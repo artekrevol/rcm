@@ -49,7 +49,7 @@ export default function DashboardPage() {
     queryKey: ["/api/claims/recent"],
   });
 
-  const { data: alerts } = useQuery<Array<{ id: string; type: string; message: string; claimId: string; timestamp: string }>>({
+  const { data: alerts } = useQuery<Array<{ id: string; type: string; title: string; description: string; claimId: string; severity: string; timestamp: string }>>({
     queryKey: ["/api/dashboard/alerts"],
   });
 
@@ -196,9 +196,10 @@ export default function DashboardPage() {
                   onClick={() => setLocation(`/claims/${alert.claimId}`)}
                   data-testid={`alert-${alert.id}`}
                 >
-                  <div className="h-2 w-2 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+                  <div className={`h-2 w-2 rounded-full mt-1.5 shrink-0 ${alert.severity === "high" ? "bg-red-500" : "bg-amber-500"}`} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm">{alert.message}</p>
+                    <p className="text-sm font-medium">{alert.title}</p>
+                    <p className="text-xs text-muted-foreground">{alert.description}</p>
                     <p className="text-xs text-muted-foreground mt-1">
                       {format(new Date(alert.timestamp), "MMM d, h:mm a")}
                     </p>
