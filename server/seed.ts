@@ -1,18 +1,6 @@
 import { db } from "./db";
 import { users, leads, patients, encounters, claims, claimEvents, denials, rules } from "@shared/schema";
-
-const realPayers = [
-  "UnitedHealthcare",
-  "Blue Cross Blue Shield",
-  "Aetna",
-  "Cigna",
-  "Humana",
-  "Kaiser Permanente",
-  "Anthem",
-  "Molina Healthcare",
-  "Centene",
-  "Medicare",
-];
+import { allPayers } from "./payers";
 
 const cptCodeDetails: Record<string, { description: string; avgAmount: number }> = {
   "99213": { description: "Office visit, established patient, 20-29 min", avgAmount: 125 },
@@ -110,17 +98,37 @@ function randomDOB(): string {
 function randomMemberId(payer: string): string {
   const prefixes: Record<string, string> = {
     "UnitedHealthcare": "UHC",
-    "Blue Cross Blue Shield": "BCBS",
+    "Anthem Blue Cross Blue Shield": "ANT",
     "Aetna": "AET",
     "Cigna": "CGN",
     "Humana": "HUM",
     "Kaiser Permanente": "KP",
-    "Anthem": "ANT",
-    "Molina Healthcare": "MOL",
     "Centene": "CEN",
+    "Molina Healthcare": "MOL",
+    "CVS Health / Aetna": "CVS",
+    "Elevance Health": "ELV",
     "Medicare": "1EG4",
+    "Medicare Advantage": "1EG4",
+    "Medicaid": "MCD",
+    "Tricare": "TRI",
+    "Veterans Affairs (VA)": "VA",
   };
-  const prefix = prefixes[payer] || "MEM";
+  
+  // Generate prefix from payer name if not in map
+  let prefix = prefixes[payer];
+  if (!prefix) {
+    if (payer.includes("Blue Cross") || payer.includes("BCBS")) {
+      prefix = "BCBS";
+    } else if (payer.includes("Medicare")) {
+      prefix = "1EG4";
+    } else if (payer.includes("Medicaid")) {
+      prefix = "MCD";
+    } else {
+      // Take first 3 consonants or letters
+      prefix = payer.replace(/[^A-Z]/gi, "").slice(0, 3).toUpperCase() || "MEM";
+    }
+  }
+  
   const num = Math.random().toString().slice(2, 11);
   return `${prefix}${num}`;
 }

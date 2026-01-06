@@ -6,9 +6,14 @@ import {
   insertRuleSchema,
   insertCallSchema,
 } from "@shared/schema";
+import { allPayers } from "./payers";
 
 export async function registerRoutes(server: Server, app: Express): Promise<void> {
   
+  app.get("/api/payers", async (req, res) => {
+    res.json(allPayers);
+  });
+
   app.get("/api/dashboard/metrics", async (req, res) => {
     const metrics = await storage.getDashboardMetrics();
     res.json(metrics);
