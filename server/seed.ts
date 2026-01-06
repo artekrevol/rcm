@@ -1,21 +1,132 @@
 import { db } from "./db";
 import { users, leads, patients, encounters, claims, claimEvents, denials, rules } from "@shared/schema";
 
-const payers = ["Payor A", "Payor B", "Payor C", "Payor D", "Payor E"];
-const cptCodeGroups = [
-  ["90834", "90837"],
-  ["99213", "99214", "99215"],
-  ["90847", "90832"],
-  ["97110", "97140"],
-  ["99223", "99291"],
+const realPayers = [
+  "UnitedHealthcare",
+  "Blue Cross Blue Shield",
+  "Aetna",
+  "Cigna",
+  "Humana",
+  "Kaiser Permanente",
+  "Anthem",
+  "Molina Healthcare",
+  "Centene",
+  "Medicare",
 ];
-const rootCauses = ["Missing Auth", "Invalid Coding", "Timely Filing", "Duplicate Claim", "Eligibility Issues"];
-const serviceTypes = ["Outpatient Mental Health", "Inpatient", "Substance Abuse"];
-const states = ["CA", "TX", "NY", "FL", "IL", "PA", "OH", "GA", "NC", "MI"];
-const carriers = ["Blue Cross Blue Shield", "Aetna", "Cigna", "UnitedHealth", "Anthem", "Humana", "Kaiser"];
+
+const cptCodeDetails: Record<string, { description: string; avgAmount: number }> = {
+  "99213": { description: "Office visit, established patient, 20-29 min", avgAmount: 125 },
+  "99214": { description: "Office visit, established patient, 30-39 min", avgAmount: 185 },
+  "99215": { description: "Office visit, established patient, 40-54 min", avgAmount: 250 },
+  "99203": { description: "Office visit, new patient, 30-44 min", avgAmount: 175 },
+  "99204": { description: "Office visit, new patient, 45-59 min", avgAmount: 265 },
+  "99205": { description: "Office visit, new patient, 60-74 min", avgAmount: 350 },
+  "90834": { description: "Psychotherapy, 45 minutes", avgAmount: 145 },
+  "90837": { description: "Psychotherapy, 60 minutes", avgAmount: 190 },
+  "90847": { description: "Family psychotherapy with patient", avgAmount: 175 },
+  "90832": { description: "Psychotherapy, 30 minutes", avgAmount: 95 },
+  "97110": { description: "Therapeutic exercises", avgAmount: 85 },
+  "97140": { description: "Manual therapy techniques", avgAmount: 75 },
+  "97530": { description: "Therapeutic activities", avgAmount: 80 },
+  "99223": { description: "Initial hospital care, high severity", avgAmount: 425 },
+  "99232": { description: "Subsequent hospital care, moderate", avgAmount: 165 },
+  "99291": { description: "Critical care, first 30-74 min", avgAmount: 550 },
+  "99285": { description: "Emergency dept visit, high severity", avgAmount: 475 },
+  "99284": { description: "Emergency dept visit, moderate severity", avgAmount: 325 },
+  "99283": { description: "Emergency dept visit, low-moderate", avgAmount: 195 },
+  "90791": { description: "Psychiatric diagnostic evaluation", avgAmount: 275 },
+  "90792": { description: "Psychiatric evaluation with medical", avgAmount: 325 },
+  "99243": { description: "Outpatient consultation, moderate", avgAmount: 225 },
+  "99244": { description: "Outpatient consultation, high", avgAmount: 325 },
+};
+
+const denialReasons = [
+  { code: "CO-4", text: "Service not consistent with procedure code", category: "Clinical", rootCause: "Invalid Coding" },
+  { code: "CO-11", text: "Diagnosis inconsistent with procedure", category: "Clinical", rootCause: "Invalid Coding" },
+  { code: "CO-16", text: "Missing or invalid claim information", category: "Administrative", rootCause: "Missing Information" },
+  { code: "CO-18", text: "Duplicate claim/service", category: "Technical", rootCause: "Duplicate Claim" },
+  { code: "CO-22", text: "Coordination of benefits issue", category: "Administrative", rootCause: "COB Issue" },
+  { code: "CO-27", text: "Expenses incurred after coverage terminated", category: "Administrative", rootCause: "Eligibility Issues" },
+  { code: "CO-29", text: "Time limit for filing has expired", category: "Administrative", rootCause: "Timely Filing" },
+  { code: "CO-50", text: "Medical necessity not established", category: "Clinical", rootCause: "Medical Necessity" },
+  { code: "CO-96", text: "Non-covered charge(s)", category: "Clinical", rootCause: "Non-Covered Service" },
+  { code: "CO-97", text: "Payment adjusted - bundling rules", category: "Technical", rootCause: "Bundling Issue" },
+  { code: "CO-197", text: "Prior authorization required", category: "Administrative", rootCause: "Missing Auth" },
+  { code: "PR-1", text: "Deductible amount", category: "Patient Responsibility", rootCause: "Patient Deductible" },
+  { code: "PR-2", text: "Coinsurance amount", category: "Patient Responsibility", rootCause: "Patient Coinsurance" },
+  { code: "PR-3", text: "Copayment amount", category: "Patient Responsibility", rootCause: "Patient Copay" },
+];
+
+const serviceTypes = [
+  "Outpatient Mental Health",
+  "Inpatient Psychiatric",
+  "Substance Abuse Treatment",
+  "Physical Therapy",
+  "Emergency Services",
+  "Primary Care",
+  "Specialist Consultation",
+];
+
+const facilityTypes = [
+  "General Acute Care Hospital",
+  "Behavioral Health Center",
+  "Outpatient Clinic",
+  "Skilled Nursing Facility",
+  "Ambulatory Surgery Center",
+  "Emergency Department",
+  "Rehabilitation Center",
+];
+
+const states = ["CA", "TX", "NY", "FL", "IL", "PA", "OH", "GA", "NC", "MI", "NJ", "VA", "WA", "AZ", "MA"];
+
+const firstNames = [
+  "Sarah", "Michael", "Emily", "David", "Jennifer", "James", "Amanda", "Robert", "Jessica", "Christopher",
+  "Ashley", "Matthew", "Stephanie", "Daniel", "Nicole", "Anthony", "Melissa", "Joseph", "Elizabeth", "William",
+  "Lauren", "Andrew", "Megan", "Joshua", "Rachel", "Ryan", "Samantha", "Brandon", "Katherine", "Tyler",
+  "Maria", "Carlos", "Linda", "Richard", "Patricia", "Thomas", "Barbara", "Steven", "Susan", "Mark",
+];
+
+const lastNames = [
+  "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Anderson",
+  "Taylor", "Thomas", "Hernandez", "Moore", "Martin", "Jackson", "Thompson", "White", "Lopez", "Lee",
+  "Gonzalez", "Harris", "Clark", "Lewis", "Robinson", "Walker", "Perez", "Hall", "Young", "Allen",
+  "Sanchez", "Wright", "King", "Scott", "Green", "Baker", "Adams", "Nelson", "Hill", "Ramirez",
+];
+
+function randomPhone(): string {
+  const area = Math.floor(Math.random() * 900) + 100;
+  const first = Math.floor(Math.random() * 900) + 100;
+  const last = Math.floor(Math.random() * 9000) + 1000;
+  return `(${area}) ${first}-${last}`;
+}
+
+function randomDOB(): string {
+  const year = 1945 + Math.floor(Math.random() * 55);
+  const month = String(Math.floor(Math.random() * 12) + 1).padStart(2, "0");
+  const day = String(Math.floor(Math.random() * 28) + 1).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function randomMemberId(payer: string): string {
+  const prefixes: Record<string, string> = {
+    "UnitedHealthcare": "UHC",
+    "Blue Cross Blue Shield": "BCBS",
+    "Aetna": "AET",
+    "Cigna": "CGN",
+    "Humana": "HUM",
+    "Kaiser Permanente": "KP",
+    "Anthem": "ANT",
+    "Molina Healthcare": "MOL",
+    "Centene": "CEN",
+    "Medicare": "1EG4",
+  };
+  const prefix = prefixes[payer] || "MEM";
+  const num = Math.random().toString().slice(2, 11);
+  return `${prefix}${num}`;
+}
 
 async function seed() {
-  console.log("Seeding database...");
+  console.log("Seeding database with realistic healthcare data...");
 
   await db.insert(users).values({
     email: "demo@claimshield.ai",
@@ -24,29 +135,36 @@ async function seed() {
     name: "Demo User",
   }).onConflictDoNothing();
 
-  const leadData = [
-    { name: "Sarah Johnson", phone: "(555) 123-4567", email: "sarah.j@email.com", source: "website", status: "new" },
-    { name: "Michael Chen", phone: "(555) 234-5678", email: "m.chen@email.com", source: "referral", status: "contacted" },
-    { name: "Emily Rodriguez", phone: "(555) 345-6789", email: "emily.r@email.com", source: "phone", status: "qualified" },
-    { name: "David Kim", phone: "(555) 456-7890", email: "d.kim@email.com", source: "event", status: "new" },
-    { name: "Lisa Thompson", phone: "(555) 567-8901", email: "lisa.t@email.com", source: "website", status: "converted" },
-    { name: "James Wilson", phone: "(555) 678-9012", email: "j.wilson@email.com", source: "referral", status: "qualified" },
-    { name: "Amanda Davis", phone: "(555) 789-0123", email: "amanda.d@email.com", source: "phone", status: "unqualified" },
-    { name: "Robert Martinez", phone: "(555) 890-1234", email: "r.martinez@email.com", source: "website", status: "new" },
-  ];
-
+  const leadData = [];
+  for (let i = 0; i < 12; i++) {
+    const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
+    const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
+    const statuses = ["new", "contacted", "qualified", "unqualified", "converted"];
+    const sources = ["website", "referral", "phone", "insurance_portal", "physician_referral", "marketing"];
+    
+    leadData.push({
+      name: `${firstName} ${lastName}`,
+      phone: randomPhone(),
+      email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@email.com`,
+      source: sources[Math.floor(Math.random() * sources.length)],
+      status: statuses[Math.floor(Math.random() * statuses.length)],
+    });
+  }
   const insertedLeads = await db.insert(leads).values(leadData).returning();
   console.log(`Created ${insertedLeads.length} leads`);
 
   const patientData = [];
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 50; i++) {
+    const payer = realPayers[Math.floor(Math.random() * realPayers.length)];
+    const planTypes = ["PPO", "HMO", "EPO", "POS", "Medicare Advantage", "Medicaid Managed Care"];
+    
     patientData.push({
       leadId: insertedLeads[i % insertedLeads.length].id,
-      dob: `${1960 + Math.floor(Math.random() * 40)}-${String(Math.floor(Math.random() * 12) + 1).padStart(2, "0")}-${String(Math.floor(Math.random() * 28) + 1).padStart(2, "0")}`,
+      dob: randomDOB(),
       state: states[Math.floor(Math.random() * states.length)],
-      insuranceCarrier: carriers[Math.floor(Math.random() * carriers.length)],
-      memberId: `MEM${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
-      planType: ["PPO", "HMO", "EPO", "POS"][Math.floor(Math.random() * 4)],
+      insuranceCarrier: payer,
+      memberId: randomMemberId(payer),
+      planType: planTypes[Math.floor(Math.random() * planTypes.length)],
     });
   }
   const insertedPatients = await db.insert(patients).values(patientData).returning();
@@ -54,34 +172,55 @@ async function seed() {
 
   const encounterData = [];
   for (const patient of insertedPatients) {
+    const daysAgo = Math.floor(Math.random() * 60);
     encounterData.push({
       patientId: patient.id,
       serviceType: serviceTypes[Math.floor(Math.random() * serviceTypes.length)],
-      facilityType: ["Hospital", "Clinic", "Outpatient Center"][Math.floor(Math.random() * 3)],
-      admissionType: ["Scheduled", "Emergency", "Elective"][Math.floor(Math.random() * 3)],
-      expectedStartDate: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+      facilityType: facilityTypes[Math.floor(Math.random() * facilityTypes.length)],
+      admissionType: ["Scheduled", "Urgent", "Emergency", "Elective"][Math.floor(Math.random() * 4)],
+      expectedStartDate: new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
     });
   }
   const insertedEncounters = await db.insert(encounters).values(encounterData).returning();
   console.log(`Created ${insertedEncounters.length} encounters`);
 
+  const cptCodes = Object.keys(cptCodeDetails);
   const claimData = [];
-  const statuses = ["created", "verified", "submitted", "acknowledged", "pending", "denied", "paid"];
+  const statuses = ["created", "verified", "submitted", "acknowledged", "pending", "suspended", "denied", "appealed", "paid"];
   
   for (let i = 0; i < insertedPatients.length; i++) {
+    const patient = insertedPatients[i];
+    const numCodes = Math.floor(Math.random() * 3) + 1;
+    const selectedCpts: string[] = [];
+    for (let j = 0; j < numCodes; j++) {
+      const code = cptCodes[Math.floor(Math.random() * cptCodes.length)];
+      if (!selectedCpts.includes(code)) selectedCpts.push(code);
+    }
+    
+    const baseAmount = selectedCpts.reduce((sum, code) => sum + cptCodeDetails[code].avgAmount, 0);
+    const amount = Math.round(baseAmount * (0.8 + Math.random() * 0.4));
+    
     const riskScore = Math.floor(Math.random() * 100);
     const readinessStatus = riskScore > 70 ? "RED" : riskScore > 40 ? "YELLOW" : "GREEN";
-    const status = statuses[Math.floor(Math.random() * statuses.length)];
-    const cptGroup = cptCodeGroups[Math.floor(Math.random() * cptCodeGroups.length)];
-    const selectedCpts = cptGroup.slice(0, Math.floor(Math.random() * 2) + 1);
+    
+    const statusWeights = [0.08, 0.1, 0.15, 0.15, 0.12, 0.05, 0.1, 0.05, 0.2];
+    let rand = Math.random();
+    let statusIndex = 0;
+    for (let w = 0; w < statusWeights.length; w++) {
+      rand -= statusWeights[w];
+      if (rand <= 0) {
+        statusIndex = w;
+        break;
+      }
+    }
     
     claimData.push({
-      patientId: insertedPatients[i].id,
+      patientId: patient.id,
       encounterId: insertedEncounters[i].id,
-      payer: payers[Math.floor(Math.random() * payers.length)],
+      payer: patient.insuranceCarrier,
       cptCodes: selectedCpts,
-      amount: Math.floor(Math.random() * 15000) + 500,
-      status,
+      amount,
+      status: statuses[statusIndex],
       riskScore,
       readinessStatus,
     });
@@ -89,87 +228,81 @@ async function seed() {
   const insertedClaims = await db.insert(claims).values(claimData).returning();
   console.log(`Created ${insertedClaims.length} claims`);
 
-  const eventData = [];
+  const eventData: Array<{ claimId: string; type: string; notes: string; timestamp?: Date }> = [];
   for (const claim of insertedClaims) {
-    eventData.push({
-      claimId: claim.id,
-      type: "Created",
-      notes: "Claim created and risk assessed",
-    });
+    const baseDate = new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000);
+    let eventDate = new Date(baseDate);
     
-    if (["verified", "submitted", "acknowledged", "pending", "denied", "paid"].includes(claim.status)) {
+    const addEvent = (type: string, notes: string, hoursLater: number) => {
+      eventDate = new Date(eventDate.getTime() + hoursLater * 60 * 60 * 1000);
       eventData.push({
         claimId: claim.id,
-        type: "Verified",
-        notes: "Patient eligibility verified",
+        type,
+        notes,
+        timestamp: eventDate,
       });
+    };
+
+    addEvent("Created", "Claim created from encounter data, risk assessment initiated", 0);
+    
+    if (["verified", "submitted", "acknowledged", "pending", "suspended", "denied", "appealed", "paid"].includes(claim.status)) {
+      addEvent("Verified", "Patient eligibility confirmed, coverage active through plan year", 4 + Math.random() * 20);
     }
-    if (["submitted", "acknowledged", "pending", "denied", "paid"].includes(claim.status)) {
-      eventData.push({
-        claimId: claim.id,
-        type: "Submitted",
-        notes: "Claim submitted to payer",
-      });
+    if (["submitted", "acknowledged", "pending", "suspended", "denied", "appealed", "paid"].includes(claim.status)) {
+      addEvent("Submitted", `Claim submitted electronically via EDI 837P to ${claim.payer}`, 2 + Math.random() * 8);
     }
-    if (["acknowledged", "pending", "denied", "paid"].includes(claim.status)) {
-      eventData.push({
-        claimId: claim.id,
-        type: "Acknowledged",
-        notes: "Payer acknowledged receipt",
-      });
+    if (["acknowledged", "pending", "suspended", "denied", "appealed", "paid"].includes(claim.status)) {
+      addEvent("Acknowledged", `${claim.payer} confirmed receipt, assigned ICN for tracking`, 1 + Math.random() * 24);
     }
-    if (["pending", "denied", "paid"].includes(claim.status)) {
-      eventData.push({
-        claimId: claim.id,
-        type: "Pending",
-        notes: "Awaiting payer decision",
-      });
+    if (["pending", "suspended", "denied", "appealed", "paid"].includes(claim.status)) {
+      addEvent("Pending", "Claim in adjudication queue, awaiting medical review", 24 + Math.random() * 72);
+    }
+    if (claim.status === "suspended") {
+      addEvent("Suspended", "Additional documentation requested by payer medical review", 12 + Math.random() * 48);
     }
     if (claim.status === "denied") {
-      eventData.push({
-        claimId: claim.id,
-        type: "Denied",
-        notes: "Claim denied by payer",
-      });
+      addEvent("Denied", "Claim denied - see denial reason code for details", 24 + Math.random() * 120);
+    }
+    if (claim.status === "appealed") {
+      addEvent("Denied", "Initial claim denied", 24 + Math.random() * 72);
+      addEvent("Appealed", "Appeal submitted with supporting clinical documentation", 48 + Math.random() * 96);
     }
     if (claim.status === "paid") {
-      eventData.push({
-        claimId: claim.id,
-        type: "Paid",
-        notes: "Payment received",
-      });
+      addEvent("Paid", `Payment received via EFT, deposited to operating account`, 48 + Math.random() * 168);
     }
   }
   await db.insert(claimEvents).values(eventData);
   console.log(`Created ${eventData.length} claim events`);
 
-  const denialData = [];
-  const deniedClaims = insertedClaims.filter(c => c.status === "denied");
+  const denialData: Array<{ claimId: string; denialCategory: string; denialReasonText: string; payer: string; cptCode: string; rootCauseTag: string; resolved: boolean }> = [];
+  const deniedClaims = insertedClaims.filter(c => c.status === "denied" || c.status === "appealed");
+  
   for (const claim of deniedClaims) {
-    const rootCause = rootCauses[Math.floor(Math.random() * rootCauses.length)];
+    const denial = denialReasons[Math.floor(Math.random() * denialReasons.length)];
     denialData.push({
       claimId: claim.id,
-      denialCategory: "Administrative",
-      denialReasonText: `Claim denied: ${rootCause}`,
+      denialCategory: denial.category,
+      denialReasonText: `${denial.code}: ${denial.text}`,
       payer: claim.payer,
       cptCode: claim.cptCodes[0] as string,
-      rootCauseTag: rootCause,
-      resolved: Math.random() > 0.7,
+      rootCauseTag: denial.rootCause,
+      resolved: claim.status === "appealed" ? Math.random() > 0.5 : false,
     });
   }
   
-  for (let i = 0; i < 15; i++) {
-    const payer = payers[Math.floor(Math.random() * payers.length)];
-    const cptGroup = cptCodeGroups[Math.floor(Math.random() * cptCodeGroups.length)];
-    const rootCause = rootCauses[Math.floor(Math.random() * rootCauses.length)];
+  for (let i = 0; i < 25; i++) {
+    const payer = realPayers[Math.floor(Math.random() * realPayers.length)];
+    const cptCode = cptCodes[Math.floor(Math.random() * cptCodes.length)];
+    const denial = denialReasons[Math.floor(Math.random() * denialReasons.length)];
+    const randomClaim = insertedClaims[Math.floor(Math.random() * insertedClaims.length)];
     
     denialData.push({
-      claimId: insertedClaims[Math.floor(Math.random() * insertedClaims.length)].id,
-      denialCategory: ["Administrative", "Clinical", "Technical"][Math.floor(Math.random() * 3)],
-      denialReasonText: `Claim denied: ${rootCause}`,
+      claimId: randomClaim.id,
+      denialCategory: denial.category,
+      denialReasonText: `${denial.code}: ${denial.text}`,
       payer,
-      cptCode: cptGroup[0],
-      rootCauseTag: rootCause,
+      cptCode,
+      rootCauseTag: denial.rootCause,
       resolved: Math.random() > 0.6,
     });
   }
@@ -178,60 +311,91 @@ async function seed() {
 
   const ruleData = [
     {
-      name: "Prior Auth Required for Inpatient",
-      description: "Block inpatient claims without prior authorization",
-      payer: "Payor A",
-      cptCode: "99223",
-      triggerPattern: "serviceType=Inpatient AND authStatus=missing",
-      preventionAction: "Require prior authorization before submission",
+      name: "UHC Prior Auth - Behavioral Health",
+      description: "UnitedHealthcare requires prior authorization for all behavioral health CPT codes 90834-90847",
+      payer: "UnitedHealthcare",
+      cptCode: "90837",
+      triggerPattern: "payer='UnitedHealthcare' AND cptCode IN ('90834','90837','90847') AND authStatus IS NULL",
+      preventionAction: "Submit prior authorization request via UHC Provider Portal before claim submission",
+      enabled: true,
+      impactCount: 34,
+    },
+    {
+      name: "BCBS Timely Filing - 90 Days",
+      description: "Blue Cross Blue Shield has strict 90-day timely filing limit from date of service",
+      payer: "Blue Cross Blue Shield",
+      cptCode: null,
+      triggerPattern: "payer='Blue Cross Blue Shield' AND daysSinceService > 75",
+      preventionAction: "Escalate for immediate submission - approaching BCBS 90-day filing deadline",
+      enabled: true,
+      impactCount: 52,
+    },
+    {
+      name: "Medicare Medical Necessity - E/M Codes",
+      description: "Medicare requires ABN for E/M codes when medical necessity documentation is incomplete",
+      payer: "Medicare",
+      cptCode: "99215",
+      triggerPattern: "payer='Medicare' AND cptCode IN ('99214','99215','99205') AND abnStatus != 'signed'",
+      preventionAction: "Obtain signed ABN from patient before proceeding with high-level E/M service",
+      enabled: true,
+      impactCount: 78,
+    },
+    {
+      name: "Aetna COB Verification",
+      description: "Verify coordination of benefits for Aetna patients with potential secondary coverage",
+      payer: "Aetna",
+      cptCode: null,
+      triggerPattern: "payer='Aetna' AND cobStatus != 'verified' AND planType='PPO'",
+      preventionAction: "Contact Aetna to verify primary/secondary coverage before submission",
       enabled: true,
       impactCount: 23,
     },
     {
-      name: "Timely Filing Check",
-      description: "Alert when claim approaches filing deadline",
-      payer: null,
-      cptCode: null,
-      triggerPattern: "daysSinceService > 85 AND status=created",
-      preventionAction: "Prioritize submission to avoid timely filing denial",
+      name: "Cigna Bundling - PT Services",
+      description: "Cigna bundles 97110 with 97140 when performed same day - bill only primary code",
+      payer: "Cigna",
+      cptCode: "97110",
+      triggerPattern: "payer='Cigna' AND cptCodes CONTAINS ('97110','97140') AND sameDay=true",
+      preventionAction: "Remove bundled code 97140 or append modifier 59 if distinct service",
       enabled: true,
-      impactCount: 45,
+      impactCount: 19,
     },
     {
-      name: "Duplicate Claim Prevention",
-      description: "Detect potential duplicate claims before submission",
-      payer: null,
+      name: "Humana Eligibility - Monthly Check",
+      description: "Humana Medicaid plans require monthly eligibility verification",
+      payer: "Humana",
       cptCode: null,
-      triggerPattern: "matchingClaim(payer, cptCode, dateOfService) EXISTS",
-      preventionAction: "Review for duplicate before submission",
-      enabled: true,
+      triggerPattern: "payer='Humana' AND planType='Medicaid Managed Care' AND eligibilityAge > 30",
+      preventionAction: "Re-verify patient eligibility through Humana provider portal",
+      enabled: false,
       impactCount: 12,
     },
     {
-      name: "Eligibility Verification Required",
-      description: "Ensure patient eligibility is verified before submission",
-      payer: "Payor B",
+      name: "Kaiser Referral Required",
+      description: "Kaiser HMO requires referral authorization for specialist consultations",
+      payer: "Kaiser Permanente",
+      cptCode: "99244",
+      triggerPattern: "payer='Kaiser Permanente' AND cptCode IN ('99243','99244','99245') AND referralStatus IS NULL",
+      preventionAction: "Obtain Kaiser referral authorization before scheduling consultation",
+      enabled: true,
+      impactCount: 41,
+    },
+    {
+      name: "Duplicate Claim Detection",
+      description: "Prevent duplicate claim submissions across all payers",
+      payer: null,
       cptCode: null,
-      triggerPattern: "eligibilityStatus != verified",
-      preventionAction: "Complete eligibility verification",
+      triggerPattern: "EXISTS(claim WHERE payer=current.payer AND cptCode=current.cptCode AND dos=current.dos AND patientId=current.patientId)",
+      preventionAction: "Review potential duplicate - check if correction/void needed for original claim",
       enabled: true,
       impactCount: 67,
     },
-    {
-      name: "Mental Health Auth Rule",
-      description: "Require authorization for mental health CPT codes",
-      payer: "Payor C",
-      cptCode: "90837",
-      triggerPattern: "cptCode IN (90834, 90837) AND authStatus != approved",
-      preventionAction: "Obtain mental health authorization",
-      enabled: false,
-      impactCount: 8,
-    },
   ];
   await db.insert(rules).values(ruleData);
-  console.log(`Created ${ruleData.length} rules`);
+  console.log(`Created ${ruleData.length} prevention rules`);
 
-  console.log("Seeding completed!");
+  console.log("\nSeeding completed with realistic healthcare data!");
+  console.log(`Summary: ${insertedLeads.length} leads, ${insertedPatients.length} patients, ${insertedClaims.length} claims, ${denialData.length} denials, ${ruleData.length} rules`);
 }
 
 seed().catch(console.error).finally(() => process.exit(0));
