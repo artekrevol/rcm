@@ -1,0 +1,282 @@
+Got it. If you’re doing this as a **standalone POC** (instead of “inside Reverto”), the winning move is to build a **micro-product** that proves 3 things in one demo:
+
+1. **Prevents an authorization denial before it happens**
+2. **Tracks claim state like a shipment tracker**
+3. **Learns denial patterns and turns them into prevention rules**
+   …and adds a **Vapi voice agent** to make it feel inevitable.
+
+Below is a **detailed “Replit build prompt”** you can paste into Replit (or your dev agent) plus **name options**, **platform structure**, and **wow details**.
+
+---
+
+## Platform Name Options (pick 1)
+
+Pick a name that screams *prevention + clarity + cashflow*:
+
+1. **ClaimShield AI** (denial prevention positioning)
+2. **AuthGuard** (authorization-first wedge)
+3. **CleanClaim Copilot** (simple, exec-friendly)
+4. **RCM Sentinel** (monitoring + intelligence)
+5. **PreClaim IQ** (predictive VOB/auth)
+
+If you want maximum “wow” in healthcare RCM circles: **ClaimShield AI**.
+
+---
+
+## Product Positioning (what you say in the demo)
+
+> “This POC is a preventive control layer that stops avoidable denials before they happen, tracks claims in real-time, and learns patterns to reduce repeat denials—without replacing your EHR or billing system.”
+
+---
+
+# ✅ COPY/PASTE PROMPT FOR REPLIT (POC BUILD)
+
+Use this as the master prompt in Replit:
+
+```text
+You are building a polished Proof-of-Concept web platform called "ClaimShield AI" for healthcare revenue cycle management (RCM). The purpose is to demo denial prevention and claim visibility using simulated data (no real integrations required). The POC must be demo-ready and visually impressive.
+
+GOAL:
+Deliver an interactive POC that demonstrates:
+1) Pre-Claim Prevention: Eligibility + authorization risk scoring BEFORE claim submission.
+2) Claim State Tracker: A claim timeline that flags “stuck” claims and recommends actions.
+3) Denial Pattern Intelligence: Clustering denial reasons and auto-generating prevention “rules.”
+4) AI Voice Intake via Vapi: A voice agent that collects patient/insurance details and creates a Lead + Claim-ready packet.
+
+TECH STACK:
+- Frontend: Next.js (App Router) + Tailwind + shadcn/ui
+- Backend: Next.js API routes OR Express server in same repo
+- Database: SQLite (via Prisma) for simplicity
+- Auth: simple demo login (email + password) OR magic link mock
+- Vapi: integrate Vapi voice calls (use Vapi SDK or REST). If keys not available, mock the call and transcript while preserving the same UI/flow.
+
+KEY DEMO PRINCIPLES:
+- No real PHI needed. Use seeded fake patient data.
+- The UI must be executive-friendly, minimal, clean.
+- Every AI decision must have “Why this decision?” explainability panel.
+- The platform must include a “Demo Scenarios” page with buttons to trigger scenarios (e.g., high-risk auth required, claim stuck, denial pattern spike).
+
+CORE ENTITIES / DATA MODEL (Prisma):
+- User: id, email, role (admin, rcm_manager, intake)
+- Lead: id, name, phone, email, source, status, createdAt
+- Patient: id, leadId, dob (fake), state, insuranceCarrier, memberId (fake), planType
+- Encounter: id, patientId, serviceType, facilityType, admissionType, expectedStartDate
+- Claim: id, patientId, encounterId, payer, cptCodes (json), amount, status, riskScore, readinessStatus (GREEN/YELLOW/RED), createdAt
+- ClaimEvent: id, claimId, type (Created, Verified, Submitted, Acknowledged, Pending, Suspended, Denied, Appealed, Paid), timestamp, notes
+- Denial: id, claimId, denialCategory, denialReasonText, payer, cptCode, rootCauseTag, resolved (boolean)
+- Rule: id, name, description, payer, cptCode, triggerPattern, preventionAction, enabled, createdAt
+- Call: id, leadId, vapiCallId, transcript, summary, disposition, createdAt
+
+SEED DATA (must be included):
+Seed at least:
+- 40 claims
+- 12 denials
+- 5 payers (e.g., “Payor A/B/C”)
+- 3 service types (e.g., Inpatient Behavioral, Outpatient, Detox)
+- Create patterns like: “Payor A + CPT 12345 → auth required → denial if missing”
+- Include one “spike” pattern (e.g., 6 denials from same payer due to missing auth)
+
+UI PAGES (must implement):
+1) /login (simple demo login)
+2) /dashboard (exec overview cards + charts)
+   - Denials prevented this week (mock metric)
+   - Claims at risk (count)
+   - Avg AR days (mock)
+   - Top payer risk
+3) /leads
+   - Lead list, status pipeline, create new lead
+   - “Call with AI” button triggers Vapi call or mock call flow
+4) /leads/[id]
+   - Lead details + call transcript + “Create Claim Packet”
+5) /claims
+   - Claims table with filters (payer, status, risk)
+6) /claims/[id]
+   - Claim timeline (ClaimEvents)
+   - Readiness Status: GREEN/YELLOW/RED
+   - Risk Score (0–1 or 0–100)
+   - Explainability panel: list inputs used and reasons
+   - Recommended next action and checklist
+7) /intelligence
+   - Denial pattern clusters (by payer, CPT, root cause)
+   - “Generate Prevention Rule” button
+8) /rules
+   - Rules list, enable/disable, show impact (“prevented X denials in demo”)
+9) /demo-scenarios
+   - Buttons that trigger scenario changes:
+     a) High-risk auth missing → claim becomes RED + blocked
+     b) Claim stuck in Pending > 7 days → alert generated
+     c) Denial spike from payer → cluster highlights + rule suggested
+
+CORE WORKFLOWS:
+Workflow A: Intake → Preventive Check
+- User creates a lead OR lead comes via “Call with AI”
+- Platform creates a Patient + Encounter
+- User clicks “Create Claim Packet”
+- System runs Risk Scoring:
+  Inputs: payer, serviceType, CPT, planType, history patterns, rules
+  Output: readinessStatus + riskScore + reasons
+  If RED: show “Blocked: Authorization likely required” + checklist
+  If YELLOW: show “At-risk: missing documentation”
+  If GREEN: allow “Submit claim” (simulated)
+
+Workflow B: Claim State Tracker
+- Claims have events and status
+- If time in a state exceeds threshold, show alert
+- Alerts appear on dashboard and claim page
+
+Workflow C: Denial Intelligence → Rule Creation
+- Denials cluster by payer/CPT/root-cause
+- System suggests a rule (name, trigger, action)
+- When rule enabled, subsequent simulated claims use it to prevent issues
+
+VAPI INTEGRATION (voice intake):
+- Provide a “Call with AI” button.
+- If Vapi keys provided:
+  - Start Vapi call to phone number
+  - Use a defined agent prompt
+  - Receive transcript and summary
+- If not, create a “Mock Call” modal that generates a transcript and summary in the same format.
+- After call, auto-populate insuranceCarrier, memberId, serviceType, and consent flag.
+
+VAPI AGENT PROMPT (must include):
+- Role: Intake assistant for a healthcare facility
+- Collect: insurance carrier, member ID (fake), DOB (fake), service interest, location/state, consent
+- Disposition: qualified/unqualified, best callback time
+- Must output structured JSON at end for system ingestion:
+  { "insuranceCarrier": "", "memberId": "", "serviceType": "", "state": "", "consent": true, "qualified": true, "notes": "" }
+
+WOW FACTORS (must include):
+- “Why this decision?” panel (explainability)
+- A “Revenue Protected” widget per prevented denial (mock dollars)
+- One “Before vs After” screen: shows what would happen without prevention vs with prevention
+- A guided Demo Mode toggle that highlights where to click next
+- Elegant charts (simple) for denial clusters and risk distribution
+
+DEMO SCRIPT SUPPORT:
+Add a “Demo Guide” drawer with step-by-step instructions:
+1) Start in demo-scenarios → trigger High-risk auth
+2) Go to leads → call with AI → create claim packet
+3) Show claim blocked + explainability
+4) Show rule generation from intelligence
+5) Enable rule → re-run claim → now GREEN
+
+DELIVERABLE:
+A working Replit project with README explaining setup, environment variables, and how to run the demo in 15 minutes.
+```
+
+---
+
+## “Wow the Client” Requirements (non-negotiable)
+
+If you want Shiraz to say “this is real” within 5 minutes, you need these *on screen*:
+
+### 1) **Explainability Panel**
+
+Every risk score must show:
+
+* Inputs used (payer, CPT, service type)
+* What rule/pattern triggered it
+* Confidence score
+* Recommended action checklist
+
+### 2) **Prevention Moment**
+
+A big red state that says:
+
+> **Blocked before submission — authorization required**
+
+Then show:
+
+> **Potential revenue protected: $X,XXX** (mock)
+
+### 3) **Claim “Shipment Tracking” Timeline**
+
+Created → Verified → Submitted → Acknowledged → Pending → Paid/Denied
+Plus: “stuck” alerts.
+
+### 4) **Rules That Learn**
+
+From denial clusters:
+
+* “Generate Rule”
+* Enable toggle
+* Impact counter (demo)
+
+### 5) **Demo Scenarios Page**
+
+This is your “magic wand.”
+One click creates a controlled narrative.
+
+---
+
+## Email + Call Script for the Demo (what you run in the POC)
+
+### Intake Email (automated after call)
+
+Subject: Next steps to verify coverage
+
+Body:
+
+* We’re verifying eligibility and authorization requirements to prevent delays.
+* We’ll confirm next steps shortly.
+
+### Internal RCM Alert Email (when RED)
+
+Subject: ⚠️ ClaimShield flagged high-risk claim (Auth likely required)
+
+Body:
+
+* Risk score + reason
+* Checklist (auth, docs)
+* Owner assigned
+
+### Follow-up Call Script (AI agent)
+
+“Hi, we’re confirming a couple of details to finalize your coverage verification…”
+
+* Captures missing pieces
+* Updates claim packet
+
+---
+
+## Validation Logic (how to make it feel “healthcare-grade”)
+
+Even if it’s simulated, the platform must “think” consistently:
+
+**Risk score formula (simple + believable):**
+
+* Payer risk weight (0–40)
+* CPT/service type auth probability (0–40)
+* Missing documentation signals (0–20)
+
+Then:
+
+* 0–39 = GREEN
+* 40–69 = YELLOW
+* 70–100 = RED
+
+Show this on the explainability panel.
+
+---
+
+## Extra Scenarios to Include (so it feels enterprise-ready)
+
+Add these buttons to `/demo-scenarios`:
+
+1. **High-risk auth required** (RED block)
+2. **Claim stuck in pending** (creates alert)
+3. **Denial spike detected** (clusters highlight)
+4. **Low-risk clean claim** (GREEN fast path)
+5. **Rule prevents repeat denial** (before/after comparison)
+
+---
+
+## What I’d do next (fastest path to execution)
+
+If you want, I can also generate:
+
+* A **Vapi agent prompt pack** (intake agent + follow-up agent + collections agent)
+* The **demo dataset structure** (CSV/JSON) to seed the DB
+* A **10-minute demo talk track** you can follow live
+
+Tell me one thing: are you demoing this as **Behavioral Health / Recovery** specifically (Kemah Palms style), or keeping it **general RCM**? Either is fine — the wording changes slightly.
