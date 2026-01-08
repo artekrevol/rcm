@@ -99,10 +99,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const callData = {
       leadId: req.params.id,
       vapiCallId: null,
-      transcript: req.body.transcript || generateMockTranscript(lead.name),
+      transcript: req.body.transcript || generateIntakeTranscript(lead.name),
       summary: req.body.summary || `VOB call completed with ${lead.name}. Insurance verified.`,
       disposition: req.body.disposition || "qualified",
-      extractedData: req.body.extractedData || generateMockExtractedData(),
+      extractedData: req.body.extractedData || generateIntakeData(),
     };
 
     const call = await storage.createCall(callData);
@@ -279,198 +279,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json({ success: true });
   });
 
-  app.post("/api/demo/trigger/:scenarioId", async (req, res) => {
-    const { scenarioId } = req.params;
-
-    switch (scenarioId) {
-      case "high-risk-auth": {
-        const patient = await storage.createPatient({
-          leadId: "demo",
-          dob: "1980-06-20",
-          state: "TX",
-          insuranceCarrier: "Aetna",
-          memberId: "AET" + Math.random().toString(36).slice(2, 10).toUpperCase(),
-          planType: "HMO",
-        });
-        const encounter = await storage.createEncounter({
-          patientId: patient.id,
-          serviceType: "Inpatient",
-          facilityType: "Hospital",
-          admissionType: "Emergency",
-          expectedStartDate: new Date().toISOString().split("T")[0],
-        });
-        const claim = await storage.createClaim({
-          patientId: patient.id,
-          encounterId: encounter.id,
-          payer: "Payor A",
-          cptCodes: ["99223", "99291"],
-          amount: 12500,
-          status: "created",
-          riskScore: 92,
-          readinessStatus: "RED",
-        });
-        await storage.createClaimEvent({
-          claimId: claim.id,
-          type: "Created",
-          notes: "High-risk claim flagged for authorization",
-        });
-        res.json({ success: true, claimId: claim.id });
-        break;
-      }
-      case "claim-stuck": {
-        const claims = await storage.getClaims();
-        const pendingClaim = claims.find(c => c.status === "pending");
-        if (pendingClaim) {
-          const oldDate = new Date();
-          oldDate.setDate(oldDate.getDate() - 14);
-          await storage.createClaimEvent({
-            claimId: pendingClaim.id,
-            type: "Pending",
-            notes: "Awaiting payer response",
-          });
-        } else {
-          const patient = await storage.createPatient({
-            leadId: "demo-stuck",
-            dob: "1975-11-10",
-            state: "FL",
-            insuranceCarrier: "Cigna",
-            memberId: "CIG" + Math.random().toString(36).slice(2, 10).toUpperCase(),
-            planType: "PPO",
-          });
-          const encounter = await storage.createEncounter({
-            patientId: patient.id,
-            serviceType: "Outpatient",
-            facilityType: "Clinic",
-            admissionType: "Scheduled",
-            expectedStartDate: new Date().toISOString().split("T")[0],
-          });
-          const claim = await storage.createClaim({
-            patientId: patient.id,
-            encounterId: encounter.id,
-            payer: "Payor B",
-            cptCodes: ["90834"],
-            amount: 2800,
-            status: "pending",
-            riskScore: 45,
-            readinessStatus: "YELLOW",
-          });
-          await storage.createClaimEvent({
-            claimId: claim.id,
-            type: "Created",
-            notes: "Claim submitted",
-          });
-          await storage.createClaimEvent({
-            claimId: claim.id,
-            type: "Pending",
-            notes: "Awaiting payer response",
-          });
-        }
-        res.json({ success: true });
-        break;
-      }
-      case "denial-spike": {
-        const payers = ["Payor C", "Payor D"];
-        const cptCodes = ["90837", "99214"];
-        const rootCauses = ["Missing Auth", "Invalid Coding", "Timely Filing"];
-        
-        for (let i = 0; i < 8; i++) {
-          const patient = await storage.createPatient({
-            leadId: `demo-denial-${i}`,
-            dob: "1990-01-15",
-            state: "NY",
-            insuranceCarrier: "UnitedHealth",
-            memberId: "UHC" + Math.random().toString(36).slice(2, 10).toUpperCase(),
-            planType: "EPO",
-          });
-          const encounter = await storage.createEncounter({
-            patientId: patient.id,
-            serviceType: "Outpatient",
-            facilityType: "Clinic",
-            admissionType: "Scheduled",
-            expectedStartDate: new Date().toISOString().split("T")[0],
-          });
-          const claim = await storage.createClaim({
-            patientId: patient.id,
-            encounterId: encounter.id,
-            payer: payers[i % 2],
-            cptCodes: [cptCodes[i % 2]],
-            amount: 1500 + Math.random() * 2000,
-            status: "denied",
-            riskScore: 65 + Math.random() * 30,
-            readinessStatus: "RED",
-          });
-          await storage.createDenial({
-            claimId: claim.id,
-            denialCategory: "Administrative",
-            denialReasonText: `Claim denied due to ${rootCauses[i % 3]}`,
-            payer: payers[i % 2],
-            cptCode: cptCodes[i % 2],
-            rootCauseTag: rootCauses[i % 3],
-            resolved: false,
-          });
-        }
-        res.json({ success: true });
-        break;
-      }
-      case "clean-claim": {
-        const patient = await storage.createPatient({
-          leadId: "demo-clean",
-          dob: "1988-04-22",
-          state: "CA",
-          insuranceCarrier: "Blue Shield",
-          memberId: "BSC" + Math.random().toString(36).slice(2, 10).toUpperCase(),
-          planType: "PPO",
-        });
-        const encounter = await storage.createEncounter({
-          patientId: patient.id,
-          serviceType: "Outpatient",
-          facilityType: "Clinic",
-          admissionType: "Scheduled",
-          expectedStartDate: new Date().toISOString().split("T")[0],
-        });
-        const claim = await storage.createClaim({
-          patientId: patient.id,
-          encounterId: encounter.id,
-          payer: "Payor E",
-          cptCodes: ["99213"],
-          amount: 850,
-          status: "created",
-          riskScore: 12,
-          readinessStatus: "GREEN",
-        });
-        await storage.createClaimEvent({
-          claimId: claim.id,
-          type: "Created",
-          notes: "Clean claim ready for submission",
-        });
-        await storage.createClaimEvent({
-          claimId: claim.id,
-          type: "Verified",
-          notes: "All requirements verified",
-        });
-        res.json({ success: true, claimId: claim.id });
-        break;
-      }
-      case "rule-prevents": {
-        const rules = await storage.getRules();
-        if (rules.length > 0) {
-          const rule = rules[0];
-          await storage.updateRule(rule.id, { impactCount: rule.impactCount + 1 });
-        }
-        res.json({ success: true });
-        break;
-      }
-      default:
-        res.status(400).json({ error: "Unknown scenario" });
-    }
-  });
-
-  app.post("/api/demo/reset", async (req, res) => {
-    res.json({ success: true, message: "Demo reset (seed data preserved)" });
-  });
 }
 
-function generateMockTranscript(patientName: string): string {
+function generateIntakeTranscript(patientName: string): string {
   return `Agent: Good morning! This is Sarah from ClaimShield calling to verify insurance benefits. May I speak with ${patientName}?
 
 Patient: Yes, this is ${patientName}.
@@ -498,7 +309,7 @@ Patient: That sounds good. Thank you!
 Agent: You're welcome! Have a great day.`;
 }
 
-function generateMockExtractedData() {
+function generateIntakeData() {
   const carriers = ["Blue Cross Blue Shield", "Aetna", "Cigna", "UnitedHealth", "Anthem"];
   const states = ["CA", "TX", "NY", "FL", "IL"];
   const services = ["Outpatient Mental Health", "Physical Therapy", "Substance Abuse Treatment"];

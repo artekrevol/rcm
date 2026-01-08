@@ -32,7 +32,7 @@ interface CallModalProps {
   }) => void;
 }
 
-const mockTranscripts = [
+const sampleIntakeFlow = [
   { role: "agent", text: "Hello, thank you for calling ClaimShield Healthcare. My name is Alex. How can I help you today?" },
   { role: "patient", text: "Hi, I'm interested in getting information about your behavioral health services." },
   { role: "agent", text: "Of course! I'd be happy to help. May I start by getting your insurance information?" },
@@ -57,7 +57,7 @@ export function CallModal({
 }: CallModalProps) {
   const [callStatus, setCallStatus] = useState<"idle" | "calling" | "in-call" | "completed">("idle");
   const [currentMessage, setCurrentMessage] = useState(0);
-  const [transcript, setTranscript] = useState<typeof mockTranscripts>([]);
+  const [transcript, setTranscript] = useState<typeof sampleIntakeFlow>([]);
 
   const startCall = () => {
     setCallStatus("calling");
@@ -70,8 +70,8 @@ export function CallModal({
   const simulateConversation = () => {
     let messageIndex = 0;
     const interval = setInterval(() => {
-      if (messageIndex < mockTranscripts.length) {
-        setTranscript((prev) => [...prev, mockTranscripts[messageIndex]]);
+      if (messageIndex < sampleIntakeFlow.length) {
+        setTranscript((prev) => [...prev, sampleIntakeFlow[messageIndex]]);
         setCurrentMessage(messageIndex);
         messageIndex++;
       } else {
@@ -83,7 +83,7 @@ export function CallModal({
 
   const endCall = () => {
     onCallComplete({
-      transcript: mockTranscripts.map((m) => `${m.role}: ${m.text}`).join("\n"),
+      transcript: sampleIntakeFlow.map((m) => `${m.role}: ${m.text}`).join("\n"),
       summary: "Patient interested in outpatient behavioral health services. Has BCBS insurance (Member ID: BCB-12345678) in Texas. Consent obtained for VOB.",
       disposition: "qualified",
       extractedData: {
@@ -177,7 +177,7 @@ export function CallModal({
           {callStatus === "idle" && (
             <Button onClick={startCall} className="w-full gap-2" data-testid="button-start-call">
               <Phone className="h-4 w-4" />
-              Start Call (Mock)
+              Start AI Intake
             </Button>
           )}
           {(callStatus === "calling" || callStatus === "in-call") && (

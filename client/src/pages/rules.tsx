@@ -168,7 +168,7 @@ export default function RulesPage() {
                     id="payer"
                     value={newRule.payer || ""}
                     onChange={(e) => setNewRule({ ...newRule, payer: e.target.value })}
-                    placeholder="Payor A"
+                    placeholder="UnitedHealthcare"
                   />
                 </div>
                 <div className="space-y-2">

@@ -8,8 +8,8 @@ import { ShieldCheck, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
-  const [email, setEmail] = useState("demo@claimshield.ai");
-  const [password, setPassword] = useState("demo123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -38,7 +38,7 @@ export default function LoginPage() {
           <CardHeader>
             <CardTitle>Sign in</CardTitle>
             <CardDescription>
-              Enter your credentials to access the demo
+              Enter your credentials to access ClaimShield AI
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -48,7 +48,7 @@ export default function LoginPage() {
                 <Input
                   id="email"
                   type="email"
-                  placeholder="demo@claimshield.ai"
+                  placeholder="you@organization.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   data-testid="input-email"
@@ -80,7 +80,7 @@ export default function LoginPage() {
         </Card>
 
         <p className="text-center text-sm text-muted-foreground">
-          This is a demo environment with simulated data
+          HIPAA-compliant denial prevention for healthcare revenue cycle
         </p>
       </div>
     </div>

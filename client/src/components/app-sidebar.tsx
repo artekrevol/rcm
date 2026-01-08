@@ -5,7 +5,6 @@ import {
   FileText,
   Brain,
   Shield,
-  FlaskConical,
   LogOut,
   ShieldCheck,
 } from "lucide-react";
@@ -31,9 +30,6 @@ const mainNavItems = [
   { title: "Rules", url: "/rules", icon: Shield },
 ];
 
-const demoNavItems = [
-  { title: "Demo Scenarios", url: "/demo-scenarios", icon: FlaskConical },
-];
 
 export function AppSidebar() {
   const [location] = useLocation();
@@ -76,40 +72,18 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-xs font-medium uppercase tracking-wide">
-            Demo
-          </SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {demoNavItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={location === item.url}
-                  >
-                    <Link href={item.url} data-testid={`nav-${item.title.toLowerCase().replace(' ', '-')}`}>
-                      <item.icon className="h-5 w-5" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter className="p-4">
         <div className="flex items-center gap-3 rounded-lg bg-sidebar-accent p-3">
           <Avatar className="h-9 w-9">
             <AvatarFallback className="bg-primary text-primary-foreground text-sm">
-              DU
+              RCM
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">Demo User</p>
-            <p className="text-xs text-muted-foreground truncate">demo@claimshield.ai</p>
+            <p className="text-sm font-medium truncate">RCM Admin</p>
+            <p className="text-xs text-muted-foreground truncate">admin@claimshield.ai</p>
           </div>
           <Link href="/login">
             <LogOut className="h-4 w-4 text-muted-foreground hover:text-foreground cursor-pointer" data-testid="button-logout" />

@@ -30,7 +30,6 @@ const claimStatuses = [
   "paid",
 ];
 
-const payers = ["Payor A", "Payor B", "Payor C", "Payor D", "Payor E"];
 
 export default function ClaimsPage() {
   const [, setLocation] = useLocation();
@@ -42,6 +41,8 @@ export default function ClaimsPage() {
   const { data: claims, isLoading } = useQuery<Claim[]>({
     queryKey: ["/api/claims"],
   });
+
+  const uniquePayers = Array.from(new Set(claims?.map(c => c.payer) || [])).sort();
 
   const filteredClaims = claims?.filter((claim) => {
     const matchesSearch =
@@ -170,12 +171,12 @@ export default function ClaimsPage() {
           </SelectContent>
         </Select>
         <Select value={payerFilter} onValueChange={setPayerFilter}>
-          <SelectTrigger className="w-36" data-testid="select-payer-filter">
+          <SelectTrigger className="w-48" data-testid="select-payer-filter">
             <SelectValue placeholder="Payer" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Payers</SelectItem>
-            {payers.map((payer) => (
+            {uniquePayers.map((payer) => (
               <SelectItem key={payer} value={payer}>
                 {payer}
               </SelectItem>

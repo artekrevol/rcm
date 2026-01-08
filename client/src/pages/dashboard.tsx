@@ -28,14 +28,11 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-const mockChartData = [
-  { name: "Mon", claims: 12, denials: 2 },
-  { name: "Tue", claims: 15, denials: 1 },
-  { name: "Wed", claims: 18, denials: 3 },
-  { name: "Thu", claims: 14, denials: 0 },
-  { name: "Fri", claims: 22, denials: 2 },
-  { name: "Sat", claims: 8, denials: 1 },
-  { name: "Sun", claims: 5, denials: 0 },
+const weeklyTrendData = [
+  { name: "Week 1", claims: 142, denials: 18, prevented: 15 },
+  { name: "Week 2", claims: 156, denials: 12, prevented: 22 },
+  { name: "Week 3", claims: 138, denials: 8, prevented: 28 },
+  { name: "Week 4", claims: 167, denials: 6, prevented: 34 },
 ];
 
 export default function DashboardPage() {
@@ -113,12 +110,16 @@ export default function DashboardPage() {
         <Card className="lg:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-2">
             <CardTitle className="text-base font-medium">
-              Claims Overview
+              Monthly Trend
             </CardTitle>
             <div className="flex items-center gap-4 text-sm">
               <div className="flex items-center gap-2">
                 <div className="h-3 w-3 rounded-full bg-primary" />
                 <span className="text-muted-foreground">Claims</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-3 w-3 rounded-full bg-emerald-500" />
+                <span className="text-muted-foreground">Prevented</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="h-3 w-3 rounded-full bg-red-500" />
@@ -129,7 +130,7 @@ export default function DashboardPage() {
           <CardContent>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={mockChartData}>
+                <AreaChart data={weeklyTrendData}>
                   <defs>
                     <linearGradient id="colorClaims" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
@@ -157,6 +158,14 @@ export default function DashboardPage() {
                     strokeWidth={2}
                     fillOpacity={1}
                     fill="url(#colorClaims)"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="prevented"
+                    stroke="hsl(145 70% 42%)"
+                    strokeWidth={2}
+                    fillOpacity={0.5}
+                    fill="hsl(145 70% 42% / 0.2)"
                   />
                   <Area
                     type="monotone"

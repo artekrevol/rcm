@@ -5,7 +5,6 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { DemoGuide } from "@/components/demo-guide";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import NotFound from "@/pages/not-found";
@@ -17,7 +16,6 @@ import ClaimsPage from "@/pages/claims";
 import ClaimDetailPage from "@/pages/claim-detail";
 import IntelligencePage from "@/pages/intelligence";
 import RulesPage from "@/pages/rules";
-import DemoScenariosPage from "@/pages/demo-scenarios";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const style = {
@@ -35,7 +33,6 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
               <SidebarTrigger data-testid="button-sidebar-toggle" />
             </div>
             <div className="flex items-center gap-2">
-              <DemoGuide />
               <ThemeToggle />
             </div>
           </header>
@@ -88,11 +85,6 @@ function Router() {
       <Route path="/rules">
         <AuthenticatedLayout>
           <RulesPage />
-        </AuthenticatedLayout>
-      </Route>
-      <Route path="/demo-scenarios">
-        <AuthenticatedLayout>
-          <DemoScenariosPage />
         </AuthenticatedLayout>
       </Route>
       <Route component={NotFound} />

@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { users, leads, patients, encounters, claims, claimEvents, denials, rules } from "@shared/schema";
-import { allPayers } from "./payers";
+import { allPayers as realPayers } from "./payers";
 
 const cptCodeDetails: Record<string, { description: string; avgAmount: number }> = {
   "99213": { description: "Office visit, established patient, 20-29 min", avgAmount: 125 },
@@ -137,10 +137,10 @@ async function seed() {
   console.log("Seeding database with realistic healthcare data...");
 
   await db.insert(users).values({
-    email: "demo@claimshield.ai",
-    password: "demo123",
+    email: "admin@claimshield.ai",
+    password: "admin123",
     role: "admin",
-    name: "Demo User",
+    name: "System Administrator",
   }).onConflictDoNothing();
 
   const leadData = [];
