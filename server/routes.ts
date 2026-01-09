@@ -279,6 +279,103 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json({ success: true });
   });
 
+  app.post("/api/vapi/outbound-call", async (req, res) => {
+    const { leadId, customerNumber, customerName } = req.body;
+    
+    const vapiApiKey = process.env.VAPI_API_KEY;
+    const assistantId = process.env.VAPI_ASSISTANT_ID;
+    const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+    
+    if (!vapiApiKey || !assistantId || !phoneNumberId) {
+      return res.status(500).json({ 
+        error: "Vapi configuration missing. Please set VAPI_API_KEY, VAPI_ASSISTANT_ID, and VAPI_PHONE_NUMBER_ID." 
+      });
+    }
+    
+    if (!customerNumber) {
+      return res.status(400).json({ error: "Customer phone number is required" });
+    }
+    
+    try {
+      const response = await fetch("https://api.vapi.ai/call/phone", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${vapiApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          assistantId,
+          phoneNumberId,
+          customer: {
+            number: customerNumber,
+            name: customerName || "Patient",
+          },
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Vapi API error:", errorData);
+        return res.status(response.status).json({ 
+          error: errorData.message || "Failed to initiate call" 
+        });
+      }
+      
+      const callData = await response.json();
+      
+      const call = await storage.createCall({
+        leadId,
+        vapiCallId: callData.id,
+        transcript: "",
+        summary: "Call initiated",
+        disposition: "in_progress",
+        extractedData: {},
+      });
+      
+      res.status(201).json({ 
+        success: true, 
+        callId: call.id,
+        vapiCallId: callData.id,
+        status: callData.status,
+      });
+    } catch (error) {
+      console.error("Error initiating Vapi call:", error);
+      res.status(500).json({ error: "Failed to initiate outbound call" });
+    }
+  });
+
+  app.get("/api/vapi/call-status/:vapiCallId", async (req, res) => {
+    const vapiApiKey = process.env.VAPI_API_KEY;
+    
+    if (!vapiApiKey) {
+      return res.status(500).json({ error: "Vapi API key not configured" });
+    }
+    
+    try {
+      const response = await fetch(`https://api.vapi.ai/call/${req.params.vapiCallId}`, {
+        headers: {
+          "Authorization": `Bearer ${vapiApiKey}`,
+        },
+      });
+      
+      if (!response.ok) {
+        return res.status(response.status).json({ error: "Failed to get call status" });
+      }
+      
+      const callData = await response.json();
+      res.json({
+        status: callData.status,
+        transcript: callData.transcript || "",
+        summary: callData.summary || "",
+        endedReason: callData.endedReason,
+        duration: callData.duration,
+      });
+    } catch (error) {
+      console.error("Error getting call status:", error);
+      res.status(500).json({ error: "Failed to get call status" });
+    }
+  });
+
 }
 
 function generateIntakeTranscript(patientName: string): string {

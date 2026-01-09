@@ -303,6 +303,7 @@ export default function LeadsPage() {
         <CallModal
           open={callModalOpen}
           onOpenChange={setCallModalOpen}
+          leadId={selectedLead.id}
           leadName={selectedLead.name}
           leadPhone={selectedLead.phone}
           onCallComplete={handleCallComplete}

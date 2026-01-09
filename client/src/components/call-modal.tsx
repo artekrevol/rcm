@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -8,14 +8,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Phone, PhoneOff, Loader2, Mic, MicOff, Volume2 } from "lucide-react";
+import { Phone, PhoneOff, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useVapi } from "@/hooks/use-vapi";
 import { useToast } from "@/hooks/use-toast";
 
 interface CallModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  leadId: string;
   leadName: string;
   leadPhone: string;
   onCallComplete: (data: {
@@ -34,161 +34,210 @@ interface CallModalProps {
   }) => void;
 }
 
-const HEALTHCARE_INTAKE_PROMPT = `You are Alex, a professional healthcare intake specialist at ClaimShield Healthcare. Your role is to conduct patient intake calls to gather insurance information and qualify leads for behavioral health services.
-
-Your objectives during the call:
-1. Greet the patient warmly and confirm their identity
-2. Ask about their insurance provider (carrier name)
-3. Request their member ID number
-4. Ask what state they are located in
-5. Inquire about the type of service they need (inpatient, outpatient, or detox)
-6. Obtain verbal consent to verify their benefits with their insurance company
-7. Thank them and let them know a team member will follow up within 24 hours
-
-Guidelines:
-- Be professional, empathetic, and patient
-- Speak clearly and at a moderate pace
-- If the patient seems confused, offer clarification
-- Do not provide medical advice
-- Keep the conversation focused on intake information
-- If asked about coverage details, explain that you'll need to verify with their insurance first
-
-Remember to extract and confirm:
-- Insurance carrier name
-- Member ID
-- State of residence
-- Service type preference
-- Consent for verification
-
-End the call politely after gathering all necessary information.`;
-
 export function CallModal({
   open,
   onOpenChange,
+  leadId,
   leadName,
   leadPhone,
   onCallComplete,
 }: CallModalProps) {
   const { toast } = useToast();
-  const vapiPublicKey = import.meta.env.VITE_VAPI_PUBLIC_KEY;
-  
-  const [callStatus, setCallStatus] = useState<"idle" | "connecting" | "in-call" | "completed">("idle");
-
-  const {
-    isCallActive,
-    isSpeaking,
-    messages,
-    volumeLevel,
-    startCall,
-    endCall,
-    toggleMute,
-    isMuted,
-  } = useVapi({
-    publicKey: vapiPublicKey || "",
-    onCallStart: () => {
-      setCallStatus("in-call");
-    },
-    onCallEnd: () => {
-      if (callStatus === "in-call") {
-        setCallStatus("completed");
-      }
-    },
-    onError: (error) => {
-      toast({
-        title: "Call Error",
-        description: error.message || "Failed to connect the call",
-        variant: "destructive",
-      });
-      setCallStatus("idle");
-    },
-  });
+  const [callStatus, setCallStatus] = useState<"idle" | "connecting" | "ringing" | "in-progress" | "completed" | "failed">("idle");
+  const [vapiCallId, setVapiCallId] = useState<string | null>(null);
+  const [callData, setCallData] = useState<{ transcript: string; summary: string; duration?: number } | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!open) {
       setCallStatus("idle");
+      setVapiCallId(null);
+      setCallData(null);
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
     }
   }, [open]);
 
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, []);
+
+  const pollCallStatus = async (callId: string) => {
+    try {
+      const response = await fetch(`/api/vapi/call-status/${callId}`);
+      if (!response.ok) return;
+      
+      const data = await response.json();
+      
+      if (data.status === "ringing") {
+        setCallStatus("ringing");
+      } else if (data.status === "in-progress") {
+        setCallStatus("in-progress");
+      } else if (data.status === "ended") {
+        setCallStatus("completed");
+        setCallData({
+          transcript: data.transcript || "",
+          summary: data.summary || "",
+          duration: data.duration,
+        });
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      } else if (data.status === "failed" || data.endedReason === "error") {
+        setCallStatus("failed");
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+      }
+    } catch (error) {
+      console.error("Error polling call status:", error);
+    }
+  };
+
   const handleStartCall = async () => {
-    if (!vapiPublicKey) {
+    setCallStatus("connecting");
+    
+    try {
+      const response = await fetch("/api/vapi/outbound-call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadId,
+          customerNumber: leadPhone,
+          customerName: leadName,
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "Failed to initiate call");
+      }
+      
+      setVapiCallId(data.vapiCallId);
+      setCallStatus("ringing");
+      
+      pollingRef.current = setInterval(() => {
+        pollCallStatus(data.vapiCallId);
+      }, 2000);
+      
+    } catch (error: any) {
       toast({
-        title: "Configuration Required",
-        description: "Please configure the VITE_VAPI_PUBLIC_KEY environment variable",
+        title: "Call Failed",
+        description: error.message || "Failed to initiate call",
         variant: "destructive",
       });
-      return;
+      setCallStatus("idle");
     }
-
-    setCallStatus("connecting");
-    await startCall({
-      systemPrompt: HEALTHCARE_INTAKE_PROMPT,
-      leadName,
-      leadPhone,
-      firstMessage: `Hello, this is Alex from ClaimShield Healthcare. Am I speaking with ${leadName}?`,
-    });
   };
 
   const handleEndCall = () => {
-    endCall();
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
     
-    const transcript = messages.map((m) => `${m.role}: ${m.text}`).join("\n");
-    
-    const extractedData = extractDataFromTranscript(messages);
+    const extractedData = callData?.transcript 
+      ? extractDataFromTranscript(callData.transcript)
+      : { qualified: false, notes: "Call ended without transcript" };
     
     onCallComplete({
-      transcript,
-      summary: generateSummary(messages, extractedData),
+      transcript: callData?.transcript || "",
+      summary: callData?.summary || "Call completed",
       disposition: extractedData.qualified ? "qualified" : "needs_follow_up",
       extractedData,
     });
     
     setCallStatus("idle");
+    setVapiCallId(null);
+    setCallData(null);
     onOpenChange(false);
   };
 
-  const extractDataFromTranscript = (msgs: typeof messages) => {
-    const fullText = msgs.map(m => m.text.toLowerCase()).join(" ");
+  const extractDataFromTranscript = (transcript: string) => {
+    const text = transcript.toLowerCase();
     
     const carriers = [
-      "blue cross", "bcbs", "united", "aetna", "cigna", "humana", "medicare", "medicaid"
+      { pattern: /blue cross|bcbs|blue shield/i, name: "Blue Cross Blue Shield" },
+      { pattern: /united|unitedhealthcare|uhc/i, name: "UnitedHealthcare" },
+      { pattern: /aetna/i, name: "Aetna" },
+      { pattern: /cigna/i, name: "Cigna" },
+      { pattern: /humana/i, name: "Humana" },
+      { pattern: /medicare/i, name: "Medicare" },
+      { pattern: /medicaid/i, name: "Medicaid" },
     ];
-    const foundCarrier = carriers.find(c => fullText.includes(c));
     
-    const memberIdMatch = fullText.match(/\b([a-z]{2,4}[-\s]?\d{6,12})\b/i);
+    let insuranceCarrier: string | undefined;
+    for (const carrier of carriers) {
+      if (carrier.pattern.test(text)) {
+        insuranceCarrier = carrier.name;
+        break;
+      }
+    }
     
-    const states = ["texas", "california", "florida", "new york", "illinois", "ohio", "pennsylvania"];
-    const foundState = states.find(s => fullText.includes(s));
+    const memberIdMatch = text.match(/\b([a-z]{2,4}[-\s]?\d{6,12})\b/i);
+    const memberId = memberIdMatch ? memberIdMatch[1].toUpperCase() : undefined;
     
-    const hasConsent = fullText.includes("consent") || fullText.includes("yes") || fullText.includes("agree");
+    const statePatterns = [
+      { pattern: /texas|tx\b/i, code: "TX" },
+      { pattern: /california|ca\b/i, code: "CA" },
+      { pattern: /florida|fl\b/i, code: "FL" },
+      { pattern: /new york|ny\b/i, code: "NY" },
+      { pattern: /illinois|il\b/i, code: "IL" },
+    ];
+    
+    let state: string | undefined;
+    for (const st of statePatterns) {
+      if (st.pattern.test(text)) {
+        state = st.code;
+        break;
+      }
+    }
+    
+    const hasConsent = /consent|agree|yes|confirm/i.test(text);
     
     let serviceType = "Unknown";
-    if (fullText.includes("outpatient")) serviceType = "Outpatient";
-    else if (fullText.includes("inpatient")) serviceType = "Inpatient";
-    else if (fullText.includes("detox")) serviceType = "Detox";
+    if (/outpatient/i.test(text)) serviceType = "Outpatient";
+    else if (/inpatient/i.test(text)) serviceType = "Inpatient";
+    else if (/detox/i.test(text)) serviceType = "Detox";
     
     return {
-      insuranceCarrier: foundCarrier ? foundCarrier.charAt(0).toUpperCase() + foundCarrier.slice(1) : undefined,
-      memberId: memberIdMatch ? memberIdMatch[1].toUpperCase() : undefined,
+      insuranceCarrier,
+      memberId,
       serviceType,
-      state: foundState ? foundState.charAt(0).toUpperCase() + foundState.slice(1) : undefined,
+      state,
       consent: hasConsent,
-      qualified: !!(foundCarrier && hasConsent),
-      notes: `AI intake call completed with ${msgs.length} exchanges`,
+      qualified: !!(insuranceCarrier && hasConsent),
+      notes: `Call duration: ${callData?.duration || 0}s`,
     };
   };
 
-  const generateSummary = (msgs: typeof messages, data: ReturnType<typeof extractDataFromTranscript>) => {
-    const parts = [];
-    if (data.insuranceCarrier) parts.push(`Insurance: ${data.insuranceCarrier}`);
-    if (data.memberId) parts.push(`Member ID: ${data.memberId}`);
-    if (data.state) parts.push(`State: ${data.state}`);
-    if (data.serviceType !== "Unknown") parts.push(`Service: ${data.serviceType}`);
-    if (data.consent) parts.push("Consent obtained for VOB");
-    
-    return parts.length > 0 
-      ? `Patient intake completed. ${parts.join(". ")}.`
-      : `Intake call with ${msgs.length} exchanges. Manual review recommended.`;
+  const getStatusDisplay = () => {
+    switch (callStatus) {
+      case "connecting":
+        return { text: "Connecting...", color: "text-amber-600 dark:text-amber-400" };
+      case "ringing":
+        return { text: "Ringing...", color: "text-amber-600 dark:text-amber-400" };
+      case "in-progress":
+        return { text: "Call in progress", color: "text-green-600 dark:text-green-400" };
+      case "completed":
+        return { text: "Call completed", color: "text-green-600 dark:text-green-400" };
+      case "failed":
+        return { text: "Call failed", color: "text-red-600 dark:text-red-400" };
+      default:
+        return { text: "", color: "" };
+    }
   };
+
+  const statusDisplay = getStatusDisplay();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -210,81 +259,79 @@ export function CallModal({
                 <Phone className="h-8 w-8 text-primary" />
               </div>
               <p className="text-muted-foreground">
-                Click below to start an AI-powered intake call
+                Click below to call the patient for insurance verification
               </p>
-              {!vapiPublicKey && (
-                <p className="text-sm text-destructive mt-2">
-                  VITE_VAPI_PUBLIC_KEY not configured
-                </p>
-              )}
             </div>
           )}
 
-          {callStatus === "connecting" && (
+          {(callStatus === "connecting" || callStatus === "ringing") && (
             <div className="text-center py-8">
               <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30 mb-4 animate-pulse">
                 <Phone className="h-8 w-8 text-amber-600 dark:text-amber-400" />
               </div>
-              <p className="text-amber-600 dark:text-amber-400 font-medium">
-                Connecting to Vapi...
+              <p className={cn("font-medium", statusDisplay.color)}>
+                {statusDisplay.text}
               </p>
             </div>
           )}
 
-          {(callStatus === "in-call" || callStatus === "completed") && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between px-2">
-                <div className="flex items-center gap-2">
-                  <div className={cn(
-                    "h-3 w-3 rounded-full",
-                    isCallActive ? "bg-green-500 animate-pulse" : "bg-gray-400"
-                  )} />
-                  <span className="text-sm text-muted-foreground">
-                    {isCallActive ? (isSpeaking ? "Agent speaking..." : "Listening...") : "Call ended"}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Volume2 className="h-4 w-4 text-muted-foreground" />
-                  <div className="w-16 h-2 bg-muted rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-primary transition-all duration-100"
-                      style={{ width: `${volumeLevel * 100}%` }}
-                    />
-                  </div>
-                </div>
+          {callStatus === "in-progress" && (
+            <div className="text-center py-8">
+              <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30 mb-4">
+                <Phone className="h-8 w-8 text-green-600 dark:text-green-400 animate-pulse" />
               </div>
+              <p className={cn("font-medium", statusDisplay.color)}>
+                {statusDisplay.text}
+              </p>
+              <p className="text-sm text-muted-foreground mt-2">
+                AI agent is speaking with {leadName}
+              </p>
+            </div>
+          )}
 
-              <div className="space-y-3 max-h-64 overflow-y-auto border rounded-lg p-3 bg-muted/30">
-                {messages.length === 0 && callStatus === "in-call" && (
-                  <div className="flex items-center justify-center py-4 text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    Waiting for conversation...
-                  </div>
+          {callStatus === "completed" && callData && (
+            <div className="space-y-4">
+              <div className="text-center">
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30 mb-2">
+                  <Phone className="h-6 w-6 text-green-600 dark:text-green-400" />
+                </div>
+                <p className={cn("font-medium", statusDisplay.color)}>
+                  {statusDisplay.text}
+                </p>
+                {callData.duration && (
+                  <p className="text-sm text-muted-foreground">
+                    Duration: {Math.floor(callData.duration / 60)}m {callData.duration % 60}s
+                  </p>
                 )}
-                {messages.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={cn(
-                      "flex",
-                      msg.role === "agent" ? "justify-start" : "justify-end"
-                    )}
-                  >
-                    <div
-                      className={cn(
-                        "max-w-[80%] rounded-lg px-3 py-2 text-sm",
-                        msg.role === "agent"
-                          ? "bg-muted"
-                          : "bg-primary text-primary-foreground"
-                      )}
-                    >
-                      <p className="text-xs font-medium mb-1 opacity-70">
-                        {msg.role === "agent" ? "AI Agent" : "Patient"}
-                      </p>
-                      {msg.text}
-                    </div>
-                  </div>
-                ))}
               </div>
+              
+              {callData.summary && (
+                <div className="border rounded-lg p-3 bg-muted/30">
+                  <p className="text-sm font-medium mb-1">Call Summary</p>
+                  <p className="text-sm text-muted-foreground">{callData.summary}</p>
+                </div>
+              )}
+              
+              {callData.transcript && (
+                <div className="border rounded-lg p-3 bg-muted/30 max-h-40 overflow-y-auto">
+                  <p className="text-sm font-medium mb-1">Transcript</p>
+                  <p className="text-xs text-muted-foreground whitespace-pre-wrap">{callData.transcript}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {callStatus === "failed" && (
+            <div className="text-center py-8">
+              <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/30 mb-4">
+                <PhoneOff className="h-8 w-8 text-red-600 dark:text-red-400" />
+              </div>
+              <p className={cn("font-medium", statusDisplay.color)}>
+                {statusDisplay.text}
+              </p>
+              <p className="text-sm text-muted-foreground mt-2">
+                Please try again or check the phone number
+              </p>
             </div>
           )}
         </div>
@@ -295,48 +342,52 @@ export function CallModal({
               onClick={handleStartCall} 
               className="w-full gap-2" 
               data-testid="button-start-call"
-              disabled={!vapiPublicKey}
             >
               <Phone className="h-4 w-4" />
-              Start AI Intake
+              Call Patient
             </Button>
           )}
-          {callStatus === "connecting" && (
+          {(callStatus === "connecting" || callStatus === "ringing") && (
             <Button
               variant="outline"
               disabled
               className="w-full gap-2"
             >
               <Loader2 className="h-4 w-4 animate-spin" />
-              Connecting...
+              {statusDisplay.text}
             </Button>
           )}
-          {callStatus === "in-call" && (
-            <>
+          {callStatus === "in-progress" && (
+            <div className="w-full text-center">
+              <p className="text-sm text-muted-foreground mb-2">
+                Call in progress - waiting for completion
+              </p>
               <Button
                 variant="outline"
-                onClick={toggleMute}
-                className="gap-2"
-                data-testid="button-mute"
+                disabled
+                className="w-full gap-2"
+                data-testid="button-in-progress"
               >
-                {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-                {isMuted ? "Unmute" : "Mute"}
+                <Loader2 className="h-4 w-4 animate-spin" />
+                AI agent speaking...
               </Button>
-              <Button
-                variant="destructive"
-                onClick={handleEndCall}
-                className="flex-1 gap-2"
-                data-testid="button-end-call"
-              >
-                <PhoneOff className="h-4 w-4" />
-                End Call
-              </Button>
-            </>
+            </div>
           )}
           {callStatus === "completed" && (
             <Button onClick={handleEndCall} className="w-full gap-2" data-testid="button-save-call">
               Save & Continue
             </Button>
+          )}
+          {callStatus === "failed" && (
+            <div className="flex gap-2 w-full">
+              <Button variant="outline" onClick={() => onOpenChange(false)} className="flex-1">
+                Cancel
+              </Button>
+              <Button onClick={handleStartCall} className="flex-1 gap-2">
+                <Phone className="h-4 w-4" />
+                Retry
+              </Button>
+            </div>
           )}
         </DialogFooter>
       </DialogContent>

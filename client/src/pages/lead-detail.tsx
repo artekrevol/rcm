@@ -265,6 +265,7 @@ export default function LeadDetailPage() {
       <CallModal
         open={callModalOpen}
         onOpenChange={setCallModalOpen}
+        leadId={lead.id}
         leadName={lead.name}
         leadPhone={lead.phone}
         onCallComplete={handleCallComplete}
