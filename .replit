@@ -40,3 +40,8 @@ waitForPort = 5000
 
 [agent]
 integrations = ["javascript_database:1.0.0"]
+
+[userenv]
+
+[userenv.shared]
+VITE_VAPI_PUBLIC_KEY = "6dab72fc-1267-42ca-9d4c-78e89c854938"
