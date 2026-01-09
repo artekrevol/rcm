@@ -45,3 +45,5 @@ integrations = ["javascript_database:1.0.0"]
 
 [userenv.shared]
 VITE_VAPI_PUBLIC_KEY = "6dab72fc-1267-42ca-9d4c-78e89c854938"
+VAPI_ASSISTANT_ID = "20f87e19-f86e-4055-b9fd-aa18e5eb1c9f"
+VAPI_PHONE_NUMBER_ID = "20617765-2d18-4206-91dc-5212a67c59f9"
