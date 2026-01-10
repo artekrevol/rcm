@@ -63,6 +63,73 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(leads);
   });
 
+  // Worklist API with queue filtering
+  app.get("/api/leads/worklist", async (req, res) => {
+    const allLeads = await storage.getLeads();
+    const queue = req.query.queue as string || "all";
+    const now = new Date();
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+
+    // Queue filter functions
+    const queueFilters: Record<string, (lead: typeof allLeads[0]) => boolean> = {
+      all: () => true,
+      sla_breach: (lead) => {
+        const isNew = lead.status === "new" || lead.status === "attempting_contact";
+        const createdRecently = new Date(lead.createdAt) >= oneDayAgo;
+        const notContacted = !lead.lastContactedAt;
+        const createdOverHourAgo = new Date(lead.createdAt) <= oneHourAgo;
+        return isNew && createdRecently && notContacted && createdOverHourAgo;
+      },
+      not_contacted: (lead) => lead.status === "new" && lead.attemptCount === 0,
+      incomplete_vob: (lead) => {
+        return lead.vobScore < 100 || !lead.insuranceCarrier || !lead.memberId || !lead.planType;
+      },
+      vob_complete_needs_admissions: (lead) => {
+        return lead.vobStatus === "verified" && lead.handoffStatus === "not_sent";
+      },
+      follow_up_today: (lead) => {
+        if (!lead.nextActionAt) return false;
+        const actionAt = new Date(lead.nextActionAt);
+        return actionAt <= endOfToday && !["converted", "lost"].includes(lead.status);
+      },
+    };
+
+    // Calculate counts for each queue
+    const countsByQueue: Record<string, number> = {};
+    for (const [queueName, filterFn] of Object.entries(queueFilters)) {
+      countsByQueue[queueName] = allLeads.filter(filterFn).length;
+    }
+
+    // Apply selected queue filter
+    const filterFn = queueFilters[queue] || queueFilters.all;
+    let filteredLeads = allLeads.filter(filterFn);
+
+    // Sort by priority (P0 first), then by createdAt (newest first)
+    filteredLeads.sort((a, b) => {
+      const priorityOrder = { P0: 0, P1: 1, P2: 2 };
+      const aPriority = priorityOrder[a.priority as keyof typeof priorityOrder] ?? 2;
+      const bPriority = priorityOrder[b.priority as keyof typeof priorityOrder] ?? 2;
+      if (aPriority !== bPriority) return aPriority - bPriority;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    // Pagination
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 50;
+    const startIndex = (page - 1) * pageSize;
+    const paginatedLeads = filteredLeads.slice(startIndex, startIndex + pageSize);
+
+    res.json({
+      rows: paginatedLeads,
+      countsByQueue,
+      total: filteredLeads.length,
+      page,
+      pageSize,
+    });
+  });
+
   app.get("/api/leads/:id", async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
@@ -78,6 +145,35 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
     const lead = await storage.createLead(parsed.data);
     res.status(201).json(lead);
+  });
+
+  // PATCH endpoint for quick actions and lead updates
+  app.patch("/api/leads/:id", async (req, res) => {
+    const lead = await storage.getLead(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    const allowedFields = [
+      "status", "priority", "nextAction", "nextActionAt", "lastOutcome",
+      "attemptCount", "lastContactedAt", "vobStatus", "vobScore",
+      "serviceNeeded", "insuranceCarrier", "memberId", "planType",
+      "ownerUserId", "handoffStatus"
+    ];
+
+    const updates: Record<string, any> = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+
+    const updated = await storage.updateLead(req.params.id, updates);
+    res.json(updated);
   });
 
   app.get("/api/leads/:id/calls", async (req, res) => {
