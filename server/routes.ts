@@ -296,6 +296,32 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return res.status(400).json({ error: "Customer phone number is required" });
     }
     
+    // Format phone number to E.164 format for US numbers (+1XXXXXXXXXX)
+    const formatToE164 = (phone: string): string => {
+      // Remove all non-digit characters
+      const digits = phone.replace(/\D/g, '');
+      
+      // If already has country code (11 digits starting with 1), add +
+      if (digits.length === 11 && digits.startsWith('1')) {
+        return `+${digits}`;
+      }
+      
+      // If 10 digits (standard US), add +1
+      if (digits.length === 10) {
+        return `+1${digits}`;
+      }
+      
+      // If already in E.164 format, return as-is
+      if (phone.startsWith('+')) {
+        return phone;
+      }
+      
+      // Default: add +1 prefix
+      return `+1${digits}`;
+    };
+    
+    const formattedNumber = formatToE164(customerNumber);
+    
     try {
       const response = await fetch("https://api.vapi.ai/call/phone", {
         method: "POST",
@@ -307,7 +333,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           assistantId,
           phoneNumberId,
           customer: {
-            number: customerNumber,
+            number: formattedNumber,
             name: customerName || "Patient",
           },
         }),
