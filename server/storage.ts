@@ -8,10 +8,11 @@ import {
   type Denial, type InsertDenial,
   type Rule, type InsertRule,
   type Call, type InsertCall,
+  type PriorAuth, type InsertPriorAuth,
   type DashboardMetrics,
   type DenialCluster,
   type RiskExplanation,
-  users, leads, patients, encounters, claims, claimEvents, denials, rules, calls,
+  users, leads, patients, encounters, claims, claimEvents, denials, rules, calls, priorAuthorizations,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, count } from "drizzle-orm";
@@ -53,7 +54,15 @@ export interface IStorage {
   deleteRule(id: string): Promise<void>;
   
   getCallsByLeadId(leadId: string): Promise<Call[]>;
+  getCall(id: string): Promise<Call | undefined>;
   createCall(call: InsertCall): Promise<Call>;
+  updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined>;
+  
+  getPriorAuthsByEncounterId(encounterId: string): Promise<PriorAuth[]>;
+  getPriorAuthsByPatientId(patientId: string): Promise<PriorAuth[]>;
+  getPriorAuth(id: string): Promise<PriorAuth | undefined>;
+  createPriorAuth(auth: InsertPriorAuth): Promise<PriorAuth>;
+  updatePriorAuth(id: string, updates: Partial<PriorAuth>): Promise<PriorAuth | undefined>;
   
   getDashboardMetrics(): Promise<DashboardMetrics>;
   getDenialClusters(): Promise<DenialCluster[]>;
@@ -195,9 +204,42 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(calls).where(eq(calls.leadId, leadId)).orderBy(desc(calls.createdAt));
   }
 
+  async getCall(id: string): Promise<Call | undefined> {
+    const [call] = await db.select().from(calls).where(eq(calls.id, id));
+    return call || undefined;
+  }
+
   async createCall(call: InsertCall): Promise<Call> {
     const [newCall] = await db.insert(calls).values(call).returning();
     return newCall;
+  }
+
+  async updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined> {
+    const [updated] = await db.update(calls).set(updates).where(eq(calls.id, id)).returning();
+    return updated || undefined;
+  }
+
+  async getPriorAuthsByEncounterId(encounterId: string): Promise<PriorAuth[]> {
+    return db.select().from(priorAuthorizations).where(eq(priorAuthorizations.encounterId, encounterId)).orderBy(desc(priorAuthorizations.requestedDate));
+  }
+
+  async getPriorAuthsByPatientId(patientId: string): Promise<PriorAuth[]> {
+    return db.select().from(priorAuthorizations).where(eq(priorAuthorizations.patientId, patientId)).orderBy(desc(priorAuthorizations.requestedDate));
+  }
+
+  async getPriorAuth(id: string): Promise<PriorAuth | undefined> {
+    const [auth] = await db.select().from(priorAuthorizations).where(eq(priorAuthorizations.id, id));
+    return auth || undefined;
+  }
+
+  async createPriorAuth(auth: InsertPriorAuth): Promise<PriorAuth> {
+    const [newAuth] = await db.insert(priorAuthorizations).values(auth).returning();
+    return newAuth;
+  }
+
+  async updatePriorAuth(id: string, updates: Partial<PriorAuth>): Promise<PriorAuth | undefined> {
+    const [updated] = await db.update(priorAuthorizations).set(updates).where(eq(priorAuthorizations.id, id)).returning();
+    return updated || undefined;
   }
 
   async getDashboardMetrics(): Promise<DashboardMetrics> {

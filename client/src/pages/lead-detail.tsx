@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import { LeadStatusBadge } from "@/components/status-badge";
 import { CallModal } from "@/components/call-modal";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,6 +22,15 @@ import {
   CreditCard,
   MessageSquare,
   Plus,
+  Clock,
+  DollarSign,
+  Shield,
+  CheckCircle2,
+  AlertCircle,
+  Edit3,
+  Save,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { format } from "date-fns";
 import type { Lead, Call, Patient } from "@shared/schema";
@@ -30,6 +40,9 @@ export default function LeadDetailPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [callModalOpen, setCallModalOpen] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set());
 
   const { data: lead, isLoading: leadLoading } = useQuery<Lead>({
     queryKey: ["/api/leads", id],
@@ -41,6 +54,20 @@ export default function LeadDetailPage() {
 
   const { data: patient } = useQuery<Patient | null>({
     queryKey: ["/api/leads", id, "patient"],
+  });
+
+  const updateCallMutation = useMutation({
+    mutationFn: async ({ callId, notes }: { callId: string; notes: string }) => {
+      return apiRequest("PATCH", `/api/calls/${callId}`, { notes });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "calls"] });
+      toast({ title: "Notes saved" });
+      setEditingNoteId(null);
+    },
+    onError: () => {
+      toast({ title: "Failed to save notes", variant: "destructive" });
+    },
   });
 
   const createClaimPacketMutation = useMutation({
@@ -56,12 +83,54 @@ export default function LeadDetailPage() {
     },
   });
 
-  const handleCallComplete = async (data: any) => {
-    await apiRequest("POST", `/api/leads/${id}/call`, data);
+  const handleCallComplete = async (data: {
+    transcript: string;
+    summary: string;
+    disposition: string;
+    duration?: number;
+    extractedData: any;
+    vobData?: any;
+  }) => {
+    await apiRequest("POST", `/api/leads/${id}/call`, {
+      transcript: data.transcript,
+      summary: data.summary,
+      disposition: data.disposition,
+      duration: data.duration,
+      extractedData: data.extractedData,
+      vobData: data.vobData,
+    });
     queryClient.invalidateQueries({ queryKey: ["/api/leads", id] });
     queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "calls"] });
     queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "patient"] });
     toast({ title: "Call saved successfully" });
+  };
+
+  const toggleTranscript = (callId: string) => {
+    setExpandedTranscripts(prev => {
+      const next = new Set(prev);
+      if (next.has(callId)) {
+        next.delete(callId);
+      } else {
+        next.add(callId);
+      }
+      return next;
+    });
+  };
+
+  const startEditingNote = (call: Call) => {
+    setEditingNoteId(call.id);
+    setNoteText(call.notes || "");
+  };
+
+  const saveNote = (callId: string) => {
+    updateCallMutation.mutate({ callId, notes: noteText });
+  };
+
+  const formatDuration = (seconds?: number | null) => {
+    if (!seconds) return null;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}m ${secs}s`;
   };
 
   if (leadLoading) {
@@ -86,6 +155,7 @@ export default function LeadDetailPage() {
 
   const latestCall = calls?.[0];
   const extractedData = latestCall?.extractedData;
+  const vobData = latestCall?.vobData;
 
   return (
     <div className="p-6 space-y-6">
@@ -203,6 +273,78 @@ export default function LeadDetailPage() {
               </CardContent>
             </Card>
           )}
+
+          {vobData && vobData.verified && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base font-medium flex items-center gap-2">
+                  <Shield className="h-4 w-4" />
+                  Benefits Verification
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                  <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                    Verified
+                  </span>
+                  {vobData.networkStatus && (
+                    <Badge variant="outline" className="ml-auto text-xs">
+                      {vobData.networkStatus === "in_network" ? "In-Network" : "Out-of-Network"}
+                    </Badge>
+                  )}
+                </div>
+                
+                <Separator />
+                
+                <div className="grid grid-cols-2 gap-4">
+                  {vobData.copay !== undefined && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Copay</p>
+                      <p className="text-sm font-semibold">${vobData.copay}</p>
+                    </div>
+                  )}
+                  {vobData.coinsurance !== undefined && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Coinsurance</p>
+                      <p className="text-sm font-semibold">{vobData.coinsurance}%</p>
+                    </div>
+                  )}
+                  {vobData.deductible !== undefined && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Deductible</p>
+                      <p className="text-sm font-semibold">
+                        ${vobData.deductibleMet || 0} / ${vobData.deductible}
+                      </p>
+                    </div>
+                  )}
+                  {vobData.outOfPocketMax !== undefined && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Out-of-Pocket Max</p>
+                      <p className="text-sm font-semibold">
+                        ${vobData.outOfPocketMet || 0} / ${vobData.outOfPocketMax}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {vobData.priorAuthRequired && (
+                  <div className="flex items-center gap-2 pt-2">
+                    <AlertCircle className="h-4 w-4 text-amber-500" />
+                    <span className="text-sm text-amber-600 dark:text-amber-400">
+                      Prior Authorization Required
+                    </span>
+                  </div>
+                )}
+
+                {(vobData.effectiveDate || vobData.termDate) && (
+                  <div className="text-xs text-muted-foreground pt-2">
+                    Coverage: {vobData.effectiveDate || "—"} to {vobData.termDate || "Ongoing"}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <Card className="lg:col-span-2">
@@ -218,26 +360,94 @@ export default function LeadDetailPage() {
                 {calls.map((call) => (
                   <div key={call.id} className="space-y-4">
                     <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="flex items-center gap-2">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <Badge variant="outline" className="capitalize">
                             {call.disposition}
                           </Badge>
                           <span className="text-sm text-muted-foreground">
                             {format(new Date(call.createdAt), "MMM d, yyyy 'at' h:mm a")}
                           </span>
+                          {call.duration && (
+                            <span className="flex items-center gap-1 text-sm text-muted-foreground">
+                              <Clock className="h-3 w-3" />
+                              {formatDuration(call.duration)}
+                            </span>
+                          )}
                         </div>
                         <p className="text-sm mt-2">{call.summary}</p>
                       </div>
                     </div>
                     
-                    <div className="bg-muted/50 rounded-lg p-4">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-3">
-                        Transcript
-                      </p>
-                      <div className="text-sm whitespace-pre-wrap font-mono text-xs leading-relaxed">
-                        {call.transcript}
+                    {call.transcript && (
+                      <div className="bg-muted/50 rounded-lg overflow-hidden">
+                        <button
+                          onClick={() => toggleTranscript(call.id)}
+                          className="w-full flex items-center justify-between p-3 text-left hover-elevate"
+                          data-testid={`button-toggle-transcript-${call.id}`}
+                        >
+                          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Transcript
+                          </span>
+                          {expandedTranscripts.has(call.id) ? (
+                            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </button>
+                        {expandedTranscripts.has(call.id) && (
+                          <div className="px-4 pb-4">
+                            <div className="text-sm whitespace-pre-wrap font-mono text-xs leading-relaxed max-h-64 overflow-y-auto">
+                              {call.transcript}
+                            </div>
+                          </div>
+                        )}
                       </div>
+                    )}
+
+                    <div className="bg-muted/30 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          Notes
+                        </span>
+                        {editingNoteId !== call.id ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => startEditingNote(call)}
+                            className="h-7 gap-1"
+                            data-testid={`button-edit-notes-${call.id}`}
+                          >
+                            <Edit3 className="h-3 w-3" />
+                            Edit
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => saveNote(call.id)}
+                            className="h-7 gap-1"
+                            disabled={updateCallMutation.isPending}
+                            data-testid={`button-save-notes-${call.id}`}
+                          >
+                            <Save className="h-3 w-3" />
+                            Save
+                          </Button>
+                        )}
+                      </div>
+                      {editingNoteId === call.id ? (
+                        <Textarea
+                          value={noteText}
+                          onChange={(e) => setNoteText(e.target.value)}
+                          placeholder="Add notes about this call..."
+                          className="min-h-[80px] text-sm"
+                          data-testid={`textarea-notes-${call.id}`}
+                        />
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          {call.notes || "No notes added yet."}
+                        </p>
+                      )}
                     </div>
                     
                     <Separator />

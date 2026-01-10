@@ -134,6 +134,8 @@ export const calls = pgTable("calls", {
   transcript: text("transcript").notNull(),
   summary: text("summary").notNull(),
   disposition: text("disposition").notNull(),
+  notes: text("notes"),
+  duration: integer("duration"),
   extractedData: jsonb("extracted_data").$type<{
     insuranceCarrier?: string;
     memberId?: string;
@@ -143,12 +145,48 @@ export const calls = pgTable("calls", {
     qualified?: boolean;
     notes?: string;
   }>(),
+  vobData: jsonb("vob_data").$type<{
+    verified?: boolean;
+    copay?: number;
+    deductible?: number;
+    deductibleMet?: number;
+    outOfPocketMax?: number;
+    outOfPocketMet?: number;
+    coinsurance?: number;
+    coverageType?: string;
+    effectiveDate?: string;
+    termDate?: string;
+    priorAuthRequired?: boolean;
+    networkStatus?: "in_network" | "out_of_network" | "unknown";
+  }>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const insertCallSchema = createInsertSchema(calls).omit({ id: true, createdAt: true });
 export type InsertCall = z.infer<typeof insertCallSchema>;
 export type Call = typeof calls.$inferSelect;
+
+// Prior Authorization tracking
+export const priorAuthorizations = pgTable("prior_authorizations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  encounterId: varchar("encounter_id").notNull(),
+  patientId: varchar("patient_id").notNull(),
+  payer: text("payer").notNull(),
+  serviceType: text("service_type").notNull(),
+  authNumber: text("auth_number"),
+  status: text("status").notNull().default("pending"),
+  requestedDate: timestamp("requested_date").defaultNow().notNull(),
+  approvedDate: timestamp("approved_date"),
+  expirationDate: timestamp("expiration_date"),
+  approvedUnits: integer("approved_units"),
+  usedUnits: integer("used_units").default(0),
+  notes: text("notes"),
+  denialReason: text("denial_reason"),
+});
+
+export const insertPriorAuthSchema = createInsertSchema(priorAuthorizations).omit({ id: true, requestedDate: true });
+export type InsertPriorAuth = z.infer<typeof insertPriorAuthSchema>;
+export type PriorAuth = typeof priorAuthorizations.$inferSelect;
 
 // Dashboard metrics type
 export type DashboardMetrics = {

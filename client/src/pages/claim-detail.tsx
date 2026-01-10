@@ -9,6 +9,7 @@ import { StatusBadge, ClaimStatusBadge } from "@/components/status-badge";
 import { RiskScoreCircle } from "@/components/risk-score";
 import { ClaimTimeline } from "@/components/claim-timeline";
 import { ExplainabilityDrawer } from "@/components/explainability-drawer";
+import { PriorAuthSection } from "@/components/prior-auth-section";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -257,6 +258,13 @@ export default function ClaimDetailPage() {
               </CardContent>
             </Card>
           )}
+
+          <PriorAuthSection
+            encounterId={claim.encounterId}
+            patientId={claim.patientId}
+            payer={claim.payer}
+            serviceType={claim.cptCodes?.[0] || "General Services"}
+          />
         </div>
 
         <Card className="lg:col-span-2">

@@ -22,6 +22,7 @@ interface CallModalProps {
     transcript: string;
     summary: string;
     disposition: string;
+    duration?: number;
     extractedData: {
       insuranceCarrier?: string;
       memberId?: string;
@@ -30,6 +31,14 @@ interface CallModalProps {
       consent?: boolean;
       qualified?: boolean;
       notes?: string;
+    };
+    vobData?: {
+      verified?: boolean;
+      copay?: number;
+      deductible?: number;
+      coinsurance?: number;
+      priorAuthRequired?: boolean;
+      networkStatus?: "in_network" | "out_of_network";
     };
   }) => void;
 }
@@ -149,17 +158,47 @@ export function CallModal({
       ? extractDataFromTranscript(callData.transcript)
       : { qualified: false, notes: "Call ended without transcript" };
     
+    const vobData = extractVobDataFromTranscript(callData?.transcript || "");
+    
     onCallComplete({
       transcript: callData?.transcript || "",
       summary: callData?.summary || "Call completed",
       disposition: extractedData.qualified ? "qualified" : "needs_follow_up",
       extractedData,
+      duration: callData?.duration,
+      vobData,
     });
     
     setCallStatus("idle");
     setVapiCallId(null);
     setCallData(null);
     onOpenChange(false);
+  };
+
+  const extractVobDataFromTranscript = (transcript: string) => {
+    const text = transcript.toLowerCase();
+    
+    const copayMatch = text.match(/\$(\d+)\s*copay/i);
+    const deductibleMatch = text.match(/deductible.*?\$(\d+)/i) || text.match(/\$(\d+).*?deductible/i);
+    const coinsuranceMatch = text.match(/(\d+)%\s*coinsurance/i) || text.match(/coinsurance.*?(\d+)%/i);
+    
+    const hasVerification = /verif|confirm|check.*benefit|benefit.*check/i.test(text);
+    const priorAuthRequired = /prior auth|authorization required|need.*auth/i.test(text);
+    const inNetwork = /in.?network|participating provider/i.test(text);
+    const outOfNetwork = /out.?of.?network|non.?participating/i.test(text);
+    
+    if (!hasVerification && !copayMatch && !deductibleMatch) {
+      return undefined;
+    }
+    
+    return {
+      verified: hasVerification || !!copayMatch || !!deductibleMatch,
+      copay: copayMatch ? parseInt(copayMatch[1]) : undefined,
+      deductible: deductibleMatch ? parseInt(deductibleMatch[1]) : undefined,
+      coinsurance: coinsuranceMatch ? parseInt(coinsuranceMatch[1]) : undefined,
+      priorAuthRequired,
+      networkStatus: inNetwork ? "in_network" as const : outOfNetwork ? "out_of_network" as const : undefined,
+    };
   };
 
   const extractDataFromTranscript = (transcript: string) => {

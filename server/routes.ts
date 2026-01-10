@@ -103,6 +103,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       summary: req.body.summary || `VOB call completed with ${lead.name}. Insurance verified.`,
       disposition: req.body.disposition || "qualified",
       extractedData: req.body.extractedData || generateIntakeData(),
+      duration: req.body.duration || null,
+      notes: req.body.notes || null,
+      vobData: req.body.vobData || null,
     };
 
     const call = await storage.createCall(callData);
@@ -400,6 +403,55 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       console.error("Error getting call status:", error);
       res.status(500).json({ error: "Failed to get call status" });
     }
+  });
+
+  // Call history and notes
+  app.get("/api/calls/:id", async (req, res) => {
+    const call = await storage.getCall(req.params.id);
+    if (!call) {
+      return res.status(404).json({ error: "Call not found" });
+    }
+    res.json(call);
+  });
+
+  app.patch("/api/calls/:id", async (req, res) => {
+    const call = await storage.updateCall(req.params.id, req.body);
+    if (!call) {
+      return res.status(404).json({ error: "Call not found" });
+    }
+    res.json(call);
+  });
+
+  // Prior Authorization routes
+  app.get("/api/prior-auth/encounter/:encounterId", async (req, res) => {
+    const auths = await storage.getPriorAuthsByEncounterId(req.params.encounterId);
+    res.json(auths);
+  });
+
+  app.get("/api/prior-auth/patient/:patientId", async (req, res) => {
+    const auths = await storage.getPriorAuthsByPatientId(req.params.patientId);
+    res.json(auths);
+  });
+
+  app.get("/api/prior-auth/:id", async (req, res) => {
+    const auth = await storage.getPriorAuth(req.params.id);
+    if (!auth) {
+      return res.status(404).json({ error: "Prior authorization not found" });
+    }
+    res.json(auth);
+  });
+
+  app.post("/api/prior-auth", async (req, res) => {
+    const auth = await storage.createPriorAuth(req.body);
+    res.status(201).json(auth);
+  });
+
+  app.patch("/api/prior-auth/:id", async (req, res) => {
+    const auth = await storage.updatePriorAuth(req.params.id, req.body);
+    if (!auth) {
+      return res.status(404).json({ error: "Prior authorization not found" });
+    }
+    res.json(auth);
   });
 
 }
