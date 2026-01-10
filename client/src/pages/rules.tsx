@@ -384,9 +384,9 @@ export default function RulesPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      {rule.protectedAmount > 0 ? (
+                      {(rule.protectedAmount || 0) > 0 ? (
                         <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                          ${rule.protectedAmount.toLocaleString()}
+                          ${(rule.protectedAmount || 0).toLocaleString()}
                         </span>
                       ) : (
                         <span className="text-muted-foreground text-sm">$0</span>

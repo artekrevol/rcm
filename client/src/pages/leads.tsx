@@ -116,10 +116,13 @@ export default function LeadsPage() {
     localStorage.setItem("leadsView", viewMode);
   }, [viewMode]);
 
-  const { data: worklistData, isLoading } = useQuery<WorklistResponse>({
+  const { data: worklistData, isLoading, error } = useQuery<WorklistResponse>({
     queryKey: ["/api/leads/worklist", activeQueue],
     queryFn: async () => {
       const res = await fetch(`/api/leads/worklist?queue=${activeQueue}`);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch worklist: ${res.status}`);
+      }
       return res.json();
     },
   });
@@ -182,10 +185,10 @@ export default function LeadsPage() {
         updateLeadMutation.mutate({
           id: lead.id,
           updates: { 
-            status: "contacted", 
-            lastContactedAt: new Date().toISOString() as any,
+            status: "contacted",
+            lastContactedAt: new Date().toISOString(),
             attemptCount: (lead.attemptCount || 0) + 1
-          }
+          } as any
         });
         break;
       case "mark_qualified":

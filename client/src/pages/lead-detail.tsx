@@ -203,15 +203,15 @@ export default function LeadDetailPage() {
       case "mark_contacted":
         updateLeadMutation.mutate({
           status: "contacted",
-          lastContactedAt: new Date().toISOString() as any,
-          attemptCount: ((lead?.attemptCount || 0) + 1) as any,
-        });
+          lastContactedAt: new Date().toISOString(),
+          attemptCount: (lead?.attemptCount || 0) + 1,
+        } as any);
         break;
       case "mark_qualified":
-        updateLeadMutation.mutate({ status: "qualified" });
+        updateLeadMutation.mutate({ status: "qualified" } as any);
         break;
       case "mark_lost":
-        updateLeadMutation.mutate({ status: "lost" });
+        updateLeadMutation.mutate({ status: "lost" } as any);
         break;
     }
   };
