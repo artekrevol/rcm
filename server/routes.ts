@@ -154,18 +154,99 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return res.status(404).json({ error: "Lead not found" });
     }
 
-    const allowedFields = [
-      "status", "priority", "nextAction", "nextActionAt", "lastOutcome",
-      "attemptCount", "lastContactedAt", "vobStatus", "vobScore",
-      "serviceNeeded", "insuranceCarrier", "memberId", "planType",
-      "ownerUserId", "handoffStatus"
-    ];
+    // Validation schemas for enum fields
+    const validStatuses = ["new", "attempting_contact", "contacted", "qualified", "unqualified", "converted", "lost"];
+    const validPriorities = ["P0", "P1", "P2"];
+    const validVobStatuses = ["not_started", "in_progress", "verified", "incomplete"];
+    const validHandoffStatuses = ["not_sent", "sent", "accepted"];
 
     const updates: Record<string, any> = {};
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        updates[field] = req.body[field];
+    const errors: string[] = [];
+
+    // Validate and collect updates
+    if (req.body.status !== undefined) {
+      if (validStatuses.includes(req.body.status)) {
+        updates.status = req.body.status;
+      } else {
+        errors.push(`Invalid status: ${req.body.status}`);
       }
+    }
+    if (req.body.priority !== undefined) {
+      if (validPriorities.includes(req.body.priority)) {
+        updates.priority = req.body.priority;
+      } else {
+        errors.push(`Invalid priority: ${req.body.priority}`);
+      }
+    }
+    if (req.body.vobStatus !== undefined) {
+      if (validVobStatuses.includes(req.body.vobStatus)) {
+        updates.vobStatus = req.body.vobStatus;
+      } else {
+        errors.push(`Invalid vobStatus: ${req.body.vobStatus}`);
+      }
+    }
+    if (req.body.handoffStatus !== undefined) {
+      if (validHandoffStatuses.includes(req.body.handoffStatus)) {
+        updates.handoffStatus = req.body.handoffStatus;
+      } else {
+        errors.push(`Invalid handoffStatus: ${req.body.handoffStatus}`);
+      }
+    }
+
+    // String fields (no validation needed beyond type)
+    const stringFields = ["nextAction", "lastOutcome", "serviceNeeded", "insuranceCarrier", "memberId", "planType", "ownerUserId"];
+    for (const field of stringFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field] === null ? null : String(req.body[field]);
+      }
+    }
+
+    // Numeric fields
+    if (req.body.attemptCount !== undefined) {
+      const count = parseInt(req.body.attemptCount);
+      if (!isNaN(count) && count >= 0) {
+        updates.attemptCount = count;
+      } else {
+        errors.push("Invalid attemptCount: must be non-negative integer");
+      }
+    }
+    if (req.body.vobScore !== undefined) {
+      const score = parseInt(req.body.vobScore);
+      if (!isNaN(score) && score >= 0 && score <= 100) {
+        updates.vobScore = score;
+      } else {
+        errors.push("Invalid vobScore: must be 0-100");
+      }
+    }
+
+    // Timestamp fields
+    if (req.body.nextActionAt !== undefined) {
+      if (req.body.nextActionAt === null) {
+        updates.nextActionAt = null;
+      } else {
+        const date = new Date(req.body.nextActionAt);
+        if (!isNaN(date.getTime())) {
+          updates.nextActionAt = date;
+        } else {
+          errors.push("Invalid nextActionAt: must be valid date");
+        }
+      }
+    }
+    if (req.body.lastContactedAt !== undefined) {
+      if (req.body.lastContactedAt === null) {
+        updates.lastContactedAt = null;
+      } else {
+        const date = new Date(req.body.lastContactedAt);
+        if (!isNaN(date.getTime())) {
+          updates.lastContactedAt = date;
+        } else {
+          errors.push("Invalid lastContactedAt: must be valid date");
+        }
+      }
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({ error: errors.join("; ") });
     }
 
     if (Object.keys(updates).length === 0) {
