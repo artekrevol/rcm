@@ -1,0 +1,516 @@
+1) UI/UX Changes to Match Competitors (Enterprise Operator Console)
+Change A — Make List/Table the default everywhere (not Kanban)
+
+Competitors default to worklists (tables) with filters, not boards.
+
+Leads: replace default board with “Worklist”
+
+UI changes
+
+Add View toggle: Worklist | Board
+
+Default = Worklist
+
+Board remains optional
+
+Worklist columns (exact)
+
+Lead (name + phone)
+
+Status
+
+Priority
+
+Next Action
+
+Last Outcome
+
+Attempts
+
+VOB Completeness (0–100)
+
+Insurance (carrier + plan type)
+
+LOC / Service Needed
+
+Owner
+
+Created
+
+UX behavior
+
+Row click opens Lead Detail
+
+Hover shows quick actions: Call, Text, Assign, Mark Qualified, Mark Lost
+
+Change B — Add Work Queues (tabs) like Waystar/Experian “work queues”
+
+Top of Leads and Claims add queue tabs.
+
+Leads Queues
+
+SLA Breach (P0)
+
+New → Not Contacted
+
+Incomplete VOB
+
+VOB Complete → Needs Admissions
+
+Needs Follow-up Today
+
+Claims Queues
+
+Blocked (P0)
+
+At Risk (P1)
+
+Stuck > X days
+
+Ready to Submit
+
+Need Prior Auth
+
+These are just saved filters. Huge perceived value, minimal build.
+
+Change C — Turn the Lead Detail into a “summary-first” record like competitors
+
+Competitors don’t make you read transcripts first.
+
+Lead Detail Layout (top-down)
+
+Header strip with:
+
+Status, Priority, Owner, Next Action, Next Action At
+
+Summary cards row
+
+Intake Completeness (%)
+
+Insurance Snapshot
+
+VOB Status
+
+“Auth Likely?” flag
+
+Action panel (right rail)
+
+Mark as Contacted/Qualified
+
+Request missing info (email/SMS stub ok)
+
+Create claim packet
+
+Add note
+
+Transcript/Call logs below, collapsed by default
+
+Change D — Add “Reason + Next Step” everywhere (the #1 competitor pattern)
+
+Competitors always show “why” and “what now”.
+
+Claims List add 2 columns:
+
+Reason (Auth Likely, Missing Info, Coding Risk)
+
+Next Step (Obtain Auth, Verify Benefits, Fix CPT)
+
+Rules List add “Impact” that is real:
+
+Triggers (30d)
+
+Prevented
+
+$ Protected
+
+2) Replit Build Instructions (Step-by-Step)
+
+I’m assuming your stack is:
+
+React + TS + Tailwind + shadcn
+
+Express + Postgres + Drizzle
+
+TanStack Query
+
+If any mismatch, still follow structure.
+
+Step 1 — Add required fields to the DB (Leads)
+1.1 Update Drizzle schema
+
+File: server/db/schema/leads.ts (or wherever leads schema lives)
+
+Add these fields (exact):
+
+priority (text) default 'P2'
+
+nextAction (text) nullable
+
+nextActionAt (timestamp) nullable
+
+lastOutcome (text) nullable
+
+attemptCount (int) default 0
+
+vobStatus (text) default 'not_started'
+
+vobScore (int) default 0
+
+carrier (text) nullable
+
+memberId (text) nullable
+
+planType (text) nullable
+
+serviceNeeded (text) nullable
+
+ownerUserId (uuid) nullable
+
+handoffStatus (text) default 'not_sent'
+
+Enums (use text if you want speed)
+
+priority: P0, P1, P2
+
+vobStatus: not_started, in_progress, verified, incomplete
+
+handoffStatus: not_sent, sent, accepted
+
+1.2 Add indexes (important for worklists)
+
+Add indexes for:
+
+(status, priority, createdAt)
+
+(priority, nextActionAt)
+
+(ownerUserId, status)
+
+1.3 Generate migration and push
+
+Create migration
+
+Run migration
+
+Seed 30–50 leads with realistic values across statuses
+
+Acceptance
+
+You can query leads and see new fields populated.
+
+Step 2 — Create “Worklist API” endpoints
+2.1 Leads worklist endpoint
+
+File: server/routes/leads.ts
+
+Create route:
+
+GET /api/leads/worklist
+
+Query params
+
+queue (string) e.g., sla_breach, incomplete_vob
+
+status optional
+
+owner optional
+
+q optional search text
+
+page, pageSize
+
+Server-side logic
+
+Apply queue filters (see Step 3)
+
+Return:
+
+rows
+
+countsByQueue (for tabs)
+
+total
+
+Acceptance
+
+Postman / browser returns rows + queue counts.
+
+Step 3 — Implement Queue Logic (this is the ROI brain)
+
+Create a helper:
+File: server/services/queueFilters.ts
+
+Leads Queue Definitions (exact)
+
+sla_breach (P0)
+status in ('new','attempting_contact') AND created_at >= now()-24h AND last_contacted_at is null AND created_at <= now()-60min
+
+not_contacted
+status='new' AND attempt_count=0
+
+incomplete_vob
+vob_score < 100 OR carrier is null OR member_id is null OR plan_type is null
+
+vob_complete_needs_admissions (P0)
+vob_status='verified' AND handoff_status='not_sent'
+
+follow_up_today
+next_action_at <= end_of_today AND status not in ('converted','lost')
+
+Claims Queue Definitions (if needed this week)
+
+blocked readiness='blocked'
+
+at_risk readiness='at_risk'
+
+stuck days_since_last_event > threshold
+
+Acceptance
+
+Tabs match what the team expects operationally.
+
+Step 4 — Build Leads Worklist UI (replace Kanban default)
+4.1 Add view toggle + persist selection
+
+File: client/pages/Leads.tsx
+
+Create a toggle component:
+
+“Worklist” (default)
+
+“Board”
+
+Store in localStorage: leadsView = 'worklist' | 'board'
+
+4.2 Work Queue tabs
+
+At top of the page, add tabs with counts:
+
+SLA Breach
+
+Not Contacted
+
+Incomplete VOB
+
+VOB Complete → Needs Admissions
+
+Follow-up Today
+
+When tab changes:
+
+call /api/leads/worklist?queue=<tab>
+
+4.3 Implement Worklist table component
+
+File: client/components/leads/LeadsWorklistTable.tsx
+
+Use shadcn table pattern.
+
+Rows render
+
+Priority badge (P0 red, P1 amber, P2 neutral)
+
+VOB score as progress chip (0/25/50/75/100)
+
+Next Action as pill
+
+Hover quick actions
+
+4.4 Quick actions (row hover)
+
+Assign
+
+Mark Contacted
+
+Mark Qualified
+
+Mark Lost
+
+Open
+
+These should call PATCH endpoints (Step 5)
+
+Acceptance
+
+You can run the client and operate the leads like a call center console.
+
+Step 5 — Add “Operator Actions” endpoints (PATCH)
+5.1 Leads patch route
+
+File: server/routes/leads.ts
+
+Add:
+
+PATCH /api/leads/:id
+
+Allowed updates:
+
+status
+
+priority
+
+nextAction / nextActionAt
+
+vobStatus / vobScore
+
+carrier / memberId / planType / serviceNeeded
+
+ownerUserId
+
+handoffStatus
+
+Acceptance
+
+Quick actions update UI instantly (optimistic update is a plus).
+
+Step 6 — Upgrade Lead Detail UI (summary-first + right rail)
+6.1 Header strip
+
+File: client/pages/LeadDetail.tsx
+
+Add top strip:
+
+Status pill
+
+Priority pill
+
+Owner dropdown
+
+Next Action + datetime picker
+
+Buttons: “Mark Qualified”, “Mark Lost”
+
+6.2 Summary cards row
+
+Add 4 cards:
+
+Intake Completeness (use vobScore)
+
+Insurance Snapshot (carrier/plan/memberId)
+
+VOB Status
+
+Auth Likely (stub logic ok: if serviceNeeded in detox/residential => likely)
+
+6.3 Right rail actions
+
+Add stacked buttons:
+
+Update Insurance Info (opens modal)
+
+Mark VOB Verified
+
+Create Claim Packet
+
+Add Note
+
+6.4 Transcript collapsible default closed
+
+Move transcript into accordion collapsed by default.
+
+Acceptance
+
+Lead Detail feels like Salesforce/Waystar record: summary + actions first.
+
+Step 7 — Claims list improvements (Reason + Next Step)
+
+File: client/pages/Claims.tsx
+
+Add 2 columns:
+
+Reason (top risk driver / block reason)
+
+Next Step (mapped action)
+
+Backend can return these as computed fields or simple string fields.
+
+Acceptance
+
+Claims list tells an operator “what to do” without clicking in.
+
+Step 8 — Rules page: make Impact real (the “wow” metric)
+8.1 DB fields for rule impact (fast approach)
+
+If you don’t have event-based tracking yet, implement quick metrics from claims:
+
+preventedCount = number of claims blocked by rule
+
+$protected = sum of claim.amount blocked by rule
+
+triggeredCount = number of claims matched by rule condition (even if not blocked)
+
+Return those to UI.
+
+8.2 UI change
+
+Replace Impact column blanks with:
+
+“23 prevented”
+
+“$47,500 protected”
+
+“41 triggers”
+
+Acceptance
+
+Rules page now looks like a revenue system.
+
+3) UI Styling Notes to Match Competitors (Do these in parallel)
+
+Competitors use:
+
+denser tables
+
+less empty space
+
+more right-rail actions
+
+more badges and inline status
+
+Apply these UI changes globally
+
+Reduce card padding slightly (p-6 → p-4)
+
+Reduce row height in tables (dense mode)
+
+Make filters sticky (top bar stays while scrolling)
+
+Use consistent status colors across the app:
+
+P0/Blocked: red
+
+P1/At Risk: amber
+
+Ready/Verified: green
+
+Replace large gauges with:
+
+progress bars
+
+labeled risk drivers
+
+This moves you from “nice demo UI” → “enterprise ops UI.”
+
+4) What to Ship by End of Week (Minimum “Client WOW” Bundle)
+
+If you ship only these, it’s still a win:
+
+Leads Worklist (default) + Queue tabs
+
+Quick actions + PATCH updates
+
+Lead Detail summary-first + action rail
+
+Claims list Reason + Next Step
+
+Rules Impact ($ protected) populated
+
+That bundle demonstrates clear ROI:
+
+faster intake throughput
+
+fewer missing data issues
+
+fewer blocked claims
+
+operational clarity

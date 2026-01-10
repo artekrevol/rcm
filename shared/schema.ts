@@ -16,7 +16,10 @@ export const insertUserSchema = createInsertSchema(users).omit({ id: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
-// Lead status: new, contacted, qualified, unqualified, converted
+// Lead status: new, attempting_contact, contacted, qualified, unqualified, converted, lost
+// Priority: P0 (urgent), P1 (high), P2 (normal)
+// VOB Status: not_started, in_progress, verified, incomplete
+// Handoff Status: not_sent, sent, accepted
 export const leads = pgTable("leads", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -24,9 +27,20 @@ export const leads = pgTable("leads", {
   email: text("email"),
   source: text("source").notNull().default("website"),
   status: text("status").notNull().default("new"),
+  priority: text("priority").notNull().default("P2"),
+  nextAction: text("next_action"),
+  nextActionAt: timestamp("next_action_at"),
+  lastOutcome: text("last_outcome"),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastContactedAt: timestamp("last_contacted_at"),
+  vobStatus: text("vob_status").notNull().default("not_started"),
+  vobScore: integer("vob_score").notNull().default(0),
   serviceNeeded: text("service_needed"),
   insuranceCarrier: text("insurance_carrier"),
   memberId: text("member_id"),
+  planType: text("plan_type"),
+  ownerUserId: varchar("owner_user_id"),
+  handoffStatus: text("handoff_status").notNull().default("not_sent"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -74,6 +88,8 @@ export const claims = pgTable("claims", {
   status: text("status").notNull().default("created"),
   riskScore: integer("risk_score").notNull().default(0),
   readinessStatus: text("readiness_status").notNull().default("GREEN"),
+  reason: text("reason"),
+  nextStep: text("next_step"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -122,10 +138,13 @@ export const rules = pgTable("rules", {
   preventionAction: text("prevention_action").notNull(),
   enabled: boolean("enabled").notNull().default(true),
   impactCount: integer("impact_count").notNull().default(0),
+  triggeredCount: integer("triggered_count").notNull().default(0),
+  preventedCount: integer("prevented_count").notNull().default(0),
+  protectedAmount: real("protected_amount").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-export const insertRuleSchema = createInsertSchema(rules).omit({ id: true, createdAt: true, impactCount: true });
+export const insertRuleSchema = createInsertSchema(rules).omit({ id: true, createdAt: true, impactCount: true, triggeredCount: true, preventedCount: true, protectedAmount: true });
 export type InsertRule = z.infer<typeof insertRuleSchema>;
 export type Rule = typeof rules.$inferSelect;
 
