@@ -110,6 +110,24 @@ export default function ClaimsPage() {
       render: (claim: Claim) => <ClaimStatusBadge status={claim.status} />,
     },
     {
+      key: "reason",
+      header: "Reason",
+      render: (claim: Claim) => (
+        <span className="text-sm text-muted-foreground truncate max-w-[120px] block">
+          {claim.reason || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "nextStep",
+      header: "Next Step",
+      render: (claim: Claim) => (
+        <span className="text-sm text-muted-foreground truncate max-w-[120px] block">
+          {claim.nextStep || "—"}
+        </span>
+      ),
+    },
+    {
       key: "createdAt",
       header: "Created",
       render: (claim: Claim) => (

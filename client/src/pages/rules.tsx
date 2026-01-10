@@ -27,7 +27,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Shield, Plus, Pencil, Trash2, ShieldCheck, Search } from "lucide-react";
+import { Shield, Plus, Pencil, Trash2, ShieldCheck, Search, AlertTriangle, DollarSign } from "lucide-react";
 import { format } from "date-fns";
 import type { Rule, InsertRule } from "@shared/schema";
 
@@ -111,6 +111,9 @@ export default function RulesPage() {
 
   const totalImpact = rules?.reduce((sum, r) => sum + r.impactCount, 0) || 0;
   const enabledCount = rules?.filter((r) => r.enabled).length || 0;
+  const totalTriggered = rules?.reduce((sum, r) => sum + (r.triggeredCount || 0), 0) || 0;
+  const totalPrevented = rules?.reduce((sum, r) => sum + (r.preventedCount || 0), 0) || 0;
+  const totalProtected = rules?.reduce((sum, r) => sum + (r.protectedAmount || 0), 0) || 0;
 
   return (
     <div className="p-6 space-y-6">
@@ -231,45 +234,60 @@ export default function RulesPage() {
         </Dialog>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-4">
-              <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center">
-                <Shield className="h-6 w-6 text-primary" />
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                <Shield className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{rules?.length || 0}</p>
-                <p className="text-sm text-muted-foreground">Total Rules</p>
+                <p className="text-xl font-bold">{enabledCount}/{rules?.length || 0}</p>
+                <p className="text-xs text-muted-foreground">Active Rules</p>
               </div>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-4">
-              <div className="h-12 w-12 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
-                <ShieldCheck className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{enabledCount}</p>
-                <p className="text-sm text-muted-foreground">Active Rules</p>
+                <p className="text-xl font-bold">{totalTriggered}</p>
+                <p className="text-xs text-muted-foreground">Times Triggered</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+                <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-xl font-bold text-emerald-700 dark:text-emerald-400">
+                  {totalPrevented}
+                </p>
+                <p className="text-xs text-muted-foreground">Denials Prevented</p>
               </div>
             </div>
           </CardContent>
         </Card>
         <Card className="border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
-          <CardContent className="p-6">
-            <div className="flex items-center gap-4">
-              <div className="h-12 w-12 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
-                <ShieldCheck className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+                <DollarSign className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-400">
-                  {totalImpact}
+                <p className="text-xl font-bold text-emerald-700 dark:text-emerald-400">
+                  ${totalProtected.toLocaleString()}
                 </p>
-                <p className="text-sm text-emerald-600/80 dark:text-emerald-400/80">
-                  Denials Prevented
+                <p className="text-xs text-emerald-600/80 dark:text-emerald-400/80">
+                  Revenue Protected
                 </p>
               </div>
             </div>
@@ -306,9 +324,11 @@ export default function RulesPage() {
                   <TableHead>Rule</TableHead>
                   <TableHead>Payer</TableHead>
                   <TableHead>CPT</TableHead>
-                  <TableHead>Impact</TableHead>
+                  <TableHead className="text-center">Triggered</TableHead>
+                  <TableHead className="text-center">Prevented</TableHead>
+                  <TableHead className="text-right">$ Protected</TableHead>
                   <TableHead>Created</TableHead>
-                  <TableHead className="w-24"></TableHead>
+                  <TableHead className="w-12"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -347,13 +367,29 @@ export default function RulesPage() {
                         <span className="text-muted-foreground">Any</span>
                       )}
                     </TableCell>
-                    <TableCell>
-                      {rule.impactCount > 0 ? (
+                    <TableCell className="text-center">
+                      {rule.triggeredCount > 0 ? (
+                        <span className="text-sm font-medium">{rule.triggeredCount}</span>
+                      ) : (
+                        <span className="text-muted-foreground text-sm">0</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      {rule.preventedCount > 0 ? (
                         <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0">
-                          {rule.impactCount} prevented
+                          {rule.preventedCount}
                         </Badge>
                       ) : (
-                        <span className="text-muted-foreground text-sm">—</span>
+                        <span className="text-muted-foreground text-sm">0</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {rule.protectedAmount > 0 ? (
+                        <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                          ${rule.protectedAmount.toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground text-sm">$0</span>
                       )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
