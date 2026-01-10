@@ -24,6 +24,9 @@ export const leads = pgTable("leads", {
   email: text("email"),
   source: text("source").notNull().default("website"),
   status: text("status").notNull().default("new"),
+  serviceNeeded: text("service_needed"),
+  insuranceCarrier: text("insurance_carrier"),
+  memberId: text("member_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

@@ -110,19 +110,50 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
     const call = await storage.createCall(callData);
 
-    if (callData.extractedData?.qualified) {
-      await storage.updateLead(req.params.id, { status: "qualified" });
+    // Auto-fill lead with extracted call data
+    const extracted = callData.extractedData;
+    if (extracted) {
+      const leadUpdate: Record<string, any> = {};
       
+      if (extracted.qualified) {
+        leadUpdate.status = "qualified";
+      }
+      const service = extracted.serviceType || extracted.serviceNeeded;
+      if (service && service !== "Unknown") {
+        leadUpdate.serviceNeeded = service;
+      }
+      if (extracted.insuranceCarrier) {
+        leadUpdate.insuranceCarrier = extracted.insuranceCarrier;
+      }
+      if (extracted.memberId) {
+        leadUpdate.memberId = extracted.memberId;
+      }
+      
+      if (Object.keys(leadUpdate).length > 0) {
+        await storage.updateLead(req.params.id, leadUpdate);
+      }
+      
+      // Create or update patient record
       const existingPatient = await storage.getPatientByLeadId(req.params.id);
-      if (!existingPatient && callData.extractedData) {
+      if (!existingPatient && extracted.qualified) {
         await storage.createPatient({
           leadId: req.params.id,
           dob: "1985-03-15",
-          state: callData.extractedData.state || "CA",
-          insuranceCarrier: callData.extractedData.insuranceCarrier || "Blue Cross",
-          memberId: callData.extractedData.memberId || "MEM" + Math.random().toString(36).slice(2, 10).toUpperCase(),
+          state: extracted.state || "CA",
+          insuranceCarrier: extracted.insuranceCarrier || "Blue Cross",
+          memberId: extracted.memberId || "MEM" + Math.random().toString(36).slice(2, 10).toUpperCase(),
           planType: "PPO",
         });
+      } else if (existingPatient) {
+        // Update existing patient with new extracted data
+        const patientUpdate: Record<string, any> = {};
+        if (extracted.insuranceCarrier) patientUpdate.insuranceCarrier = extracted.insuranceCarrier;
+        if (extracted.memberId) patientUpdate.memberId = extracted.memberId;
+        if (extracted.state) patientUpdate.state = extracted.state;
+        
+        if (Object.keys(patientUpdate).length > 0) {
+          await storage.updatePatient(existingPatient.id, patientUpdate);
+        }
       }
     }
 

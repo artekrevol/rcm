@@ -223,7 +223,7 @@ export default function LeadDetailPage() {
             </CardContent>
           </Card>
 
-          {(patient || extractedData) && (
+          {(patient || extractedData || lead.insuranceCarrier || lead.serviceNeeded) && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base font-medium">Insurance Info</CardTitle>
@@ -234,7 +234,7 @@ export default function LeadDetailPage() {
                   <div>
                     <p className="text-xs text-muted-foreground">Carrier</p>
                     <p className="text-sm font-medium">
-                      {patient?.insuranceCarrier || extractedData?.insuranceCarrier || "—"}
+                      {lead.insuranceCarrier || patient?.insuranceCarrier || extractedData?.insuranceCarrier || "—"}
                     </p>
                   </div>
                 </div>
@@ -243,7 +243,7 @@ export default function LeadDetailPage() {
                   <div>
                     <p className="text-xs text-muted-foreground">Member ID</p>
                     <p className="text-sm font-mono">
-                      {patient?.memberId || extractedData?.memberId || "—"}
+                      {lead.memberId || patient?.memberId || extractedData?.memberId || "—"}
                     </p>
                   </div>
                 </div>
@@ -259,9 +259,9 @@ export default function LeadDetailPage() {
                 <div className="flex items-center gap-3">
                   <FileText className="h-4 w-4 text-muted-foreground" />
                   <div>
-                    <p className="text-xs text-muted-foreground">Service Type</p>
+                    <p className="text-xs text-muted-foreground">Service Needed</p>
                     <p className="text-sm">
-                      {extractedData?.serviceType || "—"}
+                      {lead.serviceNeeded || extractedData?.serviceType || "—"}
                     </p>
                   </div>
                 </div>

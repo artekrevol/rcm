@@ -106,6 +106,7 @@ Preferred communication style: Simple, everyday language.
 - ~~Call Notes & Transcript Viewer~~ - Display transcripts/summaries, manual notes
 - ~~Insurance Verification Display~~ - VOB results (copay, deductible, coverage)
 - ~~Prior Authorization Tracker~~ - Auth requests per encounter with status/expiration
+- ~~Auto-Fill Lead Data~~ - Call-extracted info (service needed, insurance carrier, member ID) auto-populates lead records
 
 ### Future Enhancements
 - Call Performance Dashboard - Track call completion rates, durations
