@@ -94,3 +94,25 @@ Preferred communication style: Simple, everyday language.
 - **@replit/vite-plugin-runtime-error-modal** - Error overlay for development
 - **@replit/vite-plugin-cartographer** - Code navigation plugin
 - **@replit/vite-plugin-dev-banner** - Development environment indicator
+
+## Feature Roadmap
+
+### Completed Features
+- ~~Pre-Claim Prevention~~ - Eligibility and authorization risk scoring
+- ~~Claim State Tracker~~ - Timeline-based claim monitoring
+- ~~Denial Pattern Intelligence~~ - Clustering and auto-generating rules
+- ~~Lead Management~~ - Patient intake pipeline
+- ~~Vapi AI Voice Integration~~ - Real outbound calls with transcripts
+- ~~Call Notes & Transcript Viewer~~ - Display transcripts/summaries, manual notes
+- ~~Insurance Verification Display~~ - VOB results (copay, deductible, coverage)
+- ~~Prior Authorization Tracker~~ - Auth requests per encounter with status/expiration
+
+### Future Enhancements
+- Call Performance Dashboard - Track call completion rates, durations
+- Revenue Impact Reporting - Estimated revenue protected
+- Payer Performance Scorecard - Denial rates, payment speeds
+- Bulk Call Campaigns - Queue multiple leads for AI calling
+- Task Assignment Queue - Assign leads/claims to team members
+- Automated Follow-up Reminders - Auth expiration alerts
+- Real-time Eligibility API - Live insurance verification
+- Claim Submission Integration - Connect to clearinghouse
