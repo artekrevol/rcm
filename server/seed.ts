@@ -136,6 +136,16 @@ function randomMemberId(payer: string): string {
 async function seed() {
   console.log("Seeding database with realistic healthcare data...");
 
+  // Check if data already exists
+  const existingUsers = await db.select().from(users).limit(1);
+  const existingLeads = await db.select().from(leads).limit(1);
+  
+  if (existingUsers.length > 0 && existingLeads.length > 0) {
+    console.log("Database already contains data. Skipping seed.");
+    console.log("To re-seed, clear the database first.");
+    process.exit(0);
+  }
+
   await db.insert(users).values({
     email: "admin@claimshield.ai",
     password: "admin123",
