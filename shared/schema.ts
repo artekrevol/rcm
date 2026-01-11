@@ -172,6 +172,7 @@ export const calls = pgTable("calls", {
   disposition: text("disposition").notNull(),
   notes: text("notes"),
   duration: integer("duration"),
+  recordingUrl: text("recording_url"),
   extractedData: jsonb("extracted_data").$type<{
     insuranceCarrier?: string;
     memberId?: string;
