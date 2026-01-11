@@ -20,6 +20,8 @@ export type User = typeof users.$inferSelect;
 // Priority: P0 (urgent), P1 (high), P2 (normal)
 // VOB Status: not_started, in_progress, verified, incomplete
 // Handoff Status: not_sent, sent, accepted
+// Next Action Type: call, callback, verify_insurance, request_docs, create_claim, none
+// Outcome Code: no_answer, left_voicemail, contacted, qualified, unqualified, insurance_missing, wrong_number
 export const leads = pgTable("leads", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -29,12 +31,16 @@ export const leads = pgTable("leads", {
   status: text("status").notNull().default("new"),
   priority: text("priority").notNull().default("P2"),
   nextAction: text("next_action"),
+  nextActionType: text("next_action_type").notNull().default("call"),
   nextActionAt: timestamp("next_action_at"),
+  slaDeadlineAt: timestamp("sla_deadline_at"),
   lastOutcome: text("last_outcome"),
+  outcomeCode: text("outcome_code"),
   attemptCount: integer("attempt_count").notNull().default(0),
   lastContactedAt: timestamp("last_contacted_at"),
   vobStatus: text("vob_status").notNull().default("not_started"),
   vobScore: integer("vob_score").notNull().default(0),
+  vobMissingFields: jsonb("vob_missing_fields").$type<string[]>().default([]),
   serviceNeeded: text("service_needed"),
   insuranceCarrier: text("insurance_carrier"),
   memberId: text("member_id"),

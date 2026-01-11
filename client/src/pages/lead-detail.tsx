@@ -11,6 +11,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadStatusBadge } from "@/components/status-badge";
 import { CallModal } from "@/components/call-modal";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import {
@@ -265,10 +270,23 @@ export default function LeadDetailPage() {
               <User className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-xl font-semibold">{lead.name}</h1>
                 <LeadStatusBadge status={lead.status} />
                 <PriorityBadge priority={lead.priority || "P2"} />
+                {/* Claim Risk Preview Badge */}
+                <Badge 
+                  variant="outline" 
+                  className={
+                    vobScore >= 75 
+                      ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-0" 
+                      : vobScore >= 50 
+                        ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0"
+                        : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-0"
+                  }
+                >
+                  {vobScore >= 75 ? "Low Risk" : vobScore >= 50 ? "Medium Risk" : "High Risk"}
+                </Badge>
               </div>
               <p className="text-sm text-muted-foreground">
                 {lead.phone} {lead.email && `• ${lead.email}`}
@@ -307,15 +325,29 @@ export default function LeadDetailPage() {
             <Phone className="h-4 w-4" />
             Call
           </Button>
-          <Button
-            size="sm"
-            onClick={() => createClaimPacketMutation.mutate()}
-            disabled={createClaimPacketMutation.isPending || !patient}
-            data-testid="button-create-claim"
-          >
-            <Plus className="h-4 w-4 mr-1" />
-            Create Claim
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button
+                  size="sm"
+                  onClick={() => createClaimPacketMutation.mutate()}
+                  disabled={createClaimPacketMutation.isPending || !patient || vobScore < 100}
+                  data-testid="button-create-claim"
+                  className={vobScore >= 100 ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  Create Claim (Pre-Filled)
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {vobScore >= 100 ? (
+                <p className="text-xs">VOB complete - ready to create claim</p>
+              ) : (
+                <p className="text-xs text-amber-500">Requires 100% VOB completeness ({vobScore}% complete)</p>
+              )}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 
@@ -323,7 +355,7 @@ export default function LeadDetailPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card className="p-4">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-muted-foreground uppercase tracking-wide">VOB Score</span>
+            <span className="text-xs text-muted-foreground uppercase tracking-wide">VOB Completeness</span>
             <Activity className={`h-4 w-4 ${vobVariant === "success" ? "text-emerald-500" : vobVariant === "warning" ? "text-amber-500" : "text-red-500"}`} />
           </div>
           <div className="space-y-2">

@@ -43,12 +43,18 @@ import { CallModal } from "@/components/call-modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { 
   Plus, Phone, User, Search, Filter, LayoutList, LayoutGrid, 
-  MoreHorizontal, CheckCircle, XCircle, UserPlus, Clock
+  MoreHorizontal, CheckCircle, XCircle, UserPlus, Clock, AlertTriangle,
+  PhoneCall, PhoneForwarded, FileCheck, FileText, Send, Ban
 } from "lucide-react";
-import { format } from "date-fns";
-import type { Lead, InsertLead } from "@shared/schema";
+import { format, formatDistanceToNow } from "date-fns";
+import type { Lead, InsertLead, Call } from "@shared/schema";
 
 const leadSources = ["website", "referral", "phone", "marketing", "physician_referral", "insurance_portal"];
 
@@ -82,13 +88,75 @@ function PriorityBadge({ priority }: { priority: string }) {
   );
 }
 
-function VobScoreChip({ score }: { score: number }) {
-  const color = score >= 75 ? "bg-emerald-500" : score >= 50 ? "bg-amber-500" : "bg-red-500";
+function VobCompletenessChip({ score, missingFields }: { score: number; missingFields?: string[] }) {
+  const missing = missingFields || [];
   return (
-    <div className="flex items-center gap-2">
-      <Progress value={score} className="h-2 w-16" />
-      <span className="text-xs text-muted-foreground">{score}%</span>
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="flex items-center gap-2 cursor-help">
+          <Progress value={score} className="h-2 w-16" />
+          <span className="text-xs text-muted-foreground">{score}%</span>
+          {missing.length > 0 && (
+            <AlertTriangle className="h-3 w-3 text-amber-500" />
+          )}
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>
+        <div className="text-xs">
+          {missing.length > 0 ? (
+            <div>
+              <p className="font-medium mb-1">Missing:</p>
+              <ul className="list-disc pl-3 space-y-0.5">
+                {missing.map((field, i) => (
+                  <li key={i}>{field}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-emerald-500">VOB Complete</p>
+          )}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function NextActionBadge({ actionType, dueAt }: { actionType?: string; dueAt?: string | Date | null }) {
+  const actionConfig: Record<string, { label: string; icon: typeof PhoneCall; variant: "destructive" | "warning" | "success" | "default" }> = {
+    call: { label: "CALL NOW", icon: PhoneCall, variant: "destructive" },
+    callback: { label: "CALLBACK", icon: PhoneForwarded, variant: "warning" },
+    verify_insurance: { label: "VERIFY INSURANCE", icon: FileCheck, variant: "warning" },
+    request_docs: { label: "REQUEST DOCS", icon: FileText, variant: "default" },
+    create_claim: { label: "READY FOR CLAIM", icon: Send, variant: "success" },
+    none: { label: "NO ACTION", icon: Ban, variant: "default" },
+  };
+
+  const config = actionConfig[actionType || "call"] || actionConfig.call;
+  const Icon = config.icon;
+  
+  const variantStyles: Record<string, string> = {
+    destructive: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800",
+    warning: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-amber-200 dark:border-amber-800",
+    success: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800",
+    default: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border-slate-200 dark:border-slate-700",
+  };
+
+  const dueTime = dueAt ? formatDistanceToNow(new Date(dueAt), { addSuffix: true }) : null;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge variant="outline" className={`${variantStyles[config.variant]} font-medium text-xs gap-1`}>
+          <Icon className="h-3 w-3" />
+          {config.label}
+        </Badge>
+      </TooltipTrigger>
+      {dueTime && (
+        <TooltipContent>
+          <p className="text-xs">Due {dueTime}</p>
+        </TooltipContent>
+      )}
+    </Tooltip>
   );
 }
 
@@ -98,6 +166,7 @@ export default function LeadsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [attemptsModalLead, setAttemptsModalLead] = useState<Lead | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeQueue, setActiveQueue] = useState("all");
   const [viewMode, setViewMode] = useState<"worklist" | "board">(() => {
@@ -130,6 +199,16 @@ export default function LeadsPage() {
   const { data: allLeads } = useQuery<Lead[]>({
     queryKey: ["/api/leads"],
     enabled: viewMode === "board",
+  });
+
+  // Fetch calls for attempts timeline modal
+  const { data: attemptsCalls } = useQuery<Call[]>({
+    queryKey: ["/api/leads", attemptsModalLead?.id, "calls"],
+    queryFn: async () => {
+      const res = await fetch(`/api/leads/${attemptsModalLead?.id}/calls`);
+      return res.json();
+    },
+    enabled: !!attemptsModalLead,
   });
 
   const createLeadMutation = useMutation({
@@ -343,6 +422,40 @@ export default function LeadsPage() {
 
       {viewMode === "worklist" && (
         <>
+          {/* Manager KPI Strip */}
+          <div className="flex items-center gap-6 bg-muted/50 rounded-lg px-4 py-2">
+            <button
+              onClick={() => setActiveQueue("sla_breach")}
+              className="flex items-center gap-2 text-sm hover:underline"
+              data-testid="kpi-sla-breach"
+            >
+              <AlertTriangle className="h-4 w-4 text-red-500" />
+              <span className="font-medium text-red-600 dark:text-red-400">
+                {worklistData?.countsByQueue?.sla_breach || 0} leads breaching SLA
+              </span>
+            </button>
+            <button
+              onClick={() => setActiveQueue("incomplete_vob")}
+              className="flex items-center gap-2 text-sm hover:underline"
+              data-testid="kpi-incomplete-vob"
+            >
+              <FileCheck className="h-4 w-4 text-amber-500" />
+              <span className="font-medium text-amber-600 dark:text-amber-400">
+                {worklistData?.countsByQueue?.incomplete_vob || 0} incomplete VOBs
+              </span>
+            </button>
+            <button
+              onClick={() => setActiveQueue("vob_complete_needs_admissions")}
+              className="flex items-center gap-2 text-sm hover:underline"
+              data-testid="kpi-ready-for-claim"
+            >
+              <Send className="h-4 w-4 text-emerald-500" />
+              <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                {worklistData?.countsByQueue?.vob_complete_needs_admissions || 0} ready for claim
+              </span>
+            </button>
+          </div>
+
           {/* Queue Tabs */}
           <div className="flex items-center gap-4 overflow-x-auto pb-2">
             <Tabs value={activeQueue} onValueChange={setActiveQueue}>
@@ -400,11 +513,11 @@ export default function LeadsPage() {
                     <TableRow className="hover:bg-transparent">
                       <TableHead className="w-[200px]">Lead</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Priority</TableHead>
                       <TableHead>Next Action</TableHead>
+                      <TableHead>Priority</TableHead>
                       <TableHead>Last Outcome</TableHead>
                       <TableHead className="text-center">Attempts</TableHead>
-                      <TableHead>VOB</TableHead>
+                      <TableHead>VOB Completeness</TableHead>
                       <TableHead>Insurance</TableHead>
                       <TableHead>Service</TableHead>
                       <TableHead>Created</TableHead>
@@ -419,15 +532,22 @@ export default function LeadsPage() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredLeads.map((lead) => (
+                      filteredLeads.map((lead) => {
+                        const slaDeadline = (lead as any).slaDeadlineAt;
+                        const isSlaBreach = slaDeadline && new Date(slaDeadline) < new Date();
+                        
+                        return (
                         <TableRow
                           key={lead.id}
-                          className="cursor-pointer group"
+                          className={`cursor-pointer group ${isSlaBreach ? "border-l-4 border-l-red-500 bg-red-50/50 dark:bg-red-950/20" : ""}`}
                           onClick={() => setLocation(`/leads/${lead.id}`)}
                           data-testid={`row-lead-${lead.id}`}
                         >
                           <TableCell>
                             <div className="flex items-center gap-2">
+                              {isSlaBreach && (
+                                <Clock className="h-4 w-4 text-red-500 shrink-0" />
+                              )}
                               <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                                 <User className="h-4 w-4 text-primary" />
                               </div>
@@ -441,27 +561,33 @@ export default function LeadsPage() {
                             <LeadStatusBadge status={lead.status} />
                           </TableCell>
                           <TableCell>
-                            <PriorityBadge priority={lead.priority || "P2"} />
+                            <NextActionBadge 
+                              actionType={(lead as any).nextActionType || "call"} 
+                              dueAt={(lead as any).nextActionAt}
+                            />
                           </TableCell>
                           <TableCell>
-                            {lead.nextAction ? (
-                              <Badge variant="outline" className="font-normal">
-                                {lead.nextAction}
-                              </Badge>
-                            ) : (
-                              <span className="text-muted-foreground text-sm">—</span>
-                            )}
+                            <PriorityBadge priority={lead.priority || "P2"} />
                           </TableCell>
                           <TableCell>
                             <span className="text-sm text-muted-foreground">
                               {lead.lastOutcome || "—"}
                             </span>
                           </TableCell>
-                          <TableCell className="text-center">
-                            <span className="text-sm">{lead.attemptCount || 0}</span>
+                          <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => setAttemptsModalLead(lead)}
+                              className="text-sm underline-offset-2 hover:underline text-primary cursor-pointer"
+                              data-testid={`button-attempts-${lead.id}`}
+                            >
+                              {lead.attemptCount || 0}
+                            </button>
                           </TableCell>
                           <TableCell>
-                            <VobScoreChip score={lead.vobScore || 0} />
+                            <VobCompletenessChip 
+                              score={lead.vobScore || 0} 
+                              missingFields={(lead as any).vobMissingFields}
+                            />
                           </TableCell>
                           <TableCell>
                             <div className="text-sm">
@@ -514,7 +640,8 @@ export default function LeadsPage() {
                             </DropdownMenu>
                           </TableCell>
                         </TableRow>
-                      ))
+                        );
+                      })
                     )}
                   </TableBody>
                 </Table>
@@ -594,6 +721,57 @@ export default function LeadsPage() {
           onCallComplete={handleCallComplete}
         />
       )}
+
+      {/* Attempts Timeline Modal */}
+      <Dialog open={!!attemptsModalLead} onOpenChange={(open) => !open && setAttemptsModalLead(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Contact Attempts</DialogTitle>
+            <DialogDescription>
+              {attemptsModalLead?.name} - {attemptsModalLead?.attemptCount || 0} attempts
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[300px] overflow-y-auto">
+            {attemptsCalls && attemptsCalls.length > 0 ? (
+              attemptsCalls.map((call) => (
+                <div key={call.id} className="flex gap-3 p-3 rounded-lg bg-muted/50">
+                  <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                    <Phone className="h-4 w-4 text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-medium capitalize">{call.disposition}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {format(new Date(call.createdAt), "MMM d, h:mm a")}
+                      </span>
+                    </div>
+                    {call.duration && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Duration: {Math.floor(call.duration / 60)}m {call.duration % 60}s
+                      </p>
+                    )}
+                    {call.summary && (
+                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                        {call.summary}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-6 text-muted-foreground">
+                <Phone className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No call records found</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAttemptsModalLead(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

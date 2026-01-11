@@ -76,6 +76,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const queueFilters: Record<string, (lead: typeof allLeads[0]) => boolean> = {
       all: () => true,
       sla_breach: (lead) => {
+        // Use slaDeadlineAt if present, otherwise fallback to legacy logic
+        if (lead.slaDeadlineAt) {
+          const deadline = new Date(lead.slaDeadlineAt);
+          const isOverdue = deadline < now;
+          const isNotConverted = lead.status !== "converted" && lead.status !== "lost";
+          return isOverdue && isNotConverted;
+        }
+        // Legacy fallback for leads without slaDeadlineAt
         const isNew = lead.status === "new" || lead.status === "attempting_contact";
         const createdRecently = new Date(lead.createdAt) >= oneDayAgo;
         const notContacted = !lead.lastContactedAt;
@@ -143,7 +151,40 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.message });
     }
-    const lead = await storage.createLead(parsed.data);
+    
+    // Auto-assign SLA deadline based on priority
+    const priority = parsed.data.priority || "P2";
+    const now = new Date();
+    let slaDeadlineAt: Date;
+    
+    if (priority === "P0") {
+      slaDeadlineAt = new Date(now.getTime() + 1 * 60 * 60 * 1000); // 1 hour
+    } else if (priority === "P1") {
+      slaDeadlineAt = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours
+    } else {
+      slaDeadlineAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
+    }
+    
+    // Compute VOB missing fields and score
+    const vobMissingFields: string[] = [];
+    if (!parsed.data.insuranceCarrier) vobMissingFields.push("Insurance Carrier");
+    if (!parsed.data.memberId) vobMissingFields.push("Member ID");
+    if (!parsed.data.serviceNeeded) vobMissingFields.push("Service Needed");
+    if (!parsed.data.planType) vobMissingFields.push("Plan Type");
+    
+    const totalVobFields = 4;
+    const completedFields = totalVobFields - vobMissingFields.length;
+    const vobScore = Math.round((completedFields / totalVobFields) * 100);
+    
+    const leadData = {
+      ...parsed.data,
+      slaDeadlineAt,
+      vobMissingFields,
+      vobScore,
+      nextActionType: parsed.data.nextActionType || "call",
+    };
+    
+    const lead = await storage.createLead(leadData as any);
     res.status(201).json(lead);
   });
 
@@ -159,6 +200,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const validPriorities = ["P0", "P1", "P2"];
     const validVobStatuses = ["not_started", "in_progress", "verified", "incomplete"];
     const validHandoffStatuses = ["not_sent", "sent", "accepted"];
+    const validNextActionTypes = ["call", "callback", "verify_insurance", "request_docs", "create_claim", "none"];
+    const validOutcomeCodes = ["no_answer", "left_voicemail", "contacted", "qualified", "unqualified", "insurance_missing", "wrong_number"];
 
     const updates: Record<string, any> = {};
     const errors: string[] = [];
@@ -190,6 +233,20 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         updates.handoffStatus = req.body.handoffStatus;
       } else {
         errors.push(`Invalid handoffStatus: ${req.body.handoffStatus}`);
+      }
+    }
+    if (req.body.nextActionType !== undefined) {
+      if (validNextActionTypes.includes(req.body.nextActionType)) {
+        updates.nextActionType = req.body.nextActionType;
+      } else {
+        errors.push(`Invalid nextActionType: ${req.body.nextActionType}`);
+      }
+    }
+    if (req.body.outcomeCode !== undefined) {
+      if (req.body.outcomeCode === null || validOutcomeCodes.includes(req.body.outcomeCode)) {
+        updates.outcomeCode = req.body.outcomeCode;
+      } else {
+        errors.push(`Invalid outcomeCode: ${req.body.outcomeCode}`);
       }
     }
 
@@ -244,6 +301,29 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         }
       }
     }
+    if (req.body.slaDeadlineAt !== undefined) {
+      if (req.body.slaDeadlineAt === null) {
+        updates.slaDeadlineAt = null;
+      } else {
+        const date = new Date(req.body.slaDeadlineAt);
+        if (!isNaN(date.getTime())) {
+          updates.slaDeadlineAt = date;
+        } else {
+          errors.push("Invalid slaDeadlineAt: must be valid date");
+        }
+      }
+    }
+
+    // JSONB array field
+    if (req.body.vobMissingFields !== undefined) {
+      if (Array.isArray(req.body.vobMissingFields)) {
+        updates.vobMissingFields = req.body.vobMissingFields;
+      } else if (req.body.vobMissingFields === null) {
+        updates.vobMissingFields = [];
+      } else {
+        errors.push("Invalid vobMissingFields: must be array");
+      }
+    }
 
     if (errors.length > 0) {
       return res.status(400).json({ error: errors.join("; ") });
@@ -251,6 +331,36 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: "No valid fields to update" });
+    }
+
+    // Recalculate SLA deadline if priority changes
+    if (updates.priority) {
+      const now = new Date();
+      if (updates.priority === "P0") {
+        updates.slaDeadlineAt = new Date(now.getTime() + 1 * 60 * 60 * 1000); // 1 hour
+      } else if (updates.priority === "P1") {
+        updates.slaDeadlineAt = new Date(now.getTime() + 4 * 60 * 60 * 1000); // 4 hours
+      } else {
+        updates.slaDeadlineAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
+      }
+    }
+
+    // Recalculate VOB score if VOB-related fields change
+    const vobFields = ["insuranceCarrier", "memberId", "serviceNeeded", "planType"];
+    const hasVobUpdate = vobFields.some(f => updates[f] !== undefined);
+    if (hasVobUpdate) {
+      // Merge current lead data with updates
+      const merged = { ...lead, ...updates };
+      const vobMissingFields: string[] = [];
+      if (!merged.insuranceCarrier) vobMissingFields.push("Insurance Carrier");
+      if (!merged.memberId) vobMissingFields.push("Member ID");
+      if (!merged.serviceNeeded) vobMissingFields.push("Service Needed");
+      if (!merged.planType) vobMissingFields.push("Plan Type");
+      
+      const totalVobFields = 4;
+      const completedFields = totalVobFields - vobMissingFields.length;
+      updates.vobScore = Math.round((completedFields / totalVobFields) * 100);
+      updates.vobMissingFields = vobMissingFields;
     }
 
     const updated = await storage.updateLead(req.params.id, updates);
