@@ -10,6 +10,7 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadStatusBadge } from "@/components/status-badge";
 import { CallModal } from "@/components/call-modal";
+import { LeadFormDialog } from "@/components/lead-form-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
@@ -43,6 +44,8 @@ import {
   AlertTriangle,
   CheckCircle,
   PhoneCall,
+  Pencil,
+  PlayCircle,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import type { Lead, Call, Patient } from "@shared/schema";
@@ -95,6 +98,7 @@ export default function LeadDetailPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [callModalOpen, setCallModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set());
@@ -314,6 +318,15 @@ export default function LeadDetailPage() {
           >
             <CheckCircle className="h-4 w-4 mr-1" />
             Qualified
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setEditModalOpen(true)}
+            data-testid="button-edit-lead"
+          >
+            <Pencil className="h-4 w-4 mr-1" />
+            Edit
           </Button>
           <Button
             variant="default"
@@ -585,6 +598,25 @@ export default function LeadDetailPage() {
                         </div>
                       )}
 
+                      {call.recordingUrl && (
+                        <div className="bg-muted/50 rounded-lg p-3">
+                          <div className="flex items-center gap-2 mb-2">
+                            <PlayCircle className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                              Recording
+                            </span>
+                          </div>
+                          <audio
+                            controls
+                            className="w-full h-10"
+                            src={call.recordingUrl}
+                            data-testid={`audio-recording-${call.id}`}
+                          >
+                            Your browser does not support audio playback.
+                          </audio>
+                        </div>
+                      )}
+
                       <div className="bg-muted/30 rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -799,6 +831,13 @@ export default function LeadDetailPage() {
         leadName={lead.name}
         leadPhone={lead.phone}
         onCallComplete={handleCallComplete}
+      />
+
+      <LeadFormDialog
+        open={editModalOpen}
+        onOpenChange={setEditModalOpen}
+        lead={lead}
+        mode="edit"
       />
     </div>
   );
