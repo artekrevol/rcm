@@ -1,0 +1,354 @@
+Perfect — this is already **80% of a top-tier RCM product**. To get **client-visible ROI this week**, we need to **tighten the Leads system into an execution engine**, not add new modules.
+
+Below are **Replit-ready instructions ONLY** (backend + frontend), focused on **what to build/change**, **why it increases ROI**, and **how to align UI/UX with competitors like Waystar / Cedar / AKASA / Olive without overbuilding**.
+
+---
+
+# 🔥 THIS WEEK’S ROI GOAL (FOR THE CLIENT)
+
+**Primary KPI this week**
+
+> ⬆️ Increase % of leads that reach **VOB Complete** within 24–48 hours
+
+**Secondary KPIs**
+
+* ↓ Time to first contact
+* ↓ Incomplete VOB backlog
+* ↑ Conversion → Claim Creation
+* ↑ Staff efficiency per intake rep
+
+Everything below maps directly to those.
+
+---
+
+# PRIORITY 1 (THIS WEEK): TURN LEADS INTO A REAL WORK QUEUE
+
+Right now your Leads page is visually strong but **passive**.
+
+Competitors win because:
+
+* The UI *forces action*
+* The system *tells staff what to do next*
+* Managers can *see leaks instantly*
+
+We’ll fix that **without adding new infra**.
+
+---
+
+## 1️⃣ BACKEND: LEAD EXECUTION MODEL (CRITICAL)
+
+### A. Add Required Fields (DB / Drizzle)
+
+Update `leads` table:
+
+```ts
+next_action_type: enum(
+  'call',
+  'callback',
+  'verify_insurance',
+  'request_docs',
+  'create_claim',
+  'none'
+)
+
+next_action_due_at: timestamp (nullable)
+
+last_contact_at: timestamp (nullable)
+
+sla_deadline_at: timestamp (nullable)
+
+outcome_code: enum(
+  'no_answer',
+  'left_voicemail',
+  'contacted',
+  'qualified',
+  'unqualified',
+  'insurance_missing',
+  'wrong_number'
+)
+
+vob_missing_fields: jsonb
+// example: ["member_id", "payer", "dob"]
+```
+
+**Why this matters**
+
+* Competitors don’t just store leads — they store **decisions**
+* This unlocks SLA tracking, urgency, automation, and manager oversight
+
+---
+
+### B. SLA AUTO-ASSIGNMENT (HIGH ROI)
+
+On lead creation:
+
+```ts
+if (priority === 'P0') {
+  sla_deadline_at = now() + 1 hour
+} else if (priority === 'P1') {
+  sla_deadline_at = now() + 4 hours
+} else {
+  sla_deadline_at = now() + 24 hours
+}
+```
+
+**ROI**
+
+* Clients immediately see “we reduced response time”
+* This is a **Waystar-level expectation**
+
+---
+
+## 2️⃣ FRONTEND: LEADS TABLE — WHAT TO CHANGE (VERY SPECIFIC)
+
+### A. Make “Next Action” the STAR COLUMN
+
+#### Change:
+
+* Move **Next Action** to column #3 (after Status)
+* Show as **action badge**, not text
+
+Example badges:
+
+* 🔴 `CALL NOW`
+* 🟠 `VERIFY INSURANCE`
+* 🟡 `CALLBACK @ 3PM`
+* 🟢 `READY FOR CLAIM`
+
+**Implementation**
+
+```tsx
+<Badge variant={
+  nextAction === 'call' ? 'destructive' :
+  nextAction === 'verify_insurance' ? 'warning' :
+  'success'
+}>
+```
+
+**ROI**
+
+* Intake reps stop scanning rows
+* They just execute the queue
+* This is exactly how Cedar & AKASA drive speed
+
+---
+
+### B. VOB SCORE → VOB COMPLETENESS (LANGUAGE MATTERS)
+
+#### Change:
+
+Rename **VOB Score** → **VOB Completeness**
+
+Show:
+
+* Progress bar
+* Tooltip listing missing items
+
+```tsx
+Tooltip:
+"Missing: Member ID, Payer, DOB"
+```
+
+**Competitor insight**
+
+* No one in ops cares about “scores”
+* They care about “what’s missing”
+
+---
+
+### C. SLA BREACH = VISUAL PAIN
+
+For rows where `now > sla_deadline_at`:
+
+* Add **red left border**
+* Auto-promote Priority to `P0`
+* Add clock icon in Lead column
+
+```css
+border-left: 3px solid #ef4444;
+```
+
+**ROI**
+
+* Managers instantly see breakdowns
+* This is a **client demo killer feature**
+
+---
+
+### D. ATTEMPTS → CLICKABLE TIMELINE (LIGHTWEIGHT)
+
+Instead of `Attempts = 2`, make it clickable:
+
+On click → modal:
+
+```
+Jan 9, 2:13 PM – No answer
+Jan 9, 11:02 AM – Voicemail left
+```
+
+**No new backend needed** — derive from call logs.
+
+---
+
+## 3️⃣ WORK QUEUES: MAKE THEM INTELLIGENT (NOT FILTERS)
+
+### A. SLA Breach Queue (P0)
+
+Auto logic:
+
+```ts
+where now() > sla_deadline_at
+and status != 'Converted'
+```
+
+UI:
+
+* Show **count in red**
+* Lock this tab to first position
+
+---
+
+### B. Incomplete VOB Queue (MOST ROI)
+
+Logic:
+
+```ts
+where vob_completeness < 100
+and status in ('Contacted', 'Qualified')
+```
+
+Add **Missing Fields column** (compact pills):
+
+* `DOB`
+* `Member ID`
+* `Payer`
+
+**ROI**
+
+* This directly reduces denials later
+* This is the *core pitch* of ClaimShield
+
+---
+
+## 4️⃣ LEAD DETAIL PAGE (SUMMARY-FIRST — TIGHTEN IT)
+
+### A. Header Strip — ADD 1 THING
+
+Add:
+
+> **“Claim Risk Preview”** badge
+
+* GREEN / YELLOW / RED
+* Based on current data completeness
+
+This creates:
+
+> Mental link between **intake quality → revenue**
+
+---
+
+### B. Summary Cards — CHANGE ORDER
+
+Current → OK
+**Change to:**
+
+1. **Next Action (with due time)**
+2. **VOB Completeness**
+3. **Attempts / Last Contact**
+4. **Last Outcome**
+
+This mirrors **Waystar’s intake panels**.
+
+---
+
+### C. One-Click Conversion (HIGH WOW)
+
+Add button:
+
+> **“Create Claim (Pre-Filled)”**
+
+Rules:
+
+* Enabled only if VOB = 100%
+* Pull payer, CPT, patient info automatically
+
+**ROI**
+
+* Client sees instant downstream value
+* Reduces manual re-entry
+
+---
+
+## 5️⃣ MANAGER VISIBILITY (VERY IMPORTANT FOR BUYERS)
+
+Add **1 lightweight manager metric** (no new page):
+
+At top of Leads page:
+
+```
+⚠️ 7 leads breaching SLA
+🟡 12 incomplete VOBs
+🟢 18 ready for claim
+```
+
+These numbers should be **clickable filters**.
+
+---
+
+# UI/UX ALIGNMENT WITH COMPETITORS (NO REDESIGN)
+
+### What competitors do visually:
+
+| Area         | Competitor Pattern | What You Should Do              |
+| ------------ | ------------------ | ------------------------------- |
+| Density      | Dense tables       | Keep yours (already good)       |
+| Color        | Status-driven      | Increase red/orange usage       |
+| Action       | Always visible     | Surface Next Action             |
+| Language     | Operational        | Rename “Score” → “Completeness” |
+| Manager view | KPI first          | Add SLA & backlog counts        |
+
+You are already **90% there visually** — this is about **behavioral UX**, not styling.
+
+---
+
+# WHAT NOT TO BUILD THIS WEEK ❌
+
+* New AI models
+* New dashboards
+* Clearinghouse integrations
+* More charts
+
+They don’t move **client ROI in 7 days**.
+
+---
+
+# FINAL REPLIT TODO LIST (COPY THIS)
+
+### Backend
+
+* [ ] Add lead execution fields
+* [ ] Auto-assign SLA on creation
+* [ ] Track VOB missing fields
+* [ ] Compute VOB completeness %
+
+### Frontend
+
+* [ ] Promote Next Action column
+* [ ] Rename VOB Score → VOB Completeness
+* [ ] Add SLA visual indicators
+* [ ] Add Missing Fields pills
+* [ ] Clickable attempts timeline
+* [ ] Manager KPI strip
+
+---
+
+## If you want next:
+
+I can give you:
+
+* **Exact Drizzle migrations**
+* **Exact React component diffs**
+* **Demo script that sells this to execs**
+* **Pricing narrative vs Waystar / AKASA**
+
+Just tell me what you want next.
