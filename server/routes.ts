@@ -389,6 +389,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const nameParts = lead.name.split(' ');
     const firstName = lead.firstName || nameParts[0] || "Unknown";
     const lastName = lead.lastName || nameParts.slice(1).join(' ') || "";
+    const fullName = lead.name || `${firstName} ${lastName}`.trim();
     
     // Format service type for display
     const formatServiceType = (service: string | null): string => {
@@ -411,8 +412,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     };
     
     res.json({
-      name: `${firstName} ${lastName}`.trim(),
+      name: fullName,
+      firstName,
+      lastName,
       preferredName: lead.preferredName || firstName,
+      phone: lead.phone || "Unknown",
+      email: lead.email || "Unknown",
       state: lead.state || "Unknown",
       source: lead.source || "Website",
       serviceNeeded: formatServiceType(lead.serviceNeeded),
@@ -699,7 +704,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         variableValues: {
           patient_first_name: firstName,
           patient_last_name: lastName,
+          patient_full_name: lead.name || `${firstName} ${lastName}`.trim(),
           patient_preferred_name: lead.preferredName || firstName,
+          patient_phone: lead.phone || "Unknown",
+          patient_email: lead.email || "Unknown",
           patient_state: lead.state || "Unknown",
           patient_source: lead.source || "Website",
           service_needed: formatServiceType(lead.serviceNeeded),

@@ -179,6 +179,11 @@ export default function LeadsPage() {
     email: "",
     source: "website",
     status: "new",
+    state: "",
+    preferredName: "",
+    serviceNeeded: "",
+    bestTimeToCall: "",
+    notes: "",
   });
 
   useEffect(() => {
@@ -219,7 +224,7 @@ export default function LeadsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
       queryClient.invalidateQueries({ queryKey: ["/api/leads/worklist"] });
       setCreateOpen(false);
-      setNewLead({ name: "", phone: "", email: "", source: "website", status: "new" });
+      setNewLead({ name: "", phone: "", email: "", source: "website", status: "new", state: "", preferredName: "", serviceNeeded: "", bestTimeToCall: "", notes: "" });
       toast({ title: "Lead created successfully" });
     },
     onError: () => {
@@ -401,6 +406,76 @@ export default function LeadsPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="preferredName">Preferred Name</Label>
+                    <Input
+                      id="preferredName"
+                      value={newLead.preferredName || ""}
+                      onChange={(e) => setNewLead({ ...newLead, preferredName: e.target.value })}
+                      placeholder="Nickname or preferred name"
+                      data-testid="input-lead-preferred-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="state">State</Label>
+                    <Input
+                      id="state"
+                      value={newLead.state || ""}
+                      onChange={(e) => setNewLead({ ...newLead, state: e.target.value })}
+                      placeholder="TX, CA, NY..."
+                      data-testid="input-lead-state"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="serviceNeeded">Service Needed</Label>
+                    <Select
+                      value={newLead.serviceNeeded || ""}
+                      onValueChange={(v) => setNewLead({ ...newLead, serviceNeeded: v })}
+                    >
+                      <SelectTrigger data-testid="select-lead-service">
+                        <SelectValue placeholder="Select service" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="detox">Detox</SelectItem>
+                        <SelectItem value="residential">Residential</SelectItem>
+                        <SelectItem value="PHP">Partial Hospitalization (PHP)</SelectItem>
+                        <SelectItem value="IOP">Intensive Outpatient (IOP)</SelectItem>
+                        <SelectItem value="outpatient">Outpatient</SelectItem>
+                        <SelectItem value="unknown">Unknown</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="bestTimeToCall">Best Time to Call</Label>
+                    <Select
+                      value={newLead.bestTimeToCall || ""}
+                      onValueChange={(v) => setNewLead({ ...newLead, bestTimeToCall: v })}
+                    >
+                      <SelectTrigger data-testid="select-lead-best-time">
+                        <SelectValue placeholder="Select time" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="morning">Morning (8am-12pm)</SelectItem>
+                        <SelectItem value="afternoon">Afternoon (12pm-5pm)</SelectItem>
+                        <SelectItem value="evening">Evening (5pm-8pm)</SelectItem>
+                        <SelectItem value="anytime">Anytime</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="notes">Notes</Label>
+                  <Input
+                    id="notes"
+                    value={newLead.notes || ""}
+                    onChange={(e) => setNewLead({ ...newLead, notes: e.target.value })}
+                    placeholder="Internal notes about this lead"
+                    data-testid="input-lead-notes"
+                  />
                 </div>
               </div>
               <DialogFooter>

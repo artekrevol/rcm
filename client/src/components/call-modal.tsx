@@ -16,7 +16,11 @@ import { useQuery } from "@tanstack/react-query";
 
 interface CallContext {
   name: string;
+  firstName: string;
+  lastName: string;
   preferredName: string;
+  phone: string;
+  email: string;
   state: string;
   source: string;
   serviceNeeded: string;
@@ -338,7 +342,18 @@ export function CallModal({
                     <div className="flex items-center gap-2">
                       <User className="h-4 w-4 text-muted-foreground" />
                       <span className="text-muted-foreground">Name:</span>
-                      <span className="font-medium">{callContext.preferredName}</span>
+                      <span className="font-medium">{callContext.name}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <Phone className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Phone:</span>
+                      <span className="font-medium">{callContext.phone}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 col-span-2">
+                      <span className="text-muted-foreground">Email:</span>
+                      <span className="font-medium truncate">{callContext.email}</span>
                     </div>
                     
                     <div className="flex items-center gap-2">
