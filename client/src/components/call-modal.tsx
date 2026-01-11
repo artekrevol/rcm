@@ -76,7 +76,7 @@ export function CallModal({
 
   // Fetch lead context for call prep preview
   const { data: callContext, isLoading: loadingContext } = useQuery<CallContext>({
-    queryKey: ['/api/leads', leadId, 'call-context'],
+    queryKey: [`/api/leads/${leadId}/call-context`],
     enabled: open && !!leadId,
   });
 
