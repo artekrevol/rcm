@@ -385,6 +385,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return res.status(404).json({ error: "Lead not found" });
     }
     
+    // Also fetch patient data for additional context
+    const patient = await storage.getPatientByLeadId(req.params.id);
+    
     // Parse name into first/last if not already split
     const nameParts = lead.name.split(' ');
     const firstName = lead.firstName || nameParts[0] || "Unknown";
@@ -411,6 +414,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return serviceMap[service] || service;
     };
     
+    // Merge lead and patient data (lead takes priority, patient fills gaps)
+    const state = lead.state || patient?.state || "Unknown";
+    const insuranceCarrier = lead.insuranceCarrier || patient?.insuranceCarrier || "Unknown";
+    const memberId = lead.memberId || patient?.memberId || null;
+    const planType = lead.planType || patient?.planType || null;
+    
     res.json({
       name: fullName,
       firstName,
@@ -418,10 +427,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       preferredName: lead.preferredName || firstName,
       phone: lead.phone || "Unknown",
       email: lead.email || "Unknown",
-      state: lead.state || "Unknown",
+      state,
       source: lead.source || "Website",
       serviceNeeded: formatServiceType(lead.serviceNeeded),
-      insuranceCarrier: lead.insuranceCarrier || "Unknown",
+      insuranceCarrier,
+      memberId,
+      planType,
       attempts: lead.attemptCount || 0,
       lastOutcome: lead.lastOutcome || "First contact",
       bestTimeToCall: lead.bestTimeToCall || "Anytime",
