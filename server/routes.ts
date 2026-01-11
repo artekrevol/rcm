@@ -420,6 +420,31 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const memberId = lead.memberId || patient?.memberId || null;
     const planType = lead.planType || patient?.planType || null;
     
+    // Infer timezone from state if not set
+    const stateTimezones: Record<string, string> = {
+      "CA": "Pacific", "WA": "Pacific", "OR": "Pacific", "NV": "Pacific",
+      "TX": "Central", "IL": "Central", "MN": "Central", "WI": "Central", "MO": "Central", "LA": "Central", "OK": "Central",
+      "NY": "Eastern", "FL": "Eastern", "PA": "Eastern", "OH": "Eastern", "GA": "Eastern", "NC": "Eastern", "VA": "Eastern", "MA": "Eastern", "NJ": "Eastern", "MI": "Eastern",
+      "AZ": "Mountain", "CO": "Mountain", "UT": "Mountain", "NM": "Mountain",
+      "HI": "Hawaii", "AK": "Alaska",
+    };
+    const timezone = lead.timezone || (state !== "Unknown" ? stateTimezones[state] : null) || "Unknown";
+    
+    // Calculate time since lead
+    const getTimeSinceLead = (createdAt: Date): string => {
+      const now = new Date();
+      const diffMs = now.getTime() - createdAt.getTime();
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      
+      if (diffMins < 60) return `${diffMins} minutes ago`;
+      if (diffHours < 24) return `${diffHours} hours ago`;
+      if (diffDays === 1) return "yesterday";
+      if (diffDays < 7) return `${diffDays} days ago`;
+      return `${Math.floor(diffDays / 7)} weeks ago`;
+    };
+
     res.json({
       name: fullName,
       firstName,
@@ -428,6 +453,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       phone: lead.phone || "Unknown",
       email: lead.email || "Unknown",
       state,
+      timezone,
       source: lead.source || "Website",
       serviceNeeded: formatServiceType(lead.serviceNeeded),
       insuranceCarrier,
@@ -439,6 +465,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       priority: lead.priority || "P2",
       notes: lead.notes || null,
       hasConsent: lead.consentToCall !== false,
+      timeSinceLead: getTimeSinceLead(lead.createdAt),
+      leadCreatedAt: lead.createdAt.toISOString(),
     });
   });
 
@@ -701,6 +729,35 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return serviceMap[service] || service.toLowerCase();
     };
 
+    // Calculate time since lead was created
+    const getTimeSinceLead = (createdAt: Date): string => {
+      const now = new Date();
+      const diffMs = now.getTime() - createdAt.getTime();
+      const diffMins = Math.floor(diffMs / (1000 * 60));
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      
+      if (diffMins < 60) return `${diffMins} minutes ago`;
+      if (diffHours < 24) return `${diffHours} hours ago`;
+      if (diffDays === 1) return "yesterday";
+      if (diffDays < 7) return `${diffDays} days ago`;
+      return `${Math.floor(diffDays / 7)} weeks ago`;
+    };
+
+    // Format timezone for display
+    const formatTimezone = (tz: string | null, state: string | null): string => {
+      if (tz) return tz;
+      // Infer from state if timezone not set
+      const stateTimezones: Record<string, string> = {
+        "CA": "Pacific", "WA": "Pacific", "OR": "Pacific", "NV": "Pacific",
+        "TX": "Central", "IL": "Central", "MN": "Central", "WI": "Central", "MO": "Central", "LA": "Central", "OK": "Central",
+        "NY": "Eastern", "FL": "Eastern", "PA": "Eastern", "OH": "Eastern", "GA": "Eastern", "NC": "Eastern", "VA": "Eastern", "MA": "Eastern", "NJ": "Eastern", "MI": "Eastern",
+        "AZ": "Mountain", "CO": "Mountain", "UT": "Mountain", "NM": "Mountain",
+        "HI": "Hawaii", "AK": "Alaska",
+      };
+      return state ? (stateTimezones[state] || "Unknown") : "Unknown";
+    };
+
     return {
       assistantId,
       phoneNumberId,
@@ -720,6 +777,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           patient_phone: lead.phone || "Unknown",
           patient_email: lead.email || "Unknown",
           patient_state: lead.state || "Unknown",
+          patient_timezone: formatTimezone(lead.timezone, lead.state),
           patient_source: lead.source || "Website",
           service_needed: formatServiceType(lead.serviceNeeded),
           insurance_carrier: lead.insuranceCarrier || "Unknown",
@@ -727,6 +785,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           last_outcome: lead.lastOutcome || "First contact",
           best_time_to_call: lead.bestTimeToCall || "anytime",
           priority_level: lead.priority || "P2",
+          time_since_lead: getTimeSinceLead(lead.createdAt),
+          lead_created_at: lead.createdAt.toISOString(),
           clinic_name: "Kemah Palms Recovery",
           clinic_callback_number: "(866) 488-8684",
         },
