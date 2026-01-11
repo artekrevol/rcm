@@ -5,6 +5,7 @@ import {
   insertLeadSchema,
   insertRuleSchema,
   insertCallSchema,
+  type Lead,
 } from "@shared/schema";
 import { allPayers } from "./payers";
 
@@ -377,6 +378,54 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(patient || null);
   });
 
+  // Get lead context for call prep preview
+  app.get("/api/leads/:id/call-context", async (req, res) => {
+    const lead = await storage.getLead(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    
+    // Parse name into first/last if not already split
+    const nameParts = lead.name.split(' ');
+    const firstName = lead.firstName || nameParts[0] || "Unknown";
+    const lastName = lead.lastName || nameParts.slice(1).join(' ') || "";
+    
+    // Format service type for display
+    const formatServiceType = (service: string | null): string => {
+      if (!service) return "Unknown";
+      const serviceMap: Record<string, string> = {
+        "IOP": "Intensive Outpatient",
+        "iop": "Intensive Outpatient",
+        "PHP": "Partial Hospitalization",
+        "php": "Partial Hospitalization",
+        "detox": "Detox",
+        "Detox": "Detox",
+        "residential": "Residential Treatment",
+        "Residential": "Residential Treatment",
+        "outpatient": "Outpatient",
+        "Outpatient": "Outpatient",
+        "inpatient": "Inpatient",
+        "Inpatient": "Inpatient",
+      };
+      return serviceMap[service] || service;
+    };
+    
+    res.json({
+      name: `${firstName} ${lastName}`.trim(),
+      preferredName: lead.preferredName || firstName,
+      state: lead.state || "Unknown",
+      source: lead.source || "Website",
+      serviceNeeded: formatServiceType(lead.serviceNeeded),
+      insuranceCarrier: lead.insuranceCarrier || "Unknown",
+      attempts: lead.attemptCount || 0,
+      lastOutcome: lead.lastOutcome || "First contact",
+      bestTimeToCall: lead.bestTimeToCall || "Anytime",
+      priority: lead.priority || "P2",
+      notes: lead.notes || null,
+      hasConsent: lead.consentToCall !== false,
+    });
+  });
+
   app.post("/api/leads/:id/call", async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
@@ -600,8 +649,74 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json({ success: true });
   });
 
+  // Build Vapi call payload with lead context for personalized calls
+  const buildVapiCallPayload = (lead: Lead, assistantId: string, phoneNumberId: string) => {
+    // Format phone number to E.164 format
+    const formatToE164 = (phone: string): string => {
+      const digits = phone.replace(/\D/g, '');
+      if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+      if (digits.length === 10) return `+1${digits}`;
+      if (phone.startsWith('+')) return phone;
+      return `+1${digits}`;
+    };
+
+    // Parse name into first/last if not already split
+    const nameParts = lead.name.split(' ');
+    const firstName = lead.firstName || nameParts[0] || "Unknown";
+    const lastName = lead.lastName || nameParts.slice(1).join(' ') || "";
+
+    // Format service type for natural speech
+    const formatServiceType = (service: string | null): string => {
+      if (!service) return "Unknown";
+      const serviceMap: Record<string, string> = {
+        "IOP": "intensive outpatient",
+        "iop": "intensive outpatient",
+        "PHP": "partial hospitalization",
+        "php": "partial hospitalization",
+        "detox": "detox",
+        "Detox": "detox",
+        "residential": "residential treatment",
+        "Residential": "residential treatment",
+        "outpatient": "outpatient",
+        "Outpatient": "outpatient",
+        "inpatient": "inpatient",
+        "Inpatient": "inpatient",
+      };
+      return serviceMap[service] || service.toLowerCase();
+    };
+
+    return {
+      assistantId,
+      phoneNumberId,
+      customer: {
+        number: formatToE164(lead.phone),
+        name: lead.name || "Patient",
+      },
+      metadata: {
+        leadId: lead.id,
+      },
+      assistantOverrides: {
+        variableValues: {
+          patient_first_name: firstName,
+          patient_last_name: lastName,
+          patient_preferred_name: lead.preferredName || firstName,
+          patient_state: lead.state || "Unknown",
+          patient_source: lead.source || "Website",
+          service_needed: formatServiceType(lead.serviceNeeded),
+          insurance_carrier: lead.insuranceCarrier || "Unknown",
+          attempts: String(lead.attemptCount || 0),
+          last_outcome: lead.lastOutcome || "First contact",
+          best_time_to_call: lead.bestTimeToCall || "anytime",
+          priority_level: lead.priority || "P2",
+          clinic_name: "Kemah Palms Recovery",
+          clinic_callback_number: "(866) 488-8684",
+        },
+      },
+    };
+  };
+
   app.post("/api/vapi/outbound-call", async (req, res) => {
-    const { leadId, customerNumber, customerName } = req.body;
+    const { leadId } = req.body;
     
     const vapiApiKey = process.env.VAPI_API_KEY;
     const assistantId = process.env.VAPI_ASSISTANT_ID;
@@ -613,51 +728,31 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       });
     }
     
-    if (!customerNumber) {
-      return res.status(400).json({ error: "Customer phone number is required" });
+    if (!leadId) {
+      return res.status(400).json({ error: "Lead ID is required" });
+    }
+
+    // Fetch full lead data for context
+    const lead = await storage.getLead(leadId);
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    if (!lead.phone) {
+      return res.status(400).json({ error: "Lead has no phone number" });
     }
     
-    // Format phone number to E.164 format for US numbers (+1XXXXXXXXXX)
-    const formatToE164 = (phone: string): string => {
-      // Remove all non-digit characters
-      const digits = phone.replace(/\D/g, '');
-      
-      // If already has country code (11 digits starting with 1), add +
-      if (digits.length === 11 && digits.startsWith('1')) {
-        return `+${digits}`;
-      }
-      
-      // If 10 digits (standard US), add +1
-      if (digits.length === 10) {
-        return `+1${digits}`;
-      }
-      
-      // If already in E.164 format, return as-is
-      if (phone.startsWith('+')) {
-        return phone;
-      }
-      
-      // Default: add +1 prefix
-      return `+1${digits}`;
-    };
-    
-    const formattedNumber = formatToE164(customerNumber);
-    
     try {
+      // Build personalized call payload with lead context
+      const vapiPayload = buildVapiCallPayload(lead, assistantId, phoneNumberId);
+      
       const response = await fetch("https://api.vapi.ai/call/phone", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${vapiApiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          assistantId,
-          phoneNumberId,
-          customer: {
-            number: formattedNumber,
-            name: customerName || "Patient",
-          },
-        }),
+        body: JSON.stringify(vapiPayload),
       });
       
       if (!response.ok) {

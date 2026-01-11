@@ -8,9 +8,26 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Phone, PhoneOff, Loader2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Phone, PhoneOff, Loader2, User, MapPin, Briefcase, Shield, Clock, Hash } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useQuery } from "@tanstack/react-query";
+
+interface CallContext {
+  name: string;
+  preferredName: string;
+  state: string;
+  source: string;
+  serviceNeeded: string;
+  insuranceCarrier: string;
+  attempts: number;
+  lastOutcome: string;
+  bestTimeToCall: string;
+  priority: string;
+  notes: string | null;
+  hasConsent: boolean;
+}
 
 interface CallModalProps {
   open: boolean;
@@ -52,14 +69,20 @@ export function CallModal({
   onCallComplete,
 }: CallModalProps) {
   const { toast } = useToast();
-  const [callStatus, setCallStatus] = useState<"idle" | "connecting" | "ringing" | "in-progress" | "completed" | "failed">("idle");
+  const [callStatus, setCallStatus] = useState<"prep" | "idle" | "connecting" | "ringing" | "in-progress" | "completed" | "failed">("prep");
   const [vapiCallId, setVapiCallId] = useState<string | null>(null);
   const [callData, setCallData] = useState<{ transcript: string; summary: string; duration?: number } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Fetch lead context for call prep preview
+  const { data: callContext, isLoading: loadingContext } = useQuery<CallContext>({
+    queryKey: ['/api/leads', leadId, 'call-context'],
+    enabled: open && !!leadId,
+  });
+
   useEffect(() => {
     if (!open) {
-      setCallStatus("idle");
+      setCallStatus("prep");
       setVapiCallId(null);
       setCallData(null);
       if (pollingRef.current) {
@@ -115,13 +138,12 @@ export function CallModal({
     setCallStatus("connecting");
     
     try {
+      // Backend now fetches lead context and builds personalized payload
       const response = await fetch("/api/vapi/outbound-call", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId,
-          customerNumber: leadPhone,
-          customerName: leadName,
         }),
       });
       
@@ -292,6 +314,86 @@ export function CallModal({
         </DialogHeader>
 
         <div className="py-4">
+          {/* Call Prep Preview - Shows lead context before calling */}
+          {callStatus === "prep" && (
+            <div className="space-y-4">
+              <div className="text-center mb-4">
+                <div className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 mb-2">
+                  <Phone className="h-7 w-7 text-primary" />
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Review the information the AI agent will use
+                </p>
+              </div>
+              
+              {loadingContext ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : callContext ? (
+                <div className="border rounded-lg p-4 bg-muted/30 space-y-3">
+                  <div className="text-sm font-medium text-muted-foreground mb-2">Agent will use:</div>
+                  
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="flex items-center gap-2">
+                      <User className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Name:</span>
+                      <span className="font-medium">{callContext.preferredName}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">State:</span>
+                      <span className="font-medium">{callContext.state}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <Briefcase className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Service:</span>
+                      <span className="font-medium">{callContext.serviceNeeded}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">Source:</span>
+                      <span className="font-medium">{callContext.source}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <Shield className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Insurance:</span>
+                      <span className="font-medium">{callContext.insuranceCarrier}</span>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <Hash className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Attempts:</span>
+                      <span className="font-medium">{callContext.attempts}</span>
+                    </div>
+                  </div>
+                  
+                  {callContext.attempts > 0 && (
+                    <div className="flex items-center gap-2 pt-2 border-t text-sm">
+                      <Clock className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Last Outcome:</span>
+                      <Badge variant="outline" className="text-xs">{callContext.lastOutcome}</Badge>
+                    </div>
+                  )}
+                  
+                  {callContext.notes && (
+                    <div className="pt-2 border-t text-sm">
+                      <span className="text-muted-foreground">Notes:</span>
+                      <p className="text-xs mt-1 italic">{callContext.notes}</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-4 text-muted-foreground">
+                  Unable to load lead context
+                </div>
+              )}
+            </div>
+          )}
+          
           {callStatus === "idle" && (
             <div className="text-center py-8">
               <div className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 mb-4">
@@ -376,6 +478,27 @@ export function CallModal({
         </div>
 
         <DialogFooter className="flex-col sm:flex-row gap-2">
+          {callStatus === "prep" && (
+            <div className="flex gap-2 w-full">
+              <Button 
+                variant="outline" 
+                onClick={() => onOpenChange(false)} 
+                className="flex-1"
+                data-testid="button-cancel-call"
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleStartCall} 
+                className="flex-1 gap-2" 
+                data-testid="button-start-call"
+                disabled={loadingContext || !callContext}
+              >
+                <Phone className="h-4 w-4" />
+                Start Call
+              </Button>
+            </div>
+          )}
           {callStatus === "idle" && (
             <Button 
               onClick={handleStartCall} 
