@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { LeadStatusBadge } from "@/components/status-badge";
 import { CallModal } from "@/components/call-modal";
+import { LeadFormDialog } from "@/components/lead-form-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -51,7 +52,7 @@ import {
 import { 
   Plus, Phone, User, Search, Filter, LayoutList, LayoutGrid, 
   MoreHorizontal, CheckCircle, XCircle, UserPlus, Clock, AlertTriangle,
-  PhoneCall, PhoneForwarded, FileCheck, FileText, Send, Ban
+  PhoneCall, PhoneForwarded, FileCheck, FileText, Send, Ban, Pencil
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import type { Lead, InsertLead, Call } from "@shared/schema";
@@ -164,6 +165,8 @@ export default function LeadsPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [attemptsModalLead, setAttemptsModalLead] = useState<Lead | null>(null);
@@ -284,6 +287,10 @@ export default function LeadsPage() {
       case "call":
         setSelectedLead(lead);
         setCallModalOpen(true);
+        break;
+      case "edit":
+        setEditingLead(lead);
+        setEditModalOpen(true);
         break;
     }
   };
@@ -695,6 +702,10 @@ export default function LeadsPage() {
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => handleQuickAction(lead, "edit")}>
+                                  <Pencil className="h-4 w-4 mr-2" />
+                                  Edit Lead
+                                </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => handleQuickAction(lead, "call")}>
                                   <Phone className="h-4 w-4 mr-2" />
                                   Call
@@ -847,6 +858,13 @@ export default function LeadsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <LeadFormDialog
+        open={editModalOpen}
+        onOpenChange={setEditModalOpen}
+        lead={editingLead}
+        mode="edit"
+      />
     </div>
   );
 }
