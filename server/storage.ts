@@ -55,6 +55,7 @@ export interface IStorage {
   deleteRule(id: string): Promise<void>;
   
   getCallsByLeadId(leadId: string): Promise<Call[]>;
+  getCallsByVapiId(vapiCallId: string): Promise<Call[]>;
   getCall(id: string): Promise<Call | undefined>;
   createCall(call: InsertCall): Promise<Call>;
   updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined>;
@@ -208,6 +209,10 @@ export class DatabaseStorage implements IStorage {
 
   async getCallsByLeadId(leadId: string): Promise<Call[]> {
     return db.select().from(calls).where(eq(calls.leadId, leadId)).orderBy(desc(calls.createdAt));
+  }
+
+  async getCallsByVapiId(vapiCallId: string): Promise<Call[]> {
+    return db.select().from(calls).where(eq(calls.vapiCallId, vapiCallId));
   }
 
   async getCall(id: string): Promise<Call | undefined> {

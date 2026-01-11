@@ -826,6 +826,44 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // Vapi Webhook for call updates (recording, transcript, etc.)
+  app.post("/api/vapi/webhook", async (req, res) => {
+    try {
+      const event = req.body;
+      console.log("Vapi webhook received:", event.message?.type || event.type);
+      
+      // Handle end-of-call-report with recording
+      if (event.message?.type === "end-of-call-report" || event.type === "call.completed") {
+        const callData = event.message?.call || event.call || event;
+        const vapiCallId = callData.id || event.callId;
+        const recordingUrl = callData.recordingUrl || callData.recording?.url;
+        const transcript = callData.transcript || "";
+        const summary = callData.summary || callData.analysis?.summary || "";
+        
+        if (vapiCallId) {
+          // Find and update the call by vapiCallId
+          const calls = await storage.getCallsByVapiId(vapiCallId);
+          if (calls && calls.length > 0) {
+            const updateData: any = {};
+            if (recordingUrl) updateData.recordingUrl = recordingUrl;
+            if (transcript) updateData.transcript = transcript;
+            if (summary) updateData.summary = summary;
+            if (callData.endedReason) updateData.disposition = callData.endedReason;
+            if (callData.duration) updateData.duration = Math.round(callData.duration);
+            
+            await storage.updateCall(calls[0].id, updateData);
+            console.log(`Updated call ${calls[0].id} with recording URL`);
+          }
+        }
+      }
+      
+      res.status(200).json({ received: true });
+    } catch (error) {
+      console.error("Error processing Vapi webhook:", error);
+      res.status(200).json({ received: true }); // Always return 200 to avoid retries
+    }
+  });
+
   // Call history and notes
   app.get("/api/calls/:id", async (req, res) => {
     const call = await storage.getCall(req.params.id);
