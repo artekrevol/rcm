@@ -98,7 +98,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createLead(lead: InsertLead): Promise<Lead> {
-    const [newLead] = await db.insert(leads).values(lead).returning();
+    const [newLead] = await db.insert(leads).values([lead]).returning();
     return newLead;
   }
 
@@ -147,7 +147,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createClaim(claim: InsertClaim): Promise<Claim> {
-    const [newClaim] = await db.insert(claims).values(claim).returning();
+    const [newClaim] = await db.insert(claims).values([claim]).returning();
     return newClaim;
   }
 
@@ -221,7 +221,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createCall(call: InsertCall): Promise<Call> {
-    const [newCall] = await db.insert(calls).values(call).returning();
+    const [newCall] = await db.insert(calls).values([call]).returning();
     return newCall;
   }
 
@@ -244,7 +244,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createPriorAuth(auth: InsertPriorAuth): Promise<PriorAuth> {
-    const [newAuth] = await db.insert(priorAuthorizations).values(auth).returning();
+    const [newAuth] = await db.insert(priorAuthorizations).values([auth]).returning();
     return newAuth;
   }
 
