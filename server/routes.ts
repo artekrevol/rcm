@@ -6,8 +6,110 @@ import {
   insertRuleSchema,
   insertCallSchema,
   type Lead,
+  type Patient,
 } from "@shared/schema";
 import { allPayers } from "./payers";
+
+// Helper function to sync patient data to lead and recalculate VOB score
+// clearedFields: array of field names that were explicitly cleared in the update
+async function syncPatientToLeadWithClears(patient: Patient, extractedData?: any, clearedFields: string[] = []): Promise<void> {
+  const lead = await storage.getLead(patient.leadId);
+  if (!lead) return;
+  
+  const leadUpdate: Record<string, any> = {};
+  
+  // Sync patient values to lead - only copy truthy values
+  if (patient.insuranceCarrier) leadUpdate.insuranceCarrier = patient.insuranceCarrier;
+  if (patient.memberId) leadUpdate.memberId = patient.memberId;
+  if (patient.planType) leadUpdate.planType = patient.planType;
+  if (patient.state) leadUpdate.state = patient.state;
+  
+  // Explicitly clear lead fields that were cleared in the patient update
+  for (const field of clearedFields) {
+    leadUpdate[field] = null;
+  }
+  
+  // Backfill serviceNeeded from extracted call data
+  if (extractedData) {
+    const service = extractedData.serviceType || extractedData.serviceNeeded;
+    if (service && service !== "Unknown") {
+      leadUpdate.serviceNeeded = service;
+    }
+  }
+  
+  // Calculate VOB score based on the final lead state after updates
+  const finalState = { ...lead, ...leadUpdate };
+  const vobMissingFields: string[] = [];
+  if (!finalState.insuranceCarrier) vobMissingFields.push("Insurance Carrier");
+  if (!finalState.memberId) vobMissingFields.push("Member ID");
+  if (!finalState.serviceNeeded) vobMissingFields.push("Service Needed");
+  if (!finalState.planType) vobMissingFields.push("Plan Type");
+  
+  const totalVobFields = 4;
+  const completedFields = totalVobFields - vobMissingFields.length;
+  leadUpdate.vobScore = Math.round((completedFields / totalVobFields) * 100);
+  leadUpdate.vobMissingFields = vobMissingFields;
+  
+  // Update VOB status based on completeness
+  if (vobMissingFields.length === 0) {
+    leadUpdate.vobStatus = "verified";
+  } else if (lead.vobStatus === "verified" || clearedFields.length > 0) {
+    // Downgrade if was verified or if fields were explicitly cleared
+    leadUpdate.vobStatus = "in_progress";
+  }
+  
+  if (Object.keys(leadUpdate).length > 0) {
+    await storage.updateLead(patient.leadId, leadUpdate);
+  }
+}
+
+// Simple sync that only adds data, never removes
+async function syncPatientToLead(patient: Patient, extractedData?: any): Promise<void> {
+  const lead = await storage.getLead(patient.leadId);
+  if (!lead) return;
+  
+  const leadUpdate: Record<string, any> = {};
+  
+  // Sync patient values to lead - only copy truthy values
+  // Patient data supplements lead data, doesn't replace it with nulls
+  if (patient.insuranceCarrier) leadUpdate.insuranceCarrier = patient.insuranceCarrier;
+  if (patient.memberId) leadUpdate.memberId = patient.memberId;
+  if (patient.planType) leadUpdate.planType = patient.planType;
+  if (patient.state) leadUpdate.state = patient.state;
+  
+  // Backfill serviceNeeded from extracted call data
+  if (extractedData) {
+    const service = extractedData.serviceType || extractedData.serviceNeeded;
+    if (service && service !== "Unknown") {
+      leadUpdate.serviceNeeded = service;
+    }
+  }
+  
+  // Calculate VOB score based on the final lead state after updates
+  const finalState = { ...lead, ...leadUpdate };
+  const vobMissingFields: string[] = [];
+  if (!finalState.insuranceCarrier) vobMissingFields.push("Insurance Carrier");
+  if (!finalState.memberId) vobMissingFields.push("Member ID");
+  if (!finalState.serviceNeeded) vobMissingFields.push("Service Needed");
+  if (!finalState.planType) vobMissingFields.push("Plan Type");
+  
+  const totalVobFields = 4;
+  const completedFields = totalVobFields - vobMissingFields.length;
+  leadUpdate.vobScore = Math.round((completedFields / totalVobFields) * 100);
+  leadUpdate.vobMissingFields = vobMissingFields;
+  
+  // Update VOB status based on completeness
+  if (vobMissingFields.length === 0) {
+    leadUpdate.vobStatus = "verified";
+  } else if (lead.vobStatus === "verified") {
+    // Only downgrade if was previously verified
+    leadUpdate.vobStatus = "in_progress";
+  }
+  
+  if (Object.keys(leadUpdate).length > 0) {
+    await storage.updateLead(patient.leadId, leadUpdate);
+  }
+}
 
 export async function registerRoutes(server: Server, app: Express): Promise<void> {
   
@@ -378,6 +480,118 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(patient || null);
   });
 
+  // Update patient and sync to lead
+  app.patch("/api/leads/:id/patient", async (req, res) => {
+    const patient = await storage.getPatientByLeadId(req.params.id);
+    if (!patient) {
+      return res.status(404).json({ error: "Patient not found for this lead" });
+    }
+    
+    // Store original values for comparison
+    const originalValues: Record<string, any> = {
+      insuranceCarrier: patient.insuranceCarrier,
+      memberId: patient.memberId,
+      planType: patient.planType,
+    };
+    
+    const allowedFields = ["dob", "state", "insuranceCarrier", "memberId", "planType"];
+    const updates: Record<string, any> = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
+    
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+    
+    const updatedPatient = await storage.updatePatient(patient.id, updates);
+    if (updatedPatient) {
+      // Fetch calls and sort by most recent first to get latest extractedData
+      const calls = await storage.getCallsByLeadId(req.params.id);
+      const sortedCalls = [...calls].sort((a, b) => {
+        const dateA = a.startedAt ? new Date(a.startedAt).getTime() : 0;
+        const dateB = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+        return dateB - dateA;
+      });
+      
+      let extractedData: any = null;
+      for (const call of sortedCalls) {
+        if (call.extractedData && typeof call.extractedData === 'object') {
+          const data = call.extractedData as any;
+          if (data.serviceType || data.serviceNeeded) {
+            extractedData = data;
+            break;
+          }
+        }
+      }
+      
+      // Detect which VOB fields were cleared by comparing before/after
+      const clearedFields: string[] = [];
+      const vobFields = ["insuranceCarrier", "memberId", "planType"] as const;
+      for (const field of vobFields) {
+        const wasSet = !!originalValues[field];
+        const isNowEmpty = !updatedPatient[field];
+        if (wasSet && isNowEmpty) {
+          clearedFields.push(field);
+        }
+      }
+      
+      await syncPatientToLeadWithClears(updatedPatient, extractedData, clearedFields);
+    }
+    
+    res.json(updatedPatient);
+  });
+
+  // Manual sync of patient data to lead
+  app.post("/api/leads/:id/sync-patient", async (req, res) => {
+    const patient = await storage.getPatientByLeadId(req.params.id);
+    if (!patient) {
+      return res.status(404).json({ error: "No patient record found for this lead" });
+    }
+    
+    const lead = await storage.getLead(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+    
+    // Fetch calls and sort by most recent first to get latest extractedData
+    const calls = await storage.getCallsByLeadId(req.params.id);
+    const sortedCalls = [...calls].sort((a, b) => {
+      const dateA = a.startedAt ? new Date(a.startedAt).getTime() : 0;
+      const dateB = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+      return dateB - dateA;
+    });
+    
+    let extractedData: any = null;
+    for (const call of sortedCalls) {
+      if (call.extractedData && typeof call.extractedData === 'object') {
+        const data = call.extractedData as any;
+        if (data.serviceType || data.serviceNeeded) {
+          extractedData = data;
+          break;
+        }
+      }
+    }
+    
+    // Detect fields that were cleared on patient but lead still has data
+    // (syncing should make lead match patient state)
+    const clearedFields: string[] = [];
+    const vobFields = ["insuranceCarrier", "memberId", "planType"] as const;
+    for (const field of vobFields) {
+      const leadHasValue = !!(lead as any)[field];
+      const patientEmpty = !patient[field];
+      if (leadHasValue && patientEmpty) {
+        clearedFields.push(field);
+      }
+    }
+    
+    await syncPatientToLeadWithClears(patient, extractedData, clearedFields);
+    const updatedLead = await storage.getLead(req.params.id);
+    res.json({ success: true, lead: updatedLead });
+  });
+
   // Get lead context for call prep preview
   app.get("/api/leads/:id/call-context", async (req, res) => {
     const lead = await storage.getLead(req.params.id);
@@ -516,7 +730,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       // Create or update patient record
       const existingPatient = await storage.getPatientByLeadId(req.params.id);
       if (!existingPatient && extracted.qualified) {
-        await storage.createPatient({
+        const newPatient = await storage.createPatient({
           leadId: req.params.id,
           dob: "1985-03-15",
           state: extracted.state || "CA",
@@ -524,6 +738,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           memberId: extracted.memberId || "MEM" + Math.random().toString(36).slice(2, 10).toUpperCase(),
           planType: "PPO",
         });
+        // Sync patient data to lead to update VOB score (pass extractedData for serviceNeeded)
+        await syncPatientToLead(newPatient, extracted);
       } else if (existingPatient) {
         // Update existing patient with new extracted data
         const patientUpdate: Record<string, any> = {};
@@ -532,7 +748,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (extracted.state) patientUpdate.state = extracted.state;
         
         if (Object.keys(patientUpdate).length > 0) {
-          await storage.updatePatient(existingPatient.id, patientUpdate);
+          const updatedPatient = await storage.updatePatient(existingPatient.id, patientUpdate);
+          // Sync updated patient data to lead (pass extractedData for serviceNeeded)
+          if (updatedPatient) {
+            await syncPatientToLead(updatedPatient, extracted);
+          }
+        } else {
+          // Even if no patient updates, sync to ensure serviceNeeded gets backfilled
+          await syncPatientToLead(existingPatient, extracted);
         }
       }
     }
@@ -901,30 +1124,76 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/vapi/webhook", async (req, res) => {
     try {
       const event = req.body;
-      console.log("Vapi webhook received:", event.message?.type || event.type);
+      const eventType = event.message?.type || event.type;
+      console.log("Vapi webhook received:", eventType, JSON.stringify(event).slice(0, 1000));
       
       // Handle end-of-call-report with recording
-      if (event.message?.type === "end-of-call-report" || event.type === "call.completed") {
-        const callData = event.message?.call || event.call || event;
-        const vapiCallId = callData.id || event.callId;
-        const recordingUrl = callData.recordingUrl || callData.recording?.url;
-        const transcript = callData.transcript || "";
-        const summary = callData.summary || callData.analysis?.summary || "";
+      if (eventType === "end-of-call-report" || eventType === "call.completed" || eventType === "call-ended") {
+        const callData = event.message?.call || event.message || event.call || event;
+        const vapiCallId = callData.id || callData.callId || event.callId;
+        
+        // Handle Vapi's deeply nested artifacts structure - check all possible paths
+        const artifacts = callData.artifact || callData.artifacts || {};
+        const latest = artifacts.latest || {};
+        const latestArtifacts = latest.artifacts || latest.artifact || {};
+        
+        // Recording URL can be in deeply nested locations - check all paths
+        const recordingUrl = latestArtifacts.recordingUrl
+          || (Array.isArray(latestArtifacts.recordings) && latestArtifacts.recordings[0]?.url)
+          || latest.recordingUrl
+          || (Array.isArray(latest.recordings) && latest.recordings[0]?.url)
+          || callData.recordingUrl 
+          || callData.recording?.url 
+          || artifacts.recordingUrl
+          || (Array.isArray(callData.recordings) && callData.recordings[0]?.url)
+          || (artifacts.recordings && artifacts.recordings[0]?.url);
+        
+        // Transcript from various locations - check deepest first
+        const transcript = latestArtifacts.transcript
+          || (latestArtifacts.messages?.map((m: any) => `${m.role}: ${m.content}`).join('\n'))
+          || latest.transcript
+          || (latest.messages?.map((m: any) => `${m.role}: ${m.content}`).join('\n'))
+          || callData.transcript 
+          || artifacts.transcript 
+          || (artifacts.messages?.map((m: any) => `${m.role}: ${m.content}`).join('\n'))
+          || "";
+        
+        // Summary from all possible locations
+        const summary = latestArtifacts.summary
+          || latest.summary
+          || callData.summary 
+          || callData.analysis?.summary 
+          || artifacts.summary 
+          || "";
+        
+        console.log("Processing call end:", { vapiCallId, hasRecording: !!recordingUrl, hasTranscript: !!transcript, hasSummary: !!summary });
         
         if (vapiCallId) {
           // Find and update the call by vapiCallId
           const calls = await storage.getCallsByVapiId(vapiCallId);
+          
           if (calls && calls.length > 0) {
             const updateData: any = {};
             if (recordingUrl) updateData.recordingUrl = recordingUrl;
             if (transcript) updateData.transcript = transcript;
             if (summary) updateData.summary = summary;
-            if (callData.endedReason) updateData.disposition = callData.endedReason;
+            // Only set disposition if Vapi provides one, otherwise leave as-is
+            if (callData.endedReason) {
+              updateData.disposition = callData.endedReason;
+            } else if (callData.status === "ended") {
+              updateData.disposition = "completed";
+            }
             if (callData.duration) updateData.duration = Math.round(callData.duration);
             
-            await storage.updateCall(calls[0].id, updateData);
-            console.log(`Updated call ${calls[0].id} with recording URL`);
+            if (Object.keys(updateData).length > 0) {
+              await storage.updateCall(calls[0].id, updateData);
+              console.log(`Updated call ${calls[0].id} with data:`, Object.keys(updateData));
+            }
+          } else {
+            console.warn(`No matching call found for vapiCallId: ${vapiCallId}`);
           }
+        } else {
+          console.warn("Webhook event missing vapiCallId");
         }
       }
       
@@ -932,6 +1201,93 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     } catch (error) {
       console.error("Error processing Vapi webhook:", error);
       res.status(200).json({ received: true }); // Always return 200 to avoid retries
+    }
+  });
+
+  // Manually refresh call data from Vapi API
+  app.post("/api/calls/:id/refresh", async (req, res) => {
+    const call = await storage.getCall(req.params.id);
+    if (!call) {
+      return res.status(404).json({ error: "Call not found" });
+    }
+    
+    if (!call.vapiCallId) {
+      return res.status(400).json({ error: "Call has no Vapi call ID" });
+    }
+    
+    const vapiApiKey = process.env.VAPI_API_KEY;
+    if (!vapiApiKey) {
+      return res.status(500).json({ error: "Vapi API key not configured" });
+    }
+    
+    try {
+      const response = await fetch(`https://api.vapi.ai/call/${call.vapiCallId}`, {
+        headers: {
+          "Authorization": `Bearer ${vapiApiKey}`,
+        },
+      });
+      
+      if (!response.ok) {
+        console.error(`Vapi API returned ${response.status} for call ${call.vapiCallId}`);
+        return res.status(response.status).json({ error: "Failed to fetch call from Vapi" });
+      }
+      
+      const callData = await response.json();
+      const updateData: any = {};
+      
+      // Handle Vapi's deeply nested artifacts structure - check all possible paths
+      const artifacts = callData.artifact || callData.artifacts || {};
+      const latest = artifacts.latest || {};
+      const latestArtifacts = latest.artifacts || latest.artifact || {};
+      
+      // Recording URL can be in deeply nested locations - check all paths
+      const recordingUrl = latestArtifacts.recordingUrl
+        || (Array.isArray(latestArtifacts.recordings) && latestArtifacts.recordings[0]?.url)
+        || latest.recordingUrl
+        || (Array.isArray(latest.recordings) && latest.recordings[0]?.url)
+        || callData.recordingUrl 
+        || callData.recording?.url 
+        || artifacts.recordingUrl
+        || (Array.isArray(callData.recordings) && callData.recordings[0]?.url)
+        || (artifacts.recordings && artifacts.recordings[0]?.url);
+      
+      // Transcript from various locations - check deepest first
+      const transcript = latestArtifacts.transcript
+        || (latestArtifacts.messages?.map((m: any) => `${m.role}: ${m.content}`).join('\n'))
+        || latest.transcript
+        || (latest.messages?.map((m: any) => `${m.role}: ${m.content}`).join('\n'))
+        || callData.transcript 
+        || artifacts.transcript 
+        || (artifacts.messages?.map((m: any) => `${m.role}: ${m.content}`).join('\n'));
+      
+      // Summary from all possible locations
+      const summary = latestArtifacts.summary
+        || latest.summary
+        || callData.summary 
+        || callData.analysis?.summary 
+        || artifacts.summary;
+      
+      if (recordingUrl) updateData.recordingUrl = recordingUrl;
+      if (transcript) updateData.transcript = transcript;
+      if (summary) updateData.summary = summary;
+      if (callData.endedReason) updateData.disposition = callData.endedReason;
+      if (callData.duration) updateData.duration = Math.round(callData.duration);
+      if (callData.status === "ended" && !updateData.disposition) {
+        updateData.disposition = "completed";
+      }
+      
+      if (Object.keys(updateData).length > 0) {
+        const updatedCall = await storage.updateCall(call.id, updateData);
+        console.log(`Refreshed call ${call.id} with:`, Object.keys(updateData));
+        res.json({ ...updatedCall, refreshed: true });
+      } else {
+        // No new data available - return 200 with explicit payload (204 can't have body)
+        console.log(`No new data for call ${call.id} from Vapi (status: ${callData.status})`);
+        res.status(200).json({ ...call, refreshed: false, message: "No new data available from Vapi yet" });
+      }
+    } catch (error) {
+      console.error("Error refreshing call from Vapi:", error);
+      res.status(500).json({ error: "Failed to refresh call" });
     }
   });
 

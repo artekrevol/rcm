@@ -46,6 +46,7 @@ import {
   PhoneCall,
   Pencil,
   PlayCircle,
+  RefreshCw,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import type { Lead, Call, Patient } from "@shared/schema";
@@ -153,6 +154,42 @@ export default function LeadDetailPage() {
     },
     onError: () => {
       toast({ title: "Failed to create claim packet", variant: "destructive" });
+    },
+  });
+
+  const refreshCallMutation = useMutation({
+    mutationFn: async (callId: string) => {
+      const response = await apiRequest("POST", `/api/calls/${callId}/refresh`);
+      // Handle 204 no content gracefully
+      if (response.status === 204) {
+        return { refreshed: false };
+      }
+      return response.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "calls"] });
+      if (data?.refreshed) {
+        toast({ title: "Call data refreshed from Vapi" });
+      } else {
+        toast({ title: "No new data available yet", description: "Try again in a few moments" });
+      }
+    },
+    onError: () => {
+      toast({ title: "Failed to refresh call data", variant: "destructive" });
+    },
+  });
+
+  const syncPatientMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("POST", `/api/leads/${id}/sync-patient`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads/worklist"] });
+      toast({ title: "Patient data synced to lead" });
+    },
+    onError: () => {
+      toast({ title: "Failed to sync patient data", variant: "destructive" });
     },
   });
 
@@ -567,6 +604,19 @@ export default function LeadDetailPage() {
                                 {formatDuration(call.duration)}
                               </span>
                             )}
+                            {call.vapiCallId && call.disposition === "in_progress" && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 gap-1 text-xs"
+                                onClick={() => refreshCallMutation.mutate(call.id)}
+                                disabled={refreshCallMutation.isPending}
+                                data-testid={`button-refresh-call-${call.id}`}
+                              >
+                                <RefreshCw className={`h-3 w-3 ${refreshCallMutation.isPending ? 'animate-spin' : ''}`} />
+                                Refresh
+                              </Button>
+                            )}
                           </div>
                           <p className="text-sm mt-2">{call.summary}</p>
                         </div>
@@ -686,8 +736,21 @@ export default function LeadDetailPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Insurance Info */}
             <Card>
-              <CardHeader className="pb-3">
+              <CardHeader className="pb-3 flex flex-row items-center justify-between">
                 <CardTitle className="text-sm font-medium">Insurance Details</CardTitle>
+                {patient && vobScore < 100 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 h-7"
+                    onClick={() => syncPatientMutation.mutate()}
+                    disabled={syncPatientMutation.isPending}
+                    data-testid="button-sync-patient"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${syncPatientMutation.isPending ? 'animate-spin' : ''}`} />
+                    Sync to Lead
+                  </Button>
+                )}
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex items-center gap-3">
