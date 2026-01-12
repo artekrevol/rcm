@@ -29,9 +29,9 @@ async function syncPatientToLeadWithClears(patient: Patient, extractedData?: any
     leadUpdate[field] = null;
   }
   
-  // Backfill serviceNeeded from extracted call data
+  // Backfill serviceNeeded from extracted call data (check multiple field name formats)
   if (extractedData) {
-    const service = extractedData.serviceType || extractedData.serviceNeeded;
+    const service = extractedData.serviceType || extractedData.serviceNeeded || extractedData.service_interest || extractedData.service_type;
     if (service && service !== "Unknown") {
       leadUpdate.serviceNeeded = service;
     }
@@ -77,9 +77,9 @@ async function syncPatientToLead(patient: Patient, extractedData?: any): Promise
   if (patient.planType) leadUpdate.planType = patient.planType;
   if (patient.state) leadUpdate.state = patient.state;
   
-  // Backfill serviceNeeded from extracted call data
+  // Backfill serviceNeeded from extracted call data (check multiple field name formats)
   if (extractedData) {
-    const service = extractedData.serviceType || extractedData.serviceNeeded;
+    const service = extractedData.serviceType || extractedData.serviceNeeded || extractedData.service_interest || extractedData.service_type;
     if (service && service !== "Unknown") {
       leadUpdate.serviceNeeded = service;
     }
@@ -511,8 +511,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       // Fetch calls and sort by most recent first to get latest extractedData
       const calls = await storage.getCallsByLeadId(req.params.id);
       const sortedCalls = [...calls].sort((a, b) => {
-        const dateA = a.startedAt ? new Date(a.startedAt).getTime() : 0;
-        const dateB = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return dateB - dateA;
       });
       
@@ -568,7 +568,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     for (const call of sortedCalls) {
       if (call.extractedData && typeof call.extractedData === 'object') {
         const data = call.extractedData as any;
-        if (data.serviceType || data.serviceNeeded) {
+        if (data.serviceType || data.serviceNeeded || data.service_interest) {
           extractedData = data;
           break;
         }
@@ -712,15 +712,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (extracted.qualified) {
         leadUpdate.status = "qualified";
       }
-      const service = extracted.serviceType || extracted.serviceNeeded;
+      // Check multiple field name formats (camelCase and snake_case from Vapi)
+      const service = extracted.serviceType || extracted.serviceNeeded || extracted.service_interest || extracted.service_type;
       if (service && service !== "Unknown") {
         leadUpdate.serviceNeeded = service;
       }
-      if (extracted.insuranceCarrier) {
-        leadUpdate.insuranceCarrier = extracted.insuranceCarrier;
+      const carrier = extracted.insuranceCarrier || extracted.insurance_carrier;
+      if (carrier) {
+        leadUpdate.insuranceCarrier = carrier;
       }
-      if (extracted.memberId) {
-        leadUpdate.memberId = extracted.memberId;
+      const member = extracted.memberId || extracted.member_id;
+      if (member) {
+        leadUpdate.memberId = member;
       }
       
       if (Object.keys(leadUpdate).length > 0) {
@@ -734,8 +737,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           leadId: req.params.id,
           dob: "1985-03-15",
           state: extracted.state || "CA",
-          insuranceCarrier: extracted.insuranceCarrier || "Blue Cross",
-          memberId: extracted.memberId || "MEM" + Math.random().toString(36).slice(2, 10).toUpperCase(),
+          insuranceCarrier: extracted.insuranceCarrier || extracted.insurance_carrier || "Blue Cross",
+          memberId: extracted.memberId || extracted.member_id || "MEM" + Math.random().toString(36).slice(2, 10).toUpperCase(),
           planType: "PPO",
         });
         // Sync patient data to lead to update VOB score (pass extractedData for serviceNeeded)
@@ -743,8 +746,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       } else if (existingPatient) {
         // Update existing patient with new extracted data
         const patientUpdate: Record<string, any> = {};
-        if (extracted.insuranceCarrier) patientUpdate.insuranceCarrier = extracted.insuranceCarrier;
-        if (extracted.memberId) patientUpdate.memberId = extracted.memberId;
+        const extractedCarrier = extracted.insuranceCarrier || extracted.insurance_carrier;
+        const extractedMemberId = extracted.memberId || extracted.member_id;
+        if (extractedCarrier) patientUpdate.insuranceCarrier = extractedCarrier;
+        if (extractedMemberId) patientUpdate.memberId = extractedMemberId;
         if (extracted.state) patientUpdate.state = extracted.state;
         
         if (Object.keys(patientUpdate).length > 0) {
