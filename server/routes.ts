@@ -2007,6 +2007,57 @@ Warmly,
     res.json({ message: "Default availability created", slots: defaultSlots });
   });
 
+  // ==================== VAPI CHAT WIDGET ====================
+
+  // Get Vapi widget configuration (public key + assistant ID for client-side widget)
+  app.get("/api/vapi/widget-config", async (req, res) => {
+    const publicKey = process.env.VAPI_PUBLIC_KEY;
+    const assistantId = process.env.VAPI_ASSISTANT_ID;
+
+    res.json({
+      publicKey: publicKey || "",
+      assistantId: assistantId || "",
+      configured: !!(publicKey && assistantId),
+    });
+  });
+
+  // Chat message endpoint for text-based chat (uses OpenAI or simple responses)
+  app.post("/api/chat/message", async (req, res) => {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "Message is required" });
+    }
+
+    // Simple response logic - can be enhanced with OpenAI integration
+    const lowerMessage = message.toLowerCase();
+    let reply = "";
+
+    if (lowerMessage.includes("appointment") || lowerMessage.includes("schedule")) {
+      reply = "I'd be happy to help you schedule an appointment! Our available times are Monday through Friday, 9 AM to 5 PM. Would you like me to check availability for a specific date?";
+    } else if (lowerMessage.includes("insurance") || lowerMessage.includes("coverage")) {
+      reply = "We work with most major insurance providers including Blue Cross Blue Shield, Aetna, Cigna, UnitedHealth, and many others. Would you like me to verify your specific coverage?";
+    } else if (lowerMessage.includes("service") || lowerMessage.includes("help") || lowerMessage.includes("treatment")) {
+      reply = "We offer a range of healthcare services including mental health counseling, substance abuse treatment, and physical therapy. What type of care are you looking for?";
+    } else if (lowerMessage.includes("cost") || lowerMessage.includes("price") || lowerMessage.includes("pay")) {
+      reply = "Costs vary depending on your insurance coverage and the services you need. We offer free insurance verification to give you an accurate estimate. Would you like us to check your benefits?";
+    } else if (lowerMessage.includes("location") || lowerMessage.includes("address") || lowerMessage.includes("where")) {
+      reply = "We have multiple locations to serve you. Our main facility is conveniently located with easy parking. Would you like specific directions?";
+    } else if (lowerMessage.includes("hello") || lowerMessage.includes("hi") || lowerMessage.includes("hey")) {
+      reply = "Hello! Welcome to ClaimShield Healthcare. How can I assist you today? I can help with scheduling appointments, verifying insurance, or answering questions about our services.";
+    } else if (lowerMessage.includes("thanks") || lowerMessage.includes("thank you")) {
+      reply = "You're welcome! Is there anything else I can help you with?";
+    } else if (lowerMessage.includes("call") || lowerMessage.includes("phone") || lowerMessage.includes("speak")) {
+      reply = "Would you like to speak with someone directly? I can connect you with our team, or you can use the phone icon to start a voice call right now.";
+    } else if (lowerMessage.includes("hours") || lowerMessage.includes("open")) {
+      reply = "Our office hours are Monday through Friday, 9 AM to 5 PM CST. However, our AI assistant is available 24/7 to answer questions and schedule appointments.";
+    } else {
+      reply = "Thank you for your message. I'd be happy to help you with scheduling an appointment, verifying your insurance, or answering questions about our services. What would you like to know more about?";
+    }
+
+    res.json({ reply });
+  });
+
 }
 
 function generateIntakeTranscript(patientName: string): string {

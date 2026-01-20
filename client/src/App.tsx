@@ -9,6 +9,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
+import { VapiChatWidget } from "@/components/vapi-chat-widget";
 import DashboardPage from "@/pages/dashboard";
 import LeadsPage from "@/pages/leads";
 import LeadDetailPage from "@/pages/lead-detail";
@@ -99,6 +100,7 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <Router />
+          <VapiChatWidget />
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>
