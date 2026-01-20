@@ -5,17 +5,28 @@ import {
   insertLeadSchema,
   insertRuleSchema,
   insertCallSchema,
+  insertEmailTemplateSchema,
+  insertNurtureSequenceSchema,
+  insertAvailabilitySlotSchema,
+  insertAppointmentSchema,
   type Lead,
   type Patient,
 } from "@shared/schema";
 import { allPayers } from "./payers";
 import twilio from "twilio";
+import { Resend } from "resend";
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
   : null;
 const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+
+// Initialize Resend client for email
+const resendClient = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
+const fromEmail = process.env.FROM_EMAIL || "onboarding@resend.dev";
 
 // Helper function to sync patient data to lead and recalculate VOB score
 // clearedFields: array of field names that were explicitly cleared in the update
@@ -1514,6 +1525,478 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       configured: !!twilioClient,
       phoneNumber: twilioPhoneNumber ? twilioPhoneNumber.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") : null,
     });
+  });
+
+  // ==================== EMAIL AUTOMATION ====================
+
+  // Get all email templates
+  app.get("/api/email-templates", async (req, res) => {
+    const templates = await storage.getEmailTemplates();
+    res.json(templates);
+  });
+
+  // Create email template
+  app.post("/api/email-templates", async (req, res) => {
+    const result = insertEmailTemplateSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error.flatten() });
+    }
+    const template = await storage.createEmailTemplate(result.data);
+    res.json(template);
+  });
+
+  // Update email template
+  app.patch("/api/email-templates/:id", async (req, res) => {
+    const template = await storage.updateEmailTemplate(req.params.id, req.body);
+    if (!template) {
+      return res.status(404).json({ error: "Template not found" });
+    }
+    res.json(template);
+  });
+
+  // Delete email template
+  app.delete("/api/email-templates/:id", async (req, res) => {
+    await storage.deleteEmailTemplate(req.params.id);
+    res.status(204).send();
+  });
+
+  // Get all nurture sequences
+  app.get("/api/nurture-sequences", async (req, res) => {
+    const sequences = await storage.getNurtureSequences();
+    res.json(sequences);
+  });
+
+  // Create nurture sequence
+  app.post("/api/nurture-sequences", async (req, res) => {
+    const result = insertNurtureSequenceSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error.flatten() });
+    }
+    const sequence = await storage.createNurtureSequence(result.data);
+    res.json(sequence);
+  });
+
+  // Update nurture sequence
+  app.patch("/api/nurture-sequences/:id", async (req, res) => {
+    const sequence = await storage.updateNurtureSequence(req.params.id, req.body);
+    if (!sequence) {
+      return res.status(404).json({ error: "Sequence not found" });
+    }
+    res.json(sequence);
+  });
+
+  // Delete nurture sequence
+  app.delete("/api/nurture-sequences/:id", async (req, res) => {
+    await storage.deleteNurtureSequence(req.params.id);
+    res.status(204).send();
+  });
+
+  // Pre-built email templates for quick selection
+  const emailPresets = {
+    welcome: {
+      subject: "Welcome to {{facility_name}} - Your Care Journey Begins",
+      body: `Dear {{first_name}},
+
+Thank you for reaching out to {{facility_name}}. We're here to support you on your journey to better health.
+
+Our team has received your information and will be contacting you shortly to discuss the next steps for {{service_needed}}.
+
+In the meantime, please feel free to reach out if you have any questions.
+
+Warm regards,
+The {{facility_name}} Team`,
+    },
+    insurance_verification: {
+      subject: "Insurance Information Needed - {{facility_name}}",
+      body: `Dear {{first_name}},
+
+We're working on verifying your insurance benefits for your upcoming care with us.
+
+To proceed, we need the following information:
+- Insurance carrier name
+- Member ID number
+- Group number (if applicable)
+- Copy of your insurance card (front and back)
+
+Please reply to this email with the requested information, or call us at your earliest convenience.
+
+Thank you,
+{{facility_name}} Admissions Team`,
+    },
+    appointment_confirmation: {
+      subject: "Your Appointment is Confirmed - {{appointment_date}}",
+      body: `Dear {{first_name}},
+
+Your appointment has been confirmed for {{appointment_date}} at {{appointment_time}}.
+
+Location: {{facility_name}}
+
+Please arrive 15 minutes early to complete any necessary paperwork.
+
+If you need to reschedule, please let us know at least 24 hours in advance.
+
+See you soon!
+{{facility_name}} Team`,
+    },
+    documents_request: {
+      subject: "Documents Needed for Your Care - {{facility_name}}",
+      body: `Dear {{first_name}},
+
+To ensure we can provide you with the best care, we need the following documents:
+
+1. Valid photo ID
+2. Insurance card (front and back)
+3. Referral from your primary care physician (if applicable)
+4. List of current medications
+
+Please scan or photograph these documents and reply to this email, or bring them to your appointment.
+
+Thank you for your cooperation!
+{{facility_name}} Admissions Team`,
+    },
+    follow_up: {
+      subject: "Following Up - {{facility_name}}",
+      body: `Dear {{first_name}},
+
+We wanted to follow up regarding your inquiry about {{service_needed}}.
+
+We understand that taking this step can feel overwhelming, and we're here to help make the process as smooth as possible.
+
+Would you be available for a brief call to discuss your options? Please let us know a time that works for you, or simply reply to this email with any questions.
+
+We're here when you're ready.
+
+Warmly,
+{{facility_name}} Admissions Team`,
+    },
+  };
+
+  // Send email to lead
+  app.post("/api/leads/:id/email", async (req, res) => {
+    const lead = await storage.getLead(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    if (!lead.email) {
+      return res.status(400).json({ error: "Lead has no email address" });
+    }
+
+    const { template, templateId, subject, body } = req.body;
+    let emailSubject: string;
+    let emailBody: string;
+
+    // Use preset template
+    if (template && emailPresets[template as keyof typeof emailPresets]) {
+      const preset = emailPresets[template as keyof typeof emailPresets];
+      emailSubject = preset.subject;
+      emailBody = preset.body;
+    } 
+    // Use custom template from database
+    else if (templateId) {
+      const dbTemplate = await storage.getEmailTemplate(templateId);
+      if (!dbTemplate) {
+        return res.status(404).json({ error: "Template not found" });
+      }
+      emailSubject = dbTemplate.subject;
+      emailBody = dbTemplate.body;
+    } 
+    // Use provided subject/body
+    else if (subject && body) {
+      emailSubject = subject;
+      emailBody = body;
+    } else {
+      return res.status(400).json({ error: "Template, templateId, or subject/body required" });
+    }
+
+    // Replace template variables
+    const variables: Record<string, string> = {
+      first_name: lead.firstName || lead.name.split(" ")[0] || "there",
+      last_name: lead.lastName || lead.name.split(" ").slice(1).join(" ") || "",
+      full_name: lead.name,
+      service_needed: lead.serviceNeeded || "your care",
+      facility_name: "ClaimShield Healthcare",
+      insurance_carrier: lead.insuranceCarrier || "your insurance",
+    };
+
+    for (const [key, value] of Object.entries(variables)) {
+      emailSubject = emailSubject.replace(new RegExp(`{{${key}}}`, "g"), value);
+      emailBody = emailBody.replace(new RegExp(`{{${key}}}`, "g"), value);
+    }
+
+    // Log email first
+    const emailLog = await storage.createEmailLog({
+      leadId: lead.id,
+      templateId: templateId || null,
+      subject: emailSubject,
+      body: emailBody,
+      toEmail: lead.email,
+      status: "pending",
+    });
+
+    // Send via Resend if configured
+    if (resendClient) {
+      try {
+        await resendClient.emails.send({
+          from: fromEmail,
+          to: lead.email,
+          subject: emailSubject,
+          text: emailBody,
+        });
+        await storage.updateEmailLog(emailLog.id, { 
+          status: "sent", 
+          sentAt: new Date() 
+        });
+      } catch (err: any) {
+        console.error("Email send error:", err);
+        await storage.updateEmailLog(emailLog.id, { 
+          status: "failed", 
+          errorMessage: err.message || "Failed to send email" 
+        });
+        return res.status(500).json({ error: "Failed to send email" });
+      }
+    } else {
+      // Mark as sent in demo mode
+      await storage.updateEmailLog(emailLog.id, { 
+        status: "sent", 
+        sentAt: new Date() 
+      });
+    }
+
+    // Update lead last contacted
+    await storage.updateLead(lead.id, { 
+      lastContactedAt: new Date(),
+      lastOutcome: `Email sent: ${emailSubject}`,
+    });
+
+    res.json({ success: true, emailLogId: emailLog.id });
+  });
+
+  // Get email logs for a lead
+  app.get("/api/leads/:id/emails", async (req, res) => {
+    const emails = await storage.getEmailLogsByLeadId(req.params.id);
+    res.json(emails);
+  });
+
+  // Get email configuration status
+  app.get("/api/email/status", async (req, res) => {
+    res.json({
+      configured: !!resendClient,
+      fromEmail: fromEmail,
+    });
+  });
+
+  // List available email presets
+  app.get("/api/email/presets", async (req, res) => {
+    const presets = Object.entries(emailPresets).map(([id, template]) => ({
+      id,
+      name: id.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+      subject: template.subject,
+    }));
+    res.json(presets);
+  });
+
+  // ==================== APPOINTMENT SCHEDULING ====================
+
+  // Get all availability slots
+  app.get("/api/availability", async (req, res) => {
+    const slots = await storage.getAvailabilitySlots();
+    res.json(slots);
+  });
+
+  // Create availability slot
+  app.post("/api/availability", async (req, res) => {
+    const result = insertAvailabilitySlotSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error.flatten() });
+    }
+    const slot = await storage.createAvailabilitySlot(result.data);
+    res.json(slot);
+  });
+
+  // Update availability slot
+  app.patch("/api/availability/:id", async (req, res) => {
+    const slot = await storage.updateAvailabilitySlot(req.params.id, req.body);
+    if (!slot) {
+      return res.status(404).json({ error: "Slot not found" });
+    }
+    res.json(slot);
+  });
+
+  // Delete availability slot
+  app.delete("/api/availability/:id", async (req, res) => {
+    await storage.deleteAvailabilitySlot(req.params.id);
+    res.status(204).send();
+  });
+
+  // Get all appointments
+  app.get("/api/appointments", async (req, res) => {
+    const appointments = await storage.getAppointments();
+    res.json(appointments);
+  });
+
+  // Get appointments for a lead
+  app.get("/api/leads/:id/appointments", async (req, res) => {
+    const appointments = await storage.getAppointmentsByLeadId(req.params.id);
+    res.json(appointments);
+  });
+
+  // Create appointment for a lead
+  app.post("/api/leads/:id/appointments", async (req, res) => {
+    const lead = await storage.getLead(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    const appointmentData = {
+      ...req.body,
+      leadId: lead.id,
+    };
+
+    const result = insertAppointmentSchema.safeParse(appointmentData);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error.flatten() });
+    }
+
+    const appointment = await storage.createAppointment(result.data);
+
+    // Update lead with next action
+    await storage.updateLead(lead.id, {
+      nextAction: `Appointment scheduled: ${new Date(appointment.scheduledAt).toLocaleDateString()}`,
+      nextActionType: "appointment",
+      nextActionAt: appointment.scheduledAt,
+    });
+
+    res.json(appointment);
+  });
+
+  // Update appointment
+  app.patch("/api/appointments/:id", async (req, res) => {
+    const appointment = await storage.updateAppointment(req.params.id, req.body);
+    if (!appointment) {
+      return res.status(404).json({ error: "Appointment not found" });
+    }
+    res.json(appointment);
+  });
+
+  // Cancel appointment
+  app.post("/api/appointments/:id/cancel", async (req, res) => {
+    const { reason } = req.body;
+    const appointment = await storage.updateAppointment(req.params.id, {
+      status: "cancelled",
+      cancelledAt: new Date(),
+      cancelReason: reason || "Cancelled by user",
+    });
+    if (!appointment) {
+      return res.status(404).json({ error: "Appointment not found" });
+    }
+
+    // Update lead
+    await storage.updateLead(appointment.leadId, {
+      nextAction: "Reschedule appointment",
+      nextActionType: "callback",
+    });
+
+    res.json(appointment);
+  });
+
+  // Confirm appointment
+  app.post("/api/appointments/:id/confirm", async (req, res) => {
+    const appointment = await storage.updateAppointment(req.params.id, {
+      status: "confirmed",
+      confirmedAt: new Date(),
+    });
+    if (!appointment) {
+      return res.status(404).json({ error: "Appointment not found" });
+    }
+    res.json(appointment);
+  });
+
+  // Get available time slots for a specific date
+  app.get("/api/availability/slots", async (req, res) => {
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ error: "Date required" });
+    }
+
+    const requestedDate = new Date(date as string);
+    const dayOfWeek = requestedDate.getDay();
+    
+    // Get availability for this day
+    const allSlots = await storage.getAvailabilitySlots();
+    const daySlots = allSlots.filter(s => s.dayOfWeek === dayOfWeek && s.enabled);
+
+    if (daySlots.length === 0) {
+      return res.json([]);
+    }
+
+    // Get existing appointments for this date
+    const allAppointments = await storage.getAppointments();
+    const dayStart = new Date(requestedDate);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(requestedDate);
+    dayEnd.setHours(23, 59, 59, 999);
+
+    const bookedTimes = allAppointments
+      .filter(a => {
+        const apptDate = new Date(a.scheduledAt);
+        return apptDate >= dayStart && apptDate <= dayEnd && a.status !== "cancelled";
+      })
+      .map(a => new Date(a.scheduledAt).toISOString());
+
+    // Generate available time slots (30-minute intervals)
+    const availableSlots: { time: string; display: string }[] = [];
+    
+    for (const slot of daySlots) {
+      const [startHour, startMin] = slot.startTime.split(":").map(Number);
+      const [endHour, endMin] = slot.endTime.split(":").map(Number);
+      
+      const slotDate = new Date(requestedDate);
+      slotDate.setHours(startHour, startMin, 0, 0);
+      
+      const endDate = new Date(requestedDate);
+      endDate.setHours(endHour, endMin, 0, 0);
+
+      while (slotDate < endDate) {
+        const timeStr = slotDate.toISOString();
+        if (!bookedTimes.includes(timeStr)) {
+          availableSlots.push({
+            time: timeStr,
+            display: slotDate.toLocaleTimeString("en-US", { 
+              hour: "numeric", 
+              minute: "2-digit", 
+              hour12: true 
+            }),
+          });
+        }
+        slotDate.setMinutes(slotDate.getMinutes() + 30);
+      }
+    }
+
+    res.json(availableSlots);
+  });
+
+  // Seed default availability if none exists
+  app.post("/api/availability/seed", async (req, res) => {
+    const existing = await storage.getAvailabilitySlots();
+    if (existing.length > 0) {
+      return res.json({ message: "Availability already configured", slots: existing });
+    }
+
+    // Create default Mon-Fri 9am-5pm availability
+    const defaultSlots = [];
+    for (let day = 1; day <= 5; day++) {
+      const slot = await storage.createAvailabilitySlot({
+        dayOfWeek: day,
+        startTime: "09:00",
+        endTime: "17:00",
+        timezone: "America/Chicago",
+        enabled: true,
+      });
+      defaultSlots.push(slot);
+    }
+
+    res.json({ message: "Default availability created", slots: defaultSlots });
   });
 
 }
