@@ -202,7 +202,7 @@ export function VapiChatWidget() {
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
@@ -219,11 +219,11 @@ export function VapiChatWidget() {
     return (
       <Button
         onClick={handleOpen}
-        size="lg"
-        className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-lg z-50"
+        size="icon"
+        className="fixed bottom-6 right-6 rounded-full shadow-lg z-50"
         data-testid="button-chat-widget"
       >
-        <MessageCircle className="h-6 w-6" />
+        <MessageCircle className="h-5 w-5" />
       </Button>
     );
   }
@@ -232,8 +232,9 @@ export function VapiChatWidget() {
   if (isMinimized) {
     return (
       <div 
-        className="fixed bottom-6 right-6 z-50 cursor-pointer"
+        className="fixed bottom-6 right-6 z-50 cursor-pointer hover-elevate"
         onClick={() => setIsMinimized(false)}
+        data-testid="chat-widget-minimized"
       >
         <Card className="p-3 shadow-lg flex items-center gap-2">
           <Bot className="h-5 w-5 text-primary" />
@@ -266,7 +267,7 @@ export function VapiChatWidget() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-primary-foreground hover:bg-primary-foreground/20"
+            className="text-primary-foreground"
             onClick={handleMinimize}
             data-testid="button-minimize-chat"
           >
@@ -275,7 +276,7 @@ export function VapiChatWidget() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-primary-foreground hover:bg-primary-foreground/20"
+            className="text-primary-foreground"
             onClick={handleClose}
             data-testid="button-close-chat"
           >
@@ -285,8 +286,8 @@ export function VapiChatWidget() {
       </div>
 
       {/* Messages */}
-      <ScrollArea className="flex-1 p-4" ref={scrollRef}>
-        <div className="space-y-4">
+      <ScrollArea className="flex-1 p-4">
+        <div className="space-y-4" ref={scrollRef}>
           {messages.map((message) => (
             <div
               key={message.id}
@@ -372,7 +373,7 @@ export function VapiChatWidget() {
             ref={inputRef}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyDown}
             placeholder={isCallActive ? "Voice call active..." : "Type a message..."}
             disabled={isLoading || isCallActive}
             className="flex-1"
