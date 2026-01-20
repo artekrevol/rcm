@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadStatusBadge } from "@/components/status-badge";
 import { CallModal } from "@/components/call-modal";
 import { LeadFormDialog } from "@/components/lead-form-dialog";
+import { ScheduleAppointmentDialog } from "@/components/schedule-appointment-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
@@ -109,6 +110,7 @@ export default function LeadDetailPage() {
   const { toast } = useToast();
   const [callModalOpen, setCallModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
   const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set());
@@ -527,6 +529,16 @@ export default function LeadDetailPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1"
+            onClick={() => setScheduleModalOpen(true)}
+            data-testid="button-schedule-appointment"
+          >
+            <Calendar className="h-4 w-4" />
+            Schedule
+          </Button>
           <Tooltip>
             <TooltipTrigger asChild>
               <span>
@@ -1053,6 +1065,13 @@ export default function LeadDetailPage() {
         onOpenChange={setEditModalOpen}
         lead={lead}
         mode="edit"
+      />
+
+      <ScheduleAppointmentDialog
+        open={scheduleModalOpen}
+        onOpenChange={setScheduleModalOpen}
+        leadId={lead.id}
+        leadName={lead.name}
       />
     </div>
   );
