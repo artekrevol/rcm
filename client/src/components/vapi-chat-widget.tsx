@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,17 +8,13 @@ import {
   MessageCircle, 
   X, 
   Send, 
-  Mic, 
-  MicOff, 
-  Phone, 
-  PhoneOff,
   Loader2,
   Bot,
   User,
   Minimize2
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useQuery } from "@tanstack/react-query";
+
 interface ChatMessage {
   id: string;
   role: "assistant" | "user";
@@ -26,109 +22,29 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-interface VapiConfig {
-  publicKey: string;
-  assistantId: string;
-  configured: boolean;
-}
-
 export function VapiChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
-  const [isConnected, setIsConnected] = useState(false);
-  const [isCallActive, setIsCallActive] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [mode, setMode] = useState<"chat" | "voice">("chat");
-  const [voiceAvailable, setVoiceAvailable] = useState(false);
   
-  const vapiRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch Vapi configuration
-  const { data: config } = useQuery<VapiConfig>({
-    queryKey: ["/api/vapi/widget-config"],
-  });
-
-  // Initialize Vapi when config is available (dynamic import)
-  useEffect(() => {
-    if (!config?.publicKey || !config?.configured || vapiRef.current) return;
-
-    const initVapi = async () => {
-      try {
-        const VapiModule = await import("@vapi-ai/web");
-        const Vapi = VapiModule.default;
-        const vapi = new Vapi(config.publicKey);
-        vapiRef.current = vapi;
-        setVoiceAvailable(true);
-
-        vapi.on("call-start", () => {
-          setIsCallActive(true);
-          setIsConnected(true);
-          addMessage("assistant", "Connected! I'm listening...");
-        });
-
-        vapi.on("call-end", () => {
-          setIsCallActive(false);
-          setIsConnected(false);
-          setIsSpeaking(false);
-          addMessage("assistant", "Call ended. How else can I help you?");
-        });
-
-        vapi.on("speech-start", () => {
-          setIsSpeaking(true);
-        });
-
-        vapi.on("speech-end", () => {
-          setIsSpeaking(false);
-        });
-
-        vapi.on("message", (message: any) => {
-          if (message.type === "transcript" && message.transcriptType === "final") {
-            const role = message.role === "assistant" ? "assistant" : "user";
-            addMessage(role, message.transcript);
-          }
-        });
-
-        vapi.on("error", (error: Error) => {
-          console.error("Vapi error:", error);
-          addMessage("assistant", "Sorry, there was an error. Please try again.");
-        });
-      } catch (error) {
-        console.error("Failed to load Vapi SDK:", error);
-        setVoiceAvailable(false);
-      }
-    };
-
-    initVapi();
-
-    return () => {
-      if (vapiRef.current) {
-        vapiRef.current.stop();
-        vapiRef.current = null;
-      }
-    };
-  }, [config]);
-
-  // Scroll to bottom on new messages
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
 
-  // Focus input when opened
   useEffect(() => {
-    if (isOpen && !isMinimized && inputRef.current && mode === "chat") {
+    if (isOpen && !isMinimized && inputRef.current) {
       inputRef.current.focus();
     }
-  }, [isOpen, isMinimized, mode]);
+  }, [isOpen, isMinimized]);
 
-  const addMessage = useCallback((role: "assistant" | "user", content: string) => {
+  const addMessage = (role: "assistant" | "user", content: string) => {
     const newMessage: ChatMessage = {
       id: `${Date.now()}-${Math.random()}`,
       role,
@@ -136,7 +52,7 @@ export function VapiChatWidget() {
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, newMessage]);
-  }, []);
+  };
 
   const handleOpen = () => {
     setIsOpen(true);
@@ -147,9 +63,6 @@ export function VapiChatWidget() {
   };
 
   const handleClose = () => {
-    if (isCallActive && vapiRef.current) {
-      vapiRef.current.stop();
-    }
     setIsOpen(false);
     setIsMinimized(false);
   };
@@ -159,9 +72,9 @@ export function VapiChatWidget() {
   };
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
-
     const userMessage = inputValue.trim();
+    if (!userMessage || isLoading) return;
+
     addMessage("user", userMessage);
     setInputValue("");
     setIsLoading(true);
@@ -185,34 +98,6 @@ export function VapiChatWidget() {
     }
   };
 
-  const handleStartVoice = async () => {
-    if (!vapiRef.current || !config?.assistantId) return;
-
-    setMode("voice");
-    try {
-      await vapiRef.current.start(config.assistantId);
-    } catch (error) {
-      console.error("Failed to start voice call:", error);
-      addMessage("assistant", "Couldn't start voice call. Please check your microphone permissions.");
-      setMode("chat");
-    }
-  };
-
-  const handleEndVoice = () => {
-    if (vapiRef.current) {
-      vapiRef.current.stop();
-    }
-    setMode("chat");
-  };
-
-  const handleToggleMute = () => {
-    if (vapiRef.current) {
-      const newMuted = !isMuted;
-      vapiRef.current.setMuted(newMuted);
-      setIsMuted(newMuted);
-    }
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -220,12 +105,6 @@ export function VapiChatWidget() {
     }
   };
 
-  // Don't render if not configured
-  if (!config?.configured) {
-    return null;
-  }
-
-  // Floating button when closed
   if (!isOpen) {
     return (
       <Button
@@ -239,7 +118,6 @@ export function VapiChatWidget() {
     );
   }
 
-  // Minimized state
   if (isMinimized) {
     return (
       <div 
@@ -260,18 +138,14 @@ export function VapiChatWidget() {
     );
   }
 
-  // Full chat window
   return (
     <Card className="fixed bottom-6 right-6 w-96 h-[500px] shadow-xl z-[9999] flex flex-col overflow-hidden" data-testid="chat-widget-window">
-      {/* Header */}
       <div className="flex items-center justify-between p-4 border-b bg-primary text-primary-foreground">
         <div className="flex items-center gap-2">
           <Bot className="h-5 w-5" />
           <div>
             <h3 className="font-semibold text-sm">ClaimShield AI</h3>
-            <p className="text-xs opacity-80">
-              {isCallActive ? "Voice call active" : "Online"}
-            </p>
+            <p className="text-xs opacity-80">Online</p>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -296,7 +170,6 @@ export function VapiChatWidget() {
         </div>
       </div>
 
-      {/* Messages */}
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4" ref={scrollRef}>
           {messages.map((message) => (
@@ -314,24 +187,25 @@ export function VapiChatWidget() {
               )}
               <div
                 className={cn(
-                  "max-w-[75%] rounded-lg px-3 py-2 text-sm",
+                  "max-w-[80%] rounded-lg px-3 py-2 text-sm",
                   message.role === "user"
                     ? "bg-primary text-primary-foreground"
                     : "bg-muted"
                 )}
+                data-testid={`message-${message.role}-${message.id}`}
               >
                 {message.content}
               </div>
               {message.role === "user" && (
-                <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center flex-shrink-0">
-                  <User className="h-4 w-4" />
+                <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                  <User className="h-4 w-4 text-primary-foreground" />
                 </div>
               )}
             </div>
           ))}
           {isLoading && (
             <div className="flex gap-2 justify-start">
-              <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+              <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
                 <Bot className="h-4 w-4 text-primary" />
               </div>
               <div className="bg-muted rounded-lg px-3 py-2">
@@ -342,42 +216,6 @@ export function VapiChatWidget() {
         </div>
       </ScrollArea>
 
-      {/* Voice call indicator */}
-      {isCallActive && (
-        <div className="px-4 py-2 bg-green-500/10 border-t border-green-500/20">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className={cn(
-                "h-3 w-3 rounded-full",
-                isSpeaking ? "bg-green-500 animate-pulse" : "bg-green-500"
-              )} />
-              <span className="text-sm text-green-700 dark:text-green-400">
-                {isSpeaking ? "AI is speaking..." : "Listening..."}
-              </span>
-            </div>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={handleToggleMute}
-              >
-                {isMuted ? <MicOff className="h-4 w-4 text-destructive" /> : <Mic className="h-4 w-4" />}
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={handleEndVoice}
-              >
-                <PhoneOff className="h-4 w-4 mr-1" />
-                End
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Input area */}
       <div className="p-4 border-t">
         <div className="flex gap-2">
           <Input
@@ -385,34 +223,19 @@ export function VapiChatWidget() {
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={isCallActive ? "Voice call active..." : "Type a message..."}
-            disabled={isLoading || isCallActive}
+            placeholder="Type a message..."
+            disabled={isLoading}
             className="flex-1"
             data-testid="input-chat-message"
           />
-          {!isCallActive ? (
-            <>
-              <Button
-                onClick={handleSendMessage}
-                disabled={!inputValue.trim() || isLoading}
-                size="icon"
-                data-testid="button-send-message"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-              {voiceAvailable && (
-                <Button
-                  onClick={handleStartVoice}
-                  variant="outline"
-                  size="icon"
-                  title="Start voice call"
-                  data-testid="button-start-voice"
-                >
-                  <Phone className="h-4 w-4" />
-                </Button>
-              )}
-            </>
-          ) : null}
+          <Button
+            onClick={handleSendMessage}
+            disabled={!inputValue.trim() || isLoading}
+            size="icon"
+            data-testid="button-send-message"
+          >
+            <Send className="h-4 w-4" />
+          </Button>
         </div>
         <p className="text-xs text-muted-foreground mt-2 text-center">
           Powered by ClaimShield AI
