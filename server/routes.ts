@@ -14,7 +14,7 @@ import {
 } from "@shared/schema";
 import { allPayers } from "./payers";
 import twilio from "twilio";
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
@@ -22,11 +22,19 @@ const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_T
   : null;
 const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
 
-// Initialize Resend client for email
-const resendClient = process.env.RESEND_API_KEY
-  ? new Resend(process.env.RESEND_API_KEY)
+// Initialize Gmail SMTP transporter
+const gmailUser = process.env.GMAIL_USER;
+const gmailAppPassword = process.env.GMAIL_APP_PASSWORD;
+const emailTransporter = gmailUser && gmailAppPassword
+  ? nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: gmailUser,
+        pass: gmailAppPassword,
+      },
+    })
   : null;
-const fromEmail = process.env.FROM_EMAIL || "onboarding@resend.dev";
+const fromEmail = gmailUser || "noreply@example.com";
 
 // Helper function to sync patient data to lead and recalculate VOB score
 // clearedFields: array of field names that were explicitly cleared in the update
@@ -1734,10 +1742,10 @@ Warmly,
       status: "pending",
     });
 
-    // Send via Resend if configured
-    if (resendClient) {
+    // Send via Gmail SMTP if configured
+    if (emailTransporter) {
       try {
-        await resendClient.emails.send({
+        await emailTransporter.sendMail({
           from: fromEmail,
           to: lead.email,
           subject: emailSubject,
@@ -1756,7 +1764,7 @@ Warmly,
         return res.status(500).json({ error: "Failed to send email" });
       }
     } else {
-      // Mark as sent in demo mode
+      // Mark as sent in demo mode (no Gmail configured)
       await storage.updateEmailLog(emailLog.id, { 
         status: "sent", 
         sentAt: new Date() 
@@ -1781,7 +1789,7 @@ Warmly,
   // Get email configuration status
   app.get("/api/email/status", async (req, res) => {
     res.json({
-      configured: !!resendClient,
+      configured: !!emailTransporter,
       fromEmail: fromEmail,
     });
   });
