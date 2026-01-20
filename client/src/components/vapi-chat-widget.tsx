@@ -19,8 +19,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import Vapi from "@vapi-ai/web";
-
 interface ChatMessage {
   id: string;
   role: "assistant" | "user";
@@ -45,8 +43,9 @@ export function VapiChatWidget() {
   const [isMuted, setIsMuted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<"chat" | "voice">("chat");
+  const [voiceAvailable, setVoiceAvailable] = useState(false);
   
-  const vapiRef = useRef<Vapi | null>(null);
+  const vapiRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -55,45 +54,57 @@ export function VapiChatWidget() {
     queryKey: ["/api/vapi/widget-config"],
   });
 
-  // Initialize Vapi when config is available
+  // Initialize Vapi when config is available (dynamic import)
   useEffect(() => {
     if (!config?.publicKey || !config?.configured || vapiRef.current) return;
 
-    const vapi = new Vapi(config.publicKey);
-    vapiRef.current = vapi;
+    const initVapi = async () => {
+      try {
+        const VapiModule = await import("@vapi-ai/web");
+        const Vapi = VapiModule.default;
+        const vapi = new Vapi(config.publicKey);
+        vapiRef.current = vapi;
+        setVoiceAvailable(true);
 
-    vapi.on("call-start", () => {
-      setIsCallActive(true);
-      setIsConnected(true);
-      addMessage("assistant", "Connected! I'm listening...");
-    });
+        vapi.on("call-start", () => {
+          setIsCallActive(true);
+          setIsConnected(true);
+          addMessage("assistant", "Connected! I'm listening...");
+        });
 
-    vapi.on("call-end", () => {
-      setIsCallActive(false);
-      setIsConnected(false);
-      setIsSpeaking(false);
-      addMessage("assistant", "Call ended. How else can I help you?");
-    });
+        vapi.on("call-end", () => {
+          setIsCallActive(false);
+          setIsConnected(false);
+          setIsSpeaking(false);
+          addMessage("assistant", "Call ended. How else can I help you?");
+        });
 
-    vapi.on("speech-start", () => {
-      setIsSpeaking(true);
-    });
+        vapi.on("speech-start", () => {
+          setIsSpeaking(true);
+        });
 
-    vapi.on("speech-end", () => {
-      setIsSpeaking(false);
-    });
+        vapi.on("speech-end", () => {
+          setIsSpeaking(false);
+        });
 
-    vapi.on("message", (message: any) => {
-      if (message.type === "transcript" && message.transcriptType === "final") {
-        const role = message.role === "assistant" ? "assistant" : "user";
-        addMessage(role, message.transcript);
+        vapi.on("message", (message: any) => {
+          if (message.type === "transcript" && message.transcriptType === "final") {
+            const role = message.role === "assistant" ? "assistant" : "user";
+            addMessage(role, message.transcript);
+          }
+        });
+
+        vapi.on("error", (error: Error) => {
+          console.error("Vapi error:", error);
+          addMessage("assistant", "Sorry, there was an error. Please try again.");
+        });
+      } catch (error) {
+        console.error("Failed to load Vapi SDK:", error);
+        setVoiceAvailable(false);
       }
-    });
+    };
 
-    vapi.on("error", (error: Error) => {
-      console.error("Vapi error:", error);
-      addMessage("assistant", "Sorry, there was an error. Please try again.");
-    });
+    initVapi();
 
     return () => {
       if (vapiRef.current) {
@@ -220,7 +231,7 @@ export function VapiChatWidget() {
       <Button
         onClick={handleOpen}
         size="icon"
-        className="fixed bottom-6 right-6 rounded-full shadow-lg z-50"
+        className="fixed bottom-6 right-6 rounded-full shadow-lg z-[9999]"
         data-testid="button-chat-widget"
       >
         <MessageCircle className="h-5 w-5" />
@@ -232,7 +243,7 @@ export function VapiChatWidget() {
   if (isMinimized) {
     return (
       <div 
-        className="fixed bottom-6 right-6 z-50 cursor-pointer hover-elevate"
+        className="fixed bottom-6 right-6 z-[9999] cursor-pointer hover-elevate"
         onClick={() => setIsMinimized(false)}
         data-testid="chat-widget-minimized"
       >
@@ -251,7 +262,7 @@ export function VapiChatWidget() {
 
   // Full chat window
   return (
-    <Card className="fixed bottom-6 right-6 w-96 h-[500px] shadow-xl z-50 flex flex-col overflow-hidden" data-testid="chat-widget-window">
+    <Card className="fixed bottom-6 right-6 w-96 h-[500px] shadow-xl z-[9999] flex flex-col overflow-hidden" data-testid="chat-widget-window">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b bg-primary text-primary-foreground">
         <div className="flex items-center gap-2">
@@ -389,15 +400,17 @@ export function VapiChatWidget() {
               >
                 <Send className="h-4 w-4" />
               </Button>
-              <Button
-                onClick={handleStartVoice}
-                variant="outline"
-                size="icon"
-                title="Start voice call"
-                data-testid="button-start-voice"
-              >
-                <Phone className="h-4 w-4" />
-              </Button>
+              {voiceAvailable && (
+                <Button
+                  onClick={handleStartVoice}
+                  variant="outline"
+                  size="icon"
+                  title="Start voice call"
+                  data-testid="button-start-voice"
+                >
+                  <Phone className="h-4 w-4" />
+                </Button>
+              )}
             </>
           ) : null}
         </div>
