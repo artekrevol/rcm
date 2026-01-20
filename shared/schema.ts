@@ -259,3 +259,94 @@ export type RiskExplanation = {
   confidence: number;
   recommendations: { action: string; priority: "high" | "medium" | "low"; completed: boolean }[];
 };
+
+// Email templates for automation
+export const emailTemplates = pgTable("email_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  category: text("category").notNull().default("general"),
+  variables: jsonb("variables").$type<string[]>().default([]),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertEmailTemplateSchema = createInsertSchema(emailTemplates).omit({ id: true, createdAt: true });
+export type InsertEmailTemplate = z.infer<typeof insertEmailTemplateSchema>;
+export type EmailTemplate = typeof emailTemplates.$inferSelect;
+
+// Email nurture sequences
+export const nurtureSections = pgTable("nurture_sequences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  triggerEvent: text("trigger_event").notNull(),
+  steps: jsonb("steps").$type<{
+    delayDays: number;
+    templateId: string;
+    templateName?: string;
+  }[]>().default([]),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertNurtureSequenceSchema = createInsertSchema(nurtureSections).omit({ id: true, createdAt: true });
+export type InsertNurtureSequence = z.infer<typeof insertNurtureSequenceSchema>;
+export type NurtureSequence = typeof nurtureSections.$inferSelect;
+
+// Email log for sent emails
+export const emailLogs = pgTable("email_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  leadId: varchar("lead_id").notNull(),
+  templateId: varchar("template_id"),
+  sequenceId: varchar("sequence_id"),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  toEmail: text("to_email").notNull(),
+  status: text("status").notNull().default("pending"),
+  sentAt: timestamp("sent_at"),
+  openedAt: timestamp("opened_at"),
+  clickedAt: timestamp("clicked_at"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({ id: true, createdAt: true });
+export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
+export type EmailLog = typeof emailLogs.$inferSelect;
+
+// Appointment availability slots
+export const availabilitySlots = pgTable("availability_slots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  dayOfWeek: integer("day_of_week").notNull(),
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time").notNull(),
+  timezone: text("timezone").notNull().default("America/Chicago"),
+  enabled: boolean("enabled").notNull().default(true),
+});
+
+export const insertAvailabilitySlotSchema = createInsertSchema(availabilitySlots).omit({ id: true });
+export type InsertAvailabilitySlot = z.infer<typeof insertAvailabilitySlotSchema>;
+export type AvailabilitySlot = typeof availabilitySlots.$inferSelect;
+
+// Appointments
+export const appointments = pgTable("appointments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  leadId: varchar("lead_id").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  scheduledAt: timestamp("scheduled_at").notNull(),
+  duration: integer("duration").notNull().default(30),
+  timezone: text("timezone").notNull().default("America/Chicago"),
+  status: text("status").notNull().default("scheduled"),
+  reminderSent: boolean("reminder_sent").notNull().default(false),
+  confirmedAt: timestamp("confirmed_at"),
+  cancelledAt: timestamp("cancelled_at"),
+  cancelReason: text("cancel_reason"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAppointmentSchema = createInsertSchema(appointments).omit({ id: true, createdAt: true });
+export type InsertAppointment = z.infer<typeof insertAppointmentSchema>;
+export type Appointment = typeof appointments.$inferSelect;

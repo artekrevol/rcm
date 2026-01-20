@@ -9,10 +9,16 @@ import {
   type Rule, type InsertRule,
   type Call, type InsertCall,
   type PriorAuth, type InsertPriorAuth,
+  type EmailTemplate, type InsertEmailTemplate,
+  type NurtureSequence, type InsertNurtureSequence,
+  type EmailLog, type InsertEmailLog,
+  type AvailabilitySlot, type InsertAvailabilitySlot,
+  type Appointment, type InsertAppointment,
   type DashboardMetrics,
   type DenialCluster,
   type RiskExplanation,
   users, leads, patients, encounters, claims, claimEvents, denials, rules, calls, priorAuthorizations,
+  emailTemplates, nurtureSections, emailLogs, availabilitySlots, appointments,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, count } from "drizzle-orm";
@@ -70,6 +76,38 @@ export interface IStorage {
   getDenialClusters(): Promise<DenialCluster[]>;
   getTopPatterns(): Promise<Array<{ rootCause: string; count: number; change: number }>>;
   getRiskExplanation(claimId: string): Promise<RiskExplanation | undefined>;
+  
+  // Email templates
+  getEmailTemplates(): Promise<EmailTemplate[]>;
+  getEmailTemplate(id: string): Promise<EmailTemplate | undefined>;
+  createEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate>;
+  updateEmailTemplate(id: string, updates: Partial<EmailTemplate>): Promise<EmailTemplate | undefined>;
+  deleteEmailTemplate(id: string): Promise<void>;
+  
+  // Nurture sequences
+  getNurtureSequences(): Promise<NurtureSequence[]>;
+  getNurtureSequence(id: string): Promise<NurtureSequence | undefined>;
+  createNurtureSequence(sequence: InsertNurtureSequence): Promise<NurtureSequence>;
+  updateNurtureSequence(id: string, updates: Partial<NurtureSequence>): Promise<NurtureSequence | undefined>;
+  deleteNurtureSequence(id: string): Promise<void>;
+  
+  // Email logs
+  getEmailLogsByLeadId(leadId: string): Promise<EmailLog[]>;
+  createEmailLog(log: InsertEmailLog): Promise<EmailLog>;
+  updateEmailLog(id: string, updates: Partial<EmailLog>): Promise<EmailLog | undefined>;
+  
+  // Availability slots
+  getAvailabilitySlots(): Promise<AvailabilitySlot[]>;
+  createAvailabilitySlot(slot: InsertAvailabilitySlot): Promise<AvailabilitySlot>;
+  updateAvailabilitySlot(id: string, updates: Partial<AvailabilitySlot>): Promise<AvailabilitySlot | undefined>;
+  deleteAvailabilitySlot(id: string): Promise<void>;
+  
+  // Appointments
+  getAppointments(): Promise<Appointment[]>;
+  getAppointmentsByLeadId(leadId: string): Promise<Appointment[]>;
+  getAppointment(id: string): Promise<Appointment | undefined>;
+  createAppointment(appointment: InsertAppointment): Promise<Appointment>;
+  updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -389,6 +427,112 @@ export class DatabaseStorage implements IStorage {
         },
       ],
     };
+  }
+
+  // Email templates
+  async getEmailTemplates(): Promise<EmailTemplate[]> {
+    return db.select().from(emailTemplates).orderBy(desc(emailTemplates.createdAt));
+  }
+
+  async getEmailTemplate(id: string): Promise<EmailTemplate | undefined> {
+    const [template] = await db.select().from(emailTemplates).where(eq(emailTemplates.id, id));
+    return template || undefined;
+  }
+
+  async createEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate> {
+    const [newTemplate] = await db.insert(emailTemplates).values(template).returning();
+    return newTemplate;
+  }
+
+  async updateEmailTemplate(id: string, updates: Partial<EmailTemplate>): Promise<EmailTemplate | undefined> {
+    const [updated] = await db.update(emailTemplates).set(updates).where(eq(emailTemplates.id, id)).returning();
+    return updated || undefined;
+  }
+
+  async deleteEmailTemplate(id: string): Promise<void> {
+    await db.delete(emailTemplates).where(eq(emailTemplates.id, id));
+  }
+
+  // Nurture sequences
+  async getNurtureSequences(): Promise<NurtureSequence[]> {
+    return db.select().from(nurtureSections).orderBy(desc(nurtureSections.createdAt));
+  }
+
+  async getNurtureSequence(id: string): Promise<NurtureSequence | undefined> {
+    const [sequence] = await db.select().from(nurtureSections).where(eq(nurtureSections.id, id));
+    return sequence || undefined;
+  }
+
+  async createNurtureSequence(sequence: InsertNurtureSequence): Promise<NurtureSequence> {
+    const [newSequence] = await db.insert(nurtureSections).values(sequence).returning();
+    return newSequence;
+  }
+
+  async updateNurtureSequence(id: string, updates: Partial<NurtureSequence>): Promise<NurtureSequence | undefined> {
+    const [updated] = await db.update(nurtureSections).set(updates).where(eq(nurtureSections.id, id)).returning();
+    return updated || undefined;
+  }
+
+  async deleteNurtureSequence(id: string): Promise<void> {
+    await db.delete(nurtureSections).where(eq(nurtureSections.id, id));
+  }
+
+  // Email logs
+  async getEmailLogsByLeadId(leadId: string): Promise<EmailLog[]> {
+    return db.select().from(emailLogs).where(eq(emailLogs.leadId, leadId)).orderBy(desc(emailLogs.createdAt));
+  }
+
+  async createEmailLog(log: InsertEmailLog): Promise<EmailLog> {
+    const [newLog] = await db.insert(emailLogs).values(log).returning();
+    return newLog;
+  }
+
+  async updateEmailLog(id: string, updates: Partial<EmailLog>): Promise<EmailLog | undefined> {
+    const [updated] = await db.update(emailLogs).set(updates).where(eq(emailLogs.id, id)).returning();
+    return updated || undefined;
+  }
+
+  // Availability slots
+  async getAvailabilitySlots(): Promise<AvailabilitySlot[]> {
+    return db.select().from(availabilitySlots).orderBy(availabilitySlots.dayOfWeek, availabilitySlots.startTime);
+  }
+
+  async createAvailabilitySlot(slot: InsertAvailabilitySlot): Promise<AvailabilitySlot> {
+    const [newSlot] = await db.insert(availabilitySlots).values(slot).returning();
+    return newSlot;
+  }
+
+  async updateAvailabilitySlot(id: string, updates: Partial<AvailabilitySlot>): Promise<AvailabilitySlot | undefined> {
+    const [updated] = await db.update(availabilitySlots).set(updates).where(eq(availabilitySlots.id, id)).returning();
+    return updated || undefined;
+  }
+
+  async deleteAvailabilitySlot(id: string): Promise<void> {
+    await db.delete(availabilitySlots).where(eq(availabilitySlots.id, id));
+  }
+
+  // Appointments
+  async getAppointments(): Promise<Appointment[]> {
+    return db.select().from(appointments).orderBy(desc(appointments.scheduledAt));
+  }
+
+  async getAppointmentsByLeadId(leadId: string): Promise<Appointment[]> {
+    return db.select().from(appointments).where(eq(appointments.leadId, leadId)).orderBy(desc(appointments.scheduledAt));
+  }
+
+  async getAppointment(id: string): Promise<Appointment | undefined> {
+    const [appointment] = await db.select().from(appointments).where(eq(appointments.id, id));
+    return appointment || undefined;
+  }
+
+  async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
+    const [newAppointment] = await db.insert(appointments).values(appointment).returning();
+    return newAppointment;
+  }
+
+  async updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment | undefined> {
+    const [updated] = await db.update(appointments).set(updates).where(eq(appointments.id, id)).returning();
+    return updated || undefined;
   }
 }
 
