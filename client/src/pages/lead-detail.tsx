@@ -47,7 +47,16 @@ import {
   Pencil,
   PlayCircle,
   RefreshCw,
+  Send,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { format, formatDistanceToNow } from "date-fns";
 import type { Lead, Call, Patient } from "@shared/schema";
 
@@ -190,6 +199,23 @@ export default function LeadDetailPage() {
     },
     onError: () => {
       toast({ title: "Failed to sync patient data", variant: "destructive" });
+    },
+  });
+
+  const sendSmsMutation = useMutation({
+    mutationFn: async ({ template, message }: { template?: string; message?: string }) => {
+      return apiRequest("POST", `/api/leads/${id}/sms`, { template, message });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "calls"] });
+      toast({ title: "SMS sent successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Failed to send SMS", 
+        description: error?.message || "Check phone number and try again",
+        variant: "destructive" 
+      });
     },
   });
 
@@ -375,6 +401,60 @@ export default function LeadDetailPage() {
             <Phone className="h-4 w-4" />
             Call
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                disabled={!lead.phone || sendSmsMutation.isPending}
+                data-testid="button-sms-lead"
+              >
+                <Send className="h-4 w-4" />
+                SMS
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Send SMS Template</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem 
+                onClick={() => sendSmsMutation.mutate({ template: "welcome" })}
+                data-testid="sms-template-welcome"
+              >
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Welcome Message
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => sendSmsMutation.mutate({ template: "insurance_request" })}
+                data-testid="sms-template-insurance"
+              >
+                <CreditCard className="h-4 w-4 mr-2" />
+                Request Insurance Info
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => sendSmsMutation.mutate({ template: "document_request" })}
+                data-testid="sms-template-document"
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Request Documents
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => sendSmsMutation.mutate({ template: "appointment_reminder" })}
+                data-testid="sms-template-appointment"
+              >
+                <Calendar className="h-4 w-4 mr-2" />
+                Appointment Reminder
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => sendSmsMutation.mutate({ template: "followup" })}
+                data-testid="sms-template-followup"
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Follow-up
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Tooltip>
             <TooltipTrigger asChild>
               <span>

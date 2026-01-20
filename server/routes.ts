@@ -9,6 +9,13 @@ import {
   type Patient,
 } from "@shared/schema";
 import { allPayers } from "./payers";
+import twilio from "twilio";
+
+// Initialize Twilio client
+const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+  : null;
+const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
 
 // Helper function to sync patient data to lead and recalculate VOB score
 // clearedFields: array of field names that were explicitly cleared in the update
@@ -559,8 +566,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // Fetch calls and sort by most recent first to get latest extractedData
     const calls = await storage.getCallsByLeadId(req.params.id);
     const sortedCalls = [...calls].sort((a, b) => {
-      const dateA = a.startedAt ? new Date(a.startedAt).getTime() : 0;
-      const dateB = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
       return dateB - dateA;
     });
     
@@ -1343,6 +1350,170 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return res.status(404).json({ error: "Prior authorization not found" });
     }
     res.json(auth);
+  });
+
+  // ============================================
+  // SMS Endpoints (Twilio Integration)
+  // ============================================
+
+  // Send SMS to a lead
+  app.post("/api/leads/:id/sms", async (req, res) => {
+    if (!twilioClient || !twilioPhoneNumber) {
+      return res.status(503).json({ error: "SMS service not configured" });
+    }
+
+    const lead = await storage.getLead(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    if (!lead.phone) {
+      return res.status(400).json({ error: "Lead has no phone number" });
+    }
+
+    const { message, template } = req.body;
+    
+    // Template-based messages
+    let smsBody = message;
+    if (template) {
+      const templates: Record<string, string> = {
+        "welcome": `Hi ${lead.name || "there"}! Thank you for reaching out to us. We're here to help with your healthcare needs. Reply to this message anytime.`,
+        "insurance_request": `Hi ${lead.name || "there"}, to complete your intake we need your insurance information. Please reply with your Member ID or text CALL to schedule a call.`,
+        "appointment_reminder": `Hi ${lead.name || "there"}, this is a reminder about your upcoming appointment. Reply YES to confirm or RESCHEDULE to change.`,
+        "document_request": `Hi ${lead.name || "there"}, we need a photo of your insurance card. Please reply with an image of the front and back.`,
+        "followup": `Hi ${lead.name || "there"}, we wanted to follow up on your inquiry. Do you have any questions? Reply anytime or text CALL for a callback.`,
+      };
+      smsBody = templates[template] || message;
+    }
+
+    if (!smsBody) {
+      return res.status(400).json({ error: "Message or template required" });
+    }
+
+    try {
+      // Format phone number for Twilio (must start with +1 for US)
+      let toPhone = lead.phone.replace(/\D/g, "");
+      if (toPhone.length === 10) {
+        toPhone = "+1" + toPhone;
+      } else if (!toPhone.startsWith("+")) {
+        toPhone = "+" + toPhone;
+      }
+
+      const twilioMessage = await twilioClient.messages.create({
+        body: smsBody,
+        from: twilioPhoneNumber,
+        to: toPhone,
+      });
+
+      // Log the SMS as a call record for tracking
+      const smsRecord = await storage.createCall({
+        leadId: req.params.id,
+        vapiCallId: `sms_${twilioMessage.sid}`,
+        transcript: `[OUTBOUND SMS]\n${smsBody}`,
+        summary: `Sent SMS: ${template || "custom message"}`,
+        disposition: "sms_sent",
+        duration: 0,
+        recordingUrl: null,
+        extractedData: null,
+        vobData: null,
+        notes: null,
+      });
+
+      res.json({
+        success: true,
+        messageSid: twilioMessage.sid,
+        status: twilioMessage.status,
+        callId: smsRecord.id,
+      });
+    } catch (error: any) {
+      console.error("Twilio SMS error:", error);
+      res.status(500).json({ error: error.message || "Failed to send SMS" });
+    }
+  });
+
+  // Get SMS templates
+  app.get("/api/sms/templates", async (req, res) => {
+    const templates = [
+      { id: "welcome", name: "Welcome Message", description: "Initial greeting to new leads" },
+      { id: "insurance_request", name: "Insurance Request", description: "Request insurance information" },
+      { id: "appointment_reminder", name: "Appointment Reminder", description: "Remind about upcoming appointment" },
+      { id: "document_request", name: "Document Request", description: "Request insurance card photo" },
+      { id: "followup", name: "Follow-up", description: "General follow-up message" },
+    ];
+    res.json(templates);
+  });
+
+  // Webhook for incoming SMS (Twilio will POST here)
+  app.post("/api/webhooks/sms", async (req, res) => {
+    const { From, Body, MessageSid } = req.body;
+    
+    console.log(`Incoming SMS from ${From}: ${Body}`);
+
+    // Find lead by phone number
+    const leads = await storage.getLeads();
+    const normalizedFrom = From.replace(/\D/g, "").slice(-10);
+    const matchingLead = leads.find(l => {
+      if (!l.phone) return false;
+      const normalizedLeadPhone = l.phone.replace(/\D/g, "").slice(-10);
+      return normalizedLeadPhone === normalizedFrom;
+    });
+
+    if (matchingLead) {
+      // Log incoming SMS as a call record
+      await storage.createCall({
+        leadId: matchingLead.id,
+        vapiCallId: `sms_in_${MessageSid}`,
+        transcript: `[INBOUND SMS from ${From}]\n${Body}`,
+        summary: `Received SMS reply`,
+        disposition: "sms_received",
+        duration: 0,
+        recordingUrl: null,
+        extractedData: { notes: Body } as any,
+        vobData: null,
+        notes: null,
+      });
+
+      // Check for keywords and auto-respond
+      const bodyLower = Body.toLowerCase().trim();
+      if (twilioClient && twilioPhoneNumber) {
+        let autoReply: string | null = null;
+        
+        if (bodyLower === "yes" || bodyLower === "confirm") {
+          autoReply = "Thank you for confirming! We look forward to seeing you.";
+          await storage.updateLead(matchingLead.id, { lastOutcome: "Confirmed via SMS" });
+        } else if (bodyLower === "call" || bodyLower === "callback") {
+          autoReply = "We'll call you shortly. If you miss us, we'll leave a voicemail and try again.";
+          await storage.updateLead(matchingLead.id, { nextAction: "Callback requested" });
+        } else if (bodyLower === "stop" || bodyLower === "unsubscribe") {
+          autoReply = "You've been unsubscribed from SMS messages. Call us anytime if you need assistance.";
+          await storage.updateLead(matchingLead.id, { status: "unsubscribed" });
+        }
+
+        if (autoReply) {
+          try {
+            await twilioClient.messages.create({
+              body: autoReply,
+              from: twilioPhoneNumber,
+              to: From,
+            });
+          } catch (err) {
+            console.error("Auto-reply SMS error:", err);
+          }
+        }
+      }
+    }
+
+    // Respond to Twilio with TwiML (empty response acknowledges receipt)
+    res.type("text/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
+  });
+
+  // Check SMS configuration status
+  app.get("/api/sms/status", async (req, res) => {
+    res.json({
+      configured: !!twilioClient,
+      phoneNumber: twilioPhoneNumber ? twilioPhoneNumber.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") : null,
+    });
   });
 
 }
