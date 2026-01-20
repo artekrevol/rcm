@@ -219,6 +219,24 @@ export default function LeadDetailPage() {
     },
   });
 
+  const sendEmailMutation = useMutation({
+    mutationFn: async ({ template }: { template: string }) => {
+      return apiRequest("POST", `/api/leads/${id}/email`, { template });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "emails"] });
+      toast({ title: "Email sent successfully" });
+    },
+    onError: (error: any) => {
+      toast({ 
+        title: "Failed to send email", 
+        description: error?.message || "Check email address and try again",
+        variant: "destructive" 
+      });
+    },
+  });
+
   const handleCallComplete = async (data: {
     transcript: string;
     summary: string;
@@ -449,6 +467,60 @@ export default function LeadDetailPage() {
               <DropdownMenuItem 
                 onClick={() => sendSmsMutation.mutate({ template: "followup" })}
                 data-testid="sms-template-followup"
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Follow-up
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                disabled={!lead.email || sendEmailMutation.isPending}
+                data-testid="button-email-lead"
+              >
+                <Mail className="h-4 w-4" />
+                Email
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Send Email Template</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem 
+                onClick={() => sendEmailMutation.mutate({ template: "welcome" })}
+                data-testid="email-template-welcome"
+              >
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Welcome Email
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => sendEmailMutation.mutate({ template: "insurance_verification" })}
+                data-testid="email-template-insurance"
+              >
+                <CreditCard className="h-4 w-4 mr-2" />
+                Request Insurance Info
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => sendEmailMutation.mutate({ template: "documents_request" })}
+                data-testid="email-template-documents"
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Request Documents
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => sendEmailMutation.mutate({ template: "appointment_confirmation" })}
+                data-testid="email-template-appointment"
+              >
+                <Calendar className="h-4 w-4 mr-2" />
+                Appointment Confirmation
+              </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={() => sendEmailMutation.mutate({ template: "follow_up" })}
+                data-testid="email-template-followup"
               >
                 <RefreshCw className="h-4 w-4 mr-2" />
                 Follow-up
