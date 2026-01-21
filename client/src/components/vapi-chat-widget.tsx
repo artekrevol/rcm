@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,7 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-export function VapiChatWidget() {
+function ChatWidgetContent() {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -107,21 +108,36 @@ export function VapiChatWidget() {
 
   if (!isOpen) {
     return (
-      <Button
-        onClick={handleOpen}
-        size="icon"
-        className="fixed bottom-6 right-6 rounded-full shadow-lg z-[9999]"
-        data-testid="button-chat-widget"
+      <div
+        style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          zIndex: 2147483647,
+        }}
       >
-        <MessageCircle className="h-5 w-5" />
-      </Button>
+        <Button
+          onClick={handleOpen}
+          size="icon"
+          className="h-14 w-14 rounded-full shadow-lg"
+          data-testid="button-chat-widget"
+        >
+          <MessageCircle className="h-6 w-6" />
+        </Button>
+      </div>
     );
   }
 
   if (isMinimized) {
     return (
       <div 
-        className="fixed bottom-6 right-6 z-[9999] cursor-pointer hover-elevate"
+        style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          zIndex: 2147483647,
+          cursor: 'pointer',
+        }}
         onClick={() => setIsMinimized(false)}
         data-testid="chat-widget-minimized"
       >
@@ -139,108 +155,134 @@ export function VapiChatWidget() {
   }
 
   return (
-    <Card className="fixed bottom-6 right-6 w-96 h-[500px] shadow-xl z-[9999] flex flex-col overflow-hidden" data-testid="chat-widget-window">
-      <div className="flex items-center justify-between p-4 border-b bg-primary text-primary-foreground">
-        <div className="flex items-center gap-2">
-          <Bot className="h-5 w-5" />
-          <div>
-            <h3 className="font-semibold text-sm">ClaimShield AI</h3>
-            <p className="text-xs opacity-80">Online</p>
+    <div
+      style={{
+        position: 'fixed',
+        bottom: '24px',
+        right: '24px',
+        zIndex: 2147483647,
+      }}
+    >
+      <Card className="w-96 h-[500px] shadow-xl flex flex-col overflow-hidden" data-testid="chat-widget-window">
+        <div className="flex items-center justify-between p-4 border-b bg-primary text-primary-foreground">
+          <div className="flex items-center gap-2">
+            <Bot className="h-5 w-5" />
+            <div>
+              <h3 className="font-semibold text-sm">ClaimShield AI</h3>
+              <p className="text-xs opacity-80">Online</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-primary-foreground hover:bg-primary-foreground/20"
+              onClick={handleMinimize}
+              data-testid="button-minimize-chat"
+            >
+              <Minimize2 className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-primary-foreground hover:bg-primary-foreground/20"
+              onClick={handleClose}
+              data-testid="button-close-chat"
+            >
+              <X className="h-4 w-4" />
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-primary-foreground"
-            onClick={handleMinimize}
-            data-testid="button-minimize-chat"
-          >
-            <Minimize2 className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-primary-foreground"
-            onClick={handleClose}
-            data-testid="button-close-chat"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
 
-      <ScrollArea className="flex-1 p-4">
-        <div className="space-y-4" ref={scrollRef}>
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={cn(
-                "flex gap-2",
-                message.role === "user" ? "justify-end" : "justify-start"
-              )}
-            >
-              {message.role === "assistant" && (
+        <ScrollArea className="flex-1 p-4">
+          <div className="space-y-4" ref={scrollRef}>
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={cn(
+                  "flex gap-2",
+                  message.role === "user" ? "justify-end" : "justify-start"
+                )}
+              >
+                {message.role === "assistant" && (
+                  <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                    <Bot className="h-4 w-4 text-primary" />
+                  </div>
+                )}
+                <div
+                  className={cn(
+                    "max-w-[80%] rounded-lg px-3 py-2 text-sm",
+                    message.role === "user"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted"
+                  )}
+                  data-testid={`message-${message.role}-${message.id}`}
+                >
+                  {message.content}
+                </div>
+                {message.role === "user" && (
+                  <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
+                    <User className="h-4 w-4 text-primary-foreground" />
+                  </div>
+                )}
+              </div>
+            ))}
+            {isLoading && (
+              <div className="flex gap-2 justify-start">
                 <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
                   <Bot className="h-4 w-4 text-primary" />
                 </div>
-              )}
-              <div
-                className={cn(
-                  "max-w-[80%] rounded-lg px-3 py-2 text-sm",
-                  message.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted"
-                )}
-                data-testid={`message-${message.role}-${message.id}`}
-              >
-                {message.content}
-              </div>
-              {message.role === "user" && (
-                <div className="h-8 w-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-                  <User className="h-4 w-4 text-primary-foreground" />
+                <div className="bg-muted rounded-lg px-3 py-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 </div>
-              )}
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex gap-2 justify-start">
-              <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                <Bot className="h-4 w-4 text-primary" />
               </div>
-              <div className="bg-muted rounded-lg px-3 py-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-              </div>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+            )}
+          </div>
+        </ScrollArea>
 
-      <div className="p-4 border-t">
-        <div className="flex gap-2">
-          <Input
-            ref={inputRef}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
-            disabled={isLoading}
-            className="flex-1"
-            data-testid="input-chat-message"
-          />
-          <Button
-            onClick={handleSendMessage}
-            disabled={!inputValue.trim() || isLoading}
-            size="icon"
-            data-testid="button-send-message"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
+        <div className="p-4 border-t">
+          <div className="flex gap-2">
+            <Input
+              ref={inputRef}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type a message..."
+              disabled={isLoading}
+              className="flex-1"
+              data-testid="input-chat-message"
+            />
+            <Button
+              onClick={handleSendMessage}
+              disabled={!inputValue.trim() || isLoading}
+              size="icon"
+              data-testid="button-send-message"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            Powered by ClaimShield AI
+          </p>
         </div>
-        <p className="text-xs text-muted-foreground mt-2 text-center">
-          Powered by ClaimShield AI
-        </p>
-      </div>
-    </Card>
+      </Card>
+    </div>
+  );
+}
+
+export function VapiChatWidget() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return null;
+  }
+
+  return createPortal(
+    <ChatWidgetContent />,
+    document.body
   );
 }
