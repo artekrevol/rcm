@@ -2176,6 +2176,141 @@ Warmly,
     res.json({ reply });
   });
 
+  // ==================== CHAT SESSION PERSISTENCE ====================
+
+  // Get or create chat session by visitor token
+  app.post("/api/chat-sessions/init", async (req, res) => {
+    const { visitorToken, referrerUrl, userAgent } = req.body;
+    
+    if (!visitorToken) {
+      return res.status(400).json({ error: "visitorToken is required" });
+    }
+
+    // Check for existing active session
+    let session = await storage.getChatSessionByVisitorToken(visitorToken);
+    
+    if (session) {
+      // Fetch existing messages
+      const messages = await storage.getChatMessagesBySessionId(session.id);
+      return res.json({ session, messages, resumed: true });
+    }
+
+    // Create new session
+    session = await storage.createChatSession({
+      visitorToken,
+      status: "active",
+      currentStepId: "welcome",
+      collectedData: {},
+      referrerUrl,
+      userAgent,
+    });
+
+    res.json({ session, messages: [], resumed: false });
+  });
+
+  // Update chat session
+  app.patch("/api/chat-sessions/:id", async (req, res) => {
+    const session = await storage.updateChatSession(req.params.id, {
+      ...req.body,
+      lastActivityAt: new Date(),
+    });
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    res.json(session);
+  });
+
+  // Add message to session
+  app.post("/api/chat-sessions/:id/messages", async (req, res) => {
+    const session = await storage.getChatSession(req.params.id);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    const message = await storage.createChatMessage({
+      sessionId: session.id,
+      type: req.body.type || "user",
+      stepId: req.body.stepId,
+      content: req.body.content,
+      metadata: req.body.metadata,
+    });
+
+    // Update session's last activity
+    await storage.updateChatSession(session.id, {
+      lastActivityAt: new Date(),
+    });
+
+    res.json(message);
+  });
+
+  // Complete session (link to lead)
+  app.post("/api/chat-sessions/:id/complete", async (req, res) => {
+    const { leadId, qualificationScore } = req.body;
+    
+    const session = await storage.updateChatSession(req.params.id, {
+      status: "completed",
+      leadId,
+      qualificationScore,
+      completedAt: new Date(),
+      lastActivityAt: new Date(),
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    res.json(session);
+  });
+
+  // Mark session as abandoned
+  app.post("/api/chat-sessions/:id/abandon", async (req, res) => {
+    const session = await storage.updateChatSession(req.params.id, {
+      status: "abandoned",
+      abandonedAt: new Date(),
+      lastActivityAt: new Date(),
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    res.json(session);
+  });
+
+  // ==================== CHAT ANALYTICS ====================
+
+  // Get chat analytics stats
+  app.get("/api/chat-analytics/stats", async (req, res) => {
+    const stats = await storage.getChatSessionStats();
+    res.json(stats);
+  });
+
+  // Get all chat sessions (for admin view)
+  app.get("/api/chat-sessions", async (req, res) => {
+    const sessions = await storage.getChatSessions();
+    res.json(sessions);
+  });
+
+  // Get session with messages
+  app.get("/api/chat-sessions/:id", async (req, res) => {
+    const session = await storage.getChatSession(req.params.id);
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    const messages = await storage.getChatMessagesBySessionId(session.id);
+    res.json({ session, messages });
+  });
+
+  // Get daily analytics
+  app.get("/api/chat-analytics", async (req, res) => {
+    const { startDate, endDate } = req.query;
+    const analytics = await storage.getChatAnalytics(
+      startDate as string | undefined,
+      endDate as string | undefined
+    );
+    res.json(analytics);
+  });
+
 }
 
 function generateIntakeTranscript(patientName: string): string {
