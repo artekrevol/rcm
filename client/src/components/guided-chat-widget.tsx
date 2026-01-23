@@ -6,11 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { 
   MessageCircle, 
   X, 
@@ -268,7 +263,6 @@ function GuidedChatContent() {
   const [isLoading, setIsLoading] = useState(false);
   const [collectedData, setCollectedData] = useState<Record<string, string>>({});
   const [isComplete, setIsComplete] = useState(false);
-  const [showTooltip, setShowTooltip] = useState(false);
   const [appointmentSlots, setAppointmentSlots] = useState<AppointmentSlot[]>([]);
   const [createdLeadId, setCreatedLeadId] = useState<string | null>(null);
   
@@ -309,8 +303,6 @@ function GuidedChatContent() {
       const welcomeStep = conversationFlow.find(s => s.id === "welcome");
       if (welcomeStep) {
         addMessage("assistant", welcomeStep.message);
-        setShowTooltip(true);
-        setTimeout(() => setShowTooltip(false), 5000);
       }
     }
   };
@@ -366,8 +358,6 @@ function GuidedChatContent() {
           }
         }
         setIsLoading(false);
-        setShowTooltip(true);
-        setTimeout(() => setShowTooltip(false), 4000);
       }, 600);
     }
   };
@@ -694,24 +684,6 @@ function GuidedChatContent() {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            {currentStep?.tooltip && (
-              <Tooltip open={showTooltip}>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-primary-foreground hover:bg-primary-foreground/20"
-                    onClick={() => setShowTooltip(!showTooltip)}
-                    data-testid="button-tooltip"
-                  >
-                    <HelpCircle className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="left" className="max-w-[200px]">
-                  {currentStep.tooltip}
-                </TooltipContent>
-              </Tooltip>
-            )}
             <Button
               variant="ghost"
               size="icon"
