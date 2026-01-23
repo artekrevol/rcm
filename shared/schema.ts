@@ -350,3 +350,62 @@ export const appointments = pgTable("appointments", {
 export const insertAppointmentSchema = createInsertSchema(appointments).omit({ id: true, createdAt: true });
 export type InsertAppointment = z.infer<typeof insertAppointmentSchema>;
 export type Appointment = typeof appointments.$inferSelect;
+
+// Chat Sessions for persistence and analytics
+// Status: active, completed, abandoned
+export const chatSessions = pgTable("chat_sessions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  visitorToken: text("visitor_token").notNull(),
+  leadId: varchar("lead_id"),
+  status: text("status").notNull().default("active"),
+  currentStepId: text("current_step_id").notNull().default("welcome"),
+  collectedData: jsonb("collected_data").$type<Record<string, unknown>>().default({}),
+  qualificationScore: integer("qualification_score"),
+  source: text("source").notNull().default("chat_widget"),
+  referrerUrl: text("referrer_url"),
+  userAgent: text("user_agent"),
+  ipAddress: text("ip_address"),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  abandonedAt: timestamp("abandoned_at"),
+  lastActivityAt: timestamp("last_activity_at").defaultNow().notNull(),
+});
+
+export const insertChatSessionSchema = createInsertSchema(chatSessions).omit({ id: true, startedAt: true, lastActivityAt: true });
+export type InsertChatSession = z.infer<typeof insertChatSessionSchema>;
+export type ChatSession = typeof chatSessions.$inferSelect;
+
+// Chat Messages for conversation history
+// Type: bot, user, system
+export const chatMessages = pgTable("chat_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sessionId: varchar("session_id").notNull(),
+  type: text("type").notNull().default("bot"),
+  stepId: text("step_id"),
+  content: text("content").notNull(),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true, createdAt: true });
+export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
+export type ChatMessage = typeof chatMessages.$inferSelect;
+
+// Chat Analytics aggregated metrics (daily snapshots)
+export const chatAnalytics = pgTable("chat_analytics", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  date: text("date").notNull(),
+  totalSessions: integer("total_sessions").notNull().default(0),
+  completedSessions: integer("completed_sessions").notNull().default(0),
+  abandonedSessions: integer("abandoned_sessions").notNull().default(0),
+  leadsGenerated: integer("leads_generated").notNull().default(0),
+  appointmentsBooked: integer("appointments_booked").notNull().default(0),
+  avgSessionDuration: integer("avg_session_duration"),
+  dropoffByStep: jsonb("dropoff_by_step").$type<Record<string, number>>().default({}),
+  conversionRate: real("conversion_rate"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertChatAnalyticsSchema = createInsertSchema(chatAnalytics).omit({ id: true, createdAt: true });
+export type InsertChatAnalytics = z.infer<typeof insertChatAnalyticsSchema>;
+export type ChatAnalytics = typeof chatAnalytics.$inferSelect;

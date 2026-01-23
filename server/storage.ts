@@ -14,11 +14,15 @@ import {
   type EmailLog, type InsertEmailLog,
   type AvailabilitySlot, type InsertAvailabilitySlot,
   type Appointment, type InsertAppointment,
+  type ChatSession, type InsertChatSession,
+  type ChatMessage, type InsertChatMessage,
+  type ChatAnalytics, type InsertChatAnalytics,
   type DashboardMetrics,
   type DenialCluster,
   type RiskExplanation,
   users, leads, patients, encounters, claims, claimEvents, denials, rules, calls, priorAuthorizations,
   emailTemplates, nurtureSections, emailLogs, availabilitySlots, appointments,
+  chatSessions, chatMessages, chatAnalytics,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, count } from "drizzle-orm";
@@ -108,6 +112,34 @@ export interface IStorage {
   getAppointment(id: string): Promise<Appointment | undefined>;
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
   updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment | undefined>;
+  
+  // Chat sessions
+  getChatSessions(): Promise<ChatSession[]>;
+  getChatSessionByVisitorToken(visitorToken: string): Promise<ChatSession | undefined>;
+  getChatSession(id: string): Promise<ChatSession | undefined>;
+  createChatSession(session: InsertChatSession): Promise<ChatSession>;
+  updateChatSession(id: string, updates: Partial<ChatSession>): Promise<ChatSession | undefined>;
+  
+  // Chat messages
+  getChatMessagesBySessionId(sessionId: string): Promise<ChatMessage[]>;
+  createChatMessage(message: InsertChatMessage): Promise<ChatMessage>;
+  
+  // Chat analytics
+  getChatAnalytics(startDate?: string, endDate?: string): Promise<ChatAnalytics[]>;
+  getChatAnalyticsByDate(date: string): Promise<ChatAnalytics | undefined>;
+  createChatAnalytics(analytics: InsertChatAnalytics): Promise<ChatAnalytics>;
+  updateChatAnalytics(id: string, updates: Partial<ChatAnalytics>): Promise<ChatAnalytics | undefined>;
+  getChatSessionStats(): Promise<{
+    totalSessions: number;
+    completedSessions: number;
+    abandonedSessions: number;
+    activeSessions: number;
+    leadsGenerated: number;
+    appointmentsBooked: number;
+    avgSessionDuration: number;
+    conversionRate: number;
+    dropoffByStep: Record<string, number>;
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -533,6 +565,133 @@ export class DatabaseStorage implements IStorage {
   async updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment | undefined> {
     const [updated] = await db.update(appointments).set(updates).where(eq(appointments.id, id)).returning();
     return updated || undefined;
+  }
+
+  // Chat sessions
+  async getChatSessions(): Promise<ChatSession[]> {
+    return db.select().from(chatSessions).orderBy(desc(chatSessions.startedAt));
+  }
+
+  async getChatSessionByVisitorToken(visitorToken: string): Promise<ChatSession | undefined> {
+    const [session] = await db.select().from(chatSessions)
+      .where(and(
+        eq(chatSessions.visitorToken, visitorToken),
+        eq(chatSessions.status, "active")
+      ))
+      .orderBy(desc(chatSessions.startedAt))
+      .limit(1);
+    return session || undefined;
+  }
+
+  async getChatSession(id: string): Promise<ChatSession | undefined> {
+    const [session] = await db.select().from(chatSessions).where(eq(chatSessions.id, id));
+    return session || undefined;
+  }
+
+  async createChatSession(session: InsertChatSession): Promise<ChatSession> {
+    const [newSession] = await db.insert(chatSessions).values(session).returning();
+    return newSession;
+  }
+
+  async updateChatSession(id: string, updates: Partial<ChatSession>): Promise<ChatSession | undefined> {
+    const [updated] = await db.update(chatSessions).set(updates).where(eq(chatSessions.id, id)).returning();
+    return updated || undefined;
+  }
+
+  // Chat messages
+  async getChatMessagesBySessionId(sessionId: string): Promise<ChatMessage[]> {
+    return db.select().from(chatMessages)
+      .where(eq(chatMessages.sessionId, sessionId))
+      .orderBy(chatMessages.createdAt);
+  }
+
+  async createChatMessage(message: InsertChatMessage): Promise<ChatMessage> {
+    const [newMessage] = await db.insert(chatMessages).values(message).returning();
+    return newMessage;
+  }
+
+  // Chat analytics
+  async getChatAnalytics(startDate?: string, endDate?: string): Promise<ChatAnalytics[]> {
+    if (startDate && endDate) {
+      return db.select().from(chatAnalytics)
+        .where(and(
+          sql`${chatAnalytics.date} >= ${startDate}`,
+          sql`${chatAnalytics.date} <= ${endDate}`
+        ))
+        .orderBy(desc(chatAnalytics.date));
+    }
+    return db.select().from(chatAnalytics).orderBy(desc(chatAnalytics.date)).limit(30);
+  }
+
+  async getChatAnalyticsByDate(date: string): Promise<ChatAnalytics | undefined> {
+    const [analytics] = await db.select().from(chatAnalytics).where(eq(chatAnalytics.date, date));
+    return analytics || undefined;
+  }
+
+  async createChatAnalytics(analytics: InsertChatAnalytics): Promise<ChatAnalytics> {
+    const [newAnalytics] = await db.insert(chatAnalytics).values(analytics).returning();
+    return newAnalytics;
+  }
+
+  async updateChatAnalytics(id: string, updates: Partial<ChatAnalytics>): Promise<ChatAnalytics | undefined> {
+    const [updated] = await db.update(chatAnalytics).set(updates).where(eq(chatAnalytics.id, id)).returning();
+    return updated || undefined;
+  }
+
+  async getChatSessionStats(): Promise<{
+    totalSessions: number;
+    completedSessions: number;
+    abandonedSessions: number;
+    activeSessions: number;
+    leadsGenerated: number;
+    appointmentsBooked: number;
+    avgSessionDuration: number;
+    conversionRate: number;
+    dropoffByStep: Record<string, number>;
+  }> {
+    const allSessions = await db.select().from(chatSessions);
+    
+    const totalSessions = allSessions.length;
+    const completedSessions = allSessions.filter(s => s.status === "completed").length;
+    const abandonedSessions = allSessions.filter(s => s.status === "abandoned").length;
+    const activeSessions = allSessions.filter(s => s.status === "active").length;
+    const leadsGenerated = allSessions.filter(s => s.leadId !== null).length;
+    
+    const sessionsWithAppointments = allSessions.filter(s => {
+      const data = s.collectedData as Record<string, unknown>;
+      return data && data.appointmentSlot;
+    }).length;
+    
+    let totalDuration = 0;
+    let durationCount = 0;
+    for (const session of allSessions) {
+      if (session.completedAt && session.startedAt) {
+        const duration = new Date(session.completedAt).getTime() - new Date(session.startedAt).getTime();
+        totalDuration += duration / 1000;
+        durationCount++;
+      }
+    }
+    
+    const avgSessionDuration = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
+    const conversionRate = totalSessions > 0 ? (leadsGenerated / totalSessions) * 100 : 0;
+    
+    const dropoffByStep: Record<string, number> = {};
+    for (const session of allSessions.filter(s => s.status === "abandoned")) {
+      const step = session.currentStepId;
+      dropoffByStep[step] = (dropoffByStep[step] || 0) + 1;
+    }
+    
+    return {
+      totalSessions,
+      completedSessions,
+      abandonedSessions,
+      activeSessions,
+      leadsGenerated,
+      appointmentsBooked: sessionsWithAppointments,
+      avgSessionDuration,
+      conversionRate: Math.round(conversionRate * 10) / 10,
+      dropoffByStep,
+    };
   }
 }
 
