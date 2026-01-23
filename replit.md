@@ -107,6 +107,7 @@ Preferred communication style: Simple, everyday language.
 - ~~Insurance Verification Display~~ - VOB results (copay, deductible, coverage)
 - ~~Prior Authorization Tracker~~ - Auth requests per encounter with status/expiration
 - ~~Auto-Fill Lead Data~~ - Call-extracted info (service needed, insurance carrier, member ID) auto-populates lead records
+- ~~Guided Chat Widget~~ - TalkFurther-style guided conversation for patient intake with tooltips, progress indicator, quick-reply buttons, lead qualification scoring, and appointment scheduling integration
 
 ### Future Enhancements
 - Call Performance Dashboard - Track call completion rates, durations
