@@ -420,6 +420,18 @@ function GuidedChatContent() {
         await apiRequest("POST", "/api/appointments", appointmentData);
       }
       
+      // Send confirmation email
+      if (lead.id && collectedData.email) {
+        try {
+          await apiRequest("POST", `/api/leads/${lead.id}/send-confirmation`, {
+            appointmentDate: collectedData.appointmentSlot || null
+          });
+        } catch (emailError) {
+          console.error("Failed to send confirmation email:", emailError);
+          // Don't block the flow if email fails
+        }
+      }
+      
       setIsComplete(true);
       
       setTimeout(() => {
@@ -552,7 +564,35 @@ function GuidedChatContent() {
 
     if (currentStep.id === "complete" || isComplete) {
       return (
-        <div className="p-3 border-t">
+        <div className="p-3 border-t space-y-3">
+          <Card className="p-3 bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800">
+            <h4 className="text-sm font-medium mb-2 flex items-center gap-1.5 text-green-700 dark:text-green-300">
+              <CheckCircle2 className="h-4 w-4" />
+              Submission Confirmed
+            </h4>
+            <div className="space-y-1 text-sm">
+              {collectedData.name && <p><span className="text-muted-foreground">Name:</span> {collectedData.name}</p>}
+              {collectedData.phone && <p><span className="text-muted-foreground">Phone:</span> {collectedData.phone}</p>}
+              {collectedData.email && <p><span className="text-muted-foreground">Email:</span> {collectedData.email}</p>}
+              {collectedData.serviceNeeded && <p><span className="text-muted-foreground">Service:</span> {collectedData.serviceNeeded.replace(/_/g, ' ')}</p>}
+              {collectedData.insuranceCarrier && <p><span className="text-muted-foreground">Insurance:</span> {collectedData.insuranceCarrier.toUpperCase()}</p>}
+              {collectedData.appointmentSlot && (
+                <p><span className="text-muted-foreground">Appointment:</span> {new Date(collectedData.appointmentSlot).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
+              )}
+            </div>
+            {createdLeadId && (
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="mt-3 w-full"
+                onClick={() => window.open(`/leads/${createdLeadId}`, '_blank')}
+                data-testid="button-view-details"
+              >
+                <ArrowRight className="h-4 w-4 mr-1.5" />
+                View Full Details
+              </Button>
+            )}
+          </Card>
           <div className="flex gap-2">
             <Input
               ref={inputRef}

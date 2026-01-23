@@ -1794,6 +1794,124 @@ Warmly,
     });
   });
 
+  // Send confirmation email after chat widget submission
+  app.post("/api/leads/:id/send-confirmation", async (req, res) => {
+    try {
+      const lead = await storage.getLead(req.params.id);
+      if (!lead) {
+        return res.status(404).json({ error: "Lead not found" });
+      }
+
+      if (!lead.email) {
+        return res.status(400).json({ error: "Lead has no email address" });
+      }
+
+      const { appointmentDate } = req.body;
+
+      const subject = appointmentDate 
+        ? "Your Appointment Confirmation - ClaimShield AI"
+        : "Thank You for Contacting ClaimShield AI";
+
+      const appointmentSection = appointmentDate 
+        ? `<div style="background-color: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="color: #2e7d32; margin: 0 0 10px 0;">Appointment Scheduled</h3>
+            <p style="margin: 0; font-size: 16px;"><strong>${new Date(appointmentDate).toLocaleString('en-US', { 
+              weekday: 'long', 
+              year: 'numeric', 
+              month: 'long', 
+              day: 'numeric', 
+              hour: 'numeric', 
+              minute: '2-digit' 
+            })}</strong></p>
+          </div>`
+        : "";
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #2563eb; margin: 0;">ClaimShield AI</h1>
+            <p style="color: #666; margin: 5px 0 0 0;">Healthcare Revenue Cycle Management</p>
+          </div>
+          
+          <h2 style="color: #1f2937;">Thank you, ${lead.name || 'Valued Patient'}!</h2>
+          
+          <p>We've received your information and our team will be in touch shortly.</p>
+          
+          ${appointmentSection}
+          
+          <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <h3 style="margin: 0 0 15px 0; color: #374151;">Your Submitted Information</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280;">Name:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${lead.name || 'N/A'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280;">Phone:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${lead.phone || 'N/A'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280;">Email:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${lead.email}</td>
+              </tr>
+              ${lead.serviceNeeded ? `<tr>
+                <td style="padding: 8px 0; color: #6b7280;">Service:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${lead.serviceNeeded.replace(/_/g, ' ')}</td>
+              </tr>` : ''}
+              ${lead.insuranceCarrier ? `<tr>
+                <td style="padding: 8px 0; color: #6b7280;">Insurance:</td>
+                <td style="padding: 8px 0; font-weight: 500;">${lead.insuranceCarrier.toUpperCase()}</td>
+              </tr>` : ''}
+            </table>
+          </div>
+          
+          <p>If you have any questions, please don't hesitate to reach out.</p>
+          
+          <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center; color: #6b7280; font-size: 14px;">
+            <p style="margin: 0;">ClaimShield AI - Denial Prevention Platform</p>
+            <p style="margin: 5px 0 0 0;">This is an automated confirmation email.</p>
+          </div>
+        </body>
+        </html>
+      `;
+
+      if (emailTransporter) {
+        await emailTransporter.sendMail({
+          from: fromEmail,
+          to: lead.email,
+          subject,
+          html: htmlContent,
+        });
+      }
+
+      const emailLog = await storage.createEmailLog({
+        leadId: lead.id,
+        templateId: null,
+        subject,
+        body: htmlContent,
+        toEmail: lead.email,
+        status: emailTransporter ? "sent" : "simulated",
+        sentAt: new Date(),
+      });
+
+      await storage.updateLead(lead.id, {
+        lastContactedAt: new Date(),
+        nextAction: "Confirmation email sent",
+      });
+
+      res.json({ success: true, emailLogId: emailLog.id });
+    } catch (error) {
+      console.error("Failed to send confirmation email:", error);
+      res.status(500).json({ error: "Failed to send confirmation email" });
+    }
+  });
+
   // List available email presets
   app.get("/api/email/presets", async (req, res) => {
     const presets = Object.entries(emailPresets).map(([id, template]) => ({
