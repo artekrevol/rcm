@@ -17,6 +17,7 @@ import ClaimsPage from "@/pages/claims";
 import ClaimDetailPage from "@/pages/claim-detail";
 import IntelligencePage from "@/pages/intelligence";
 import RulesPage from "@/pages/rules";
+import ChatAnalyticsPage from "@/pages/chat-analytics";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const style = {
@@ -86,6 +87,11 @@ function Router() {
       <Route path="/rules">
         <AuthenticatedLayout>
           <RulesPage />
+        </AuthenticatedLayout>
+      </Route>
+      <Route path="/chat-analytics">
+        <AuthenticatedLayout>
+          <ChatAnalyticsPage />
         </AuthenticatedLayout>
       </Route>
       <Route component={NotFound} />

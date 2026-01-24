@@ -7,6 +7,7 @@ import {
   Shield,
   LogOut,
   ShieldCheck,
+  MessageCircle,
 } from "lucide-react";
 import {
   Sidebar,
@@ -28,6 +29,7 @@ const mainNavItems = [
   { title: "Claims", url: "/claims", icon: FileText },
   { title: "Intelligence", url: "/intelligence", icon: Brain },
   { title: "Rules", url: "/rules", icon: Shield },
+  { title: "Chat Analytics", url: "/chat-analytics", icon: MessageCircle },
 ];
 
 

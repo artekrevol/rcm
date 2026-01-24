@@ -254,6 +254,16 @@ function generateAppointmentSlots(): AppointmentSlot[] {
   return slots.slice(0, 6);
 }
 
+function getOrCreateVisitorToken(): string {
+  const STORAGE_KEY = "claimshield_visitor_token";
+  let token = localStorage.getItem(STORAGE_KEY);
+  if (!token) {
+    token = `visitor_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    localStorage.setItem(STORAGE_KEY, token);
+  }
+  return token;
+}
+
 function GuidedChatContent() {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -265,13 +275,72 @@ function GuidedChatContent() {
   const [isComplete, setIsComplete] = useState(false);
   const [appointmentSlots, setAppointmentSlots] = useState<AppointmentSlot[]>([]);
   const [createdLeadId, setCreatedLeadId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionResumed, setSessionResumed] = useState(false);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const sessionInitialized = useRef(false);
 
   const currentStep = conversationFlow.find(s => s.id === currentStepId);
   const currentStepIndex = stepOrder.indexOf(currentStepId);
   const progressPercent = Math.round((currentStepIndex / (stepOrder.length - 1)) * 100);
+
+  // Initialize or resume session when chat opens
+  useEffect(() => {
+    const initSession = async () => {
+      if (!isOpen || sessionInitialized.current) return;
+      sessionInitialized.current = true;
+      
+      try {
+        const visitorToken = getOrCreateVisitorToken();
+        const response = await apiRequest("POST", "/api/chat-sessions/init", {
+          visitorToken,
+          referrerUrl: window.location.href,
+          userAgent: navigator.userAgent,
+        });
+        const data = await response.json();
+        
+        setSessionId(data.session.id);
+        
+        if (data.resumed && data.messages.length > 0) {
+          // Resume existing session
+          setSessionResumed(true);
+          const resumedMessages: ChatMessage[] = data.messages.map((m: { id: string; type: string; content: string; createdAt: string }) => ({
+            id: m.id,
+            role: m.type === "user" ? "user" : "assistant",
+            content: m.content,
+            timestamp: new Date(m.createdAt),
+          }));
+          setMessages(resumedMessages);
+          setCurrentStepId(data.session.currentStepId);
+          setCollectedData(data.session.collectedData || {});
+          
+          if (data.session.status === "completed") {
+            setIsComplete(true);
+            if (data.session.leadId) {
+              setCreatedLeadId(data.session.leadId);
+            }
+          }
+        } else {
+          // New session - add welcome message
+          const welcomeStep = conversationFlow.find(s => s.id === "welcome");
+          if (welcomeStep) {
+            addMessageWithPersist("assistant", welcomeStep.message, data.session.id, "welcome");
+          }
+        }
+      } catch (error) {
+        console.error("Failed to init session:", error);
+        // Fallback to local-only mode
+        const welcomeStep = conversationFlow.find(s => s.id === "welcome");
+        if (welcomeStep) {
+          addMessage("assistant", welcomeStep.message);
+        }
+      }
+    };
+    
+    initSession();
+  }, [isOpen]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -284,8 +353,38 @@ function GuidedChatContent() {
       inputRef.current.focus();
     }
   }, [isOpen, isMinimized, currentStepId]);
+  
+  // Update session when step changes
+  useEffect(() => {
+    if (sessionId && currentStepId) {
+      apiRequest("PATCH", `/api/chat-sessions/${sessionId}`, {
+        currentStepId,
+        collectedData,
+      }).catch(console.error);
+    }
+  }, [sessionId, currentStepId, collectedData]);
 
-  const addMessage = (role: "assistant" | "user", content: string, isQuickReply = false) => {
+  const addMessageWithPersist = async (role: "assistant" | "user", content: string, sessId: string, stepId?: string) => {
+    const newMessage: ChatMessage = {
+      id: `${Date.now()}-${Math.random()}`,
+      role,
+      content,
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, newMessage]);
+    
+    try {
+      await apiRequest("POST", `/api/chat-sessions/${sessId}/messages`, {
+        type: role === "assistant" ? "bot" : "user",
+        content,
+        stepId,
+      });
+    } catch (error) {
+      console.error("Failed to persist message:", error);
+    }
+  };
+
+  const addMessage = (role: "assistant" | "user", content: string, isQuickReply = false, stepId?: string) => {
     const newMessage: ChatMessage = {
       id: `${Date.now()}-${Math.random()}`,
       role,
@@ -294,17 +393,21 @@ function GuidedChatContent() {
       isQuickReply
     };
     setMessages((prev) => [...prev, newMessage]);
+    
+    // Persist message if we have a session
+    if (sessionId) {
+      apiRequest("POST", `/api/chat-sessions/${sessionId}/messages`, {
+        type: role === "assistant" ? "bot" : "user",
+        content,
+        stepId: stepId || currentStepId,
+      }).catch(console.error);
+    }
   };
 
   const handleOpen = () => {
     setIsOpen(true);
     setIsMinimized(false);
-    if (messages.length === 0) {
-      const welcomeStep = conversationFlow.find(s => s.id === "welcome");
-      if (welcomeStep) {
-        addMessage("assistant", welcomeStep.message);
-      }
-    }
+    // Welcome message is now handled by initSession
   };
 
   const handleClose = () => {
@@ -428,7 +531,20 @@ function GuidedChatContent() {
           });
         } catch (emailError) {
           console.error("Failed to send confirmation email:", emailError);
-          // Don't block the flow if email fails
+        }
+      }
+      
+      // Mark session as completed
+      if (sessionId && lead.id) {
+        try {
+          const qualScore = collectedData.urgency === "urgent" ? 90 : 
+                           collectedData.urgency === "this_week" ? 70 : 50;
+          await apiRequest("POST", `/api/chat-sessions/${sessionId}/complete`, {
+            leadId: lead.id,
+            qualificationScore: qualScore
+          });
+        } catch (error) {
+          console.error("Failed to complete session:", error);
         }
       }
       
