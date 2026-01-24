@@ -21,6 +21,7 @@ const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_T
   ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
   : null;
 const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+const twilioMessagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
 
 // Initialize Gmail SMTP transporter
 const gmailUser = process.env.GMAIL_USER;
@@ -1422,7 +1423,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   // Send SMS to a lead
   app.post("/api/leads/:id/sms", async (req, res) => {
-    if (!twilioClient || !twilioPhoneNumber) {
+    if (!twilioClient || !twilioMessagingServiceSid) {
       return res.status(503).json({ error: "SMS service not configured" });
     }
 
@@ -1465,7 +1466,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const twilioMessage = await twilioClient.messages.create({
         body: smsBody,
-        from: twilioPhoneNumber,
+        messagingServiceSid: twilioMessagingServiceSid,
         to: toPhone,
       });
 
@@ -1552,7 +1553,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       // Check for keywords and auto-respond
       const bodyLower = Body.toLowerCase().trim();
-      if (twilioClient && twilioPhoneNumber) {
+      if (twilioClient && twilioMessagingServiceSid) {
         let autoReply: string | null = null;
         
         if (bodyLower === "yes" || bodyLower === "confirm") {
@@ -1570,7 +1571,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           try {
             await twilioClient.messages.create({
               body: autoReply,
-              from: twilioPhoneNumber,
+              messagingServiceSid: twilioMessagingServiceSid,
               to: From,
             });
           } catch (err) {
