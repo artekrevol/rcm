@@ -2054,6 +2054,8 @@ Warmly,
     const appointmentData = {
       ...req.body,
       leadId: lead.id,
+      // Convert date string to Date object for Zod validation
+      scheduledAt: req.body.scheduledAt ? new Date(req.body.scheduledAt) : undefined,
     };
 
     const result = insertAppointmentSchema.safeParse(appointmentData);
