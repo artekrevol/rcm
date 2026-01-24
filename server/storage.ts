@@ -17,12 +17,13 @@ import {
   type ChatSession, type InsertChatSession,
   type ChatMessage, type InsertChatMessage,
   type ChatAnalytics, type InsertChatAnalytics,
+  type ActivityLog, type InsertActivityLog,
   type DashboardMetrics,
   type DenialCluster,
   type RiskExplanation,
   users, leads, patients, encounters, claims, claimEvents, denials, rules, calls, priorAuthorizations,
   emailTemplates, nurtureSections, emailLogs, availabilitySlots, appointments,
-  chatSessions, chatMessages, chatAnalytics,
+  chatSessions, chatMessages, chatAnalytics, activityLogs,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, count } from "drizzle-orm";
@@ -99,6 +100,10 @@ export interface IStorage {
   getEmailLogsByLeadId(leadId: string): Promise<EmailLog[]>;
   createEmailLog(log: InsertEmailLog): Promise<EmailLog>;
   updateEmailLog(id: string, updates: Partial<EmailLog>): Promise<EmailLog | undefined>;
+  
+  // Activity logs
+  getActivityLogsByLeadId(leadId: string): Promise<ActivityLog[]>;
+  createActivityLog(log: InsertActivityLog): Promise<ActivityLog>;
   
   // Availability slots
   getAvailabilitySlots(): Promise<AvailabilitySlot[]>;
@@ -522,6 +527,16 @@ export class DatabaseStorage implements IStorage {
   async updateEmailLog(id: string, updates: Partial<EmailLog>): Promise<EmailLog | undefined> {
     const [updated] = await db.update(emailLogs).set(updates).where(eq(emailLogs.id, id)).returning();
     return updated || undefined;
+  }
+
+  // Activity logs
+  async getActivityLogsByLeadId(leadId: string): Promise<ActivityLog[]> {
+    return db.select().from(activityLogs).where(eq(activityLogs.leadId, leadId)).orderBy(desc(activityLogs.createdAt));
+  }
+
+  async createActivityLog(log: InsertActivityLog): Promise<ActivityLog> {
+    const [newLog] = await db.insert(activityLogs).values(log).returning();
+    return newLog;
   }
 
   // Availability slots

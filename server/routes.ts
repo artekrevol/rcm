@@ -492,6 +492,51 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       updates.vobMissingFields = vobMissingFields;
     }
 
+    // Log property changes to activity log (HubSpot-style)
+    const fieldLabels: Record<string, string> = {
+      status: "Status",
+      priority: "Priority",
+      vobStatus: "VOB Status",
+      handoffStatus: "Handoff Status",
+      nextActionType: "Next Action Type",
+      outcomeCode: "Outcome Code",
+      nextAction: "Next Action",
+      lastOutcome: "Last Outcome",
+      serviceNeeded: "Service Needed",
+      insuranceCarrier: "Insurance Carrier",
+      memberId: "Member ID",
+      planType: "Plan Type",
+      ownerUserId: "Owner",
+      attemptCount: "Attempt Count",
+      vobScore: "VOB Score",
+      nextActionAt: "Next Action Date",
+      lastContactedAt: "Last Contacted",
+      slaDeadlineAt: "SLA Deadline",
+    };
+
+    for (const [field, newValue] of Object.entries(updates)) {
+      // Skip computed fields that change as side effects
+      if (field === "vobMissingFields") continue;
+      
+      const oldValue = (lead as any)[field];
+      const oldStr = oldValue === null || oldValue === undefined ? "(empty)" : String(oldValue);
+      const newStr = newValue === null || newValue === undefined ? "(empty)" : String(newValue);
+      
+      // Only log if value actually changed
+      if (oldStr !== newStr) {
+        const label = fieldLabels[field] || field;
+        await storage.createActivityLog({
+          leadId: req.params.id,
+          activityType: field === "status" ? "status_change" : "property_change",
+          field,
+          oldValue: oldStr,
+          newValue: newStr,
+          description: `${label} changed from "${oldStr}" to "${newStr}"`,
+          performedBy: "user",
+        });
+      }
+    }
+
     const updated = await storage.updateLead(req.params.id, updates);
     res.json(updated);
   });
@@ -1438,6 +1483,19 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         notes: null,
       });
 
+      // Log SMS sent activity
+      await storage.createActivityLog({
+        leadId: req.params.id,
+        activityType: "sms_sent",
+        description: `SMS sent: "${template || "custom message"}"`,
+        metadata: { 
+          messageSid: twilioMessage.sid,
+          template: template || null,
+          toPhone: lead.phone,
+        },
+        performedBy: "user",
+      });
+
       res.json({
         success: true,
         messageSid: twilioMessage.sid,
@@ -1777,6 +1835,19 @@ Warmly,
       lastOutcome: `Email sent: ${emailSubject}`,
     });
 
+    // Log email sent activity
+    await storage.createActivityLog({
+      leadId: lead.id,
+      activityType: "email_sent",
+      description: `Email sent: "${emailSubject}"`,
+      metadata: { 
+        emailLogId: emailLog.id, 
+        subject: emailSubject,
+        toEmail: lead.email,
+      },
+      performedBy: "user",
+    });
+
     res.json({ success: true, emailLogId: emailLog.id });
   });
 
@@ -1784,6 +1855,12 @@ Warmly,
   app.get("/api/leads/:id/emails", async (req, res) => {
     const emails = await storage.getEmailLogsByLeadId(req.params.id);
     res.json(emails);
+  });
+
+  // Get activity logs for a lead (HubSpot-style timeline)
+  app.get("/api/leads/:id/activity", async (req, res) => {
+    const activities = await storage.getActivityLogsByLeadId(req.params.id);
+    res.json(activities);
   });
 
   // Get email configuration status

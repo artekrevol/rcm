@@ -409,3 +409,21 @@ export const chatAnalytics = pgTable("chat_analytics", {
 export const insertChatAnalyticsSchema = createInsertSchema(chatAnalytics).omit({ id: true, createdAt: true });
 export type InsertChatAnalytics = z.infer<typeof insertChatAnalyticsSchema>;
 export type ChatAnalytics = typeof chatAnalytics.$inferSelect;
+
+// Activity logs for tracking all deal/lead changes (HubSpot-style timeline)
+export const activityLogs = pgTable("activity_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  leadId: varchar("lead_id").notNull(),
+  activityType: text("activity_type").notNull(), // property_change, status_change, email_sent, sms_sent, call_made, note_added, etc.
+  field: text("field"), // For property changes, the field that changed
+  oldValue: text("old_value"), // Previous value
+  newValue: text("new_value"), // New value
+  description: text("description"), // Human-readable description
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}), // Additional context
+  performedBy: text("performed_by"), // User or "system"
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertActivityLogSchema = createInsertSchema(activityLogs).omit({ id: true, createdAt: true });
+export type InsertActivityLog = z.infer<typeof insertActivityLogSchema>;
+export type ActivityLog = typeof activityLogs.$inferSelect;

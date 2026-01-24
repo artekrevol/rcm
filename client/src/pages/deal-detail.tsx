@@ -59,7 +59,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { format, formatDistanceToNow } from "date-fns";
-import type { Lead, Call, Patient } from "@shared/schema";
+import type { Lead, Call, Patient, ActivityLog } from "@shared/schema";
 
 function PriorityBadge({ priority }: { priority: string }) {
   const variants: Record<string, string> = {
@@ -127,12 +127,17 @@ export default function DealDetailPage() {
     queryKey: ["/api/leads", id, "patient"],
   });
 
+  const { data: activityLogs } = useQuery<ActivityLog[]>({
+    queryKey: ["/api/leads", id, "activity"],
+  });
+
   const updateLeadMutation = useMutation({
     mutationFn: async (updates: Partial<Lead>) => {
       return apiRequest("PATCH", `/api/leads/${id}`, updates);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/leads", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "activity"] });
       queryClient.invalidateQueries({ queryKey: ["/api/leads/worklist"] });
       toast({ title: "Lead updated" });
     },
@@ -210,6 +215,7 @@ export default function DealDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "calls"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "activity"] });
       toast({ title: "SMS sent successfully" });
     },
     onError: (error: any) => {
@@ -228,6 +234,7 @@ export default function DealDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/leads", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "emails"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "activity"] });
       toast({ title: "Email sent successfully" });
     },
     onError: (error: any) => {
@@ -258,6 +265,7 @@ export default function DealDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/leads", id] });
     queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "calls"] });
     queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "patient"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "activity"] });
     queryClient.invalidateQueries({ queryKey: ["/api/leads/worklist"] });
     toast({ title: "Call saved successfully" });
   };
@@ -627,6 +635,9 @@ export default function DealDetailPage() {
             Calls {calls && calls.length > 0 && <Badge variant="secondary" className="ml-1 h-5 px-1.5">{calls.length}</Badge>}
           </TabsTrigger>
           <TabsTrigger value="insurance" data-testid="tab-insurance">Insurance</TabsTrigger>
+          <TabsTrigger value="activity" data-testid="tab-activity">
+            Activity {activityLogs && activityLogs.length > 0 && <Badge variant="secondary" className="ml-1 h-5 px-1.5">{activityLogs.length}</Badge>}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
@@ -1048,6 +1059,93 @@ export default function DealDetailPage() {
               </Card>
             )}
           </div>
+        </TabsContent>
+
+        <TabsContent value="activity" className="space-y-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Activity className="h-4 w-4" />
+                Activity Timeline
+              </CardTitle>
+              <CardDescription>
+                All communications and property changes for this lead
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {activityLogs && activityLogs.length > 0 ? (
+                <div className="space-y-4">
+                  {activityLogs.map((activity) => {
+                    const activityIcons: Record<string, React.ElementType> = {
+                      email_sent: Mail,
+                      sms_sent: MessageSquare,
+                      call_completed: PhoneCall,
+                      property_change: Edit3,
+                      status_change: Target,
+                      note_added: FileText,
+                    };
+                    const activityColors: Record<string, string> = {
+                      email_sent: "text-blue-500",
+                      sms_sent: "text-emerald-500",
+                      call_completed: "text-violet-500",
+                      property_change: "text-amber-500",
+                      status_change: "text-rose-500",
+                      note_added: "text-slate-500",
+                    };
+                    const Icon = activityIcons[activity.activityType] || Activity;
+                    const iconColor = activityColors[activity.activityType] || "text-muted-foreground";
+
+                    return (
+                      <div
+                        key={activity.id}
+                        className="flex gap-3 pb-4 border-b last:border-0 last:pb-0"
+                        data-testid={`activity-item-${activity.id}`}
+                      >
+                        <div className={`shrink-0 mt-0.5 ${iconColor}`}>
+                          <Icon className="h-4 w-4" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-medium">{activity.description}</p>
+                              {activity.oldValue && activity.newValue && (
+                                <p className="text-xs text-muted-foreground mt-1">
+                                  <span className="line-through opacity-60">{activity.oldValue}</span>
+                                  {" → "}
+                                  <span className="font-medium">{activity.newValue}</span>
+                                </p>
+                              )}
+                            </div>
+                            <span className="text-xs text-muted-foreground shrink-0">
+                              {formatDistanceToNow(new Date(activity.createdAt), { addSuffix: true })}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant="outline" className="text-xs capitalize">
+                              {activity.activityType.replace("_", " ")}
+                            </Badge>
+                            {activity.performedBy && (
+                              <span className="text-xs text-muted-foreground">
+                                by {activity.performedBy}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-8">
+                  <Activity className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                  <p className="text-sm text-muted-foreground">No activity recorded yet</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Send emails, make calls, or update lead info to see activity here
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
