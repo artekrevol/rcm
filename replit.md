@@ -108,9 +108,11 @@ Preferred communication style: Simple, everyday language.
 - ~~Prior Authorization Tracker~~ - Auth requests per encounter with status/expiration
 - ~~Auto-Fill Lead Data~~ - Call-extracted info (service needed, insurance carrier, member ID) auto-populates lead records
 - ~~Guided Chat Widget~~ - TalkFurther-style guided conversation for patient intake with tooltips, progress indicator, quick-reply buttons, lead qualification scoring, and appointment scheduling integration
+- ~~Chat Analytics Dashboard~~ - Tabbed interface with metrics/charts and All Conversations table with filtering, search, and pagination
+- ~~Returning Lead Notifications~~ - Email notification when known lead returns to website after >1 hour since last activity
+- ~~Welcome Back Personalization~~ - Returning leads see personalized greeting with their name and quick action buttons
 
 ### Future Enhancements
-- Call Performance Dashboard - Track call completion rates, durations
 - Revenue Impact Reporting - Estimated revenue protected
 - Payer Performance Scorecard - Denial rates, payment speeds
 - Bulk Call Campaigns - Queue multiple leads for AI calling
