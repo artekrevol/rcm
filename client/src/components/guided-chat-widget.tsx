@@ -277,6 +277,7 @@ function GuidedChatContent() {
   const [createdLeadId, setCreatedLeadId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionResumed, setSessionResumed] = useState(false);
+  const [returningLead, setReturningLead] = useState<{ id: string; name: string; email: string; phone: string; originalVisitDate: string } | null>(null);
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -303,6 +304,11 @@ function GuidedChatContent() {
         
         setSessionId(data.session.id);
         
+        // Check if this is a returning lead
+        if (data.returningLead) {
+          setReturningLead(data.returningLead);
+        }
+        
         if (data.resumed && data.messages.length > 0) {
           // Resume existing session
           setSessionResumed(true);
@@ -322,6 +328,10 @@ function GuidedChatContent() {
               setCreatedLeadId(data.session.leadId);
             }
           }
+        } else if (data.returningLead) {
+          // Returning lead - show personalized welcome back
+          const firstName = data.returningLead.name.split(' ')[0];
+          addMessageWithPersist("assistant", `Welcome back, ${firstName}! What can we help you with today?`, data.session.id, "welcome_back");
         } else {
           // New session - add welcome message
           const welcomeStep = conversationFlow.find(s => s.id === "welcome");
@@ -906,6 +916,63 @@ function GuidedChatContent() {
                 )}
               </div>
             ))}
+            
+            {/* Welcome Back Card for Returning Leads - shows immediately when returning lead opens chat */}
+            {returningLead && (
+              <Card className="bg-muted/50 p-4 space-y-3" data-testid="card-welcome-back">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h4 className="font-semibold text-base">Come visit us!</h4>
+                    <p className="text-sm text-muted-foreground">The best way to experience our services is in person. We would love to have you!</p>
+                  </div>
+                  <div className="flex -space-x-2">
+                    <div className="h-8 w-8 rounded-full bg-primary/20 border-2 border-background flex items-center justify-center">
+                      <User className="h-4 w-4 text-primary" />
+                    </div>
+                  </div>
+                </div>
+                <Button 
+                  variant="outline" 
+                  className="w-full justify-between" 
+                  onClick={() => {
+                    setIsComplete(false);
+                    setCurrentStepId("schedule_preference");
+                    const scheduleStep = conversationFlow.find(s => s.id === "schedule_preference");
+                    if (scheduleStep && sessionId) {
+                      addMessageWithPersist("assistant", scheduleStep.message, sessionId, "schedule_preference");
+                    }
+                  }}
+                  data-testid="button-schedule-tour"
+                >
+                  <span>Schedule A Consultation</span>
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+                <Button 
+                  variant="default" 
+                  className="w-full"
+                  onClick={() => window.open(`/leads/${returningLead.id}`, '_blank')}
+                  data-testid="button-view-profile"
+                >
+                  View My Profile
+                </Button>
+                <Button 
+                  variant="secondary" 
+                  className="w-full"
+                  onClick={() => {
+                    setCurrentStepId("service_type");
+                    const serviceStep = conversationFlow.find(s => s.id === "service_type");
+                    if (serviceStep && sessionId) {
+                      addMessageWithPersist("assistant", "What else can I help you with?", sessionId, "service_type");
+                    }
+                    setIsComplete(false);
+                  }}
+                  data-testid="button-ask-more"
+                >
+                  Explore More Options
+                </Button>
+              </Card>
+            )}
+
             {isLoading && currentStepId !== "confirmation" && (
               <div className="flex gap-2 justify-start">
                 <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">

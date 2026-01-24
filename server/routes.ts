@@ -2186,13 +2186,107 @@ Warmly,
       return res.status(400).json({ error: "visitorToken is required" });
     }
 
-    // Check for existing active session
+    // Check for existing session
     let session = await storage.getChatSessionByVisitorToken(visitorToken);
     
     if (session) {
       // Fetch existing messages
       const messages = await storage.getChatMessagesBySessionId(session.id);
-      return res.json({ session, messages, resumed: true });
+      
+      // Check if this is a returning lead (completed session with leadId)
+      let returningLead = null;
+      if (session.leadId) {
+        const lead = await storage.getLead(session.leadId);
+        if (lead) {
+          returningLead = {
+            id: lead.id,
+            name: lead.name,
+            email: lead.email,
+            phone: lead.phone,
+            originalVisitDate: session.createdAt,
+          };
+          
+          // Send returning lead email notification (only once per visit, tracked by session update)
+          const lastVisitCheck = session.lastActivityAt ? new Date(session.lastActivityAt).getTime() : 0;
+          const timeSinceLastActivity = Date.now() - lastVisitCheck;
+          
+          // Only send notification if it's been more than 1 hour since last activity
+          if (timeSinceLastActivity > 60 * 60 * 1000 && emailTransporter) {
+            try {
+              const htmlContent = `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                  <style>
+                    body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+                    .header { background: #1e293b; padding: 20px; text-align: center; }
+                    .header-icon { color: #fff; font-size: 24px; }
+                    .content { padding: 32px; max-width: 600px; margin: 0 auto; }
+                    h1 { color: #1e293b; margin-bottom: 16px; font-size: 24px; }
+                    .description { color: #64748b; margin-bottom: 24px; }
+                    .lead-card { background: #f8fafc; border-left: 4px solid #3b82f6; padding: 16px; margin: 20px 0; border-radius: 4px; }
+                    .lead-name { font-weight: 600; color: #1e293b; }
+                    .lead-contact { color: #3b82f6; }
+                    .visit-info { background: #f1f5f9; padding: 12px 16px; border-radius: 4px; margin: 16px 0; display: flex; align-items: center; }
+                    .visit-icon { margin-right: 12px; color: #3b82f6; }
+                    .btn { display: inline-block; background: #3b82f6; color: #ffffff !important; padding: 14px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 24px 0; }
+                    .footer { padding: 24px 32px; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 12px; }
+                    .footer-brand { font-weight: 600; color: #1e293b; }
+                  </style>
+                </head>
+                <body>
+                  <div class="header">
+                    <span class="header-icon">🏥</span>
+                  </div>
+                  <div class="content">
+                    <h1>A Lead Has Returned to The Website</h1>
+                    <p class="description">This notification has been sent out to inform you that the lead below has just returned to the website, expressing further interest.</p>
+                    <p class="description">Why not reach out and see if you can answer any of their questions? Use the email or phone links below, or visit the dashboard using 'View Conversation'.</p>
+                    
+                    <div class="lead-card">
+                      <div class="lead-name">${lead.name}</div>
+                      <div class="lead-contact">
+                        <a href="mailto:${lead.email}">${lead.email}</a> · 
+                        <a href="tel:${lead.phone}">${lead.phone}</a>
+                      </div>
+                    </div>
+                    
+                    <div class="visit-info">
+                      <span class="visit-icon">📅</span>
+                      <div>
+                        <strong>Original Visit Date</strong><br>
+                        ${new Date(session.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} at ${new Date(session.createdAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                      </div>
+                    </div>
+                    
+                    <a href="${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000'}/leads/${lead.id}" class="btn">View Conversation</a>
+                  </div>
+                  <div class="footer">
+                    <span class="footer-brand">ClaimShield AI</span><br>
+                    The content of this email is confidential and intended for specific recipients only.
+                  </div>
+                </body>
+                </html>
+              `;
+
+              await emailTransporter.sendMail({
+                from: fromEmail,
+                to: gmailUser,
+                subject: `🔔 Returning Lead: ${lead.name} is back on your website`,
+                html: htmlContent,
+              });
+              console.log(`Sent returning lead notification for ${lead.name}`);
+            } catch (err) {
+              console.error("Failed to send returning lead email:", err);
+            }
+          }
+          
+          // Update last activity
+          await storage.updateChatSession(session.id, { lastActivityAt: new Date() });
+        }
+      }
+      
+      return res.json({ session, messages, resumed: true, returningLead });
     }
 
     // Create new session
@@ -2205,7 +2299,7 @@ Warmly,
       userAgent,
     });
 
-    res.json({ session, messages: [], resumed: false });
+    res.json({ session, messages: [], resumed: false, returningLead: null });
   });
 
   // Update chat session
@@ -2283,6 +2377,102 @@ Warmly,
   app.get("/api/chat-analytics/stats", async (req, res) => {
     const stats = await storage.getChatSessionStats();
     res.json(stats);
+  });
+
+  // Get call analytics stats
+  app.get("/api/calls-analytics/stats", async (req, res) => {
+    try {
+      const leads = await storage.getLeads();
+      let totalCalls = 0;
+      let totalDuration = 0;
+      let answeredCalls = 0;
+      let missedCalls = 0;
+      let voicemailCalls = 0;
+      
+      for (const lead of leads) {
+        const calls = await storage.getCallsByLeadId(lead.id);
+        totalCalls += calls.length;
+        
+        for (const call of calls) {
+          if (call.duration) {
+            totalDuration += call.duration;
+          }
+          if (call.status === "completed") {
+            answeredCalls++;
+          } else if (call.status === "no-answer") {
+            missedCalls++;
+          } else if (call.status === "voicemail") {
+            voicemailCalls++;
+          }
+        }
+      }
+      
+      const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
+      const answeredRate = totalCalls > 0 ? Math.round((answeredCalls / totalCalls) * 100) : 0;
+      const missedRate = totalCalls > 0 ? Math.round((missedCalls / totalCalls) * 100) : 0;
+      const voicemailRate = totalCalls > 0 ? Math.round((voicemailCalls / totalCalls) * 100) : 0;
+      
+      res.json({
+        totalCalls,
+        answeredCalls,
+        missedCalls,
+        voicemailCalls,
+        avgDuration,
+        answeredRate,
+        missedRate,
+        voicemailRate,
+      });
+    } catch (error) {
+      console.error("Error getting call stats:", error);
+      res.status(500).json({ error: "Failed to get call stats" });
+    }
+  });
+
+  // Get time-series data for charts
+  app.get("/api/chat-analytics/timeseries", async (req, res) => {
+    const { days = "30" } = req.query;
+    const numDays = parseInt(days as string) || 30;
+    
+    const sessions = await storage.getChatSessions();
+    const leads = await storage.getLeads();
+    
+    // Group data by date
+    const dateMap = new Map<string, { sessions: number; leads: number; appointments: number }>();
+    
+    // Initialize with last N days
+    for (let i = 0; i < numDays; i++) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      dateMap.set(dateStr, { sessions: 0, leads: 0, appointments: 0 });
+    }
+    
+    // Count sessions by date
+    for (const session of sessions) {
+      const dateStr = new Date(session.createdAt).toISOString().split('T')[0];
+      if (dateMap.has(dateStr)) {
+        const data = dateMap.get(dateStr)!;
+        data.sessions++;
+        if (session.leadId) {
+          data.leads++;
+        }
+        const collectedData = session.collectedData as Record<string, unknown> | null;
+        if (collectedData?.appointmentSlot) {
+          data.appointments++;
+        }
+      }
+    }
+    
+    // Convert to array and sort by date
+    const result = Array.from(dateMap.entries())
+      .map(([date, data]) => ({
+        date,
+        formattedDate: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        ...data,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    
+    res.json(result);
   });
 
   // Get all chat sessions (for admin view)
