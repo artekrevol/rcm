@@ -11,13 +11,13 @@ import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import { GuidedChatWidget } from "@/components/guided-chat-widget";
 import DashboardPage from "@/pages/dashboard";
-import LeadsPage from "@/pages/leads";
-import LeadDetailPage from "@/pages/lead-detail";
+import DealsPage from "@/pages/deals";
+import DealDetailPage from "@/pages/deal-detail";
 import ClaimsPage from "@/pages/claims";
 import ClaimDetailPage from "@/pages/claim-detail";
 import IntelligencePage from "@/pages/intelligence";
 import RulesPage from "@/pages/rules";
-import ChatAnalyticsPage from "@/pages/chat-analytics";
+import LeadAnalyticsPage from "@/pages/lead-analytics";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const style = {
@@ -59,14 +59,14 @@ function Router() {
           <DashboardPage />
         </AuthenticatedLayout>
       </Route>
-      <Route path="/leads">
+      <Route path="/deals">
         <AuthenticatedLayout>
-          <LeadsPage />
+          <DealsPage />
         </AuthenticatedLayout>
       </Route>
-      <Route path="/leads/:id">
+      <Route path="/deals/:id">
         <AuthenticatedLayout>
-          <LeadDetailPage />
+          <DealDetailPage />
         </AuthenticatedLayout>
       </Route>
       <Route path="/claims">
@@ -89,9 +89,9 @@ function Router() {
           <RulesPage />
         </AuthenticatedLayout>
       </Route>
-      <Route path="/chat-analytics">
+      <Route path="/lead-analytics">
         <AuthenticatedLayout>
-          <ChatAnalyticsPage />
+          <LeadAnalyticsPage />
         </AuthenticatedLayout>
       </Route>
       <Route component={NotFound} />

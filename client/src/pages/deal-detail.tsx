@@ -104,7 +104,7 @@ function StatCard({
   );
 }
 
-export default function LeadDetailPage() {
+export default function DealDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -347,7 +347,7 @@ export default function LeadDetailPage() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => setLocation("/leads")}
+            onClick={() => setLocation("/deals")}
             data-testid="button-back"
           >
             <ArrowLeft className="h-5 w-5" />

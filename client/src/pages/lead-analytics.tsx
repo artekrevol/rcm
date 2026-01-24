@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -42,6 +44,7 @@ import {
   Phone,
   Mail,
   Eye,
+  Plus,
 } from "lucide-react";
 import { format, formatDistanceToNow, subDays, isAfter, isBefore, parseISO } from "date-fns";
 import type { ChatSession, Lead } from "@shared/schema";
@@ -151,12 +154,35 @@ function MetricCard({
 
 const ITEMS_PER_PAGE = 20;
 
-export default function ChatAnalyticsPage() {
+export default function LeadAnalyticsPage() {
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState("analytics");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("30");
   const [currentPage, setCurrentPage] = useState(1);
+
+  // Mutation to add a lead to the deals board (changes status from "new" to "contacted")
+  const addToDealsMutation = useMutation({
+    mutationFn: async (leadId: string) => {
+      return apiRequest("PATCH", `/api/leads/${leadId}`, { status: "contacted" });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads/worklist"] });
+      toast({
+        title: "Added to Deals",
+        description: "Lead has been added to your deals pipeline.",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to add lead to deals.",
+        variant: "destructive",
+      });
+    },
+  });
 
   const { data: stats, isLoading: statsLoading } = useQuery<ChatStats>({
     queryKey: ["/api/chat-analytics/stats"],
@@ -275,9 +301,9 @@ export default function ChatAnalyticsPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-semibold" data-testid="text-page-title">Chat Analytics</h1>
+          <h1 className="text-3xl font-semibold" data-testid="text-page-title">Lead Analytics</h1>
           <p className="text-muted-foreground mt-1">
-            Track chat widget performance and visitor engagement
+            Track all lead sources: website visits, chat, calls, and emails
           </p>
         </div>
         <Badge variant="outline" className="text-xs">
@@ -286,14 +312,18 @@ export default function ChatAnalyticsPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="grid w-full max-w-md grid-cols-2">
+        <TabsList className="grid w-full max-w-lg grid-cols-3">
           <TabsTrigger value="analytics" data-testid="tab-analytics">
             <BarChart3 className="h-4 w-4 mr-2" />
             Analytics
           </TabsTrigger>
+          <TabsTrigger value="all-leads" data-testid="tab-all-leads">
+            <Users className="h-4 w-4 mr-2" />
+            All Leads
+          </TabsTrigger>
           <TabsTrigger value="conversations" data-testid="tab-conversations">
             <MessageCircle className="h-4 w-4 mr-2" />
-            All Conversations
+            Conversations
           </TabsTrigger>
         </TabsList>
 
@@ -569,6 +599,181 @@ export default function ChatAnalyticsPage() {
           )}
         </TabsContent>
 
+        <TabsContent value="all-leads" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div>
+                  <CardTitle className="text-2xl">All Leads</CardTitle>
+                  <CardDescription>
+                    Leads from all sources: website visits, chat, calls, and emails
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">
+                    {leads?.length || 0} total leads
+                  </Badge>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Leads by source summary */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Card className="p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-950">
+                      <MessageCircle className="h-4 w-4 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold">{leads?.filter(l => l.source === 'website' || l.source === 'chat_widget').length || 0}</p>
+                      <p className="text-xs text-muted-foreground">Website / Chat</p>
+                    </div>
+                  </div>
+                </Card>
+                <Card className="p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-green-100 dark:bg-green-950">
+                      <Phone className="h-4 w-4 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold">{leads?.filter(l => l.source === 'phone').length || 0}</p>
+                      <p className="text-xs text-muted-foreground">Inbound Calls</p>
+                    </div>
+                  </div>
+                </Card>
+                <Card className="p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-950">
+                      <Mail className="h-4 w-4 text-purple-600" />
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold">{leads?.filter(l => l.source === 'referral' || l.source === 'marketing').length || 0}</p>
+                      <p className="text-xs text-muted-foreground">Email / Referral</p>
+                    </div>
+                  </div>
+                </Card>
+                <Card className="p-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 rounded-lg bg-orange-100 dark:bg-orange-950">
+                      <Users className="h-4 w-4 text-orange-600" />
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold">{leads?.filter(l => l.source === 'physician_referral' || l.source === 'insurance_portal').length || 0}</p>
+                      <p className="text-xs text-muted-foreground">Other Sources</p>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              {/* Leads table with Add to Deals action */}
+              <div className="border rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead className="font-semibold">Lead</TableHead>
+                      <TableHead className="font-semibold">Contact</TableHead>
+                      <TableHead className="font-semibold">Source</TableHead>
+                      <TableHead className="font-semibold">Status</TableHead>
+                      <TableHead className="font-semibold">Created</TableHead>
+                      <TableHead className="w-[120px]">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {leads?.slice(0, 20).map((lead) => (
+                      <TableRow key={lead.id} className="hover-elevate" data-testid={`row-lead-${lead.id}`}>
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-sm font-medium text-primary">
+                              {lead.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)}
+                            </div>
+                            <div>
+                              <p className="font-medium">{lead.name}</p>
+                              {lead.serviceNeeded && (
+                                <p className="text-xs text-muted-foreground">{lead.serviceNeeded.replace(/_/g, ' ')}</p>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5 text-sm">
+                              <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+                              <a href={`tel:${lead.phone}`} className="text-primary hover:underline">{lead.phone}</a>
+                            </div>
+                            {lead.email && (
+                              <div className="flex items-center gap-1.5 text-sm">
+                                <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                                <a href={`mailto:${lead.email}`} className="text-primary hover:underline">{lead.email}</a>
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="capitalize">
+                            {lead.source?.replace(/_/g, ' ') || 'Unknown'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={
+                            lead.status === 'new' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100' :
+                            lead.status === 'contacted' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100' :
+                            lead.status === 'qualified' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100' :
+                            lead.status === 'converted' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-100' :
+                            'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-100'
+                          }>
+                            {lead.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            {lead.createdAt && format(new Date(lead.createdAt), "MMM d, yyyy")}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {lead.createdAt && formatDistanceToNow(new Date(lead.createdAt), { addSuffix: true })}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <Link href={`/deals/${lead.id}`}>
+                              <Button variant="ghost" size="icon" data-testid={`button-view-lead-${lead.id}`}>
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                            </Link>
+                            {lead.status === 'new' ? (
+                              <Button 
+                                variant="default" 
+                                size="sm" 
+                                onClick={() => addToDealsMutation.mutate(lead.id)}
+                                disabled={addToDealsMutation.isPending}
+                                data-testid={`button-add-to-deals-${lead.id}`}
+                              >
+                                <Plus className="h-4 w-4 mr-1" />
+                                Add to Deals
+                              </Button>
+                            ) : (
+                              <Link href={`/deals/${lead.id}`}>
+                                <Button variant="outline" size="sm" data-testid={`button-view-deal-${lead.id}`}>
+                                  <ArrowRight className="h-4 w-4 mr-1" />
+                                  View Deal
+                                </Button>
+                              </Link>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              {leads && leads.length > 20 && (
+                <div className="text-center text-sm text-muted-foreground">
+                  Showing 20 of {leads.length} leads. <Link href="/deals" className="text-primary hover:underline">View all in Deals</Link>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="conversations" className="space-y-6">
           <Card>
             <CardHeader>
@@ -683,7 +888,7 @@ export default function ChatAnalyticsPage() {
                                     : 'bg-muted text-muted-foreground'
                                 }`}>
                                   {session.lead?.name 
-                                    ? session.lead.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+                                    ? session.lead.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
                                     : '?'
                                   }
                                 </div>
@@ -691,9 +896,9 @@ export default function ChatAnalyticsPage() {
                                   <p className="font-medium">
                                     {session.lead?.name || `Visitor #${session.id.slice(0, 8)}`}
                                   </p>
-                                  {session.collectedData?.serviceNeeded && (
+                                  {typeof session.collectedData?.serviceNeeded === 'string' && (
                                     <p className="text-xs text-muted-foreground">
-                                      {(session.collectedData.serviceNeeded as string).replace(/_/g, ' ')}
+                                      {session.collectedData.serviceNeeded.replace(/_/g, ' ')}
                                     </p>
                                   )}
                                 </div>
@@ -745,7 +950,7 @@ export default function ChatAnalyticsPage() {
                             </TableCell>
                             <TableCell>
                               {session.leadId ? (
-                                <Link href={`/leads/${session.leadId}`}>
+                                <Link href={`/deals/${session.leadId}`}>
                                   <Button variant="ghost" size="icon" data-testid={`button-view-${session.id}`}>
                                     <Eye className="h-4 w-4" />
                                   </Button>

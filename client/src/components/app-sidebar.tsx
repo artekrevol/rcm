@@ -25,11 +25,11 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 const mainNavItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Leads", url: "/leads", icon: Users },
+  { title: "Lead Analytics", url: "/lead-analytics", icon: MessageCircle },
+  { title: "Deals", url: "/deals", icon: Users },
   { title: "Claims", url: "/claims", icon: FileText },
   { title: "Intelligence", url: "/intelligence", icon: Brain },
   { title: "Rules", url: "/rules", icon: Shield },
-  { title: "Chat Analytics", url: "/chat-analytics", icon: MessageCircle },
 ];
 
 

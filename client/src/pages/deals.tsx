@@ -161,7 +161,7 @@ function NextActionBadge({ actionType, dueAt }: { actionType?: string; dueAt?: s
   );
 }
 
-export default function LeadsPage() {
+export default function DealsPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
@@ -323,9 +323,9 @@ export default function LeadsPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold">Leads</h1>
+          <h1 className="text-2xl font-semibold">Deals</h1>
           <p className="text-sm text-muted-foreground">
-            Manage intake leads and VOB workflow
+            Manage deals pipeline and VOB workflow
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -622,7 +622,7 @@ export default function LeadsPage() {
                         <TableRow
                           key={lead.id}
                           className={`cursor-pointer group ${isSlaBreach ? "border-l-4 border-l-red-500 bg-red-50/50 dark:bg-red-950/20" : ""}`}
-                          onClick={() => setLocation(`/leads/${lead.id}`)}
+                          onClick={() => setLocation(`/deals/${lead.id}`)}
                           data-testid={`row-lead-${lead.id}`}
                         >
                           <TableCell>
@@ -768,7 +768,7 @@ export default function LeadsPage() {
                     <Card
                       key={lead.id}
                       className="cursor-pointer hover-elevate"
-                      onClick={() => setLocation(`/leads/${lead.id}`)}
+                      onClick={() => setLocation(`/deals/${lead.id}`)}
                       data-testid={`lead-card-${lead.id}`}
                     >
                       <CardContent className="p-3 space-y-2">

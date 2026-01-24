@@ -711,7 +711,7 @@ function GuidedChatContent() {
                 variant="outline" 
                 size="sm" 
                 className="mt-3 w-full"
-                onClick={() => window.open(`/leads/${createdLeadId}`, '_blank')}
+                onClick={() => window.open(`/deals/${createdLeadId}`, '_blank')}
                 data-testid="button-view-details"
               >
                 <ArrowRight className="h-4 w-4 mr-1.5" />
@@ -950,7 +950,7 @@ function GuidedChatContent() {
                 <Button 
                   variant="default" 
                   className="w-full"
-                  onClick={() => window.open(`/leads/${returningLead.id}`, '_blank')}
+                  onClick={() => window.open(`/deals/${returningLead.id}`, '_blank')}
                   data-testid="button-view-profile"
                 >
                   View My Profile
