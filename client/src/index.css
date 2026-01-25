@@ -2,16 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
-/* LIGHT MODE - ClaimShield Brand */
+/* LIGHT MODE - Claim Shield Health Brand */
 :root {
-  /* ClaimShield Brand Tokens */
-  --cs-blue: 210 76% 50%;
-  --cs-teal: 173 70% 45%;
-  --cs-slate: 209 20% 23%;
-  --cs-bg-soft: 195 33% 98%;
-  --cs-success: 173 70% 45%;
-  --cs-danger: 0 72% 58%;
-  --cs-gradient: linear-gradient(180deg, #1F7AE0 0%, #22C6B6 100%);
+  /* Claim Shield Health Brand Tokens (HSL format) */
+  --csh-blue: 210 76% 50%;
+  --csh-teal: 173 70% 45%;
+  --csh-slate: 209 20% 23%;
+  --csh-bg: 0 0% 100%;
+  --csh-bg-soft: 195 33% 98%;
+  --csh-border: 209 20% 23% / 0.12;
+  --csh-focus: 210 76% 50% / 0.35;
+  --csh-shadow: 0 6px 20px rgba(0,0,0,0.08);
   
   --button-outline: rgba(0,0,0, .10);
   --badge-outline: rgba(0,0,0, .05);

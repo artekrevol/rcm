@@ -1,0 +1,123 @@
+You are a senior frontend engineer + rebranding specialist. Apply a full brand rename and UI theming update across the entire app.
+
+GOAL
+- Replace ALL branding references from any previous name (including “ClaimShield”) to:
+  PRIMARY BRAND NAME (public): "Claim Shield Health"
+  SHORT NAME (UI where space is tight): "Claim Shield"
+  APP ID/slug (code-safe): "claim-shield-health"
+
+CRITICAL CONSTRAINTS (DO NOT VIOLATE)
+- Do NOT use the single-string “ClaimShield” anywhere in UI copy, titles, meta tags, emails, or visible content.
+- Use “Claim Shield Health” as the primary visible identity.
+- Avoid medical cross iconography as a standalone symbol in UI (it can imply regulated medical branding). If a cross exists in the logo, treat it as abstract geometry only; do not emphasize it in UI elements.
+
+ASSETS
+- Ensure these brand assets exist at:
+  /public/brand/logo_full.png
+  /public/brand/logo_icon.png
+  /public/brand/favicon_square.png
+  /public/brand/favicon_circle.png
+  /public/brand/favicon_blue.png
+
+If any are missing, create placeholders by copying existing logo assets and naming them exactly as above.
+
+BRAND TOKENS (SINGLE SOURCE OF TRUTH)
+1) Implement global design tokens used everywhere.
+- Colors (use CSS vars + Tailwind/theme integration if present):
+  --csh-blue: #1F7AE0
+  --csh-teal: #22C6B6
+  --csh-slate: #2F3A45
+  --csh-bg: #FFFFFF
+  --csh-bg-soft: #F6FAFC
+  --csh-border: rgba(47,58,69,0.12)
+  --csh-focus: rgba(31,122,224,0.35)
+- Gradient:
+  --csh-gradient: linear-gradient(180deg, #1F7AE0 0%, #22C6B6 100%)
+- Typography:
+  Font: Inter preferred (fallback to system sans)
+  Headings: 600, Body: 400–500
+- Radii:
+  10 / 14 / 18 px (sm/md/lg)
+- Shadow:
+  0 6px 20px rgba(0,0,0,0.08)
+
+2) Apply tokens globally via:
+- Tailwind theme config if Tailwind exists, otherwise:
+- globals.css + shared token exports.
+
+LOGO + WORDMARK REPLACEMENT (EVERYWHERE)
+Replace brand visuals in:
+- Navbar header (desktop + mobile)
+- Sidebar (collapsed + expanded)
+- Login/signup screens
+- Settings/profile areas
+- Any splash/loading or empty state visuals
+- Footer and marketing/landing pages
+
+Rules:
+- Desktop header: logo_full.png at 140–170px width.
+- Sidebar collapsed: logo_icon.png at 28–32px.
+- Sidebar expanded: logo_full.png at 120–150px.
+- Logo always links to "/" (home/dashboard).
+- Maintain consistent padding 12–16px around the logo.
+
+FAVICON + META
+Update browser/app metadata:
+- Document title: "Claim Shield Health"
+- Meta description (neutral): "Secure, streamlined claims workflow software."
+- Theme color meta: #1F7AE0
+- Favicon: use /public/brand/favicon_circle.png
+- Apple touch icon: use /public/brand/favicon_square.png
+- Update manifest if present (name, short_name, icons).
+
+UI COMPONENT THEMING (CONSISTENT LOOK)
+Buttons:
+- Primary: background var(--csh-blue), hover darken 8%, active darken 12%, text white
+- Secondary: white background, border var(--csh-border), text var(--csh-slate)
+- Accent CTA: gradient var(--csh-gradient) (max 1 per page)
+Inputs:
+- Border var(--csh-border)
+- Focus ring 2px var(--csh-focus)
+Cards:
+- Background white, border subtle, radius md
+Tables:
+- Header background var(--csh-bg-soft)
+- Row hover rgba(31,122,224,0.06)
+
+COPY UPDATES (TEXT)
+- Replace every occurrence of:
+  "ClaimShield" => "Claim Shield Health" (or "Claim Shield" when space is limited)
+- Replace any old app name in:
+  headers, titles, auth screens, emails/templates, footer, settings, onboarding, empty states, help text.
+- Do NOT add medical claims. Keep compliant, operational language only:
+  Examples:
+  - “Verify. Protect. Resolve.” (optional tagline)
+  - “Claims workflow, simplified.”
+  - “Secure verification for faster resolution.”
+
+ADD A BRAND QA PAGE (FAST VERIFICATION)
+Create route: /brand-preview
+Show:
+- logo_full + logo_icon
+- Color swatches (blue, teal, slate, bg-soft)
+- Buttons (primary/secondary/accent)
+- Inputs (default + focus)
+- Card + table sample
+- Typography scale (H1/H2/body/caption)
+This page is for visual QA only; do not link publicly in production if not desired.
+
+SEARCH + CLEANUP (MUST DO)
+- Search repo for: "ClaimShield", "claimshield", old hex codes, old logo filenames.
+- Remove or replace all occurrences.
+- Ensure no broken paths.
+- Ensure responsive layout.
+
+DELIVERABLE OUTPUT
+When finished, provide:
+1) A list of files changed
+2) Summary of what was updated (logos, meta, theme, copy)
+3) How to verify: visit /brand-preview and key pages (login, dashboard, settings)
+
+DO NOT change business logic. Branding + UI only.
+
+START NOW.

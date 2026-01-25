@@ -60,7 +60,7 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "welcome",
     type: "message",
-    message: "Hi there! I'm your ClaimShield AI assistant. I'm here to help you get started with our healthcare services. This will only take a few minutes.",
+    message: "Hi there! I'm your Claim Shield Health assistant. I'm here to help you get started with our healthcare services. This will only take a few minutes.",
     tooltip: "We're here to help you navigate healthcare services and ensure you get the care you need.",
     nextStep: "service_type"
   },
@@ -818,7 +818,7 @@ function GuidedChatContent() {
       >
         <Card className="p-3 shadow-lg flex items-center gap-2 hover-elevate">
           <Bot className="h-5 w-5 text-primary" />
-          <span className="text-sm font-medium">ClaimShield AI</span>
+          <span className="text-sm font-medium">Claim Shield Health</span>
           {messages.length > 0 && (
             <Badge variant="secondary" className="text-xs">
               {messages.length}
@@ -845,7 +845,7 @@ function GuidedChatContent() {
               <Bot className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="font-semibold text-sm">ClaimShield AI</h3>
+              <h3 className="font-semibold text-sm">Claim Shield Health</h3>
               <p className="text-xs opacity-80">Here to help you</p>
             </div>
           </div>
@@ -994,7 +994,7 @@ function GuidedChatContent() {
 
         <div className="px-3 py-1.5 border-t bg-muted/20">
           <p className="text-[10px] text-muted-foreground text-center">
-            Powered by ClaimShield AI • Your data is secure
+            Powered by Claim Shield Health • Your data is secure
           </p>
         </div>
       </Card>

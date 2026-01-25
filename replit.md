@@ -1,8 +1,8 @@
-# ClaimShield AI
+# Claim Shield Health
 
 ## Overview
 
-ClaimShield AI is a healthcare revenue cycle management (RCM) platform designed to prevent claim denials before they happen. The application provides pre-claim risk assessment, real-time claim tracking, denial pattern intelligence, and automated prevention rules. It serves healthcare revenue cycle professionals who need to reduce denied claims and protect revenue.
+Claim Shield Health is a healthcare revenue cycle management (RCM) platform designed to prevent claim denials before they happen. The application provides pre-claim risk assessment, real-time claim tracking, denial pattern intelligence, and automated prevention rules. It serves healthcare revenue cycle professionals who need to reduce denied claims and protect revenue.
 
 The platform demonstrates four core capabilities:
 1. **Pre-Claim Prevention** - Eligibility and authorization risk scoring before claim submission

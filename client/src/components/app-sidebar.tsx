@@ -38,14 +38,16 @@ export function AppSidebar() {
 
   return (
     <Sidebar>
-      <SidebarHeader className="p-6">
+      <SidebarHeader className="p-4">
         <Link href="/dashboard" className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary">
-            <ShieldCheck className="h-6 w-6 text-primary-foreground" />
-          </div>
+          <img 
+            src="/brand/logo_icon.png" 
+            alt="Claim Shield Health" 
+            className="h-10 w-10 rounded-lg object-contain"
+          />
           <div>
-            <h1 className="text-lg font-semibold">ClaimShield AI</h1>
-            <p className="text-xs text-muted-foreground">Denial Prevention</p>
+            <h1 className="text-sm font-semibold leading-tight">Claim Shield Health</h1>
+            <p className="text-xs text-muted-foreground">RCM Platform</p>
           </div>
         </Link>
       </SidebarHeader>
@@ -85,7 +87,7 @@ export function AppSidebar() {
           </Avatar>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">RCM Admin</p>
-            <p className="text-xs text-muted-foreground truncate">admin@claimshield.ai</p>
+            <p className="text-xs text-muted-foreground truncate">admin@claimshield.health</p>
           </div>
           <Link href="/login">
             <LogOut className="h-4 w-4 text-muted-foreground hover:text-foreground cursor-pointer" data-testid="button-logout" />

@@ -59,7 +59,7 @@ function ChatWidgetContent() {
     setIsOpen(true);
     setIsMinimized(false);
     if (messages.length === 0) {
-      addMessage("assistant", "Hi! I'm the ClaimShield AI assistant. How can I help you today? I can answer questions about our services, help you schedule an appointment, or connect you with our team.");
+      addMessage("assistant", "Hi! I'm your Claim Shield Health assistant. How can I help you today? I can answer questions about our services, help you schedule an appointment, or connect you with our team.");
     }
   };
 
@@ -143,7 +143,7 @@ function ChatWidgetContent() {
       >
         <Card className="p-3 shadow-lg flex items-center gap-2">
           <Bot className="h-5 w-5 text-primary" />
-          <span className="text-sm font-medium">ClaimShield AI</span>
+          <span className="text-sm font-medium">Claim Shield Health</span>
           {messages.length > 0 && (
             <Badge variant="secondary" className="text-xs">
               {messages.length}
@@ -168,7 +168,7 @@ function ChatWidgetContent() {
           <div className="flex items-center gap-2">
             <Bot className="h-5 w-5" />
             <div>
-              <h3 className="font-semibold text-sm">ClaimShield AI</h3>
+              <h3 className="font-semibold text-sm">Claim Shield Health</h3>
               <p className="text-xs opacity-80">Online</p>
             </div>
           </div>
@@ -262,7 +262,7 @@ function ChatWidgetContent() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground mt-2 text-center">
-            Powered by ClaimShield AI
+            Powered by Claim Shield
           </p>
         </div>
       </Card>

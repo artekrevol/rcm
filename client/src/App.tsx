@@ -18,6 +18,7 @@ import ClaimDetailPage from "@/pages/claim-detail";
 import IntelligencePage from "@/pages/intelligence";
 import RulesPage from "@/pages/rules";
 import LeadAnalyticsPage from "@/pages/lead-analytics";
+import BrandPreviewPage from "@/pages/brand-preview";
 
 function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
   const style = {
@@ -94,6 +95,11 @@ function Router() {
           <LeadAnalyticsPage />
         </AuthenticatedLayout>
       </Route>
+      <Route path="/brand-preview">
+        <AuthenticatedLayout>
+          <BrandPreviewPage />
+        </AuthenticatedLayout>
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );
@@ -101,7 +107,7 @@ function Router() {
 
 function App() {
   return (
-    <ThemeProvider defaultTheme="light" storageKey="claimshield-theme">
+    <ThemeProvider defaultTheme="light" storageKey="claim-shield-health-theme">
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <Toaster />

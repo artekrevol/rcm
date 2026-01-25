@@ -119,7 +119,7 @@ export function useVapi({ publicKey, onMessage, onCallStart, onCallEnd, onError 
     setMessages([]);
     
     const assistantOverrides = {
-      firstMessage: config.firstMessage || `Hello, this is Alex from ClaimShield Healthcare. Am I speaking with ${config.leadName}?`,
+      firstMessage: config.firstMessage || `Hello, this is Alex from Claim Shield Health. Am I speaking with ${config.leadName}?`,
       model: {
         provider: "openai" as const,
         model: "gpt-4o-mini" as const,

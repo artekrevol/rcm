@@ -1,4 +1,4 @@
-# ClaimShield AI - Design Guidelines
+# Claim Shield Health - Design Guidelines
 
 ## Design Approach: Enterprise SaaS System
 
