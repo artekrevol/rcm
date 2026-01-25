@@ -1,0 +1,153 @@
+You are a senior frontend engineer + brand implementer. Your job: apply the ClaimShield brand across the entire app UI, replacing any old branding, colors, and logos everywhere.
+
+CONTEXT
+- Brand: ClaimShield (HealthTech)
+- Style: modern, minimalist, reassuring, tech-forward
+- Assets ZIP has been uploaded to the repo. Use these file names exactly:
+  /public/brand/logo_full.png
+  /public/brand/logo_icon.png
+  /public/brand/favicon_square.png
+  /public/brand/favicon_circle.png
+  /public/brand/favicon_blue.png
+  /public/brand/color_blue.png
+  /public/brand/color_green.png
+  /public/brand/color_dark.png
+
+PRIMARY TASKS (DO ALL)
+1) Create a single source of truth for brand tokens (colors, typography, radii, shadows) and apply them globally.
+2) Replace ALL old logos and wordmarks with ClaimShield assets.
+3) Update favicon and app icons.
+4) Update nav/header/sidebar/login pages/empty states/marketing pages/components so the brand is consistent.
+5) Ensure accessibility (contrast, focus states) and consistent hover/active states.
+6) Add a small “Brand Preview” page or component so we can visually verify the changes quickly.
+
+STEP-BY-STEP INSTRUCTIONS
+
+A) FILE PLACEMENT (if not already)
+- Ensure the PNG assets exist in /public/brand/ exactly as listed above.
+- If assets are elsewhere, move them and update references.
+
+B) BRAND TOKENS (GLOBAL)
+Create a brand tokens file and make the app reference it everywhere.
+- If Tailwind is present:
+  - Update tailwind.config.* with ClaimShield colors and font.
+  - Create CSS variables in globals.css for fallback/consistency.
+- If CSS modules or styled-components are present:
+  - Create /src/styles/brand.(ts|js|css) exporting tokens.
+- If a component library theme exists (MUI/Chakra/etc.):
+  - Update theme provider with these tokens.
+
+Define these tokens (use these names):
+Colors:
+  --cs-blue: #1F7AE0 (primary blue)
+  --cs-teal: #22C6B6 (teal-green)
+  --cs-slate: #2F3A45 (dark slate text)
+  --cs-bg: #FFFFFF
+  --cs-bg-soft: #F6FAFC
+  --cs-border: rgba(47,58,69,0.12)
+  --cs-success: #22C6B6
+  --cs-danger: #E24A4A
+Gradients:
+  --cs-gradient: linear-gradient(180deg, #1F7AE0 0%, #22C6B6 100%)
+Typography:
+  - Font family: Inter (preferred). If not installed, use system sans fallback.
+  - Headings: 600 weight, body: 400–500.
+Radii:
+  --cs-radius-sm: 10px
+  --cs-radius-md: 14px
+  --cs-radius-lg: 18px
+Shadows:
+  --cs-shadow-1: 0 6px 20px rgba(0,0,0,0.08)
+
+C) LOGO INTEGRATION (EVERYWHERE)
+Replace brand mark in:
+- Header navbar (desktop + mobile)
+- Sidebar (collapsed and expanded states)
+- Login page + auth screens
+- Settings/profile pages (if brand/logo appears)
+- Loading screen/splash if exists
+- Footer/marketing sections
+
+Rules:
+- Desktop header: use /public/brand/logo_full.png at ~140–170px width, auto height.
+- Sidebar collapsed: use /public/brand/logo_icon.png at 28–32px.
+- Sidebar expanded: use /public/brand/logo_full.png at 120–150px.
+- Maintain consistent spacing: 12–16px padding around logo.
+- Logo should link to "/" (home/dashboard).
+
+D) FAVICON + META (BROWSER)
+Update:
+- /public/favicon.ico OR favicon files used by framework
+- <link rel="icon"> in index.html or framework equivalents
+Use:
+- favicon_circle.png for standard favicon (convert if needed)
+- Also include apple-touch-icon if applicable using favicon_square.png
+
+Set:
+- App name / title: "ClaimShield"
+- Theme color meta: use --cs-blue (#1F7AE0)
+
+E) COMPONENT THEMING (UI CONSISTENCY)
+Update these globally:
+Buttons:
+- Primary: background var(--cs-blue), hover darken by ~8%, active darken by ~12%
+- Secondary: white background, border var(--cs-border), text var(--cs-slate)
+- Accent: gradient var(--cs-gradient) for key CTAs only (1 per view max)
+Inputs:
+- Border: var(--cs-border)
+- Focus ring: 2px rgba(31,122,224,0.35)
+Cards:
+- Background: white
+- Border subtle
+- Radius md
+Links:
+- Default: cs-blue, hover underline
+Badges/Status chips:
+- Success: cs-teal
+- Neutral: slate
+Tables:
+- Header background: cs-bg-soft
+- Row hover: rgba(31,122,224,0.06)
+
+F) PAGE LEVEL BRANDING
+Update:
+- Login / Signup: center the shield icon above the form + ClaimShield wordmark
+- Dashboard: add a soft hero header with subtle gradient accent line (do not overdo)
+- Empty states: use logo_icon.png lightly (opacity 0.08–0.12 as watermark)
+- Modals: match radius + focus styles
+
+G) COPY UPDATES (TEXT)
+Replace any old product name across UI text, titles, metadata with "ClaimShield".
+If tagline exists, set to:
+- “Verify. Protect. Resolve.” (optional)
+Do NOT invent medical claims; keep generic and compliant.
+
+H) BRAND PREVIEW PAGE (QA)
+Add route: /brand-preview (or a component accessible from dev menu)
+It should show:
+- Logo full + icon
+- Color swatches
+- Buttons (primary/secondary/accent)
+- Inputs focus state
+- Card + table sample
+This makes visual QA fast.
+
+I) QUALITY CHECKS
+- Ensure there are no broken asset paths.
+- Ensure responsiveness (mobile header/side nav).
+- Ensure contrast ratios are reasonable (especially text on blue/teal).
+- Ensure no leftover old logos/colors remain (search the repo for old name, old hex codes, old logo filenames).
+
+DELIVERABLES
+- PR-style summary in output:
+  1) Files changed
+  2) What branding was updated
+  3) Where logos are rendered
+  4) How to verify (including /brand-preview route)
+- Do not change business logic. Branding only.
+
+START NOW:
+1) Locate current theming approach (Tailwind / CSS / theme provider) and implement tokens.
+2) Update all references to logos/favicons.
+3) Apply consistent UI styles.
+4) Add /brand-preview route and confirm it renders correctly.
