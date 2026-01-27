@@ -1,8 +1,11 @@
 import { VobVerification } from "@shared/schema";
 
+// VerifyTX uses OAuth 2.0 with username/password grant type
 interface VerifyTxConfig {
-  apiKey: string;
-  apiSecret: string;
+  username: string;
+  password: string;
+  clientId: string;
+  clientSecret: string;
   facilityId?: string;
 }
 
@@ -46,33 +49,55 @@ interface VerifyTxVobResponse {
 }
 
 class VerifyTxClient {
-  private apiKey: string;
-  private apiSecret: string;
+  private username: string;
+  private password: string;
+  private clientId: string;
+  private clientSecret: string;
   private facilityId: string;
   private baseUrl = "https://api.verifytx.com";
   private accessToken: string | null = null;
+  private refreshToken: string | null = null;
   private tokenExpiry: Date | null = null;
 
   constructor(config: VerifyTxConfig) {
-    this.apiKey = config.apiKey;
-    this.apiSecret = config.apiSecret;
-    this.facilityId = config.facilityId || "default";
+    this.username = config.username;
+    this.password = config.password;
+    this.clientId = config.clientId;
+    this.clientSecret = config.clientSecret;
+    this.facilityId = config.facilityId || "";
   }
 
   private async authenticate(): Promise<string> {
+    // Return cached token if still valid
     if (this.accessToken && this.tokenExpiry && new Date() < this.tokenExpiry) {
       return this.accessToken;
     }
 
-    const response = await fetch(`${this.baseUrl}/auth/token`, {
+    // Try refresh token first if available
+    if (this.refreshToken) {
+      try {
+        return await this.refreshAccessToken();
+      } catch (e) {
+        // Fall through to password grant if refresh fails
+        console.log("Refresh token expired, re-authenticating...");
+      }
+    }
+
+    // OAuth 2.0 password grant type
+    const params = new URLSearchParams({
+      grant_type: "password",
+      username: this.username,
+      password: this.password,
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+    });
+
+    const response = await fetch(`${this.baseUrl}/oauth/token`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: JSON.stringify({
-        apiKey: this.apiKey,
-        apiSecret: this.apiSecret,
-      }),
+      body: params.toString(),
     });
 
     if (!response.ok) {
@@ -81,14 +106,57 @@ class VerifyTxClient {
     }
 
     const data = await response.json();
-    this.accessToken = data.accessToken || data.access_token || data.token;
-    this.tokenExpiry = new Date(Date.now() + 55 * 60 * 1000);
+    
+    // Handle VerifyTX response format: { code: 200, message: { access_token, refresh_token, expires_in } }
+    const tokenData = data.message || data;
+    this.accessToken = tokenData.access_token;
+    this.refreshToken = tokenData.refresh_token;
+    
+    // Token expires in 24 hours, set expiry to 23 hours for safety
+    const expiresIn = tokenData.expires_in || 86400;
+    this.tokenExpiry = new Date(Date.now() + (expiresIn - 3600) * 1000);
 
     if (!this.accessToken) {
       throw new Error("No access token received from VerifyTX");
     }
 
     return this.accessToken;
+  }
+
+  private async refreshAccessToken(): Promise<string> {
+    if (!this.refreshToken) {
+      throw new Error("No refresh token available");
+    }
+
+    const params = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: this.refreshToken,
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+    });
+
+    const response = await fetch(`${this.baseUrl}/oauth/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: params.toString(),
+    });
+
+    if (!response.ok) {
+      this.refreshToken = null;
+      throw new Error("Refresh token expired");
+    }
+
+    const data = await response.json();
+    const tokenData = data.message || data;
+    this.accessToken = tokenData.access_token;
+    this.refreshToken = tokenData.refresh_token || this.refreshToken;
+    
+    const expiresIn = tokenData.expires_in || 86400;
+    this.tokenExpiry = new Date(Date.now() + (expiresIn - 3600) * 1000);
+
+    return this.accessToken!;
   }
 
   private async request<T>(
@@ -179,18 +247,22 @@ export function getVerifyTxClient(): VerifyTxClient | null {
     return clientInstance;
   }
 
-  const apiKey = process.env.VERIFYTX_API_KEY;
-  const apiSecret = process.env.VERIFYTX_API_SECRET;
+  const username = process.env.VERIFYTX_USERNAME;
+  const password = process.env.VERIFYTX_PASSWORD;
+  const clientId = process.env.VERIFYTX_CLIENT_ID;
+  const clientSecret = process.env.VERIFYTX_CLIENT_SECRET;
   const facilityId = process.env.VERIFYTX_FACILITY_ID;
 
-  if (!apiKey || !apiSecret) {
-    console.log("VerifyTX credentials not configured");
+  if (!username || !password || !clientId || !clientSecret) {
+    console.log("VerifyTX credentials not configured - need VERIFYTX_USERNAME, VERIFYTX_PASSWORD, VERIFYTX_CLIENT_ID, VERIFYTX_CLIENT_SECRET");
     return null;
   }
 
   clientInstance = new VerifyTxClient({
-    apiKey,
-    apiSecret,
+    username,
+    password,
+    clientId,
+    clientSecret,
     facilityId,
   });
 
