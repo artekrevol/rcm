@@ -12,6 +12,7 @@ import { LeadStatusBadge } from "@/components/status-badge";
 import { CallModal } from "@/components/call-modal";
 import { LeadFormDialog } from "@/components/lead-form-dialog";
 import { ScheduleAppointmentDialog } from "@/components/schedule-appointment-dialog";
+import { VobVerificationCard } from "@/components/vob-verification-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip,
@@ -968,96 +969,8 @@ export default function DealDetailPage() {
               </CardContent>
             </Card>
 
-            {/* Benefits Verification */}
-            {vobData && vobData.verified ? (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Shield className="h-4 w-4" />
-                    Benefits Verification
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                    <span className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                      Verified
-                    </span>
-                    {vobData.networkStatus && (
-                      <Badge variant="outline" className="ml-auto text-xs">
-                        {vobData.networkStatus === "in_network" ? "In-Network" : "Out-of-Network"}
-                      </Badge>
-                    )}
-                  </div>
-
-                  <Separator />
-
-                  <div className="grid grid-cols-2 gap-4">
-                    {vobData.copay !== undefined && (
-                      <div>
-                        <p className="text-xs text-muted-foreground">Copay</p>
-                        <p className="text-sm font-semibold">${vobData.copay}</p>
-                      </div>
-                    )}
-                    {vobData.coinsurance !== undefined && (
-                      <div>
-                        <p className="text-xs text-muted-foreground">Coinsurance</p>
-                        <p className="text-sm font-semibold">{vobData.coinsurance}%</p>
-                      </div>
-                    )}
-                    {vobData.deductible !== undefined && (
-                      <div>
-                        <p className="text-xs text-muted-foreground">Deductible</p>
-                        <p className="text-sm font-semibold">
-                          ${vobData.deductibleMet || 0} / ${vobData.deductible}
-                        </p>
-                      </div>
-                    )}
-                    {vobData.outOfPocketMax !== undefined && (
-                      <div>
-                        <p className="text-xs text-muted-foreground">Out-of-Pocket Max</p>
-                        <p className="text-sm font-semibold">
-                          ${vobData.outOfPocketMet || 0} / ${vobData.outOfPocketMax}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {vobData.priorAuthRequired && (
-                    <div className="flex items-center gap-2 pt-2">
-                      <AlertCircle className="h-4 w-4 text-amber-500" />
-                      <span className="text-sm text-amber-600 dark:text-amber-400">
-                        Prior Authorization Required
-                      </span>
-                    </div>
-                  )}
-
-                  {(vobData.effectiveDate || vobData.termDate) && (
-                    <div className="text-xs text-muted-foreground pt-2">
-                      Coverage: {vobData.effectiveDate || "—"} to {vobData.termDate || "Ongoing"}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ) : (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Shield className="h-4 w-4" />
-                    Benefits Verification
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-center py-8">
-                    <Shield className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                    <p className="text-sm text-muted-foreground">Not yet verified</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Complete an AI call to verify benefits
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+            {/* Benefits Verification with VerifyTX */}
+            <VobVerificationCard lead={lead} patient={patient || null} />
           </div>
         </TabsContent>
 

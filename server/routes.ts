@@ -2583,7 +2583,7 @@ Warmly,
 
   // ============ VOB VERIFICATION (VerifyTX) ============
   
-  // Search payers
+  // Search payers (requires at least 2 characters)
   app.get("/api/verifytx/payers", async (req, res) => {
     const { getVerifyTxClient } = await import("./verifytx");
     const client = getVerifyTxClient();
@@ -2596,10 +2596,11 @@ Warmly,
     }
 
     try {
-      const { query } = req.query;
-      const payers = query 
-        ? await client.searchPayers(query as string)
-        : await client.getAllPayers();
+      const query = req.query.q as string | undefined;
+      if (!query || query.length < 2) {
+        return res.status(400).json({ error: "Search query must be at least 2 characters" });
+      }
+      const payers = await client.searchPayers(query);
       res.json(payers);
     } catch (error: any) {
       console.error("VerifyTX payer search error:", error);
