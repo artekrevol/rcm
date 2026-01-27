@@ -2581,6 +2581,262 @@ Warmly,
     res.json(analytics);
   });
 
+  // ============ VOB VERIFICATION (VerifyTX) ============
+  
+  // Search payers
+  app.get("/api/verifytx/payers", async (req, res) => {
+    const { getVerifyTxClient } = await import("./verifytx");
+    const client = getVerifyTxClient();
+    
+    if (!client) {
+      return res.status(503).json({ 
+        error: "VerifyTX not configured", 
+        message: "VerifyTX API credentials are not set up. Please configure VERIFYTX_API_KEY and VERIFYTX_API_SECRET." 
+      });
+    }
+
+    try {
+      const { query } = req.query;
+      const payers = query 
+        ? await client.searchPayers(query as string)
+        : await client.getAllPayers();
+      res.json(payers);
+    } catch (error: any) {
+      console.error("VerifyTX payer search error:", error);
+      res.status(500).json({ error: "Failed to search payers", message: error.message });
+    }
+  });
+
+  // Get VOB verifications for a lead
+  app.get("/api/leads/:id/vob-verifications", async (req, res) => {
+    const verifications = await storage.getVobVerificationsByLeadId(req.params.id);
+    res.json(verifications);
+  });
+
+  // Get latest VOB verification for a lead
+  app.get("/api/leads/:id/vob-verifications/latest", async (req, res) => {
+    const verification = await storage.getLatestVobVerificationByLeadId(req.params.id);
+    res.json(verification || null);
+  });
+
+  // Verify insurance benefits for a lead
+  app.post("/api/leads/:id/verify-insurance", async (req, res) => {
+    const { getVerifyTxClient, mapVerifyTxResponse } = await import("./verifytx");
+    const client = getVerifyTxClient();
+    
+    if (!client) {
+      return res.status(503).json({ 
+        error: "VerifyTX not configured", 
+        message: "VerifyTX API credentials are not set up. Please configure VERIFYTX_API_KEY and VERIFYTX_API_SECRET." 
+      });
+    }
+
+    const leadId = req.params.id;
+    const lead = await storage.getLead(leadId);
+    
+    if (!lead) {
+      return res.status(404).json({ error: "Lead not found" });
+    }
+
+    const { payerId, payerName } = req.body;
+    
+    if (!payerId || !payerName) {
+      return res.status(400).json({ error: "payerId and payerName are required" });
+    }
+
+    // Get patient data for verification
+    const patient = await storage.getPatientByLeadId(leadId);
+    
+    // Use patient data if available, otherwise fall back to lead data
+    const firstName = lead.firstName || lead.name?.split(" ")[0] || "";
+    const lastName = lead.lastName || lead.name?.split(" ").slice(1).join(" ") || "";
+    const dateOfBirth = patient?.dob || req.body.dateOfBirth;
+    const memberId = patient?.memberId || lead.memberId || req.body.memberId;
+
+    if (!firstName || !lastName) {
+      return res.status(400).json({ error: "Patient name is required" });
+    }
+
+    if (!dateOfBirth) {
+      return res.status(400).json({ error: "Date of birth is required" });
+    }
+
+    if (!memberId) {
+      return res.status(400).json({ error: "Member ID is required" });
+    }
+
+    try {
+      // Create initial verification record
+      const pendingVerification = await storage.createVobVerification({
+        leadId,
+        patientId: patient?.id || null,
+        payerId,
+        payerName,
+        memberId,
+        status: "pending",
+      });
+
+      // Update lead VOB status
+      await storage.updateLead(leadId, { vobStatus: "in_progress" });
+
+      // Log activity
+      await storage.createActivityLog({
+        leadId,
+        activityType: "vob_started",
+        description: `VOB verification started with ${payerName}`,
+        performedBy: "system",
+        metadata: { payerId, payerName, memberId },
+      });
+
+      // Call VerifyTX API
+      const response = await client.verify({
+        firstName,
+        lastName,
+        dateOfBirth,
+        memberId,
+        payerId,
+      });
+
+      // Map response to our schema
+      const mappedData = mapVerifyTxResponse(response, { payerId, payerName, memberId });
+
+      // Update verification record with results
+      const updatedVerification = await storage.updateVobVerification(pendingVerification.id, {
+        ...mappedData,
+        verifiedAt: new Date(),
+      });
+
+      // Update lead VOB status based on result
+      const vobStatus = mappedData.status === "verified" ? "verified" : 
+                        mappedData.status === "error" ? "incomplete" : "in_progress";
+      
+      await storage.updateLead(leadId, { 
+        vobStatus,
+        vobScore: mappedData.status === "verified" ? 100 : 0,
+        insuranceCarrier: payerName,
+      });
+
+      // Log completion
+      await storage.createActivityLog({
+        leadId,
+        activityType: "vob_completed",
+        description: `VOB verification ${mappedData.status === "verified" ? "completed successfully" : "failed"}`,
+        performedBy: "system",
+        metadata: { 
+          payerId, 
+          payerName, 
+          status: mappedData.status,
+          copay: mappedData.copay,
+          deductible: mappedData.deductible,
+        },
+      });
+
+      res.json(updatedVerification);
+    } catch (error: any) {
+      console.error("VerifyTX verification error:", error);
+      
+      // Update lead status to reflect failure
+      await storage.updateLead(leadId, { vobStatus: "incomplete" });
+      
+      // Log error
+      await storage.createActivityLog({
+        leadId,
+        activityType: "vob_failed",
+        description: `VOB verification failed: ${error.message}`,
+        performedBy: "system",
+        metadata: { error: error.message },
+      });
+      
+      res.status(500).json({ error: "Verification failed", message: error.message });
+    }
+  });
+
+  // Re-verify existing VOB
+  app.post("/api/vob-verifications/:id/reverify", async (req, res) => {
+    const { getVerifyTxClient, mapVerifyTxResponse } = await import("./verifytx");
+    const client = getVerifyTxClient();
+    
+    if (!client) {
+      return res.status(503).json({ 
+        error: "VerifyTX not configured", 
+        message: "VerifyTX API credentials are not set up." 
+      });
+    }
+
+    const verification = await storage.getVobVerification(req.params.id);
+    
+    if (!verification) {
+      return res.status(404).json({ error: "VOB verification not found" });
+    }
+
+    if (!verification.verifytxVobId) {
+      return res.status(400).json({ error: "Cannot re-verify - no VerifyTX VOB ID" });
+    }
+
+    try {
+      const response = await client.reverify(verification.verifytxVobId);
+      const mappedData = mapVerifyTxResponse(response, {
+        payerId: verification.payerId,
+        payerName: verification.payerName,
+        memberId: verification.memberId,
+      });
+
+      const updated = await storage.updateVobVerification(verification.id, {
+        ...mappedData,
+        verifiedAt: new Date(),
+      });
+
+      res.json(updated);
+    } catch (error: any) {
+      console.error("VerifyTX re-verification error:", error);
+      res.status(500).json({ error: "Re-verification failed", message: error.message });
+    }
+  });
+
+  // Export VOB as PDF
+  app.get("/api/vob-verifications/:id/pdf", async (req, res) => {
+    const { getVerifyTxClient } = await import("./verifytx");
+    const client = getVerifyTxClient();
+    
+    if (!client) {
+      return res.status(503).json({ error: "VerifyTX not configured" });
+    }
+
+    const verification = await storage.getVobVerification(req.params.id);
+    
+    if (!verification) {
+      return res.status(404).json({ error: "VOB verification not found" });
+    }
+
+    if (!verification.verifytxVobId) {
+      return res.status(400).json({ error: "Cannot export - no VerifyTX VOB ID" });
+    }
+
+    try {
+      const result = await client.exportPdf(verification.verifytxVobId);
+      
+      // Update record with PDF URL
+      await storage.updateVobVerification(verification.id, {
+        pdfUrl: result.message,
+      });
+      
+      res.json({ pdfUrl: result.message });
+    } catch (error: any) {
+      console.error("VerifyTX PDF export error:", error);
+      res.status(500).json({ error: "PDF export failed", message: error.message });
+    }
+  });
+
+  // Check VerifyTX configuration status
+  app.get("/api/verifytx/status", async (req, res) => {
+    const { getVerifyTxClient } = await import("./verifytx");
+    const client = getVerifyTxClient();
+    res.json({ 
+      configured: !!client,
+      message: client ? "VerifyTX is configured and ready" : "VerifyTX credentials not set"
+    });
+  });
+
 }
 
 function generateIntakeTranscript(patientName: string): string {
