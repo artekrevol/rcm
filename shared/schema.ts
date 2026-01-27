@@ -410,6 +410,43 @@ export const insertChatAnalyticsSchema = createInsertSchema(chatAnalytics).omit(
 export type InsertChatAnalytics = z.infer<typeof insertChatAnalyticsSchema>;
 export type ChatAnalytics = typeof chatAnalytics.$inferSelect;
 
+// VOB Verifications from VerifyTX
+export const vobVerifications = pgTable("vob_verifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  leadId: varchar("lead_id").notNull(),
+  patientId: varchar("patient_id"),
+  verifytxVobId: text("verifytx_vob_id"),
+  payerId: text("payer_id").notNull(),
+  payerName: text("payer_name").notNull(),
+  memberId: text("member_id").notNull(),
+  status: text("status").notNull().default("pending"),
+  policyStatus: text("policy_status"),
+  policyType: text("policy_type"),
+  effectiveDate: text("effective_date"),
+  termDate: text("term_date"),
+  copay: real("copay"),
+  deductible: real("deductible"),
+  deductibleMet: real("deductible_met"),
+  coinsurance: real("coinsurance"),
+  outOfPocketMax: real("out_of_pocket_max"),
+  outOfPocketMet: real("out_of_pocket_met"),
+  benefitsRemaining: real("benefits_remaining"),
+  priorAuthRequired: boolean("prior_auth_required"),
+  networkStatus: text("network_status"),
+  coverageLimits: text("coverage_limits"),
+  planName: text("plan_name"),
+  payerNotes: text("payer_notes"),
+  pdfUrl: text("pdf_url"),
+  rawResponse: jsonb("raw_response").$type<Record<string, unknown>>().default({}),
+  errorMessage: text("error_message"),
+  verifiedAt: timestamp("verified_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertVobVerificationSchema = createInsertSchema(vobVerifications).omit({ id: true, createdAt: true });
+export type InsertVobVerification = z.infer<typeof insertVobVerificationSchema>;
+export type VobVerification = typeof vobVerifications.$inferSelect;
+
 // Activity logs for tracking all deal/lead changes (HubSpot-style timeline)
 export const activityLogs = pgTable("activity_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
