@@ -18,12 +18,13 @@ import {
   type ChatMessage, type InsertChatMessage,
   type ChatAnalytics, type InsertChatAnalytics,
   type ActivityLog, type InsertActivityLog,
+  type VobVerification, type InsertVobVerification,
   type DashboardMetrics,
   type DenialCluster,
   type RiskExplanation,
   users, leads, patients, encounters, claims, claimEvents, denials, rules, calls, priorAuthorizations,
   emailTemplates, nurtureSections, emailLogs, availabilitySlots, appointments,
-  chatSessions, chatMessages, chatAnalytics, activityLogs,
+  chatSessions, chatMessages, chatAnalytics, activityLogs, vobVerifications,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, sql, and, count } from "drizzle-orm";
@@ -145,6 +146,13 @@ export interface IStorage {
     conversionRate: number;
     dropoffByStep: Record<string, number>;
   }>;
+  
+  // VOB Verifications
+  getVobVerificationsByLeadId(leadId: string): Promise<VobVerification[]>;
+  getVobVerification(id: string): Promise<VobVerification | undefined>;
+  getLatestVobVerificationByLeadId(leadId: string): Promise<VobVerification | undefined>;
+  createVobVerification(verification: InsertVobVerification): Promise<VobVerification>;
+  updateVobVerification(id: string, updates: Partial<VobVerification>): Promise<VobVerification | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -707,6 +715,34 @@ export class DatabaseStorage implements IStorage {
       conversionRate: Math.round(conversionRate * 10) / 10,
       dropoffByStep,
     };
+  }
+
+  // VOB Verifications
+  async getVobVerificationsByLeadId(leadId: string): Promise<VobVerification[]> {
+    return db.select().from(vobVerifications).where(eq(vobVerifications.leadId, leadId)).orderBy(desc(vobVerifications.createdAt));
+  }
+
+  async getVobVerification(id: string): Promise<VobVerification | undefined> {
+    const [verification] = await db.select().from(vobVerifications).where(eq(vobVerifications.id, id));
+    return verification || undefined;
+  }
+
+  async getLatestVobVerificationByLeadId(leadId: string): Promise<VobVerification | undefined> {
+    const [verification] = await db.select().from(vobVerifications)
+      .where(eq(vobVerifications.leadId, leadId))
+      .orderBy(desc(vobVerifications.createdAt))
+      .limit(1);
+    return verification || undefined;
+  }
+
+  async createVobVerification(verification: InsertVobVerification): Promise<VobVerification> {
+    const [created] = await db.insert(vobVerifications).values(verification).returning();
+    return created;
+  }
+
+  async updateVobVerification(id: string, updates: Partial<VobVerification>): Promise<VobVerification | undefined> {
+    const [updated] = await db.update(vobVerifications).set(updates).where(eq(vobVerifications.id, id)).returning();
+    return updated || undefined;
   }
 }
 
