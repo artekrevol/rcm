@@ -1,0 +1,1114 @@
+{
+    "_id": "65798f2a02a77f7b15dd3f02",
+    "last_name": "PATIENT",
+    "first_name": "DEMO",
+    "subscriber_relation": "SR01",
+    "date_of_birth": "1991-03-04",
+    "gender": "F",
+    "facility": "6556369913c7c0658e948366",
+    "default": false,
+    "priority": 1,
+    "member_id": "VTX123",
+    "status": "new",
+    "client_type": "prospect",
+    "created_by": "62223332c9f4310014cf60a1",
+    "last_verified_by": "62223332c9f4310014cf60a1",
+    "updated_by": "62223332c9f4310014cf60a1",
+    "account": "62223309c9f4310014cf5e9e",
+    "payer_id": "VTX0453",
+    "payer_name": "Horizon BCBS of New Jersey",
+    "data_provider": 0,
+    "phone": "1231231231",
+    "email": "patient@demo.com",
+    "archived": false,
+    "api_version": 2,
+    "shared_with": [],
+    "cache": {
+        "reference_number": "000000000",
+        "status": "Complete",
+        "insurance_details": {
+            "coverage": "Active Coverage",
+            "insurance_type": {
+                "description": "Check plan details for more information",
+                "label": "Multiple",
+                "level": null,
+                "code": null
+            },
+            "payer": {
+                "payer_name": "Horizon BCBS of New Jersey",
+                "payer_id": "VTX0725"
+            }
+        },
+        "subscriber_details": {
+            "subscriber": "Demo Subscriber",
+            "first_name": "DEMO",
+            "last_name": "PATIENT",
+            "date_of_birth": "1942-03-04T04:00:00.000+0000",
+            "member_id": "VTX123",
+            "address": {
+                "address": "23 Main Street NY 10001",
+                "city": "New York",
+                "state": "NY",
+                "zip": "10001",
+                "string": "23 Main Street NY 10001"
+            }
+        },
+        "client_details": {
+            "name": "DEMO Patient",
+            "first_name": "DEMO",
+            "last_name": "PATIENT",
+            "subscriber_relation": "Self",
+            "date_of_birth": "1942-03-04T04:00:00.000+0000",
+            "address": {
+                "address": "23 Main Street NY 10001",
+                "city": "New York",
+                "state": "NY",
+                "zip": "10001",
+                "string": "23 Main Street NY 10001"
+            },
+            "gender": "Female"
+        },
+        "additional_payers": [
+            {
+                "type": "Other",
+                "typeCode": "OT",
+                "name": "ENVISION INSURANCE COMPANY",
+                "thirdPartyAdministrator": false,
+                "planNumber": "00000",
+                "planNetworkId": "006",
+                "planNetworkName": "EnvisionRxPlus",
+                "benefitBeginDate": "2017-01-01T05:00:00.000+0000",
+                "address": {
+                    "line1": "2181 E Aurora Rd",
+                    "city": "Twinsburg",
+                    "state": "Ohio",
+                    "stateCode": "OH",
+                    "zipCode": "44087"
+                },
+                "contactInformation": [
+                    {
+                        "phone": "8662502005",
+                        "url": "www.envisionrxplus.com"
+                    }
+                ]
+            }
+        ],
+        "benefits": {
+            "no_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Active Coverage",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "insuranceType": "Medicare Part B",
+                            "insuranceTypeCode": "MB",
+                            "amount": ".2",
+                            "units": "Percent",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        }
+                    ],
+                    "deductibles": [
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "1364",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part B",
+                            "insuranceTypeCode": "MB",
+                            "amount": "185",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "0",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "185",
+                            "totalTimePeriod": "Calendar Year",
+                            "totalTimePeriodCode": "23",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "units": "USD",
+                            "remaining": "1364",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        }
+                    ],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Durable Medical Equipment",
+                    "status": "Active Coverage",
+                    "type": "DM",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Professional (Physician) Visit - Office",
+                    "status": "Active Coverage",
+                    "type": "98",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Skilled Nursing Care",
+                    "status": "Active Coverage",
+                    "type": "AG",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Exceeded",
+                                    "timePeriodCode": "30",
+                                    "timePeriods": "0"
+                                },
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Not Exceeded",
+                                    "timePeriodCode": "31",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "170.5",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Exceeded",
+                                    "timePeriodCode": "30",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Not Exceeded",
+                                    "timePeriodCode": "31",
+                                    "timePeriods": "100"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Remaining",
+                                    "timePeriodCode": "29",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "170.5",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Remaining",
+                                    "timePeriodCode": "29",
+                                    "timePeriods": "80"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        }
+                    ],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Professional (Physician) Visit - Outpatient",
+                    "status": "Active Coverage",
+                    "type": "A0",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "in_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Active Coverage",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "insuranceType": "Medicare Part B",
+                            "insuranceTypeCode": "MB",
+                            "amount": ".2",
+                            "units": "Percent",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        }
+                    ],
+                    "deductibles": [
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "1364",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part B",
+                            "insuranceTypeCode": "MB",
+                            "amount": "185",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "0",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "185",
+                            "totalTimePeriod": "Calendar Year",
+                            "totalTimePeriodCode": "23",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "units": "USD",
+                            "remaining": "1364",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        }
+                    ],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Durable Medical Equipment",
+                    "status": "Active Coverage",
+                    "type": "DM",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Professional (Physician) Visit - Office",
+                    "status": "Active Coverage",
+                    "type": "98",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Skilled Nursing Care",
+                    "status": "Active Coverage",
+                    "type": "AG",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Exceeded",
+                                    "timePeriodCode": "30",
+                                    "timePeriods": "0"
+                                },
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Not Exceeded",
+                                    "timePeriodCode": "31",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "170.5",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Exceeded",
+                                    "timePeriodCode": "30",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Not Exceeded",
+                                    "timePeriodCode": "31",
+                                    "timePeriods": "100"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Remaining",
+                                    "timePeriodCode": "29",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "170.5",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Remaining",
+                                    "timePeriodCode": "29",
+                                    "timePeriods": "80"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        }
+                    ],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Professional (Physician) Visit - Outpatient",
+                    "status": "Active Coverage",
+                    "type": "A0",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "out_of_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Active Coverage",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "insuranceType": "Medicare Part B",
+                            "insuranceTypeCode": "MB",
+                            "amount": ".2",
+                            "units": "Percent",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        }
+                    ],
+                    "deductibles": [
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "1364",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part B",
+                            "insuranceTypeCode": "MB",
+                            "amount": "185",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "0",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "185",
+                            "totalTimePeriod": "Calendar Year",
+                            "totalTimePeriodCode": "23",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "units": "USD",
+                            "remaining": "1364",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        }
+                    ],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Durable Medical Equipment",
+                    "status": "Active Coverage",
+                    "type": "DM",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Professional (Physician) Visit - Office",
+                    "status": "Active Coverage",
+                    "type": "98",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Skilled Nursing Care",
+                    "status": "Active Coverage",
+                    "type": "AG",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Exceeded",
+                                    "timePeriodCode": "30",
+                                    "timePeriods": "0"
+                                },
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Not Exceeded",
+                                    "timePeriodCode": "31",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "170.5",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Exceeded",
+                                    "timePeriodCode": "30",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Not Exceeded",
+                                    "timePeriodCode": "31",
+                                    "timePeriods": "100"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Remaining",
+                                    "timePeriodCode": "29",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "170.5",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Remaining",
+                                    "timePeriodCode": "29",
+                                    "timePeriods": "80"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        }
+                    ],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Professional (Physician) Visit - Outpatient",
+                    "status": "Active Coverage",
+                    "type": "A0",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "not_applicable_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Active Coverage",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "insuranceType": "Medicare Part B",
+                            "insuranceTypeCode": "MB",
+                            "amount": ".2",
+                            "units": "Percent",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        }
+                    ],
+                    "deductibles": [
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "1364",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part B",
+                            "insuranceTypeCode": "MB",
+                            "amount": "185",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "0",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "185",
+                            "totalTimePeriod": "Calendar Year",
+                            "totalTimePeriodCode": "23",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "units": "USD",
+                            "remaining": "1364",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "coverageStartDate": "2019-01-01T05:00:00.000+0000",
+                            "coverageEndDate": "2019-12-31T05:00:00.000+0000",
+                            "noNetwork": true
+                        }
+                    ],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Durable Medical Equipment",
+                    "status": "Active Coverage",
+                    "type": "DM",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Professional (Physician) Visit - Office",
+                    "status": "Active Coverage",
+                    "type": "98",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Skilled Nursing Care",
+                    "status": "Active Coverage",
+                    "type": "AG",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Exceeded",
+                                    "timePeriodCode": "30",
+                                    "timePeriods": "0"
+                                },
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Not Exceeded",
+                                    "timePeriodCode": "31",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "170.5",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Exceeded",
+                                    "timePeriodCode": "30",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Not Exceeded",
+                                    "timePeriodCode": "31",
+                                    "timePeriods": "100"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Episode",
+                            "amountTimePeriodCode": "26",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Remaining",
+                                    "timePeriodCode": "29",
+                                    "timePeriods": "20"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        },
+                        {
+                            "insuranceType": "Medicare Part A",
+                            "insuranceTypeCode": "MA",
+                            "amount": "170.5",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "admissionDate": "2019-01-01T05:00:00.000+0000",
+                            "deliveryInformation": [
+                                {
+                                    "per": "Day",
+                                    "perCode": "DA",
+                                    "timePeriod": "Remaining",
+                                    "timePeriodCode": "29",
+                                    "timePeriods": "80"
+                                },
+                                {
+                                    "timePeriod": "Episode",
+                                    "timePeriodCode": "26",
+                                    "timePeriods": "1"
+                                }
+                            ],
+                            "noNetwork": true
+                        }
+                    ],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Professional (Physician) Visit - Outpatient",
+                    "status": "Active Coverage",
+                    "type": "A0",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ]
+        },
+        "plans": [
+            {
+                "name": "Health Benefit Plan Coverage",
+                "status": "Active Coverage",
+                "type": "30",
+                "plan_details": [
+                    {
+                        "label": "Medicare Part A",
+                        "code": "MA",
+                        "coverageStartDate": "2007-03-01T05:00:00.000+0000"
+                    },
+                    {
+                        "label": "Medicare Part B",
+                        "code": "MB",
+                        "coverageStartDate": "2016-12-01T05:00:00.000+0000"
+                    }
+                ]
+            },
+            {
+                "name": "Durable Medical Equipment",
+                "status": "Active Coverage",
+                "type": "DM",
+                "plan_details": [
+                    {
+                        "label": "Medicare Part B",
+                        "code": "MB",
+                        "coverageStartDate": "2016-12-01T05:00:00.000+0000"
+                    }
+                ]
+            },
+            {
+                "name": "Professional (Physician) Visit - Office",
+                "status": "Active Coverage",
+                "type": "98",
+                "plan_details": [
+                    {
+                        "label": "Medicare Part B",
+                        "code": "MB",
+                        "coverageStartDate": "2016-12-01T05:00:00.000+0000"
+                    }
+                ]
+            },
+            {
+                "name": "Skilled Nursing Care",
+                "status": "Active Coverage",
+                "type": "AG",
+                "plan_details": [
+                    {
+                        "label": "Medicare Part A",
+                        "code": "MA",
+                        "coverageStartDate": "2007-03-01T05:00:00.000+0000"
+                    }
+                ]
+            },
+            {
+                "name": "Professional (Physician) Visit - Outpatient",
+                "status": "Active Coverage",
+                "type": "A0",
+                "plan_details": [
+                    {
+                        "label": "Medicare Part B",
+                        "code": "MB",
+                        "coverageStartDate": "2016-12-01T05:00:00.000+0000"
+                    }
+                ]
+            }
+        ]
+    },
+    "error": "",
+    "error_ref": null,
+    "error_status": null,
+    "request_duration": 0,
+    "as_of_date": "2023-12-13T00:00:00.000Z",
+    "created_at": "2023-12-13T11:02:02.801Z",
+    "updated_at": "2023-12-13T11:02:02.801Z",
+    "__v": 0
+}

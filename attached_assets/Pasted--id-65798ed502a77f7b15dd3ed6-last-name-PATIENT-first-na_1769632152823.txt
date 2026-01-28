@@ -1,0 +1,588 @@
+{
+    "_id": "65798ed502a77f7b15dd3ed6",
+    "last_name": "PATIENT",
+    "first_name": "DEMO",
+    "subscriber_relation": "SR01",
+    "date_of_birth": "1991-03-04",
+    "gender": "F",
+    "facility": "6556369913c7c0658e948366",
+    "default": false,
+    "priority": 1,
+    "member_id": "VTX000",
+    "status": "new",
+    "client_type": "prospect",
+    "created_by": "62223332c9f4310014cf60a1",
+    "last_verified_by": "62223332c9f4310014cf60a1",
+    "updated_by": "62223332c9f4310014cf60a1",
+    "account": "62223309c9f4310014cf5e9e",
+    "payer_id": "VTX0453",
+    "payer_name": "Horizon BCBS of New Jersey",
+    "data_provider": 0,
+    "phone": "1231231231",
+    "email": "patient@demo.com",
+    "archived": false,
+    "api_version": 2,
+    "shared_with": [],
+    "cache": {
+        "reference_number": "000000000",
+        "status": "Complete",
+        "insurance_details": {
+            "coverage": "Inactive",
+            "insurance_type": null,
+            "coverage_dates": {
+                "start": null,
+                "end": null
+            },
+            "premium_paid_to_end_date": null,
+            "payer": {
+                "payer_name": "Horizon BCBS of New Jersey",
+                "payer_id": "VTX0127"
+            },
+            "plan_name": null,
+            "plan_sponsor": "Employer Company 123",
+            "plan_dates": {
+                "start": "2019-01-01T05:00:00.000+0000",
+                "end": "2019-12-31T05:00:00.000+0000"
+            },
+            "group_number": "000000",
+            "notes": null
+        },
+        "subscriber_details": {
+            "subscriber": "DEMO SUBSCRIBER",
+            "date_of_birth": "1968-03-20T05:00:00.000+0000",
+            "member_id": "VTX123",
+            "address": {
+                "address": "123 Main Street",
+                "city": "NY",
+                "state": "NY",
+                "zip": "10001",
+                "string": "123 Main Street NY 10001"
+            }
+        },
+        "client_details": {
+            "name": "DEMO PATIENT",
+            "first_name": "DEMO",
+            "last_name": "PATIENT",
+            "subscriber_relation": "Spouse",
+            "date_of_birth": "1990-01-01T05:00:00.000+0000",
+            "address": {
+                "address": "123 Main Street",
+                "city": "NY",
+                "state": "NY",
+                "zip": "10001",
+                "string": "123 Main Street NY 10001"
+            },
+            "gender": "Female"
+        },
+        "primary_care_provider": {
+            "name": null,
+            "npi": null,
+            "address": null,
+            "contact": null
+        },
+        "additional_payers": [],
+        "benefits": {
+            "no_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Inactive",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Hospital - Inpatient",
+                    "status": "Inactive",
+                    "type": "48",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Hospital - Outpatient",
+                    "status": "Inactive",
+                    "type": "50",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health",
+                    "status": "Inactive",
+                    "type": "MH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Partial Hospitalization (Psychiatric)",
+                    "status": "Inactive",
+                    "type": "BB",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse",
+                    "status": "Inactive",
+                    "type": "AI",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Diagnostic Lab",
+                    "status": "Inactive",
+                    "type": "5",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "in_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Inactive",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Hospital - Inpatient",
+                    "status": "Inactive",
+                    "type": "48",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Hospital - Outpatient",
+                    "status": "Inactive",
+                    "type": "50",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health",
+                    "status": "Inactive",
+                    "type": "MH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Partial Hospitalization (Psychiatric)",
+                    "status": "Inactive",
+                    "type": "BB",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse",
+                    "status": "Inactive",
+                    "type": "AI",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Diagnostic Lab",
+                    "status": "Inactive",
+                    "type": "5",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "out_of_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Inactive",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Hospital - Inpatient",
+                    "status": "Inactive",
+                    "type": "48",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Hospital - Outpatient",
+                    "status": "Inactive",
+                    "type": "50",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health",
+                    "status": "Inactive",
+                    "type": "MH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Partial Hospitalization (Psychiatric)",
+                    "status": "Inactive",
+                    "type": "BB",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse",
+                    "status": "Inactive",
+                    "type": "AI",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Diagnostic Lab",
+                    "status": "Inactive",
+                    "type": "5",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "not_applicable_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Inactive",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Hospital - Inpatient",
+                    "status": "Inactive",
+                    "type": "48",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Hospital - Outpatient",
+                    "status": "Inactive",
+                    "type": "50",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health",
+                    "status": "Inactive",
+                    "type": "MH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Partial Hospitalization (Psychiatric)",
+                    "status": "Inactive",
+                    "type": "BB",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse",
+                    "status": "Inactive",
+                    "type": "AI",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Diagnostic Lab",
+                    "status": "Inactive",
+                    "type": "5",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ]
+        },
+        "plans": [
+            {
+                "name": "Health Benefit Plan Coverage",
+                "status": "Inactive",
+                "type": "30",
+                "coverage_dates": {
+                    "start": null,
+                    "end": null
+                },
+                "plan_number": "00000000000000",
+                "plan_details": [
+                    {
+                        "label": null,
+                        "code": null,
+                        "description": "Choice Fund HRA Open Access Plus",
+                        "notes": null,
+                        "benefitBeginDate": null,
+                        "benefitEndDate": null,
+                        "coverageStartDate": null,
+                        "coverageEndDate": null,
+                        "level": null,
+                        "auth_required": null,
+                        "auth_required_unknown": null
+                    }
+                ]
+            },
+            {
+                "name": "Hospital - Inpatient",
+                "status": "Inactive",
+                "type": "48",
+                "coverage_dates": {
+                    "start": null,
+                    "end": null
+                },
+                "plan_number": "00000000000000",
+                "plan_details": []
+            },
+            {
+                "name": "Hospital - Outpatient",
+                "status": "Inactive",
+                "type": "50",
+                "coverage_dates": {
+                    "start": null,
+                    "end": null
+                },
+                "plan_number": "00000000000000",
+                "plan_details": []
+            },
+            {
+                "name": "Mental Health",
+                "status": "Inactive",
+                "type": "MH",
+                "coverage_dates": {
+                    "start": null,
+                    "end": null
+                },
+                "plan_number": "00000000000000",
+                "plan_details": []
+            },
+            {
+                "name": "Partial Hospitalization (Psychiatric)",
+                "status": "Inactive",
+                "type": "BB",
+                "coverage_dates": {
+                    "start": null,
+                    "end": null
+                },
+                "plan_number": "00000000000000",
+                "plan_details": []
+            },
+            {
+                "name": "Substance Abuse",
+                "status": "Inactive",
+                "type": "AI",
+                "coverage_dates": {
+                    "start": null,
+                    "end": null
+                },
+                "plan_number": "00000000000000",
+                "plan_details": []
+            },
+            {
+                "name": "Diagnostic Lab",
+                "status": "Inactive",
+                "type": "5",
+                "coverage_dates": {
+                    "start": null,
+                    "end": null
+                },
+                "plan_number": "00000000000000",
+                "plan_details": []
+            }
+        ]
+    },
+    "error": "",
+    "error_ref": null,
+    "error_status": null,
+    "request_duration": 0,
+    "as_of_date": "2023-12-13T00:00:00.000Z",
+    "created_at": "2023-12-13T11:00:37.927Z",
+    "updated_at": "2023-12-13T11:00:37.927Z",
+    "__v": 0
+}

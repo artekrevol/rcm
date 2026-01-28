@@ -2601,7 +2601,15 @@ Warmly,
         return res.status(400).json({ error: "Search query must be at least 2 characters" });
       }
       const payers = await client.searchPayers(query);
-      res.json(payers);
+      
+      // Transform to frontend-expected format (id, name instead of payer_id, payer_name)
+      const transformedPayers = payers.map(p => ({
+        id: p.payer_id,
+        name: p.payer_name,
+        type: p.featured ? "featured" : undefined,
+      }));
+      
+      res.json(transformedPayers);
     } catch (error: any) {
       console.error("VerifyTX payer search error:", error);
       res.status(500).json({ error: "Failed to search payers", message: error.message });
@@ -2690,12 +2698,15 @@ Warmly,
       });
 
       // Call VerifyTX API
-      const response = await client.verify({
+      const response = await client.createVob({
         firstName,
         lastName,
         dateOfBirth,
         memberId,
         payerId,
+        payerName,
+        phone: lead.phone || undefined,
+        email: lead.email || undefined,
       });
 
       // Map response to our schema
@@ -2816,12 +2827,17 @@ Warmly,
     try {
       const result = await client.exportPdf(verification.verifytxVobId);
       
-      // Update record with PDF URL
-      await storage.updateVobVerification(verification.id, {
-        pdfUrl: result.message,
-      });
+      // Handle different response formats (url or data)
+      const pdfUrl = result.url || result.data;
       
-      res.json({ pdfUrl: result.message });
+      // Update record with PDF URL
+      if (pdfUrl) {
+        await storage.updateVobVerification(verification.id, {
+          pdfUrl,
+        });
+      }
+      
+      res.json({ pdfUrl });
     } catch (error: any) {
       console.error("VerifyTX PDF export error:", error);
       res.status(500).json({ error: "PDF export failed", message: error.message });

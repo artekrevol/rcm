@@ -1,0 +1,1687 @@
+{
+    "_id": "6578c50c9f5e58962fbd21c0",
+    "last_name": "PATIENT",
+    "first_name": "DEMO",
+    "date_of_birth": "1996-04-03",
+    "gender": "M",
+    "facility": "64da71537209bc03f3afd199",
+    "default": false,
+    "priority": 1,
+    "member_id": "VTX123",
+    "status": "new",
+    "client_type": "web_lead",
+    "created_by": {
+        "_id": "62223332c9f4310014cf60a1",
+        "email": "demo+test120@verifytx.com",
+        "first_name": "Dev",
+        "last_name": "p"
+    },
+    "last_verified_by": {
+        "_id": "62223332c9f4310014cf60a1",
+        "email": "demo+test120@verifytx.com",
+        "first_name": "Dev",
+        "last_name": "p"
+    },
+    "updated_by": {
+        "_id": "62223332c9f4310014cf60a1",
+        "email": "demo+test120@verifytx.com",
+        "first_name": "Dev",
+        "last_name": "p"
+    },
+    "account": "62223309c9f4310014cf5e9e",
+    "payer_id": "VTX0338",
+    "payer_name": "HUMANA",
+    "data_provider": 0,
+    "phone": "1231243543",
+    "webform_notes": "Web form demo test",
+    "archived": false,
+    "webform_location": "test",
+    "api_version": 2,
+    "shared_with": [],
+    "cache": {
+        "reference_number": "000000000",
+        "status": "Complete",
+        "insurance_details": {
+            "coverage": "Active Coverage",
+            "insurance_type": {
+                "description": "PPO - PPO STUDENT HEALTH PLAN",
+                "label": "Preferred Provider Organization (PPO)",
+                "code": "PR",
+                "level": "Individual",
+                "meta": {
+                    "code": "PR",
+                    "blimp": "PPO",
+                    "description": "Preferred Provider Organization (PPO)",
+                    "color": "rgb(112, 48, 160)"
+                }
+            },
+            "coverage_dates": {
+                "start": "2017-09-01T04:00:00.000+0000",
+                "end": "9999-12-31T05:00:00.000+0000"
+            },
+            "premium_paid_to_end_date": null,
+            "payer": {
+                "payer_name": "HUMANA",
+                "payer_id": "VTX0453"
+            },
+            "plan_name": null,
+            "plan_sponsor": "Employer Company 123",
+            "plan_dates": {
+                "start": null,
+                "end": null
+            },
+            "group_number": "000000",
+            "notes": [
+                {
+                    "type": "Disclaimer",
+                    "typeCode": "P",
+                    "message": "UNLESS OTHERWISE REQUIRED BY STATE LAW, THIS NOTICE IS NOT A GUARANTEE OF PAYMENT. BENEFITS ARE SUBJECT TO ALL CONTRACT LIMITS AND THE MEMBER'S STATUS ON THE DATE OF SERVICE. ACCUMULATED AMOUNTS SUCH AS DEDUCTIBLE MAY CHANGE AS ADDITIONAL CLAIMS ARE PROCESSED."
+                }
+            ]
+        },
+        "subscriber_details": {
+            "subscriber": "Demo Subscriber",
+            "date_of_birth": "1995-05-12T04:00:00.000+0000",
+            "member_id": "VTX123",
+            "address": {
+                "address": "123 Main Street",
+                "city": "NY",
+                "state": "NY",
+                "zip": "015421108",
+                "string": "123 Main Street NY 10001"
+            }
+        },
+        "client_details": {
+            "name": "Demo Patient",
+            "first_name": "DEMO",
+            "last_name": "PATIENT",
+            "subscriber_relation": "Spouse",
+            "date_of_birth": "1990-01-01T04:00:00.000+0000",
+            "address": {
+                "address": "123 Main Street",
+                "city": "NY",
+                "state": "NY",
+                "zip": "10001",
+                "string": "123 Main Street NY 10001"
+            },
+            "gender": "Male"
+        },
+        "primary_care_provider": {
+            "name": null,
+            "npi": null,
+            "address": null,
+            "contact": null
+        },
+        "benefits": {
+            "no_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Active Coverage",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [
+                        {
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "250",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "250",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "coverageStartDate": "2017-09-01T04:00:00.000+0000",
+                            "coverageEndDate": "2018-08-31T04:00:00.000+0000",
+                            "payerNotes": [
+                                "DEDUCTIBLE DOES NOT APPLY TO MOST IN-NETWORK PREVENTIVE HEALTH SERVICES, PRESCRIPTION DRUG BENEFITS, SERVICES WITH A COPAYMENT AND CERTAIN OTHER SERVICES AS NOTED."
+                            ],
+                            "notApplicableNetwork": true
+                        }
+                    ],
+                    "outOfPocket": [
+                        {
+                            "amount": "123.10",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "3876.9",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "4000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "payerNotes": [
+                                "FOR MEDICAL BENEFITS",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        },
+                        {
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "1000",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "1000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "payerNotes": [
+                                "FOR PRESCRIPTION DRUG BENEFITS (OR $2,000 PER FAMILY)",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        },
+                        {
+                            "amount": "123.10",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "7876.9",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "8000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Family",
+                            "levelCode": "FAM",
+                            "payerNotes": [
+                                "FOR MEDICAL BENEFITS",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        }
+                    ],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": [
+                        {
+                            "type": null,
+                            "name": null,
+                            "category": "Services Restricted to Following Provider",
+                            "payer_id": null,
+                            "address": null,
+                            "notes": [
+                                "PPO PROVIDER NETWORK"
+                            ],
+                            "info": null
+                        }
+                    ]
+                },
+                {
+                    "name": "Mental Health",
+                    "status": "Active Coverage",
+                    "type": "MH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Diagnostic Lab",
+                    "status": null,
+                    "type": "5",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Facility - Inpatient",
+                    "status": null,
+                    "type": "CG",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Facility - Outpatient",
+                    "status": null,
+                    "type": "CH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Provider - Inpatient",
+                    "status": null,
+                    "type": "CE",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Provider - Outpatient",
+                    "status": null,
+                    "type": "CF",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse Facility - Inpatient",
+                    "status": null,
+                    "type": "CI",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse Facility - Outpatient",
+                    "status": null,
+                    "type": "CJ",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "in_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Active Coverage",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [
+                        {
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "250",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "250",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "coverageStartDate": "2017-09-01T04:00:00.000+0000",
+                            "coverageEndDate": "2018-08-31T04:00:00.000+0000",
+                            "payerNotes": [
+                                "DEDUCTIBLE DOES NOT APPLY TO MOST IN-NETWORK PREVENTIVE HEALTH SERVICES, PRESCRIPTION DRUG BENEFITS, SERVICES WITH A COPAYMENT AND CERTAIN OTHER SERVICES AS NOTED."
+                            ],
+                            "notApplicableNetwork": true
+                        }
+                    ],
+                    "outOfPocket": [
+                        {
+                            "amount": "123.10",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "3876.9",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "4000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "payerNotes": [
+                                "FOR MEDICAL BENEFITS",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        },
+                        {
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "1000",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "1000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "payerNotes": [
+                                "FOR PRESCRIPTION DRUG BENEFITS (OR $2,000 PER FAMILY)",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        },
+                        {
+                            "amount": "123.10",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "7876.9",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "8000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Family",
+                            "levelCode": "FAM",
+                            "payerNotes": [
+                                "FOR MEDICAL BENEFITS",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        }
+                    ],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": [
+                        {
+                            "type": null,
+                            "name": null,
+                            "category": "Services Restricted to Following Provider",
+                            "payer_id": null,
+                            "address": null,
+                            "notes": [
+                                "PPO PROVIDER NETWORK"
+                            ],
+                            "info": null
+                        }
+                    ]
+                },
+                {
+                    "name": "Mental Health",
+                    "status": "Active Coverage",
+                    "type": "MH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Diagnostic Lab",
+                    "status": null,
+                    "type": "5",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "OTHER DIAGNOSTIC TESTS, PREOPERATIVE TESTS - OUTPATIENT"
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [
+                        {
+                            "amount": "40",
+                            "units": "USD",
+                            "amountTimePeriod": "Day",
+                            "amountTimePeriodCode": "7",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "OUTPATIENT"
+                            ]
+                        }
+                    ],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Facility - Inpatient",
+                    "status": null,
+                    "type": "CG",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "ALCOHOLISM",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Facility - Outpatient",
+                    "status": null,
+                    "type": "CH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "ALCOHOLISM",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        }
+                    ],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Provider - Inpatient",
+                    "status": null,
+                    "type": "CE",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "ALCOHOLISM",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Provider - Outpatient",
+                    "status": null,
+                    "type": "CF",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "ALCOHOLISM",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        }
+                    ],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse Facility - Inpatient",
+                    "status": null,
+                    "type": "CI",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE",
+                                "INPATIENT SERVICES",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse Facility - Outpatient",
+                    "status": null,
+                    "type": "CJ",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": "30",
+                            "units": "USD",
+                            "amountTimePeriod": "Visit",
+                            "amountTimePeriodCode": "27",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "OUTPATIENT SERVICES",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        }
+                    ],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "out_of_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Active Coverage",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [
+                        {
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "250",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "250",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "coverageStartDate": "2017-09-01T04:00:00.000+0000",
+                            "coverageEndDate": "2018-08-31T04:00:00.000+0000",
+                            "payerNotes": [
+                                "DEDUCTIBLE DOES NOT APPLY TO MOST IN-NETWORK PREVENTIVE HEALTH SERVICES, PRESCRIPTION DRUG BENEFITS, SERVICES WITH A COPAYMENT AND CERTAIN OTHER SERVICES AS NOTED."
+                            ],
+                            "notApplicableNetwork": true
+                        }
+                    ],
+                    "outOfPocket": [
+                        {
+                            "amount": "123.10",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "3876.9",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "4000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "payerNotes": [
+                                "FOR MEDICAL BENEFITS",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        },
+                        {
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "1000",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "1000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "payerNotes": [
+                                "FOR PRESCRIPTION DRUG BENEFITS (OR $2,000 PER FAMILY)",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        },
+                        {
+                            "amount": "123.10",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "7876.9",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "8000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Family",
+                            "levelCode": "FAM",
+                            "payerNotes": [
+                                "FOR MEDICAL BENEFITS",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        }
+                    ],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": [
+                        {
+                            "type": null,
+                            "name": null,
+                            "category": "Services Restricted to Following Provider",
+                            "payer_id": null,
+                            "address": null,
+                            "notes": [
+                                "PPO PROVIDER NETWORK"
+                            ],
+                            "info": null
+                        }
+                    ]
+                },
+                {
+                    "name": "Mental Health",
+                    "status": "Active Coverage",
+                    "type": "MH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Diagnostic Lab",
+                    "status": null,
+                    "type": "5",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "OUTPATIENT"
+                            ]
+                        },
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "OTHER DIAGNOSTIC TESTS, PREOPERATIVE TESTS - OUTPATIENT"
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Facility - Inpatient",
+                    "status": null,
+                    "type": "CG",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "ALCOHOLISM",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Facility - Outpatient",
+                    "status": null,
+                    "type": "CH",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "ALCOHOLISM",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Provider - Inpatient",
+                    "status": null,
+                    "type": "CE",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "ALCOHOLISM",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Provider - Outpatient",
+                    "status": null,
+                    "type": "CF",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "ALCOHOLISM",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse Facility - Inpatient",
+                    "status": null,
+                    "type": "CI",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        },
+                        {
+                            "amount": ".3",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "INPATIENT SERVICES",
+                                "PA IS NOT REQUIRED FOR ACUTE INPATIENT SERVICES, BUT NOTIFICATION IS REQUIRED. MOST MANAGED CARE PLANS REQUIRE PA FOR ART (ACUTE RESIDENTIAL TREATMENT) SERVICES. PA IS NOT REQUIRED FOR ART FOR SUBSTANCE USE DISORDERS, BUT NOTIFICATION IS REQUIRED."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse Facility - Outpatient",
+                    "status": null,
+                    "type": "CJ",
+                    "description": [],
+                    "coInsurance": [
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "NON-BIOLOGICALLY-BASED MENTAL CONDITION",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        },
+                        {
+                            "amount": ".2",
+                            "units": "Percent",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "authorizationRequired": true,
+                            "authorizationRequiredUnknown": false,
+                            "payerNotes": [
+                                "AFTER DEDUCTIBLE (AND AMOUNT ABOVE ALLOWED CHARGE)",
+                                "OUTPATIENT SERVICES",
+                                "OUTPATIENT PSYCHOTHERAPY SERVICES DO NOT REQUIRE NOTIFICATION OR PA. MOST MANAGED CARE PLANS REQUIRE PA FOR IOP, PHP, PSYCHIATRIC PROCEDURES (E.G. ECT, TMS, PSYCHOLOGICAL TESTING) AND ABA SERVICES."
+                            ]
+                        }
+                    ],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ],
+            "not_applicable_network": [
+                {
+                    "name": "Health Benefit Plan Coverage",
+                    "status": "Active Coverage",
+                    "type": "30",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [
+                        {
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "250",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "250",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "coverageStartDate": "2017-09-01T04:00:00.000+0000",
+                            "coverageEndDate": "2018-08-31T04:00:00.000+0000",
+                            "payerNotes": [
+                                "DEDUCTIBLE DOES NOT APPLY TO MOST IN-NETWORK PREVENTIVE HEALTH SERVICES, PRESCRIPTION DRUG BENEFITS, SERVICES WITH A COPAYMENT AND CERTAIN OTHER SERVICES AS NOTED."
+                            ],
+                            "notApplicableNetwork": true
+                        }
+                    ],
+                    "outOfPocket": [
+                        {
+                            "amount": "123.10",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "3876.9",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "4000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "payerNotes": [
+                                "FOR MEDICAL BENEFITS",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        },
+                        {
+                            "amount": "0",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "1000",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "1000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Individual",
+                            "levelCode": "IND",
+                            "payerNotes": [
+                                "FOR PRESCRIPTION DRUG BENEFITS (OR $2,000 PER FAMILY)",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        },
+                        {
+                            "amount": "123.10",
+                            "units": "USD",
+                            "amountTimePeriod": "Year to Date",
+                            "amountTimePeriodCode": "24",
+                            "remaining": "7876.9",
+                            "remainingTimePeriod": "Remaining",
+                            "remainingTimePeriodCode": "29",
+                            "total": "8000",
+                            "totalTimePeriod": "Service Year",
+                            "totalTimePeriodCode": "22",
+                            "level": "Family",
+                            "levelCode": "FAM",
+                            "payerNotes": [
+                                "FOR MEDICAL BENEFITS",
+                                "CALCULATION INCLUDES DEDUCTIBLE, COPAYMENTS AND COINSURANCE (ACCUMULATION FOR MEDICAL BENEFITS AND PRESCRIPTION DRUG BENEFITS IS SEPARATE)."
+                            ],
+                            "notApplicableNetwork": true
+                        }
+                    ],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": [
+                        {
+                            "type": null,
+                            "name": null,
+                            "category": "Services Restricted to Following Provider",
+                            "payer_id": null,
+                            "address": null,
+                            "notes": [
+                                "PPO PROVIDER NETWORK"
+                            ],
+                            "info": null
+                        }
+                    ]
+                },
+                {
+                    "name": "Mental Health",
+                    "status": "Active Coverage",
+                    "type": "MH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Diagnostic Lab",
+                    "status": null,
+                    "type": "5",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Facility - Inpatient",
+                    "status": null,
+                    "type": "CG",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Facility - Outpatient",
+                    "status": null,
+                    "type": "CH",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Provider - Inpatient",
+                    "status": null,
+                    "type": "CE",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Mental Health Provider - Outpatient",
+                    "status": null,
+                    "type": "CF",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse Facility - Inpatient",
+                    "status": null,
+                    "type": "CI",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                },
+                {
+                    "name": "Substance Abuse Facility - Outpatient",
+                    "status": null,
+                    "type": "CJ",
+                    "description": [],
+                    "coInsurance": [],
+                    "deductibles": [],
+                    "outOfPocket": [],
+                    "coPayment": [],
+                    "coverageBasis": [],
+                    "limitations": [],
+                    "nonCovered": [],
+                    "contacts": []
+                }
+            ]
+        },
+        "plans": [
+            {
+                "name": "Health Benefit Plan Coverage",
+                "status": "Active Coverage",
+                "type": "30",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": [
+                    {
+                        "label": "Preferred Provider Organization (PPO)",
+                        "code": "PR",
+                        "description": "PPO - PPO STUDENT HEALTH PLAN",
+                        "notes": null,
+                        "level": "Individual",
+                        "auth_required": null,
+                        "auth_required_unknown": null
+                    }
+                ]
+            },
+            {
+                "name": "Mental Health",
+                "status": "Active Coverage",
+                "type": "MH",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": []
+            },
+            {
+                "name": "Diagnostic Lab",
+                "status": "Active Coverage",
+                "type": "5",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": []
+            },
+            {
+                "name": "Mental Health Facility - Inpatient",
+                "status": "Active Coverage",
+                "type": "CG",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": []
+            },
+            {
+                "name": "Mental Health Facility - Outpatient",
+                "status": "Active Coverage",
+                "type": "CH",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": []
+            },
+            {
+                "name": "Mental Health Provider - Inpatient",
+                "status": "Active Coverage",
+                "type": "CE",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": []
+            },
+            {
+                "name": "Mental Health Provider - Outpatient",
+                "status": "Active Coverage",
+                "type": "CF",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": []
+            },
+            {
+                "name": "Substance Abuse Facility - Inpatient",
+                "status": "Active Coverage",
+                "type": "CI",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": []
+            },
+            {
+                "name": "Substance Abuse Facility - Outpatient",
+                "status": "Active Coverage",
+                "type": "CJ",
+                "coverage_dates": {
+                    "start": "2017-09-01T04:00:00.000+0000",
+                    "end": "9999-12-31T05:00:00.000+0000"
+                },
+                "plan_number": "002358515",
+                "plan_details": []
+            }
+        ]
+    },
+    "error": "",
+    "error_ref": null,
+    "error_status": null,
+    "request_duration": 0,
+    "as_of_date": "2023-12-12T20:39:40.521Z",
+    "campaign": {
+        "utm_campaign": "1234",
+        "utm_source": "12381283"
+    },
+    "created_at": "2023-12-12T20:39:40.524Z",
+    "updated_at": "2023-12-12T20:39:40.524Z",
+    "__v": 0,
+    "facility_meta": {
+        "_id": "64da71537209bc03f3afd199",
+        "name": "TURNING POINT CARE CENTER LLC"
+    },
+    "payer": {
+        "payer_id": "VTX0338",
+        "claim_id": "61101",
+        "featured": true,
+        "archived": false,
+        "default_provider": 0,
+        "skip_tax_id": false,
+        "payer_name": "HUMANA",
+        "_id": "65798503fa82b26fe856dea5"
+    },
+    "coverage": "Active Coverage",
+    "insurance_type": {
+        "description": "PPO - PPO STUDENT HEALTH PLAN",
+        "label": "Preferred Provider Organization (PPO)",
+        "code": "PR",
+        "level": "Individual",
+        "meta": {
+            "code": "PR",
+            "blimp": "PPO",
+            "description": "Preferred Provider Organization (PPO)",
+            "color": "rgb(112, 48, 160)"
+        }
+    },
+    "reference_number": "000000000",
+    "is_shared": false
+}
