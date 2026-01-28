@@ -76,9 +76,11 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
     queryKey: ["/api/verifytx/status"],
   });
 
-  const { data: payers, isLoading: payersLoading } = useQuery<Payer[]>({
+  const { data: payers, isLoading: payersLoading, isError: payersError, error: payerSearchError } = useQuery<Payer[]>({
     queryKey: [`/api/verifytx/payers?q=${encodeURIComponent(debouncedPayerSearch)}`],
     enabled: verifyDialogOpen && verifytxStatus?.configured === true && shouldSearchPayers,
+    retry: 1,
+    staleTime: 30000,
   });
 
   const verifyMutation = useMutation({
@@ -261,6 +263,16 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
                           <Skeleton className="h-10 w-full" />
                           <Skeleton className="h-10 w-full" />
                           <Skeleton className="h-10 w-full" />
+                        </div>
+                      ) : payersError ? (
+                        <div className="p-4 text-center">
+                          <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto mb-2" />
+                          <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                            VerifyTX Service Unavailable
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            The insurance verification service is temporarily unavailable. Please try again in a few minutes.
+                          </p>
                         </div>
                       ) : payers && payers.length > 0 ? (
                         <div className="p-1">
