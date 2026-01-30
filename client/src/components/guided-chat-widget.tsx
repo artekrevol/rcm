@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
+import { Textarea } from "@/components/ui/textarea";
 import { 
   MessageCircle, 
   X, 
@@ -23,14 +24,19 @@ import {
   Shield,
   Heart,
   Clock,
-  ChevronLeft
+  DollarSign,
+  Building2,
+  Users,
+  MessageSquare,
+  PhoneCall,
+  Image
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
 
 interface ConversationStep {
   id: string;
-  type: "message" | "quick-reply" | "text-input" | "multi-select" | "phone-input" | "email-input" | "date-input" | "confirmation" | "appointment-picker";
+  type: "message" | "quick-reply" | "text-input" | "multi-select" | "phone-input" | "email-input" | "date-input" | "confirmation" | "appointment-picker" | "textarea-input" | "dob-input";
   message: string;
   tooltip?: string;
   options?: { label: string; value: string; icon?: React.ReactNode }[];
@@ -39,6 +45,7 @@ interface ConversationStep {
   validation?: (value: string) => boolean;
   nextStep?: string | ((value: string) => string);
   skipCondition?: (data: Record<string, string>) => boolean;
+  flowCategory?: string;
 }
 
 interface AppointmentSlot {
@@ -57,168 +64,433 @@ interface ChatMessage {
 }
 
 const conversationFlow: ConversationStep[] = [
+  // Welcome & Main Menu
   {
     id: "welcome",
     type: "message",
-    message: "Hi there! I'm your Claim Shield Health assistant. I'm here to help you get started with our healthcare services. This will only take a few minutes.",
-    tooltip: "We're here to help you navigate healthcare services and ensure you get the care you need.",
-    nextStep: "service_type"
+    message: "How can I help you today?",
+    tooltip: "Select an option to get started.",
+    nextStep: "main_menu"
   },
   {
-    id: "service_type",
+    id: "main_menu",
     type: "quick-reply",
-    message: "What type of service are you looking for today?",
-    tooltip: "Select the option that best describes your healthcare needs.",
+    message: "Please choose an option:",
     options: [
-      { label: "Mental Health", value: "mental_health", icon: <Heart className="h-4 w-4" /> },
-      { label: "Physical Therapy", value: "physical_therapy", icon: <Shield className="h-4 w-4" /> },
-      { label: "Primary Care", value: "primary_care", icon: <Heart className="h-4 w-4" /> },
-      { label: "Specialist Referral", value: "specialist", icon: <Shield className="h-4 w-4" /> },
-      { label: "Other Services", value: "other", icon: <HelpCircle className="h-4 w-4" /> }
+      { label: "Get Pricing", value: "pricing", icon: <DollarSign className="h-4 w-4" /> },
+      { label: "Verify Insurance", value: "verify_insurance", icon: <Shield className="h-4 w-4" /> },
+      { label: "Connect With Admissions", value: "admissions", icon: <Users className="h-4 w-4" /> },
+      { label: "Ask A Question", value: "question", icon: <HelpCircle className="h-4 w-4" /> },
     ],
-    field: "serviceNeeded",
-    nextStep: "urgency"
+    field: "mainChoice",
+    nextStep: (value) => {
+      switch (value) {
+        case "pricing": return "pricing_payment_type";
+        case "verify_insurance": return "vob_treatment_type";
+        case "admissions": return "admissions_treatment_type";
+        case "question": return "question_topic";
+        default: return "main_menu";
+      }
+    }
   },
+
+  // ========== GET PRICING FLOW ==========
   {
-    id: "urgency",
+    id: "pricing_payment_type",
     type: "quick-reply",
-    message: "How soon do you need to be seen?",
-    tooltip: "This helps us prioritize and find the right appointment time for you.",
+    message: "We accept both private pay and insurance. Which will you be using?",
+    flowCategory: "pricing",
     options: [
-      { label: "As soon as possible", value: "urgent", icon: <Clock className="h-4 w-4" /> },
-      { label: "Within a week", value: "this_week", icon: <Calendar className="h-4 w-4" /> },
-      { label: "Within a month", value: "this_month", icon: <Calendar className="h-4 w-4" /> },
-      { label: "Just exploring options", value: "exploring", icon: <HelpCircle className="h-4 w-4" /> }
+      { label: "Insurance", value: "insurance", icon: <Shield className="h-4 w-4" /> },
+      { label: "Private Pay", value: "private_pay", icon: <DollarSign className="h-4 w-4" /> }
     ],
-    field: "urgency",
-    nextStep: "insurance_check"
+    field: "paymentType",
+    nextStep: (value) => value === "insurance" ? "pricing_insurance_type" : "pricing_treatment_type"
   },
   {
-    id: "insurance_check",
+    id: "pricing_insurance_type",
     type: "quick-reply",
-    message: "Do you currently have health insurance?",
-    tooltip: "We accept most major insurance plans and can help verify your coverage.",
-    options: [
-      { label: "Yes, I have insurance", value: "yes" },
-      { label: "No, I don't have insurance", value: "no" },
-      { label: "I'm not sure", value: "unsure" }
-    ],
-    field: "hasInsurance",
-    nextStep: (value) => value === "yes" ? "insurance_carrier" : "contact_name"
-  },
-  {
-    id: "insurance_carrier",
-    type: "quick-reply",
-    message: "Great! Which insurance carrier do you have?",
-    tooltip: "Select your insurance provider from the list below.",
+    message: "What type of insurance do you have?",
+    flowCategory: "pricing",
     options: [
       { label: "Blue Cross Blue Shield", value: "bcbs" },
       { label: "Aetna", value: "aetna" },
       { label: "UnitedHealthcare", value: "united" },
       { label: "Cigna", value: "cigna" },
-      { label: "Medicare", value: "medicare" },
-      { label: "Medicaid", value: "medicaid" },
+      { label: "Humana", value: "humana" },
       { label: "Other", value: "other" }
     ],
     field: "insuranceCarrier",
-    nextStep: "member_id"
+    nextStep: "pricing_verify_prompt"
   },
   {
-    id: "member_id",
-    type: "text-input",
-    message: "What is your Member ID? You can find this on your insurance card.",
-    tooltip: "Your Member ID helps us verify your benefits and coverage quickly.",
-    placeholder: "Enter your Member ID",
-    field: "memberId",
-    nextStep: "contact_name"
+    id: "pricing_verify_prompt",
+    type: "quick-reply",
+    message: "We accept several providers. Let's start by verifying some information on your coverage.",
+    flowCategory: "pricing",
+    options: [
+      { label: "Verify Insurance", value: "verify", icon: <Shield className="h-4 w-4" /> }
+    ],
+    field: "pricingInsuranceVerify",
+    nextStep: "pricing_vob_treatment_type"
   },
   {
-    id: "contact_name",
+    id: "pricing_vob_treatment_type",
+    type: "quick-reply",
+    message: "What type of treatment is the patient looking for?",
+    flowCategory: "pricing",
+    options: [
+      { label: "Inpatient", value: "inpatient", icon: <Building2 className="h-4 w-4" /> },
+      { label: "Outpatient", value: "outpatient", icon: <Clock className="h-4 w-4" /> }
+    ],
+    field: "treatmentType",
+    nextStep: "pricing_vob_patient_name"
+  },
+  {
+    id: "pricing_vob_patient_name",
     type: "text-input",
-    message: "Thanks! Now, what's your name?",
-    tooltip: "We'll use this to personalize your experience and set up your account.",
-    placeholder: "Enter your full name",
+    message: "What is the patient's first and last name?",
+    flowCategory: "pricing",
+    placeholder: "Enter full name",
     field: "name",
     validation: (value) => value.trim().length >= 2,
-    nextStep: "contact_phone"
+    nextStep: "pricing_vob_email"
   },
   {
-    id: "contact_phone",
+    id: "pricing_vob_email",
+    type: "email-input",
+    message: "What is your email address?",
+    flowCategory: "pricing",
+    placeholder: "your@email.com",
+    field: "email",
+    validation: (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
+    nextStep: "pricing_vob_phone"
+  },
+  {
+    id: "pricing_vob_phone",
     type: "phone-input",
-    message: "What's the best phone number to reach you?",
-    tooltip: "We'll only use this to contact you about your appointment and care.",
+    message: "What is your phone number?",
+    flowCategory: "pricing",
     placeholder: "(555) 555-5555",
     field: "phone",
     validation: (value) => /^\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}$/.test(value.replace(/\s/g, '')),
+    nextStep: "pricing_vob_dob"
+  },
+  {
+    id: "pricing_vob_dob",
+    type: "dob-input",
+    message: "What is the patient's date of birth? (MM-DD-YYYY)",
+    flowCategory: "pricing",
+    placeholder: "MM-DD-YYYY",
+    field: "dateOfBirth",
+    validation: (value) => /^(0[1-9]|1[0-2])[-\/](0[1-9]|[12]\d|3[01])[-\/](19|20)\d{2}$/.test(value),
+    nextStep: "pricing_vob_member_id"
+  },
+  {
+    id: "pricing_vob_member_id",
+    type: "text-input",
+    message: "What is the insurance ID number?",
+    flowCategory: "pricing",
+    placeholder: "Enter Member/Policy ID",
+    field: "memberId",
+    nextStep: "vob_confirmation"
+  },
+  {
+    id: "pricing_treatment_type",
+    type: "quick-reply",
+    message: "What type of treatment are you looking for?",
+    flowCategory: "pricing",
+    options: [
+      { label: "Inpatient", value: "inpatient", icon: <Building2 className="h-4 w-4" /> },
+      { label: "Outpatient", value: "outpatient", icon: <Clock className="h-4 w-4" /> }
+    ],
+    field: "treatmentType",
+    nextStep: "pricing_seeking_for"
+  },
+  {
+    id: "pricing_seeking_for",
+    type: "quick-reply",
+    message: "Who are you seeking treatment for?",
+    flowCategory: "pricing",
+    options: [
+      { label: "Myself", value: "myself", icon: <User className="h-4 w-4" /> },
+      { label: "Someone Else", value: "someone_else", icon: <Users className="h-4 w-4" /> }
+    ],
+    field: "seekingFor",
+    nextStep: "contact_name"
+  },
+
+  // ========== VERIFY INSURANCE (VOB) FLOW ==========
+  {
+    id: "vob_treatment_type",
+    type: "quick-reply",
+    message: "What type of treatment is the patient looking for?",
+    flowCategory: "verify_insurance",
+    options: [
+      { label: "Inpatient", value: "inpatient", icon: <Building2 className="h-4 w-4" /> },
+      { label: "Outpatient", value: "outpatient", icon: <Clock className="h-4 w-4" /> }
+    ],
+    field: "treatmentType",
+    nextStep: "vob_patient_name"
+  },
+  {
+    id: "vob_patient_name",
+    type: "text-input",
+    message: "What is the patient's first and last name?",
+    flowCategory: "verify_insurance",
+    placeholder: "Enter full name",
+    field: "name",
+    validation: (value) => value.trim().length >= 2,
+    nextStep: "contact_email"
+  },
+
+  // ========== CONNECT WITH ADMISSIONS FLOW ==========
+  {
+    id: "admissions_treatment_type",
+    type: "quick-reply",
+    message: "What type of treatment are you looking for?",
+    flowCategory: "admissions",
+    options: [
+      { label: "Inpatient", value: "inpatient", icon: <Building2 className="h-4 w-4" /> },
+      { label: "Outpatient", value: "outpatient", icon: <Clock className="h-4 w-4" /> }
+    ],
+    field: "treatmentType",
+    nextStep: "admissions_seeking_for"
+  },
+  {
+    id: "admissions_seeking_for",
+    type: "quick-reply",
+    message: "Who are you seeking treatment for?",
+    flowCategory: "admissions",
+    options: [
+      { label: "Myself", value: "myself", icon: <User className="h-4 w-4" /> },
+      { label: "Someone Else", value: "someone_else", icon: <Users className="h-4 w-4" /> }
+    ],
+    field: "seekingFor",
+    nextStep: "admissions_name"
+  },
+  {
+    id: "admissions_name",
+    type: "text-input",
+    message: "What is your first and last name?",
+    flowCategory: "admissions",
+    placeholder: "Enter your full name",
+    field: "name",
+    validation: (value) => value.trim().length >= 2,
+    nextStep: "contact_email"
+  },
+
+  // ========== ASK A QUESTION FLOW ==========
+  {
+    id: "question_topic",
+    type: "quick-reply",
+    message: "What is your question in regard to?",
+    flowCategory: "question",
+    options: [
+      { label: "Treatment Options", value: "treatment", icon: <Heart className="h-4 w-4" /> },
+      { label: "Insurance & Payment", value: "insurance", icon: <Shield className="h-4 w-4" /> },
+      { label: "Scheduling", value: "scheduling", icon: <Calendar className="h-4 w-4" /> },
+      { label: "Something Else", value: "other", icon: <HelpCircle className="h-4 w-4" /> }
+    ],
+    field: "questionTopic",
+    nextStep: "question_text"
+  },
+  {
+    id: "question_text",
+    type: "textarea-input",
+    message: "What is your question?",
+    flowCategory: "question",
+    placeholder: "Type your question here...",
+    field: "questionText",
+    validation: (value) => value.trim().length >= 5,
+    nextStep: "question_contact_prompt"
+  },
+  {
+    id: "question_contact_prompt",
+    type: "message",
+    message: "To provide a response, we need some basic contact information. What is your first and last name?",
+    flowCategory: "question",
+    nextStep: "question_name"
+  },
+  {
+    id: "question_name",
+    type: "text-input",
+    message: "",
+    flowCategory: "question",
+    placeholder: "Enter your full name",
+    field: "name",
+    validation: (value) => value.trim().length >= 2,
+    nextStep: "contact_email"
+  },
+
+  // ========== SHARED CONTACT COLLECTION ==========
+  {
+    id: "contact_name",
+    type: "text-input",
+    message: "What is your first and last name?",
+    placeholder: "Enter your full name",
+    field: "name",
+    validation: (value) => value.trim().length >= 2,
     nextStep: "contact_email"
   },
   {
     id: "contact_email",
     type: "email-input",
-    message: "And your email address?",
-    tooltip: "We'll send appointment confirmations and important updates here.",
+    message: "What is your email address?",
     placeholder: "your@email.com",
     field: "email",
     validation: (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
-    nextStep: "best_time"
+    nextStep: "contact_phone"
   },
   {
-    id: "best_time",
+    id: "contact_phone",
+    type: "phone-input",
+    message: "What is your phone number?",
+    placeholder: "(555) 555-5555",
+    field: "phone",
+    validation: (value) => /^\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}$/.test(value.replace(/\s/g, '')),
+    nextStep: "route_after_contact"
+  },
+
+  // ========== VOB ADDITIONAL INFO ==========
+  {
+    id: "vob_dob",
+    type: "dob-input",
+    message: "What is the patient's date of birth? (MM-DD-YYYY)",
+    flowCategory: "verify_insurance",
+    placeholder: "MM-DD-YYYY",
+    field: "dateOfBirth",
+    validation: (value) => /^(0[1-9]|1[0-2])[-\/](0[1-9]|[12]\d|3[01])[-\/](19|20)\d{2}$/.test(value),
+    nextStep: "vob_insurance_provider"
+  },
+  {
+    id: "vob_insurance_provider",
     type: "quick-reply",
-    message: "When is the best time to reach you?",
-    tooltip: "We'll try to call during your preferred time window.",
+    message: "Who is the insurance provider?",
+    flowCategory: "verify_insurance",
     options: [
-      { label: "Morning (9am-12pm)", value: "morning" },
-      { label: "Afternoon (12pm-5pm)", value: "afternoon" },
-      { label: "Evening (5pm-8pm)", value: "evening" },
-      { label: "Anytime", value: "anytime" }
+      { label: "Blue Cross Blue Shield", value: "bcbs" },
+      { label: "Aetna", value: "aetna" },
+      { label: "UnitedHealthcare", value: "united" },
+      { label: "Cigna", value: "cigna" },
+      { label: "Humana", value: "humana" },
+      { label: "Medicare", value: "medicare" },
+      { label: "Medicaid", value: "medicaid" },
+      { label: "Other", value: "other" }
     ],
-    field: "bestTimeToCall",
-    nextStep: "schedule_preference"
+    field: "insuranceCarrier",
+    nextStep: "vob_member_id"
   },
   {
-    id: "schedule_preference",
+    id: "vob_member_id",
+    type: "text-input",
+    message: "What is the insurance ID number?",
+    flowCategory: "verify_insurance",
+    placeholder: "Enter Member/Policy ID",
+    field: "memberId",
+    nextStep: "vob_confirmation"
+  },
+  {
+    id: "vob_confirmation",
+    type: "confirmation",
+    message: "Thank you, one of our team members will reach out shortly to confirm your insurance has been verified!",
+    flowCategory: "verify_insurance",
+    nextStep: "complete"
+  },
+
+  // ========== ADMISSIONS ADDITIONAL INFO ==========
+  {
+    id: "admissions_additional_info",
+    type: "textarea-input",
+    message: "Please provide any additional information you would like us to know.",
+    flowCategory: "admissions",
+    placeholder: "Type any additional details here...",
+    field: "additionalInfo",
+    nextStep: "contact_preference"
+  },
+
+  // ========== CONTACT PREFERENCE ==========
+  {
+    id: "contact_preference",
     type: "quick-reply",
-    message: "Would you like to schedule an appointment now, or would you prefer a callback first?",
-    tooltip: "Choose what works best for you.",
+    message: "Which would you like to do?",
     options: [
-      { label: "Schedule now", value: "schedule", icon: <Calendar className="h-4 w-4" /> },
-      { label: "Request callback", value: "callback", icon: <Phone className="h-4 w-4" /> },
-      { label: "Just send me info", value: "email", icon: <Mail className="h-4 w-4" /> }
+      { label: "Text Us", value: "text", icon: <MessageSquare className="h-4 w-4" /> },
+      { label: "Call Me", value: "call", icon: <PhoneCall className="h-4 w-4" /> }
     ],
-    field: "schedulePreference",
-    nextStep: (value) => value === "schedule" ? "appointment_slots" : "confirmation"
-  },
-  {
-    id: "appointment_slots",
-    type: "appointment-picker",
-    message: "Great! Here are the available appointment times. Select one that works for you:",
-    tooltip: "Choose from the available time slots. All times shown in Central Time.",
-    field: "appointmentSlot",
+    field: "contactPreference",
     nextStep: "confirmation"
   },
+
+  // ========== AFTER FLOW OPTIONS ==========
+  {
+    id: "after_flow_options",
+    type: "quick-reply",
+    message: "Is there anything else I can help you with?",
+    options: [
+      { label: "Get Pricing", value: "pricing", icon: <DollarSign className="h-4 w-4" /> },
+      { label: "Connect With Admissions", value: "admissions", icon: <Users className="h-4 w-4" /> },
+      { label: "Ask A Question", value: "question", icon: <HelpCircle className="h-4 w-4" /> },
+      { label: "No, Thank You", value: "done", icon: <CheckCircle2 className="h-4 w-4" /> }
+    ],
+    nextStep: (value) => {
+      switch (value) {
+        case "pricing": return "pricing_payment_type";
+        case "admissions": return "admissions_treatment_type";
+        case "question": return "question_topic";
+        default: return "complete";
+      }
+    }
+  },
+
+  // ========== CONFIRMATION & COMPLETE ==========
   {
     id: "confirmation",
     type: "confirmation",
-    message: "Perfect! I've collected all the information I need. Here's a summary of what you shared:",
+    message: "Thank you, one of our team members will be in touch shortly! Please note that if you have reached out after-hours, someone will be in touch the next business day.",
     tooltip: "Review your information before we proceed.",
     nextStep: "complete"
   },
   {
     id: "complete",
     type: "message",
-    message: "Thank you! Our team will reach out to you shortly. Is there anything else I can help you with?",
+    message: "Thank you for contacting us! Is there anything else I can help you with?",
     tooltip: "Feel free to ask any questions about our services."
   }
 ];
 
-const stepOrder = ["welcome", "service_type", "urgency", "insurance_check", "insurance_carrier", "member_id", "contact_name", "contact_phone", "contact_email", "best_time", "schedule_preference", "appointment_slots", "confirmation", "complete"];
+function getFlowSteps(mainChoice: string, paymentType?: string): string[] {
+  const baseSteps = ["welcome", "main_menu"];
+  
+  switch (mainChoice) {
+    case "pricing":
+      if (paymentType === "insurance") {
+        return [...baseSteps, "pricing_payment_type", "pricing_insurance_type", "pricing_verify_prompt", "pricing_vob_treatment_type", "pricing_vob_patient_name", "pricing_vob_email", "pricing_vob_phone", "pricing_vob_dob", "pricing_vob_member_id", "vob_confirmation", "complete"];
+      }
+      return [...baseSteps, "pricing_payment_type", "pricing_treatment_type", "pricing_seeking_for", "contact_name", "contact_email", "contact_phone", "contact_preference", "confirmation", "complete"];
+    case "verify_insurance":
+      return [...baseSteps, "vob_treatment_type", "vob_patient_name", "contact_email", "contact_phone", "vob_dob", "vob_insurance_provider", "vob_member_id", "vob_confirmation", "complete"];
+    case "admissions":
+      return [...baseSteps, "admissions_treatment_type", "admissions_seeking_for", "admissions_name", "contact_email", "contact_phone", "admissions_additional_info", "contact_preference", "confirmation", "complete"];
+    case "question":
+      return [...baseSteps, "question_topic", "question_text", "question_contact_prompt", "question_name", "contact_email", "contact_phone", "confirmation", "complete"];
+    default:
+      return baseSteps;
+  }
+}
 
 function formatPhone(value: string): string {
   const cleaned = value.replace(/\D/g, '');
   if (cleaned.length <= 3) return cleaned;
   if (cleaned.length <= 6) return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3)}`;
   return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6, 10)}`;
+}
+
+function formatDob(value: string): string {
+  const cleaned = value.replace(/\D/g, '');
+  if (cleaned.length <= 2) return cleaned;
+  if (cleaned.length <= 4) return `${cleaned.slice(0, 2)}-${cleaned.slice(2)}`;
+  return `${cleaned.slice(0, 2)}-${cleaned.slice(2, 4)}-${cleaned.slice(4, 8)}`;
 }
 
 function generateAppointmentSlots(): AppointmentSlot[] {
@@ -281,13 +553,14 @@ function GuidedChatContent() {
   
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sessionInitialized = useRef(false);
 
   const currentStep = conversationFlow.find(s => s.id === currentStepId);
-  const currentStepIndex = stepOrder.indexOf(currentStepId);
-  const progressPercent = Math.round((currentStepIndex / (stepOrder.length - 1)) * 100);
+  const flowSteps = getFlowSteps(collectedData.mainChoice || "", collectedData.paymentType);
+  const currentStepIndex = flowSteps.indexOf(currentStepId);
+  const progressPercent = flowSteps.length > 1 ? Math.round((currentStepIndex / (flowSteps.length - 1)) * 100) : 0;
 
-  // Initialize or resume session when chat opens
   useEffect(() => {
     const initSession = async () => {
       if (!isOpen || sessionInitialized.current) return;
@@ -304,13 +577,11 @@ function GuidedChatContent() {
         
         setSessionId(data.session.id);
         
-        // Check if this is a returning lead
         if (data.returningLead) {
           setReturningLead(data.returningLead);
         }
         
         if (data.resumed && data.messages.length > 0) {
-          // Resume existing session
           setSessionResumed(true);
           const resumedMessages: ChatMessage[] = data.messages.map((m: { id: string; type: string; content: string; createdAt: string }) => ({
             id: m.id,
@@ -329,22 +600,40 @@ function GuidedChatContent() {
             }
           }
         } else if (data.returningLead) {
-          // Returning lead - show personalized welcome back
           const firstName = data.returningLead.name.split(' ')[0];
-          addMessageWithPersist("assistant", `Welcome back, ${firstName}! What can we help you with today?`, data.session.id, "welcome_back");
+          addMessageWithPersist("assistant", `Welcome back, ${firstName}! How can I help you today?`, data.session.id, "welcome");
+          setCurrentStepId("main_menu");
+          setTimeout(() => {
+            const menuStep = conversationFlow.find(s => s.id === "main_menu");
+            if (menuStep) {
+              addMessageWithPersist("assistant", menuStep.message, data.session.id, "main_menu");
+            }
+          }, 500);
         } else {
-          // New session - add welcome message
           const welcomeStep = conversationFlow.find(s => s.id === "welcome");
           if (welcomeStep) {
             addMessageWithPersist("assistant", welcomeStep.message, data.session.id, "welcome");
+            setCurrentStepId("main_menu");
+            setTimeout(() => {
+              const menuStep = conversationFlow.find(s => s.id === "main_menu");
+              if (menuStep) {
+                addMessageWithPersist("assistant", menuStep.message, data.session.id, "main_menu");
+              }
+            }, 500);
           }
         }
       } catch (error) {
         console.error("Failed to init session:", error);
-        // Fallback to local-only mode
         const welcomeStep = conversationFlow.find(s => s.id === "welcome");
         if (welcomeStep) {
           addMessage("assistant", welcomeStep.message);
+          setCurrentStepId("main_menu");
+          setTimeout(() => {
+            const menuStep = conversationFlow.find(s => s.id === "main_menu");
+            if (menuStep) {
+              addMessage("assistant", menuStep.message);
+            }
+          }, 500);
         }
       }
     };
@@ -359,12 +648,15 @@ function GuidedChatContent() {
   }, [messages]);
 
   useEffect(() => {
-    if (isOpen && !isMinimized && inputRef.current && currentStep?.type !== "quick-reply" && currentStep?.type !== "confirmation") {
-      inputRef.current.focus();
+    if (isOpen && !isMinimized) {
+      if (currentStep?.type === "textarea-input" && textareaRef.current) {
+        textareaRef.current.focus();
+      } else if (inputRef.current && currentStep?.type !== "quick-reply" && currentStep?.type !== "confirmation") {
+        inputRef.current.focus();
+      }
     }
   }, [isOpen, isMinimized, currentStepId]);
   
-  // Update session when step changes
   useEffect(() => {
     if (sessionId && currentStepId) {
       apiRequest("PATCH", `/api/chat-sessions/${sessionId}`, {
@@ -404,7 +696,6 @@ function GuidedChatContent() {
     };
     setMessages((prev) => [...prev, newMessage]);
     
-    // Persist message if we have a session
     if (sessionId) {
       apiRequest("POST", `/api/chat-sessions/${sessionId}/messages`, {
         type: role === "assistant" ? "bot" : "user",
@@ -417,7 +708,6 @@ function GuidedChatContent() {
   const handleOpen = () => {
     setIsOpen(true);
     setIsMinimized(false);
-    // Welcome message is now handled by initSession
   };
 
   const handleClose = () => {
@@ -429,20 +719,45 @@ function GuidedChatContent() {
     setIsMinimized(true);
   };
 
+  const getNextStepAfterContact = (): string => {
+    const mainChoice = collectedData.mainChoice;
+    switch (mainChoice) {
+      case "pricing":
+        return "contact_preference";
+      case "verify_insurance":
+        return "vob_dob";
+      case "admissions":
+        return "admissions_additional_info";
+      case "question":
+        return "confirmation";
+      default:
+        return "confirmation";
+    }
+  };
+
   const goToNextStep = (value: string, displayValue?: string) => {
     if (!currentStep) return;
 
+    const updatedData = currentStep.field 
+      ? { ...collectedData, [currentStep.field]: value }
+      : collectedData;
+    
     if (currentStep.field) {
-      setCollectedData(prev => ({ ...prev, [currentStep.field!]: value }));
+      setCollectedData(updatedData);
     }
 
     addMessage("user", displayValue || value, true);
 
     let nextStepId: string | undefined;
+    
     if (typeof currentStep.nextStep === "function") {
       nextStepId = currentStep.nextStep(value);
     } else {
       nextStepId = currentStep.nextStep;
+    }
+    
+    if (nextStepId === "route_after_contact") {
+      nextStepId = getNextStepAfterContact();
     }
 
     if (nextStepId) {
@@ -451,7 +766,7 @@ function GuidedChatContent() {
         let actualNextStep = nextStepId;
         const nextStep = conversationFlow.find(s => s.id === nextStepId);
         
-        if (nextStep?.skipCondition && nextStep.skipCondition(collectedData)) {
+        if (nextStep?.skipCondition && nextStep.skipCondition(updatedData)) {
           if (typeof nextStep.nextStep === "string") {
             actualNextStep = nextStep.nextStep;
           }
@@ -462,11 +777,11 @@ function GuidedChatContent() {
         if (step) {
           if (step.type === "confirmation") {
             addMessage("assistant", step.message);
-            submitLead();
+            submitLeadWithData(updatedData);
           } else if (step.type === "appointment-picker") {
             addMessage("assistant", step.message);
             setAppointmentSlots(generateAppointmentSlots());
-          } else {
+          } else if (step.message) {
             addMessage("assistant", step.message);
           }
         }
@@ -484,7 +799,15 @@ function GuidedChatContent() {
     if (!value || !currentStep) return;
 
     if (currentStep.validation && !currentStep.validation(value)) {
-      addMessage("assistant", "Please enter a valid value and try again.");
+      if (currentStep.type === "dob-input") {
+        addMessage("assistant", "Please enter a valid date in MM-DD-YYYY format.");
+      } else if (currentStep.type === "email-input") {
+        addMessage("assistant", "Please enter a valid email address.");
+      } else if (currentStep.type === "phone-input") {
+        addMessage("assistant", "Please enter a valid phone number.");
+      } else {
+        addMessage("assistant", "Please enter a valid value and try again.");
+      }
       return;
     }
 
@@ -499,45 +822,63 @@ function GuidedChatContent() {
     }
   };
 
-  const submitLead = async () => {
+  const submitLeadWithData = async (data: Record<string, string>) => {
     setIsLoading(true);
     try {
+      const mainChoice = data.mainChoice || "unknown";
+      let priority = "P2";
+      if (mainChoice === "admissions" || data.contactPreference === "call") {
+        priority = "P0";
+      } else if (mainChoice === "verify_insurance" || data.paymentType === "insurance") {
+        priority = "P1";
+      }
+
+      const notes: string[] = [];
+      if (mainChoice) notes.push(`Flow: ${mainChoice}`);
+      if (data.treatmentType) notes.push(`Treatment: ${data.treatmentType}`);
+      if (data.seekingFor) notes.push(`For: ${data.seekingFor}`);
+      if (data.paymentType) notes.push(`Payment: ${data.paymentType}`);
+      if (data.dateOfBirth) notes.push(`DOB: ${data.dateOfBirth}`);
+      if (data.contactPreference) notes.push(`Contact preference: ${data.contactPreference}`);
+      if (data.questionTopic) notes.push(`Question topic: ${data.questionTopic}`);
+      if (data.questionText) notes.push(`Question: ${data.questionText}`);
+      if (data.additionalInfo) notes.push(`Additional info: ${data.additionalInfo}`);
+
       const leadData = {
-        name: collectedData.name || "Website Visitor",
-        phone: collectedData.phone?.replace(/\D/g, '') || "",
-        email: collectedData.email || "",
+        name: data.name || "Website Visitor",
+        phone: data.phone?.replace(/\D/g, '') || "",
+        email: data.email || "",
         source: "chat_widget",
         status: "new",
-        priority: collectedData.urgency === "urgent" ? "P0" : collectedData.urgency === "this_week" ? "P1" : "P2",
-        serviceNeeded: collectedData.serviceNeeded || "",
-        insuranceCarrier: collectedData.insuranceCarrier || "",
-        memberId: collectedData.memberId || "",
-        bestTimeToCall: collectedData.bestTimeToCall || "",
-        notes: `Schedule preference: ${collectedData.schedulePreference || "not specified"}. Has insurance: ${collectedData.hasInsurance || "unknown"}.`
+        priority,
+        serviceNeeded: data.treatmentType || "",
+        insuranceCarrier: data.insuranceCarrier || "",
+        memberId: data.memberId || "",
+        bestTimeToCall: data.contactPreference === "call" ? "anytime" : "",
+        notes: notes.join(". ") + "."
       };
 
       const leadResponse = await apiRequest("POST", "/api/leads", leadData);
       const lead = await leadResponse.json();
       setCreatedLeadId(lead.id);
       
-      if (collectedData.appointmentSlot && lead.id) {
-        const appointmentData = {
-          leadId: lead.id,
-          title: `${collectedData.serviceNeeded?.replace(/_/g, ' ') || 'Initial'} Consultation - ${collectedData.name}`,
-          description: `Scheduled via chat widget. Service: ${collectedData.serviceNeeded?.replace(/_/g, ' ') || 'General'}`,
-          scheduledAt: collectedData.appointmentSlot,
-          duration: 30,
-          timezone: "America/Chicago",
-          status: "scheduled"
-        };
-        await apiRequest("POST", "/api/appointments", appointmentData);
+      // Send automatic SMS follow-up
+      if (lead.id && data.phone && data.contactPreference !== "call") {
+        try {
+          const firstName = (data.name || "").split(' ')[0] || "there";
+          await apiRequest("POST", `/api/leads/${lead.id}/send-sms`, {
+            message: `Hello, ${firstName}, this is Claim Shield Health. Thank you for contacting us. Do you have any immediate questions we can answer?`
+          });
+        } catch (smsError) {
+          console.error("Failed to send follow-up SMS:", smsError);
+        }
       }
       
       // Send confirmation email
-      if (lead.id && collectedData.email) {
+      if (lead.id && data.email) {
         try {
           await apiRequest("POST", `/api/leads/${lead.id}/send-confirmation`, {
-            appointmentDate: collectedData.appointmentSlot || null
+            appointmentDate: data.appointmentSlot || null
           });
         } catch (emailError) {
           console.error("Failed to send confirmation email:", emailError);
@@ -547,8 +888,7 @@ function GuidedChatContent() {
       // Mark session as completed
       if (sessionId && lead.id) {
         try {
-          const qualScore = collectedData.urgency === "urgent" ? 90 : 
-                           collectedData.urgency === "this_week" ? 70 : 50;
+          const qualScore = priority === "P0" ? 90 : priority === "P1" ? 70 : 50;
           await apiRequest("POST", `/api/chat-sessions/${sessionId}/complete`, {
             leadId: lead.id,
             qualificationScore: qualScore
@@ -564,10 +904,7 @@ function GuidedChatContent() {
         setCurrentStepId("complete");
         const completeStep = conversationFlow.find(s => s.id === "complete");
         if (completeStep) {
-          const completionMessage = collectedData.appointmentSlot 
-            ? `Your appointment has been scheduled! We've sent a confirmation to ${collectedData.email}. Is there anything else I can help you with?`
-            : completeStep.message;
-          addMessage("assistant", completionMessage);
+          addMessage("assistant", completeStep.message);
         }
         setIsLoading(false);
       }, 500);
@@ -631,6 +968,33 @@ function GuidedChatContent() {
       );
     }
 
+    if (currentStep.type === "textarea-input") {
+      return (
+        <div className="p-3 border-t">
+          <div className="flex flex-col gap-2">
+            <Textarea
+              ref={textareaRef}
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder={currentStep.placeholder || "Type your response..."}
+              disabled={isLoading}
+              className="min-h-[80px] resize-none"
+              data-testid="input-textarea-response"
+            />
+            <Button
+              onClick={handleTextSubmit}
+              disabled={!inputValue.trim() || isLoading}
+              className="self-end"
+              data-testid="button-submit-textarea"
+            >
+              <Send className="h-4 w-4 mr-1.5" />
+              Submit
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
     if (currentStep.type === "appointment-picker") {
       return (
         <div className="p-3 border-t">
@@ -671,11 +1035,10 @@ function GuidedChatContent() {
               {collectedData.name && <p><span className="text-muted-foreground">Name:</span> {collectedData.name}</p>}
               {collectedData.phone && <p><span className="text-muted-foreground">Phone:</span> {collectedData.phone}</p>}
               {collectedData.email && <p><span className="text-muted-foreground">Email:</span> {collectedData.email}</p>}
-              {collectedData.serviceNeeded && <p><span className="text-muted-foreground">Service:</span> {collectedData.serviceNeeded.replace(/_/g, ' ')}</p>}
+              {collectedData.treatmentType && <p><span className="text-muted-foreground">Treatment:</span> {collectedData.treatmentType}</p>}
               {collectedData.insuranceCarrier && <p><span className="text-muted-foreground">Insurance:</span> {collectedData.insuranceCarrier.toUpperCase()}</p>}
-              {collectedData.appointmentSlot && (
-                <p><span className="text-muted-foreground">Appointment:</span> {new Date(collectedData.appointmentSlot).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
-              )}
+              {collectedData.dateOfBirth && <p><span className="text-muted-foreground">DOB:</span> {collectedData.dateOfBirth}</p>}
+              {collectedData.memberId && <p><span className="text-muted-foreground">Member ID:</span> {collectedData.memberId}</p>}
             </div>
           </Card>
           {isLoading ? (
@@ -700,25 +1063,24 @@ function GuidedChatContent() {
               {collectedData.name && <p><span className="text-muted-foreground">Name:</span> {collectedData.name}</p>}
               {collectedData.phone && <p><span className="text-muted-foreground">Phone:</span> {collectedData.phone}</p>}
               {collectedData.email && <p><span className="text-muted-foreground">Email:</span> {collectedData.email}</p>}
-              {collectedData.serviceNeeded && <p><span className="text-muted-foreground">Service:</span> {collectedData.serviceNeeded.replace(/_/g, ' ')}</p>}
-              {collectedData.insuranceCarrier && <p><span className="text-muted-foreground">Insurance:</span> {collectedData.insuranceCarrier.toUpperCase()}</p>}
-              {collectedData.appointmentSlot && (
-                <p><span className="text-muted-foreground">Appointment:</span> {new Date(collectedData.appointmentSlot).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</p>
-              )}
+              {collectedData.treatmentType && <p><span className="text-muted-foreground">Treatment:</span> {collectedData.treatmentType}</p>}
             </div>
-            {createdLeadId && (
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="mt-3 w-full"
-                onClick={() => window.open(`/deals/${createdLeadId}`, '_blank')}
-                data-testid="button-view-details"
-              >
-                <ArrowRight className="h-4 w-4 mr-1.5" />
-                View Full Details
-              </Button>
-            )}
           </Card>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={() => {
+                setIsComplete(false);
+                setCurrentStepId("main_menu");
+                addMessage("assistant", "What else can I help you with?");
+              }}
+              data-testid="button-start-over"
+            >
+              Start New Inquiry
+            </Button>
+          </div>
           <div className="flex gap-2">
             <Input
               ref={inputRef}
@@ -747,6 +1109,8 @@ function GuidedChatContent() {
       let value = e.target.value;
       if (currentStep.type === "phone-input") {
         value = formatPhone(value);
+      } else if (currentStep.type === "dob-input") {
+        value = formatDob(value);
       }
       setInputValue(value);
     };
@@ -871,7 +1235,7 @@ function GuidedChatContent() {
           </div>
         </div>
 
-        {currentStepId !== "welcome" && currentStepId !== "complete" && (
+        {currentStepId !== "welcome" && currentStepId !== "main_menu" && currentStepId !== "complete" && collectedData.mainChoice && (
           <div className="px-3 py-2 border-b bg-muted/30">
             <div className="flex items-center justify-between mb-1">
               <span className="text-xs text-muted-foreground">Progress</span>
@@ -917,8 +1281,7 @@ function GuidedChatContent() {
               </div>
             ))}
             
-            {/* Welcome Back Card for Returning Leads - shows immediately when returning lead opens chat */}
-            {returningLead && (
+            {returningLead && currentStepId === "main_menu" && (
               <Card className="bg-muted/50 p-4 space-y-3" data-testid="card-welcome-back">
                 <div className="flex items-start justify-between">
                   <div>
@@ -935,16 +1298,16 @@ function GuidedChatContent() {
                   variant="outline" 
                   className="w-full justify-between" 
                   onClick={() => {
-                    setIsComplete(false);
-                    setCurrentStepId("schedule_preference");
-                    const scheduleStep = conversationFlow.find(s => s.id === "schedule_preference");
-                    if (scheduleStep && sessionId) {
-                      addMessageWithPersist("assistant", scheduleStep.message, sessionId, "schedule_preference");
+                    setCurrentStepId("admissions_treatment_type");
+                    setCollectedData(prev => ({ ...prev, mainChoice: "admissions" }));
+                    const step = conversationFlow.find(s => s.id === "admissions_treatment_type");
+                    if (step && sessionId) {
+                      addMessageWithPersist("assistant", step.message, sessionId, "admissions_treatment_type");
                     }
                   }}
                   data-testid="button-schedule-tour"
                 >
-                  <span>Schedule A Consultation</span>
+                  <span>Connect With Admissions</span>
                   <ArrowRight className="h-4 w-4" />
                 </Button>
                 <Button 
@@ -954,21 +1317,6 @@ function GuidedChatContent() {
                   data-testid="button-view-profile"
                 >
                   View My Profile
-                </Button>
-                <Button 
-                  variant="secondary" 
-                  className="w-full"
-                  onClick={() => {
-                    setCurrentStepId("service_type");
-                    const serviceStep = conversationFlow.find(s => s.id === "service_type");
-                    if (serviceStep && sessionId) {
-                      addMessageWithPersist("assistant", "What else can I help you with?", sessionId, "service_type");
-                    }
-                    setIsComplete(false);
-                  }}
-                  data-testid="button-ask-more"
-                >
-                  Explore More Options
                 </Button>
               </Card>
             )}
@@ -994,7 +1342,7 @@ function GuidedChatContent() {
 
         <div className="px-3 py-1.5 border-t bg-muted/20">
           <p className="text-[10px] text-muted-foreground text-center">
-            Powered by Claim Shield Health • Your data is secure
+            Powered by Claim Shield Health
           </p>
         </div>
       </Card>
