@@ -68,18 +68,18 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "welcome",
     type: "message",
-    message: "How can I help you today?",
+    message: "Hi, I'm your virtual admissions assistant at Claim Shield Health. I'm here to help answer any questions you may have about our services.",
     tooltip: "Select an option to get started.",
     nextStep: "main_menu"
   },
   {
     id: "main_menu",
     type: "quick-reply",
-    message: "Please choose an option:",
+    message: "How can I help you today?",
     options: [
-      { label: "Get Pricing", value: "pricing", icon: <DollarSign className="h-4 w-4" /> },
-      { label: "Verify Insurance", value: "verify_insurance", icon: <Shield className="h-4 w-4" /> },
-      { label: "Connect With Admissions", value: "admissions", icon: <Users className="h-4 w-4" /> },
+      { label: "Schedule a Consultation", value: "admissions", icon: <Calendar className="h-4 w-4" /> },
+      { label: "View Starting Prices", value: "pricing", icon: <DollarSign className="h-4 w-4" /> },
+      { label: "Verify My Insurance", value: "verify_insurance", icon: <Shield className="h-4 w-4" /> },
       { label: "Ask A Question", value: "question", icon: <HelpCircle className="h-4 w-4" /> },
     ],
     field: "mainChoice",
@@ -137,11 +137,13 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "pricing_vob_treatment_type",
     type: "quick-reply",
-    message: "What type of treatment is the patient looking for?",
+    message: "What level of care are you interested in?",
     flowCategory: "pricing",
     options: [
-      { label: "Inpatient", value: "inpatient", icon: <Building2 className="h-4 w-4" /> },
-      { label: "Outpatient", value: "outpatient", icon: <Clock className="h-4 w-4" /> }
+      { label: "Inpatient", value: "inpatient" },
+      { label: "Outpatient", value: "outpatient" },
+      { label: "Detox", value: "detox" },
+      { label: "Not Sure", value: "not_sure" }
     ],
     field: "treatmentType",
     nextStep: "pricing_vob_patient_name"
@@ -198,11 +200,13 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "pricing_treatment_type",
     type: "quick-reply",
-    message: "What type of treatment are you looking for?",
+    message: "What level of care are you interested in?",
     flowCategory: "pricing",
     options: [
-      { label: "Inpatient", value: "inpatient", icon: <Building2 className="h-4 w-4" /> },
-      { label: "Outpatient", value: "outpatient", icon: <Clock className="h-4 w-4" /> }
+      { label: "Inpatient", value: "inpatient" },
+      { label: "Outpatient", value: "outpatient" },
+      { label: "Detox", value: "detox" },
+      { label: "Not Sure", value: "not_sure" }
     ],
     field: "treatmentType",
     nextStep: "pricing_seeking_for"
@@ -210,11 +214,15 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "pricing_seeking_for",
     type: "quick-reply",
-    message: "Who are you seeking treatment for?",
+    message: "Who is this for?",
     flowCategory: "pricing",
     options: [
-      { label: "Myself", value: "myself", icon: <User className="h-4 w-4" /> },
-      { label: "Someone Else", value: "someone_else", icon: <Users className="h-4 w-4" /> }
+      { label: "Parent", value: "parent" },
+      { label: "Spouse", value: "spouse" },
+      { label: "Myself", value: "myself" },
+      { label: "Relative", value: "relative" },
+      { label: "Friend", value: "friend" },
+      { label: "Other", value: "other" }
     ],
     field: "seekingFor",
     nextStep: "contact_name"
@@ -224,11 +232,13 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "vob_treatment_type",
     type: "quick-reply",
-    message: "What type of treatment is the patient looking for?",
+    message: "What level of care are you interested in?",
     flowCategory: "verify_insurance",
     options: [
-      { label: "Inpatient", value: "inpatient", icon: <Building2 className="h-4 w-4" /> },
-      { label: "Outpatient", value: "outpatient", icon: <Clock className="h-4 w-4" /> }
+      { label: "Inpatient", value: "inpatient" },
+      { label: "Outpatient", value: "outpatient" },
+      { label: "Detox", value: "detox" },
+      { label: "Not Sure", value: "not_sure" }
     ],
     field: "treatmentType",
     nextStep: "vob_patient_name"
@@ -248,11 +258,13 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "admissions_treatment_type",
     type: "quick-reply",
-    message: "What type of treatment are you looking for?",
+    message: "What level of care are you interested in?",
     flowCategory: "admissions",
     options: [
-      { label: "Inpatient", value: "inpatient", icon: <Building2 className="h-4 w-4" /> },
-      { label: "Outpatient", value: "outpatient", icon: <Clock className="h-4 w-4" /> }
+      { label: "Inpatient", value: "inpatient" },
+      { label: "Outpatient", value: "outpatient" },
+      { label: "Detox", value: "detox" },
+      { label: "Not Sure", value: "not_sure" }
     ],
     field: "treatmentType",
     nextStep: "admissions_seeking_for"
@@ -260,11 +272,15 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "admissions_seeking_for",
     type: "quick-reply",
-    message: "Who are you seeking treatment for?",
+    message: "Who is this for?",
     flowCategory: "admissions",
     options: [
-      { label: "Myself", value: "myself", icon: <User className="h-4 w-4" /> },
-      { label: "Someone Else", value: "someone_else", icon: <Users className="h-4 w-4" /> }
+      { label: "Parent", value: "parent" },
+      { label: "Spouse", value: "spouse" },
+      { label: "Myself", value: "myself" },
+      { label: "Relative", value: "relative" },
+      { label: "Friend", value: "friend" },
+      { label: "Other", value: "other" }
     ],
     field: "seekingFor",
     nextStep: "admissions_name"
@@ -284,13 +300,12 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "question_topic",
     type: "quick-reply",
-    message: "What is your question in regard to?",
+    message: "What is your question regarding?",
     flowCategory: "question",
     options: [
-      { label: "Treatment Options", value: "treatment", icon: <Heart className="h-4 w-4" /> },
-      { label: "Insurance & Payment", value: "insurance", icon: <Shield className="h-4 w-4" /> },
-      { label: "Scheduling", value: "scheduling", icon: <Calendar className="h-4 w-4" /> },
-      { label: "Something Else", value: "other", icon: <HelpCircle className="h-4 w-4" /> }
+      { label: "Potential Patient Inquiry", value: "patient_inquiry" },
+      { label: "Employment Inquiry", value: "employment" },
+      { label: "Other", value: "other" }
     ],
     field: "questionTopic",
     nextStep: "question_text"
@@ -298,7 +313,7 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "question_text",
     type: "textarea-input",
-    message: "What is your question?",
+    message: "Please enter in your question below",
     flowCategory: "question",
     placeholder: "Type your question here...",
     field: "questionText",
@@ -946,15 +961,61 @@ function GuidedChatContent() {
     if (!currentStep) return null;
 
     if (currentStep.type === "quick-reply" && currentStep.options) {
+      const isMainMenu = currentStep.id === "main_menu";
+      const isSeekingFor = currentStep.id.includes("seeking_for");
+      
+      if (isMainMenu) {
+        return (
+          <div className="p-4 border-t border-border/30 bg-background space-y-2">
+            {currentStep.options.map((option, idx) => (
+              <Button
+                key={idx}
+                variant="outline"
+                className="w-full justify-start gap-3 p-3"
+                onClick={() => handleQuickReply(option)}
+                disabled={isLoading}
+                data-testid={`button-option-${option.value}`}
+              >
+                {option.icon && (
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
+                    {option.icon}
+                  </span>
+                )}
+                <span className="text-sm font-medium">{option.label}</span>
+              </Button>
+            ))}
+          </div>
+        );
+      }
+      
+      if (isSeekingFor) {
+        return (
+          <div className="p-4 border-t border-border/30 bg-background space-y-2">
+            {currentStep.options.map((option, idx) => (
+              <Button
+                key={idx}
+                variant="default"
+                className="w-full justify-center text-sm font-medium"
+                onClick={() => handleQuickReply(option)}
+                disabled={isLoading}
+                data-testid={`button-option-${option.value}`}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+        );
+      }
+      
       return (
-        <div className="p-4 border-t border-border/30 bg-gradient-to-t from-muted/20 to-transparent space-y-2">
+        <div className="p-4 border-t border-border/30 bg-background space-y-2">
           <div className="flex flex-wrap gap-2">
             {currentStep.options.map((option, idx) => (
               <Button
                 key={idx}
                 variant="outline"
                 size="sm"
-                className="flex items-center gap-2 chat-quick-reply-btn bg-white dark:bg-muted border-primary/20 hover:border-primary/40 hover:bg-primary/5 rounded-full px-4"
+                className="flex items-center gap-2 rounded-full px-4 border-primary/30"
                 onClick={() => handleQuickReply(option)}
                 disabled={isLoading}
                 data-testid={`button-option-${option.value}`}
@@ -1227,40 +1288,42 @@ function GuidedChatContent() {
         zIndex: 2147483647,
       }}
     >
-      <Card className="w-[400px] h-[560px] shadow-2xl flex flex-col overflow-hidden chat-widget-enter border-0 rounded-2xl" data-testid="chat-widget-window">
-        <div className="flex items-center justify-between p-4 chat-header-gradient text-white">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-              <Bot className="h-5 w-5" />
+      <Card className="w-[380px] h-[580px] shadow-2xl flex flex-col overflow-hidden chat-widget-enter border-0 rounded-2xl" data-testid="chat-widget-window">
+        {/* Notification Banner */}
+        <div className="flex items-center justify-between px-3 py-2 bg-primary text-white text-xs">
+          <div className="flex items-center gap-2">
+            <MessageCircle className="h-3.5 w-3.5" />
+            <span>We're here to help! Available 24/7 for your questions.</span>
+          </div>
+          <button
+            onClick={handleClose}
+            className="text-white/80 hover-elevate p-1 rounded"
+            data-testid="button-close-banner"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+
+        {/* Header */}
+        <div className="flex items-center justify-between p-3 border-b bg-background">
+          <div className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-full chat-fab-gradient flex items-center justify-center shadow-sm">
+              <Shield className="h-4 w-4 text-white" />
             </div>
             <div>
-              <h3 className="font-semibold text-sm">Claim Shield Health</h3>
-              <div className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
-                <p className="text-xs opacity-90">Online now</p>
-              </div>
+              <h3 className="font-semibold text-sm">Admissions Assistant</h3>
+              <p className="text-xs text-muted-foreground">Claim Shield Health</p>
             </div>
           </div>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-white hover:bg-white/20 rounded-full"
-              onClick={handleMinimize}
-              data-testid="button-minimize-chat"
-            >
-              <Minimize2 className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-white hover:bg-white/20 rounded-full"
-              onClick={handleClose}
-              data-testid="button-close-chat"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground"
+            onClick={handleClose}
+            data-testid="button-close-chat"
+          >
+            <X className="h-4 w-4" />
+          </Button>
         </div>
 
         {currentStepId !== "welcome" && currentStepId !== "main_menu" && currentStepId !== "complete" && collectedData.mainChoice && (
@@ -1280,9 +1343,28 @@ function GuidedChatContent() {
           </div>
         )}
 
-        <ScrollArea className="flex-1 bg-gradient-to-b from-muted/20 to-transparent">
+        <ScrollArea className="flex-1 bg-background">
           <div className="p-4 space-y-4" ref={scrollRef}>
-            {messages.map((message, idx) => (
+            {/* TalkFurther-style Welcome Screen */}
+            {(currentStepId === "welcome" || currentStepId === "main_menu") && messages.length <= 2 && (
+              <div className="flex flex-col items-center py-6 text-center space-y-4 chat-message-enter">
+                <div className="h-16 w-16 rounded-full chat-fab-gradient flex items-center justify-center shadow-lg">
+                  <Bot className="h-8 w-8 text-white" />
+                </div>
+                <div className="space-y-2 px-4">
+                  <p className="text-sm text-foreground leading-relaxed">
+                    Hi, I'm your virtual admissions assistant at Claim Shield Health. I'm here to help answer any questions you may have about our services.
+                  </p>
+                  <p className="text-sm font-medium text-foreground">How can I help you today?</p>
+                </div>
+                {currentStepId === "main_menu" && (
+                  <p className="text-xs text-muted-foreground">Suggestions</p>
+                )}
+              </div>
+            )}
+            
+            {/* Regular message display for conversation flow */}
+            {!(currentStepId === "welcome" || currentStepId === "main_menu") && messages.map((message, idx) => (
               <div
                 key={message.id}
                 className={cn(
@@ -1357,6 +1439,34 @@ function GuidedChatContent() {
               </Card>
             )}
 
+            {/* TalkFurther-style Processing Screen */}
+            {isLoading && currentStepId === "confirmation" && (
+              <div className="flex flex-col items-center py-8 text-center space-y-6 chat-message-enter">
+                <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Loader2 className="h-7 w-7 text-primary animate-spin" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-lg font-semibold">Please wait...</h3>
+                  <p className="text-xs text-muted-foreground">Processing your information</p>
+                </div>
+                <div className="space-y-3 text-left w-full max-w-[200px]">
+                  <div className="flex items-center gap-2 text-sm">
+                    <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    <span className="text-muted-foreground">Analyzing your info</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    <span className="text-muted-foreground">Checking availability</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <Loader2 className="h-4 w-4 text-primary animate-spin" />
+                    <span className="text-muted-foreground">Saving your request</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Standard typing indicator */}
             {isLoading && currentStepId !== "confirmation" && (
               <div className="flex gap-2.5 justify-start chat-message-enter">
                 <div className="h-8 w-8 rounded-full chat-fab-gradient flex items-center justify-center flex-shrink-0 shadow-sm">
