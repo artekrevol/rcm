@@ -12,9 +12,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { DataTable } from "@/components/data-table";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge, ClaimStatusBadge } from "@/components/status-badge";
 import { RiskScore } from "@/components/risk-score";
-import { Search, Filter, FileText, AlertTriangle } from "lucide-react";
+import { Search, Filter, FileText, AlertTriangle, X, Download, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
 import type { Claim } from "@shared/schema";
 
@@ -138,31 +140,76 @@ export default function ClaimsPage() {
     },
   ];
 
+  const highRiskCount = claims?.filter(c => c.readinessStatus === "RED").length || 0;
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-semibold">Claims</h1>
-          <p className="text-muted-foreground mt-1">
+          <h1 className="text-2xl font-semibold">Claims</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             Monitor and manage all claims with risk scoring
           </p>
         </div>
-        {atRiskCount > 0 && (
-          <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
-            <CardContent className="p-3 flex items-center gap-3">
-              <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-              <div>
-                <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                  {atRiskCount} claims at risk
-                </p>
-                <p className="text-xs text-amber-600/80 dark:text-amber-400/80">
-                  Require attention
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        <div className="flex items-center gap-3">
+          <Badge variant="outline" className="text-xs">
+            {claims?.length || 0} total claims
+          </Badge>
+          <Button variant="outline" size="sm" className="gap-2" data-testid="button-export-claims">
+            <Download className="h-4 w-4" />
+            Export
+          </Button>
+        </div>
       </div>
+
+      {highRiskCount > 0 && (
+        <div className="flex items-center justify-between gap-4 p-4 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-red-100 dark:bg-red-900/50 flex items-center justify-center">
+              <AlertTriangle className="h-5 w-5 text-red-600 dark:text-red-400" />
+            </div>
+            <div>
+              <p className="font-medium text-red-700 dark:text-red-300">
+                {highRiskCount} high-risk claims need attention
+              </p>
+              <p className="text-sm text-red-600/80 dark:text-red-400/80">
+                These claims have a high probability of denial
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRiskFilter("RED")}
+              className="gap-1"
+              data-testid="button-view-high-risk"
+            >
+              View Claims
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" data-testid="button-dismiss-alert">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {atRiskCount > 0 && highRiskCount === 0 && (
+        <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
+          <CardContent className="p-3 flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+            <div>
+              <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                {atRiskCount} claims at moderate risk
+              </p>
+              <p className="text-xs text-amber-600/80 dark:text-amber-400/80">
+                Require attention
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex items-center gap-4 flex-wrap">
         <div className="relative flex-1 max-w-md">

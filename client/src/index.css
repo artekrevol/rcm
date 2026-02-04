@@ -296,6 +296,69 @@
     inset: -1px;
   }
 
+  /* Metric Card Backgrounds (from design system) */
+  .metric-blue {
+    background: linear-gradient(135deg, hsl(210 100% 97%) 0%, hsl(210 60% 95%) 100%);
+  }
+
+  .dark .metric-blue {
+    background: linear-gradient(135deg, hsl(210 40% 15%) 0%, hsl(210 30% 12%) 100%);
+  }
+
+  .metric-green {
+    background: linear-gradient(135deg, hsl(142 60% 97%) 0%, hsl(142 50% 94%) 100%);
+  }
+
+  .dark .metric-green {
+    background: linear-gradient(135deg, hsl(142 40% 15%) 0%, hsl(142 30% 12%) 100%);
+  }
+
+  .metric-amber {
+    background: linear-gradient(135deg, hsl(38 80% 97%) 0%, hsl(38 70% 94%) 100%);
+  }
+
+  .dark .metric-amber {
+    background: linear-gradient(135deg, hsl(38 40% 15%) 0%, hsl(38 30% 12%) 100%);
+  }
+
+  .metric-red {
+    background: linear-gradient(135deg, hsl(0 70% 97%) 0%, hsl(0 60% 95%) 100%);
+  }
+
+  .dark .metric-red {
+    background: linear-gradient(135deg, hsl(0 40% 15%) 0%, hsl(0 30% 12%) 100%);
+  }
+
+  /* Card hover effect */
+  .card-hover {
+    transition: all 0.2s ease;
+  }
+
+  .card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px hsl(0 0% 0% / 0.1);
+  }
+
+  .dark .card-hover:hover {
+    box-shadow: 0 4px 12px hsl(0 0% 0% / 0.3);
+  }
+
+  /* Animate fade-in */
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.3s ease-out forwards;
+  }
+
   /* Chat Widget Animations */
   @keyframes chat-slide-in {
     from {

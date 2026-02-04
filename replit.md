@@ -111,6 +111,13 @@ Preferred communication style: Simple, everyday language.
 - ~~Chat Analytics Dashboard~~ - Tabbed interface with metrics/charts and All Conversations table with filtering, search, and pagination
 - ~~Returning Lead Notifications~~ - Email notification when known lead returns to website after >1 hour since last activity
 - ~~Welcome Back Personalization~~ - Returning leads see personalized greeting with their name and quick action buttons
+- ~~Enterprise Design System~~ - Updated UI matching connect-grow design patterns:
+  - MetricCard with variant backgrounds (blue/green/amber/red gradients)
+  - Time period selector tabs (Week/Month/Quarter/Year) on Dashboard and Intelligence
+  - Revenue Protected card with gradient background and split metrics
+  - High-risk alert banner on Claims page with action buttons
+  - Arrow trend indicators (ArrowUpRight/ArrowDownRight) replacing TrendingUp/Down
+  - Export Report buttons on Intelligence and Claims pages
 
 ### Future Enhancements
 - Revenue Impact Reporting - Estimated revenue protected

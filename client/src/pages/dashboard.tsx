@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MetricCard, RevenueProtectedCard } from "@/components/metric-card";
 import { StatusBadge, ClaimStatusBadge } from "@/components/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,32 +13,38 @@ import {
   FileWarning,
   Clock,
   Building2,
-  TrendingUp,
   AlertTriangle,
   ArrowRight,
   FileText,
+  ExternalLink,
+  Bell,
 } from "lucide-react";
 import { format } from "date-fns";
 import type { DashboardMetrics, Claim } from "@shared/schema";
 import {
-  AreaChart,
-  Area,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Legend,
 } from "recharts";
 
-const weeklyTrendData = [
-  { name: "Week 1", claims: 142, denials: 18, prevented: 15 },
-  { name: "Week 2", claims: 156, denials: 12, prevented: 22 },
-  { name: "Week 3", claims: 138, denials: 8, prevented: 28 },
-  { name: "Week 4", claims: 167, denials: 6, prevented: 34 },
+const monthlyTrendData = [
+  { name: "Jul", claims: 420, prevented: 85, denials: 35 },
+  { name: "Aug", claims: 380, prevented: 92, denials: 28 },
+  { name: "Sep", claims: 450, prevented: 110, denials: 22 },
+  { name: "Oct", claims: 520, prevented: 145, denials: 18 },
+  { name: "Nov", claims: 480, prevented: 160, denials: 15 },
+  { name: "Dec", claims: 550, prevented: 180, denials: 12 },
+  { name: "Jan", claims: 510, prevented: 175, denials: 10 },
 ];
 
 export default function DashboardPage() {
   const [, setLocation] = useLocation();
+  const [timePeriod, setTimePeriod] = useState("month");
 
   const { data: metrics, isLoading: metricsLoading } = useQuery<DashboardMetrics>({
     queryKey: ["/api/dashboard/metrics"],
@@ -54,14 +62,20 @@ export default function DashboardPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-semibold">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">
-            Real-time overview of your claim health
+          <h1 className="text-2xl font-semibold">Dashboard</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Revenue cycle overview and real-time alerts
           </p>
         </div>
-        <Badge variant="outline" className="text-xs">
-          Last updated: {format(new Date(), "MMM d, h:mm a")}
-        </Badge>
+        <div className="flex items-center gap-3">
+          <Badge variant="outline" className="text-xs">
+            Last 30 Days
+          </Badge>
+          <Button variant="default" size="sm" className="gap-2" data-testid="button-view-alerts">
+            <Bell className="h-4 w-4" />
+            View All Alerts
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -108,42 +122,26 @@ export default function DashboardPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2">
-          <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-2">
+          <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-4">
             <CardTitle className="text-base font-medium">
-              Monthly Trend
+              Monthly Trends
             </CardTitle>
-            <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <div className="h-3 w-3 rounded-full bg-primary" />
-                <span className="text-muted-foreground">Claims</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="h-3 w-3 rounded-full bg-emerald-500" />
-                <span className="text-muted-foreground">Prevented</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="h-3 w-3 rounded-full bg-red-500" />
-                <span className="text-muted-foreground">Denials</span>
-              </div>
-            </div>
+            <Tabs value={timePeriod} onValueChange={setTimePeriod}>
+              <TabsList className="h-8">
+                <TabsTrigger value="week" className="text-xs px-3 h-7">Week</TabsTrigger>
+                <TabsTrigger value="month" className="text-xs px-3 h-7">Month</TabsTrigger>
+                <TabsTrigger value="quarter" className="text-xs px-3 h-7">Quarter</TabsTrigger>
+                <TabsTrigger value="year" className="text-xs px-3 h-7">Year</TabsTrigger>
+              </TabsList>
+            </Tabs>
           </CardHeader>
           <CardContent>
-            <div className="h-64">
+            <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={weeklyTrendData}>
-                  <defs>
-                    <linearGradient id="colorClaims" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="colorDenials" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(0 72% 50%)" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="hsl(0 72% 50%)" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                  <XAxis dataKey="name" className="text-xs" />
-                  <YAxis className="text-xs" />
+                <LineChart data={monthlyTrendData}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" vertical={false} />
+                  <XAxis dataKey="name" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 12 }} tickLine={false} axisLine={false} />
                   <Tooltip
                     contentStyle={{
                       backgroundColor: "hsl(var(--card))",
@@ -151,78 +149,97 @@ export default function DashboardPage() {
                       borderRadius: "8px",
                     }}
                   />
-                  <Area
+                  <Line
                     type="monotone"
                     dataKey="claims"
                     stroke="hsl(var(--primary))"
                     strokeWidth={2}
-                    fillOpacity={1}
-                    fill="url(#colorClaims)"
+                    dot={false}
+                    name="Total Claims"
                   />
-                  <Area
+                  <Line
                     type="monotone"
                     dataKey="prevented"
                     stroke="hsl(145 70% 42%)"
                     strokeWidth={2}
-                    fillOpacity={0.5}
-                    fill="hsl(145 70% 42% / 0.2)"
+                    dot={false}
+                    name="Prevented"
                   />
-                  <Area
+                  <Line
                     type="monotone"
                     dataKey="denials"
                     stroke="hsl(0 72% 50%)"
                     strokeWidth={2}
-                    fillOpacity={1}
-                    fill="url(#colorDenials)"
+                    dot={false}
+                    name="Denials"
                   />
-                </AreaChart>
+                </LineChart>
               </ResponsiveContainer>
+            </div>
+            <div className="flex items-center justify-center gap-6 mt-4 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="h-0.5 w-4 bg-primary rounded" />
+                <span className="text-muted-foreground">Total Claims</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-0.5 w-4 bg-emerald-500 rounded" />
+                <span className="text-muted-foreground">Prevented</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-0.5 w-4 bg-red-500 rounded" />
+                <span className="text-muted-foreground">Denials</span>
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        <div className="space-y-4">
-          <RevenueProtectedCard
-            amount={metrics?.revenueProtected || 0}
-            claimsProtected={metrics?.denialsPrevented || 0}
-          />
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-2">
-              <CardTitle className="text-base font-medium flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-amber-500" />
-                Active Alerts
-              </CardTitle>
-              <Badge variant="secondary" className="text-xs">
-                {alerts?.length || 0}
-              </Badge>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {alerts?.slice(0, 3).map((alert) => (
-                <div
-                  key={alert.id}
-                  className="flex items-start gap-3 p-3 rounded-lg bg-muted/50 cursor-pointer hover-elevate"
-                  onClick={() => setLocation(`/claims/${alert.claimId}`)}
-                  data-testid={`alert-${alert.id}`}
-                >
-                  <div className={`h-2 w-2 rounded-full mt-1.5 shrink-0 ${alert.severity === "high" ? "bg-red-500" : "bg-amber-500"}`} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">{alert.title}</p>
-                    <p className="text-xs text-muted-foreground">{alert.description}</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {format(new Date(alert.timestamp), "MMM d, h:mm a")}
-                    </p>
-                  </div>
-                </div>
-              )) || (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  No active alerts
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <RevenueProtectedCard
+          amount={metrics?.revenueProtected || 2400000}
+          claimsProtected={metrics?.denialsPrevented || 156}
+        />
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-2">
+          <CardTitle className="text-base font-medium">
+            Active Alerts
+          </CardTitle>
+          <Button variant="ghost" size="sm" className="gap-1 text-sm" data-testid="link-view-all-alerts">
+            View All
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {alerts?.slice(0, 4).map((alert) => (
+            <div
+              key={alert.id}
+              className="flex items-center justify-between gap-4 p-3 rounded-lg hover-elevate cursor-pointer border border-transparent hover:border-border"
+              onClick={() => setLocation(`/claims/${alert.claimId}`)}
+              data-testid={`alert-${alert.id}`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`h-2 w-2 rounded-full shrink-0 ${alert.severity === "high" ? "bg-red-500" : "bg-amber-500"}`} />
+                <div>
+                  <p className="text-sm font-medium">{alert.title}</p>
+                  <p className="text-xs text-muted-foreground">{alert.description}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-4 shrink-0">
+                <span className="text-xs text-muted-foreground">
+                  {format(new Date(alert.timestamp), "h:mm a")}
+                </span>
+                <Button variant="outline" size="sm" className="h-7">
+                  View
+                </Button>
+              </div>
+            </div>
+          )) || (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              No active alerts
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -23,6 +24,9 @@ import {
   Sparkles,
   Shield,
   AlertTriangle,
+  ArrowUpRight,
+  ArrowDownRight,
+  Download,
 } from "lucide-react";
 import type { DenialCluster } from "@shared/schema";
 import {
@@ -42,6 +46,7 @@ export default function IntelligencePage() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [payerFilter, setPayerFilter] = useState("All Payers");
+  const [timePeriod, setTimePeriod] = useState("month");
 
   const { data: clusters, isLoading } = useQuery<DenialCluster[]>({
     queryKey: ["/api/intelligence/clusters"],
@@ -91,22 +96,39 @@ export default function IntelligencePage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-3xl font-semibold flex items-center gap-3">
-            <Brain className="h-8 w-8 text-primary" />
+          <h1 className="text-2xl font-semibold flex items-center gap-3">
+            <Brain className="h-7 w-7 text-primary" />
             Denial Intelligence
           </h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-sm text-muted-foreground mt-1">
             AI-powered pattern detection and prevention rule generation
           </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Tabs value={timePeriod} onValueChange={setTimePeriod}>
+            <TabsList className="h-8">
+              <TabsTrigger value="week" className="text-xs px-3 h-7">Week</TabsTrigger>
+              <TabsTrigger value="month" className="text-xs px-3 h-7">Month</TabsTrigger>
+              <TabsTrigger value="quarter" className="text-xs px-3 h-7">Quarter</TabsTrigger>
+              <TabsTrigger value="year" className="text-xs px-3 h-7">Year</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <Button variant="outline" size="sm" className="gap-2" data-testid="button-export-report">
+            <Download className="h-4 w-4" />
+            Export Report
+          </Button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <Card className="lg:col-span-3">
-          <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-2">
+          <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0 pb-4">
             <CardTitle className="text-base font-medium">
               Denial Patterns by Root Cause
             </CardTitle>
+            <Badge variant="secondary" className="text-xs">
+              {topPatterns?.length || 0} patterns detected
+            </Badge>
           </CardHeader>
           <CardContent>
             <div className="h-64">
@@ -156,20 +178,23 @@ export default function IntelligencePage() {
         </Card>
 
         <Card>
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-3">
             <CardTitle className="text-base font-medium">Top Patterns</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-3">
             {topPatterns?.slice(0, 5).map((pattern, idx) => (
-              <div key={idx} className="flex items-center justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm truncate">{pattern.rootCause}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {pattern.count} denials
-                  </p>
+              <div key={idx} className="flex items-center justify-between gap-2 p-2 rounded-lg hover-elevate">
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <div className={`h-2 w-2 rounded-full shrink-0 ${idx === 0 ? 'bg-red-500' : idx === 1 ? 'bg-orange-500' : 'bg-primary'}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate">{pattern.rootCause}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {pattern.count} denials
+                    </p>
+                  </div>
                 </div>
                 <div
-                  className={`flex items-center gap-1 text-xs ${
+                  className={`flex items-center gap-1 text-xs font-medium ${
                     pattern.change > 0
                       ? "text-red-600 dark:text-red-400"
                       : pattern.change < 0
@@ -178,9 +203,9 @@ export default function IntelligencePage() {
                   }`}
                 >
                   {pattern.change > 0 ? (
-                    <TrendingUp className="h-3 w-3" />
+                    <ArrowUpRight className="h-3.5 w-3.5" />
                   ) : pattern.change < 0 ? (
-                    <TrendingDown className="h-3 w-3" />
+                    <ArrowDownRight className="h-3.5 w-3.5" />
                   ) : null}
                   {pattern.change !== 0 && `${Math.abs(pattern.change)}%`}
                 </div>

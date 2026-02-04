@@ -1,6 +1,7 @@
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, ArrowUpRight, ArrowDownRight } from "lucide-react";
 
 interface MetricCardProps {
   title: string;
@@ -9,9 +10,11 @@ interface MetricCardProps {
   trend?: {
     value: number;
     label: string;
+    isPositive?: boolean;
   };
   subtitle?: string;
   className?: string;
+  variant?: "default" | "blue" | "green" | "amber" | "red";
 }
 
 export function MetricCard({
@@ -21,42 +24,52 @@ export function MetricCard({
   trend,
   subtitle,
   className,
+  variant = "default",
 }: MetricCardProps) {
   const getTrendIcon = (value: number) => {
-    if (value > 0) return <TrendingUp className="h-3 w-3" />;
-    if (value < 0) return <TrendingDown className="h-3 w-3" />;
+    if (value > 0) return <ArrowUpRight className="h-3.5 w-3.5" />;
+    if (value < 0) return <ArrowDownRight className="h-3.5 w-3.5" />;
     return <Minus className="h-3 w-3" />;
   };
 
-  const getTrendColor = (value: number) => {
-    if (value > 0) return "text-emerald-600 dark:text-emerald-400";
-    if (value < 0) return "text-red-600 dark:text-red-400";
-    return "text-muted-foreground";
+  const getTrendColor = (value: number, isPositive?: boolean) => {
+    const effectivePositive = isPositive !== undefined ? isPositive : value > 0;
+    if (value === 0) return "text-muted-foreground";
+    return effectivePositive ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400";
+  };
+
+  const variantStyles = {
+    default: "",
+    blue: "metric-blue",
+    green: "metric-green",
+    amber: "metric-amber",
+    red: "metric-red",
   };
 
   return (
-    <Card className={cn("", className)}>
-      <CardContent className="p-6">
-        <div className="flex items-start justify-between gap-4">
+    <Card className={cn(variantStyles[variant], className)}>
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               {title}
             </p>
-            <p className="text-3xl font-bold mt-2 truncate">{value}</p>
+            <p className="text-2xl font-bold mt-1 truncate">{value}</p>
             {trend && (
-              <div className={cn("flex items-center gap-1 mt-2", getTrendColor(trend.value))}>
+              <div className={cn("flex items-center gap-1 mt-1.5 text-sm", getTrendColor(trend.value, trend.isPositive))}>
                 {getTrendIcon(trend.value)}
-                <span className="text-xs font-medium">
+                <span className="font-medium">
                   {trend.value > 0 && "+"}
-                  {trend.value}% {trend.label}
+                  {trend.value}%
                 </span>
+                <span className="text-muted-foreground text-xs">{trend.label}</span>
               </div>
             )}
             {subtitle && (
-              <p className="text-xs text-muted-foreground mt-2">{subtitle}</p>
+              <p className="text-xs text-muted-foreground mt-1.5">{subtitle}</p>
             )}
           </div>
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
             {icon}
           </div>
         </div>
@@ -68,37 +81,68 @@ export function MetricCard({
 interface RevenueProtectedCardProps {
   amount: number;
   claimsProtected: number;
+  cleanClaimRate?: number;
+  savedThisWeek?: number;
   className?: string;
 }
 
 export function RevenueProtectedCard({
   amount,
   claimsProtected,
+  cleanClaimRate = 94,
+  savedThisWeek = 180000,
   className,
 }: RevenueProtectedCardProps) {
   const formattedAmount = new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
+    notation: "compact",
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
   }).format(amount);
 
+  const formattedSaved = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    notation: "compact",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(savedThisWeek);
+
   return (
-    <Card className={cn("border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20", className)}>
-      <CardContent className="p-6">
-        <div className="flex items-center gap-2 mb-2">
-          <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-          <p className="text-xs font-medium uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+    <div className={cn("space-y-4", className)}>
+      <Card className="bg-gradient-to-br from-primary to-primary/80 border-0 text-white">
+        <CardContent className="p-5">
+          <p className="text-sm text-white/80">
             Revenue Protected
           </p>
-        </div>
-        <p className="text-3xl font-bold text-emerald-700 dark:text-emerald-400">
-          {formattedAmount}
-        </p>
-        <p className="text-sm text-emerald-600/80 dark:text-emerald-400/80 mt-1">
-          from {claimsProtected} prevented denials
-        </p>
-      </CardContent>
-    </Card>
+          <p className="text-3xl font-bold mt-1">
+            {formattedAmount}
+          </p>
+          <p className="text-sm text-white/70 mt-1">
+            From prevented denials this quarter
+          </p>
+          <Button variant="ghost" size="sm" className="mt-3 -ml-2 text-white/90" data-testid="button-view-revenue-details">
+            View Details
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{cleanClaimRate}%</p>
+              <p className="text-xs text-muted-foreground">Clean Claim Rate</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{formattedSaved}</p>
+              <p className="text-xs text-muted-foreground">Saved This Week</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
