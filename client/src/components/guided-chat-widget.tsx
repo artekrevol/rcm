@@ -947,20 +947,20 @@ function GuidedChatContent() {
 
     if (currentStep.type === "quick-reply" && currentStep.options) {
       return (
-        <div className="p-3 border-t space-y-2">
+        <div className="p-4 border-t border-border/30 bg-gradient-to-t from-muted/20 to-transparent space-y-2">
           <div className="flex flex-wrap gap-2">
             {currentStep.options.map((option, idx) => (
               <Button
                 key={idx}
                 variant="outline"
                 size="sm"
-                className="flex items-center gap-1.5 hover-elevate"
+                className="flex items-center gap-2 chat-quick-reply-btn bg-white dark:bg-muted border-primary/20 hover:border-primary/40 hover:bg-primary/5 rounded-full px-4"
                 onClick={() => handleQuickReply(option)}
                 disabled={isLoading}
                 data-testid={`button-option-${option.value}`}
               >
-                {option.icon}
-                {option.label}
+                {option.icon && <span className="text-primary">{option.icon}</span>}
+                <span className="font-medium">{option.label}</span>
               </Button>
             ))}
           </div>
@@ -970,21 +970,21 @@ function GuidedChatContent() {
 
     if (currentStep.type === "textarea-input") {
       return (
-        <div className="p-3 border-t">
-          <div className="flex flex-col gap-2">
+        <div className="p-4 border-t border-border/30 bg-gradient-to-t from-muted/20 to-transparent">
+          <div className="flex flex-col gap-3">
             <Textarea
               ref={textareaRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder={currentStep.placeholder || "Type your response..."}
               disabled={isLoading}
-              className="min-h-[80px] resize-none"
+              className="min-h-[80px] resize-none rounded-xl border-primary/20 focus:border-primary/40 focus:ring-primary/20"
               data-testid="input-textarea-response"
             />
             <Button
               onClick={handleTextSubmit}
               disabled={!inputValue.trim() || isLoading}
-              className="self-end"
+              className="self-end chat-fab-gradient border-0 rounded-full px-5"
               data-testid="button-submit-textarea"
             >
               <Send className="h-4 w-4 mr-1.5" />
@@ -997,14 +997,14 @@ function GuidedChatContent() {
 
     if (currentStep.type === "appointment-picker") {
       return (
-        <div className="p-3 border-t">
-          <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+        <div className="p-4 border-t border-border/30 bg-gradient-to-t from-muted/20 to-transparent">
+          <div className="grid grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
             {appointmentSlots.map((slot, idx) => (
               <Button
                 key={idx}
                 variant="outline"
                 size="sm"
-                className="flex flex-col items-center gap-0.5 h-auto py-2 hover-elevate"
+                className="flex flex-col items-center gap-1 h-auto py-3 chat-quick-reply-btn bg-white dark:bg-muted border-primary/20 hover:border-primary/40 hover:bg-primary/5 rounded-xl"
                 onClick={() => {
                   setCollectedData(prev => ({ ...prev, appointmentSlot: slot.isoDate }));
                   goToNextStep(slot.isoDate, slot.formatted);
@@ -1012,9 +1012,11 @@ function GuidedChatContent() {
                 disabled={isLoading}
                 data-testid={`button-slot-${idx}`}
               >
-                <Calendar className="h-3.5 w-3.5 text-primary" />
-                <span className="text-xs font-medium">{slot.date}</span>
-                <span className="text-xs text-muted-foreground">{slot.time}</span>
+                <div className="h-6 w-6 rounded-full bg-primary/10 flex items-center justify-center">
+                  <Calendar className="h-3 w-3 text-primary" />
+                </div>
+                <span className="text-xs font-semibold">{slot.date}</span>
+                <span className="text-[10px] text-muted-foreground">{slot.time}</span>
               </Button>
             ))}
           </div>
@@ -1025,26 +1027,28 @@ function GuidedChatContent() {
 
     if (currentStep.type === "confirmation") {
       return (
-        <div className="p-3 border-t">
-          <Card className="p-3 mb-3 bg-muted/50">
-            <h4 className="text-sm font-medium mb-2 flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
+        <div className="p-4 border-t border-border/30 bg-gradient-to-t from-muted/20 to-transparent">
+          <Card className="p-4 bg-gradient-to-br from-primary/5 to-transparent border-primary/10 rounded-xl chat-bubble-enter">
+            <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <div className="h-6 w-6 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+                <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+              </div>
               Your Information
             </h4>
-            <div className="space-y-1 text-sm">
-              {collectedData.name && <p><span className="text-muted-foreground">Name:</span> {collectedData.name}</p>}
-              {collectedData.phone && <p><span className="text-muted-foreground">Phone:</span> {collectedData.phone}</p>}
-              {collectedData.email && <p><span className="text-muted-foreground">Email:</span> {collectedData.email}</p>}
-              {collectedData.treatmentType && <p><span className="text-muted-foreground">Treatment:</span> {collectedData.treatmentType}</p>}
-              {collectedData.insuranceCarrier && <p><span className="text-muted-foreground">Insurance:</span> {collectedData.insuranceCarrier.toUpperCase()}</p>}
-              {collectedData.dateOfBirth && <p><span className="text-muted-foreground">DOB:</span> {collectedData.dateOfBirth}</p>}
-              {collectedData.memberId && <p><span className="text-muted-foreground">Member ID:</span> {collectedData.memberId}</p>}
+            <div className="space-y-2 text-sm">
+              {collectedData.name && <p className="flex justify-between"><span className="text-muted-foreground">Name</span> <span className="font-medium">{collectedData.name}</span></p>}
+              {collectedData.phone && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Phone</span> <span className="font-medium">{collectedData.phone}</span></p>}
+              {collectedData.email && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Email</span> <span className="font-medium truncate max-w-[180px]">{collectedData.email}</span></p>}
+              {collectedData.treatmentType && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Treatment</span> <span className="font-medium capitalize">{collectedData.treatmentType}</span></p>}
+              {collectedData.insuranceCarrier && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Insurance</span> <span className="font-medium uppercase">{collectedData.insuranceCarrier}</span></p>}
+              {collectedData.dateOfBirth && <p className="flex justify-between gap-2"><span className="text-muted-foreground">DOB</span> <span className="font-medium">{collectedData.dateOfBirth}</span></p>}
+              {collectedData.memberId && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Member ID</span> <span className="font-medium">{collectedData.memberId}</span></p>}
             </div>
           </Card>
           {isLoading ? (
-            <div className="flex items-center justify-center py-2">
+            <div className="flex items-center justify-center py-3 gap-2">
               <Loader2 className="h-5 w-5 animate-spin text-primary" />
-              <span className="ml-2 text-sm">Saving your information...</span>
+              <span className="text-sm text-muted-foreground">Saving your information...</span>
             </div>
           ) : null}
         </div>
@@ -1053,52 +1057,53 @@ function GuidedChatContent() {
 
     if (currentStep.id === "complete" || isComplete) {
       return (
-        <div className="p-3 border-t space-y-3">
-          <Card className="p-3 bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800">
-            <h4 className="text-sm font-medium mb-2 flex items-center gap-1.5 text-green-700 dark:text-green-300">
-              <CheckCircle2 className="h-4 w-4" />
+        <div className="p-4 border-t border-border/30 bg-gradient-to-t from-muted/20 to-transparent space-y-3">
+          <Card className="p-4 bg-gradient-to-br from-green-50 to-green-50/50 dark:from-green-950/40 dark:to-green-950/20 border-green-200/50 dark:border-green-800/50 rounded-xl chat-bubble-enter">
+            <h4 className="text-sm font-semibold mb-3 flex items-center gap-2 text-green-700 dark:text-green-300">
+              <div className="h-6 w-6 rounded-full bg-green-100 dark:bg-green-900/50 flex items-center justify-center">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              </div>
               Submission Confirmed
             </h4>
-            <div className="space-y-1 text-sm">
-              {collectedData.name && <p><span className="text-muted-foreground">Name:</span> {collectedData.name}</p>}
-              {collectedData.phone && <p><span className="text-muted-foreground">Phone:</span> {collectedData.phone}</p>}
-              {collectedData.email && <p><span className="text-muted-foreground">Email:</span> {collectedData.email}</p>}
-              {collectedData.treatmentType && <p><span className="text-muted-foreground">Treatment:</span> {collectedData.treatmentType}</p>}
+            <div className="space-y-2 text-sm">
+              {collectedData.name && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Name</span> <span className="font-medium">{collectedData.name}</span></p>}
+              {collectedData.phone && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Phone</span> <span className="font-medium">{collectedData.phone}</span></p>}
+              {collectedData.email && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Email</span> <span className="font-medium truncate max-w-[180px]">{collectedData.email}</span></p>}
+              {collectedData.treatmentType && <p className="flex justify-between gap-2"><span className="text-muted-foreground">Treatment</span> <span className="font-medium capitalize">{collectedData.treatmentType}</span></p>}
             </div>
           </Card>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="flex-1"
-              onClick={() => {
-                setIsComplete(false);
-                setCurrentStepId("main_menu");
-                addMessage("assistant", "What else can I help you with?");
-              }}
-              data-testid="button-start-over"
-            >
-              Start New Inquiry
-            </Button>
-          </div>
-          <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full rounded-full border-primary/20 hover:border-primary/40 hover:bg-primary/5"
+            onClick={() => {
+              setIsComplete(false);
+              setCurrentStepId("main_menu");
+              addMessage("assistant", "What else can I help you with?");
+            }}
+            data-testid="button-start-over"
+          >
+            Start New Inquiry
+          </Button>
+          <div className="chat-input-wrapper flex items-center gap-2 p-1 pl-4">
             <Input
               ref={inputRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleFreeformMessage(); }}
-              placeholder="Ask a question..."
+              placeholder="Ask a follow-up question..."
               disabled={isLoading}
-              className="flex-1"
+              className="flex-1 border-0 bg-transparent focus-visible:ring-0 h-9"
               data-testid="input-chat-message"
             />
             <Button
               onClick={handleFreeformMessage}
               disabled={!inputValue.trim() || isLoading}
               size="icon"
+              className="h-8 w-8 rounded-full chat-fab-gradient border-0"
               data-testid="button-send-message"
             >
-              <Send className="h-4 w-4" />
+              <Send className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
@@ -1115,9 +1120,19 @@ function GuidedChatContent() {
       setInputValue(value);
     };
 
+    const getInputIcon = () => {
+      switch (currentStep.type) {
+        case "email-input": return <Mail className="h-4 w-4 text-muted-foreground" />;
+        case "phone-input": return <Phone className="h-4 w-4 text-muted-foreground" />;
+        case "dob-input": return <Calendar className="h-4 w-4 text-muted-foreground" />;
+        default: return null;
+      }
+    };
+
     return (
-      <div className="p-3 border-t">
-        <div className="flex gap-2">
+      <div className="p-4 border-t border-border/30 bg-gradient-to-t from-muted/20 to-transparent">
+        <div className="chat-input-wrapper flex items-center gap-2 p-1 pl-3">
+          {getInputIcon()}
           <Input
             ref={inputRef}
             value={inputValue}
@@ -1126,16 +1141,17 @@ function GuidedChatContent() {
             placeholder={currentStep.placeholder || "Type your response..."}
             disabled={isLoading}
             type={currentStep.type === "email-input" ? "email" : "text"}
-            className="flex-1"
+            className="flex-1 border-0 bg-transparent focus-visible:ring-0 h-9"
             data-testid="input-guided-response"
           />
           <Button
             onClick={handleTextSubmit}
             disabled={!inputValue.trim() || isLoading}
             size="icon"
+            className="h-8 w-8 rounded-full chat-fab-gradient border-0"
             data-testid="button-submit-response"
           >
-            <ArrowRight className="h-4 w-4" />
+            <ArrowRight className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
@@ -1152,16 +1168,20 @@ function GuidedChatContent() {
           zIndex: 2147483647,
         }}
       >
-        <div className="relative">
+        <div className="relative group">
+          <div className="absolute inset-0 rounded-full chat-fab-gradient opacity-0 group-hover:opacity-100 blur-xl transition-opacity duration-300" />
+          <div className="absolute inset-0 rounded-full chat-fab-gradient chat-pulse-ring opacity-30" />
           <Button
             onClick={handleOpen}
             size="icon"
-            className="h-14 w-14 rounded-full shadow-lg"
+            className="h-14 w-14 rounded-full shadow-xl chat-fab-gradient border-0 relative z-10 transition-transform duration-200 hover:scale-105"
             data-testid="button-chat-widget"
           >
-            <MessageCircle className="h-6 w-6" />
+            <MessageCircle className="h-6 w-6 text-white" />
           </Button>
-          <span className="absolute -top-1 -right-1 h-4 w-4 bg-green-500 rounded-full border-2 border-background animate-pulse" />
+          <span className="absolute -top-0.5 -right-0.5 h-3.5 w-3.5 bg-green-400 rounded-full border-2 border-background z-20">
+            <span className="absolute inset-0 rounded-full bg-green-400 animate-ping opacity-75" />
+          </span>
         </div>
       </div>
     );
@@ -1180,11 +1200,16 @@ function GuidedChatContent() {
         onClick={() => setIsMinimized(false)}
         data-testid="chat-widget-minimized"
       >
-        <Card className="p-3 shadow-lg flex items-center gap-2 hover-elevate">
-          <Bot className="h-5 w-5 text-primary" />
-          <span className="text-sm font-medium">Claim Shield Health</span>
+        <Card className="p-3 shadow-xl flex items-center gap-3 hover-elevate chat-glass border-primary/10 chat-widget-enter">
+          <div className="h-8 w-8 rounded-full chat-fab-gradient flex items-center justify-center">
+            <Bot className="h-4 w-4 text-white" />
+          </div>
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold">Claim Shield Health</span>
+            <span className="text-xs text-muted-foreground">Click to continue chat</span>
+          </div>
           {messages.length > 0 && (
-            <Badge variant="secondary" className="text-xs">
+            <Badge className="bg-primary/10 text-primary border-0 text-xs">
               {messages.length}
             </Badge>
           )}
@@ -1202,22 +1227,25 @@ function GuidedChatContent() {
         zIndex: 2147483647,
       }}
     >
-      <Card className="w-[380px] h-[520px] shadow-xl flex flex-col overflow-hidden" data-testid="chat-widget-window">
-        <div className="flex items-center justify-between p-3 border-b bg-primary text-primary-foreground">
-          <div className="flex items-center gap-2">
-            <div className="h-9 w-9 rounded-full bg-primary-foreground/20 flex items-center justify-center">
+      <Card className="w-[400px] h-[560px] shadow-2xl flex flex-col overflow-hidden chat-widget-enter border-0 rounded-2xl" data-testid="chat-widget-window">
+        <div className="flex items-center justify-between p-4 chat-header-gradient text-white">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
               <Bot className="h-5 w-5" />
             </div>
             <div>
               <h3 className="font-semibold text-sm">Claim Shield Health</h3>
-              <p className="text-xs opacity-80">Here to help you</p>
+              <div className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
+                <p className="text-xs opacity-90">Online now</p>
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"
               size="icon"
-              className="text-primary-foreground hover:bg-primary-foreground/20"
+              className="text-white hover:bg-white/20 rounded-full"
               onClick={handleMinimize}
               data-testid="button-minimize-chat"
             >
@@ -1226,7 +1254,7 @@ function GuidedChatContent() {
             <Button
               variant="ghost"
               size="icon"
-              className="text-primary-foreground hover:bg-primary-foreground/20"
+              className="text-white hover:bg-white/20 rounded-full"
               onClick={handleClose}
               data-testid="button-close-chat"
             >
@@ -1236,101 +1264,109 @@ function GuidedChatContent() {
         </div>
 
         {currentStepId !== "welcome" && currentStepId !== "main_menu" && currentStepId !== "complete" && collectedData.mainChoice && (
-          <div className="px-3 py-2 border-b bg-muted/30">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-xs text-muted-foreground">Progress</span>
-              <span className="text-xs font-medium">{progressPercent}%</span>
+          <div className="px-4 py-2.5 border-b bg-gradient-to-r from-primary/5 to-transparent">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Your progress</span>
+              <Badge variant="secondary" className="text-[10px] h-5 px-2 bg-primary/10 text-primary border-0">
+                {progressPercent}% complete
+              </Badge>
             </div>
-            <Progress value={progressPercent} className="h-1.5" />
+            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+              <div 
+                className="h-full chat-fab-gradient rounded-full transition-all duration-500 ease-out"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
           </div>
         )}
 
-        <ScrollArea className="flex-1">
-          <div className="p-3 space-y-3" ref={scrollRef}>
-            {messages.map((message) => (
+        <ScrollArea className="flex-1 bg-gradient-to-b from-muted/20 to-transparent">
+          <div className="p-4 space-y-4" ref={scrollRef}>
+            {messages.map((message, idx) => (
               <div
                 key={message.id}
                 className={cn(
-                  "flex gap-2",
+                  "flex gap-2.5 chat-message-enter",
                   message.role === "user" ? "justify-end" : "justify-start"
                 )}
+                style={{ animationDelay: `${idx * 50}ms` }}
               >
                 {message.role === "assistant" && (
-                  <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    <Bot className="h-3.5 w-3.5 text-primary" />
+                  <div className="h-8 w-8 rounded-full chat-fab-gradient flex items-center justify-center flex-shrink-0 shadow-sm">
+                    <Bot className="h-4 w-4 text-white" />
                   </div>
                 )}
                 <div
                   className={cn(
-                    "max-w-[85%] rounded-lg px-3 py-2 text-sm",
+                    "max-w-[80%] rounded-2xl px-4 py-2.5 text-sm shadow-sm",
                     message.role === "user"
-                      ? message.isQuickReply 
-                        ? "bg-primary/80 text-primary-foreground"
-                        : "bg-primary text-primary-foreground"
-                      : "bg-muted"
+                      ? "chat-user-bubble text-white rounded-br-md"
+                      : "bg-white dark:bg-muted border border-border/50 rounded-bl-md"
                   )}
                   data-testid={`message-${message.role}`}
                 >
                   {message.content}
                 </div>
                 {message.role === "user" && (
-                  <div className="h-7 w-7 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
-                    <User className="h-3.5 w-3.5 text-primary-foreground" />
+                  <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-primary/80 flex items-center justify-center flex-shrink-0 shadow-sm">
+                    <User className="h-4 w-4 text-white" />
                   </div>
                 )}
               </div>
             ))}
             
             {returningLead && currentStepId === "main_menu" && (
-              <Card className="bg-muted/50 p-4 space-y-3" data-testid="card-welcome-back">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h4 className="font-semibold text-base">Come visit us!</h4>
-                    <p className="text-sm text-muted-foreground">The best way to experience our services is in person. We would love to have you!</p>
+              <Card className="p-4 space-y-4 bg-gradient-to-br from-primary/5 via-transparent to-transparent border-primary/10 rounded-xl chat-bubble-enter" data-testid="card-welcome-back">
+                <div className="flex items-start gap-3">
+                  <div className="h-10 w-10 rounded-full chat-fab-gradient flex items-center justify-center flex-shrink-0 shadow-sm">
+                    <Heart className="h-5 w-5 text-white" />
                   </div>
-                  <div className="flex -space-x-2">
-                    <div className="h-8 w-8 rounded-full bg-primary/20 border-2 border-background flex items-center justify-center">
-                      <User className="h-4 w-4 text-primary" />
-                    </div>
+                  <div>
+                    <h4 className="font-semibold text-sm">Welcome back!</h4>
+                    <p className="text-xs text-muted-foreground mt-0.5">The best way to experience our services is in person. We would love to have you visit!</p>
                   </div>
                 </div>
-                <Button 
-                  variant="outline" 
-                  className="w-full justify-between" 
-                  onClick={() => {
-                    setCurrentStepId("admissions_treatment_type");
-                    setCollectedData(prev => ({ ...prev, mainChoice: "admissions" }));
-                    const step = conversationFlow.find(s => s.id === "admissions_treatment_type");
-                    if (step && sessionId) {
-                      addMessageWithPersist("assistant", step.message, sessionId, "admissions_treatment_type");
-                    }
-                  }}
-                  data-testid="button-schedule-tour"
-                >
-                  <span>Connect With Admissions</span>
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-                <Button 
-                  variant="default" 
-                  className="w-full"
-                  onClick={() => window.open(`/deals/${returningLead.id}`, '_blank')}
-                  data-testid="button-view-profile"
-                >
-                  View My Profile
-                </Button>
+                <div className="space-y-2">
+                  <Button 
+                    variant="outline" 
+                    className="w-full justify-between rounded-full border-primary/20 hover:border-primary/40 hover:bg-primary/5" 
+                    onClick={() => {
+                      setCurrentStepId("admissions_treatment_type");
+                      setCollectedData(prev => ({ ...prev, mainChoice: "admissions" }));
+                      const step = conversationFlow.find(s => s.id === "admissions_treatment_type");
+                      if (step && sessionId) {
+                        addMessageWithPersist("assistant", step.message, sessionId, "admissions_treatment_type");
+                      }
+                    }}
+                    data-testid="button-schedule-tour"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-primary" />
+                      Connect With Admissions
+                    </span>
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                  <Button 
+                    className="w-full chat-fab-gradient border-0 rounded-full"
+                    onClick={() => window.open(`/deals/${returningLead.id}`, '_blank')}
+                    data-testid="button-view-profile"
+                  >
+                    View My Profile
+                  </Button>
+                </div>
               </Card>
             )}
 
             {isLoading && currentStepId !== "confirmation" && (
-              <div className="flex gap-2 justify-start">
-                <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                  <Bot className="h-3.5 w-3.5 text-primary" />
+              <div className="flex gap-2.5 justify-start chat-message-enter">
+                <div className="h-8 w-8 rounded-full chat-fab-gradient flex items-center justify-center flex-shrink-0 shadow-sm">
+                  <Bot className="h-4 w-4 text-white" />
                 </div>
-                <div className="bg-muted rounded-lg px-3 py-2">
-                  <div className="flex gap-1">
-                    <span className="h-2 w-2 bg-muted-foreground/50 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <span className="h-2 w-2 bg-muted-foreground/50 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <span className="h-2 w-2 bg-muted-foreground/50 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                <div className="bg-white dark:bg-muted border border-border/50 rounded-2xl rounded-bl-md px-4 py-3 shadow-sm">
+                  <div className="flex gap-1.5 items-center">
+                    <span className="typing-dot h-2 w-2 bg-primary/60 rounded-full" />
+                    <span className="typing-dot h-2 w-2 bg-primary/60 rounded-full" />
+                    <span className="typing-dot h-2 w-2 bg-primary/60 rounded-full" />
                   </div>
                 </div>
               </div>
@@ -1340,8 +1376,9 @@ function GuidedChatContent() {
 
         {renderInputArea()}
 
-        <div className="px-3 py-1.5 border-t bg-muted/20">
-          <p className="text-[10px] text-muted-foreground text-center">
+        <div className="px-4 py-2 bg-gradient-to-r from-muted/30 to-muted/10 border-t border-border/30">
+          <p className="text-[10px] text-muted-foreground text-center flex items-center justify-center gap-1.5">
+            <Shield className="h-3 w-3" />
             Powered by Claim Shield Health
           </p>
         </div>
