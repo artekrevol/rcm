@@ -1,0 +1,1502 @@
+# ClaimShield 2.0 — Final Build Prompt (Schema-Confirmed)
+# Version: Final + Schema Verified | All 6 schema questions answered and incorporated.
+# Read every section before writing a single line of code.
+
+---
+
+## Section 1: What this codebase is and what we are doing to it
+
+ClaimShield is a React 18 + TypeScript + Express.js + PostgreSQL application being restructured into two distinct product modules within one codebase. The routing library is **Wouter** — not React Router, not Next.js. All route changes must use Wouter `Switch`, `Route`, and `Redirect` syntax exactly as the existing App.tsx uses them.
+
+**The two modules:**
+- `ClaimShield Billing` — RCM, claim creation, denial management, analytics. Path prefix: `/billing/*`
+- `ClaimShield Intake` — Lead pipeline, AI calling, SMS, email, chat widget, scheduling. Path prefix: `/intake/*`
+
+Both modules share one PostgreSQL database, one Express backend, and one Passport.js authentication system. They are separated by frontend route prefixes, role-based access control middleware, and distinct sidebar navigation components.
+
+**What we are doing:**
+1. Restructure existing Wouter routes into `/billing/*` and `/intake/*` namespaces
+2. Implement role-based access control — roles exist in the schema but are enforced nowhere
+3. Fix the logout flow — it currently only navigates to `/login` without destroying the session
+4. Build the billing core loop on top of existing working infrastructure
+5. Fix the VerifyTX timeout and add manual VOB fallback
+6. Add missing database tables and columns without destroying existing data
+7. Resolve all limiting factors identified in product review
+
+**What we are NOT doing:**
+- Rebuilding Vapi, Twilio, Gmail, or chat widget integrations — these work
+- Rewriting the denial intelligence engine, risk scoring, or prior auth tracker — these work
+- Dropping any tables or removing any columns
+- Changing the Passport.js auth system structure
+
+---
+
+## Section 2: Verified schemas — exact current state
+
+All schemas confirmed from live database. Build against these exactly.
+
+### claims
+| Column | Type |
+|---|---|
+| id | character varying |
+| patient_id | character varying |
+| encounter_id | character varying |
+| payer | text |
+| cpt_codes | jsonb |
+| amount | real |
+| status | text |
+| risk_score | integer |
+| readiness_status | text |
+| created_at | timestamp |
+| reason | text |
+| next_step | text |
+
+### encounters
+| Column | Type |
+|---|---|
+| id | character varying |
+| patient_id | character varying |
+| service_type | text |
+| facility_type | text |
+| admission_type | text |
+| expected_start_date | text |
+
+### patients
+| Column | Type |
+|---|---|
+| id | character varying |
+| lead_id | character varying |
+| dob | text |
+| state | text |
+| insurance_carrier | text |
+| member_id | text |
+| plan_type | text |
+
+### leads
+| Column | Type |
+|---|---|
+| id | character varying |
+| name | text |
+| phone | text |
+| email | text |
+| source | text |
+| status | text |
+| created_at | timestamp |
+| service_needed | text |
+| insurance_carrier | text |
+| member_id | text |
+| priority | text |
+| next_action | text |
+| next_action_at | timestamp |
+| last_outcome | text |
+| attempt_count | integer |
+| last_contacted_at | timestamp |
+| vob_status | text |
+| vob_score | integer |
+| plan_type | text |
+| owner_user_id | character varying |
+| handoff_status | text |
+| next_action_type | text |
+| sla_deadline_at | timestamp |
+| outcome_code | text |
+| vob_missing_fields | jsonb |
+| first_name | text |
+| last_name | text |
+| preferred_name | text |
+| state | text |
+| timezone | text |
+| best_time_to_call | text |
+| notes | text |
+| consent_to_call | boolean |
+
+### vob_verifications
+| Column | Type |
+|---|---|
+| id | character varying |
+| lead_id | character varying |
+| patient_id | character varying |
+| verifytx_vob_id | text |
+| payer_id | text |
+| payer_name | text |
+| member_id | text |
+| status | text |
+| policy_status | text |
+| policy_type | text |
+| effective_date | text |
+| term_date | text |
+| copay | real |
+| deductible | real |
+| deductible_met | real |
+| coinsurance | real |
+| out_of_pocket_max | real |
+| out_of_pocket_met | real |
+| benefits_remaining | real |
+| prior_auth_required | boolean |
+| network_status | text |
+| coverage_limits | text |
+| plan_name | text |
+| payer_notes | text |
+| pdf_url | text |
+| raw_response | jsonb |
+| error_message | text |
+| verified_at | timestamp |
+| created_at | timestamp |
+
+### activity_logs
+| Column | Type |
+|---|---|
+| id | character varying |
+| lead_id | character varying |
+| activity_type | text |
+| field | text |
+| old_value | text |
+| new_value | text |
+| description | text |
+| metadata | jsonb |
+| performed_by | text |
+| created_at | timestamp |
+
+### claim_events
+| Column | Type |
+|---|---|
+| id | character varying |
+| claim_id | character varying |
+| type | text |
+| timestamp | timestamp |
+| notes | text |
+
+### Key observations — read before writing any code
+
+**Patients table is very thin.** Nearly all demographic data lives on the `leads` table (first_name, last_name, phone, email, dob, state, insurance info). The billing module enriches the patients table via migration and the intake→billing handoff.
+
+**No payers table exists.** Payer is stored as plain `text` on `claims.payer` and `patients.insurance_carrier`. The migration creates a normalized payers table. New claims use `payer_id` FK. Existing text fields are preserved.
+
+**patients.dob is stored as text.** Do not cast it to a date type anywhere. Preserve as text throughout.
+
+**claims.cpt_codes is JSONB.** The existing seeded data uses CPT codes (90834, 90837, 99213, 99214, 99215) stored as a JSON array. The new claim wizard uses HCPCS codes stored in a new `service_lines` JSONB column. Both coexist on the claims table — do not remove or overwrite cpt_codes.
+
+**activity_logs has no claim_id or patient_id.** Only `lead_id`. The migration adds both nullable columns so billing events can be logged properly.
+
+**vob_verifications already has both lead_id and patient_id.** The dual-module VOB design works without restructuring. Only a `context` column needs to be added.
+
+**No auth guards exist.** Every route is currently accessible without authentication. The `AppSidebar` hardcodes "RCM Admin" and "admin@claimshield.health" with no role detection. Logout only navigates to `/login` without destroying the Passport.js session.
+
+### The /api/leads/:id/claim-packet endpoint — deprecated demo stub
+
+This endpoint creates claims with random CPT codes, random payer names ("Payor A/B/C/D/E"), and random dollar amounts. It is a prototype. **Do not extend or build on it.** The new claim wizard replaces it entirely.
+
+Deprecate it by adding at the top of the handler:
+```typescript
+// DEPRECATED: This endpoint generates random demo data.
+// Use POST /api/billing/claims/wizard instead.
+console.warn('[DEPRECATED] /api/leads/:id/claim-packet called — use the claim wizard');
+```
+
+Do not delete it yet. Historical seeded records reference the encounter structure it created.
+
+---
+
+## Section 3: Pre-migration fixes — do these before running any migrations
+
+These three fixes must be completed before anything else. They are quick and unblock everything that follows.
+
+### Fix 1: Logout — destroy session properly
+
+The current logout only navigates to `/login`. This must be fixed before adding auth guards or the guards can be bypassed.
+
+**Backend — add a real logout route:**
+```typescript
+app.post('/api/auth/logout', (req, res) => {
+  req.logout(() => {
+    req.session.destroy(() => {
+      res.clearCookie('connect.sid');
+      res.json({ success: true });
+    });
+  });
+});
+```
+
+**Frontend — update the logout handler in AppSidebar:**
+```typescript
+const handleLogout = async () => {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  window.location.href = '/auth/login';
+};
+```
+
+### Fix 2: Add context column to vob_verifications
+
+The VOB table already has both `lead_id` and `patient_id` which is ideal. Add one column to distinguish intake-context from billing-context verifications:
+
+```sql
+ALTER TABLE vob_verifications
+  ADD COLUMN IF NOT EXISTS context VARCHAR DEFAULT 'intake';
+-- Values: 'intake' | 'billing'
+-- All existing rows default to 'intake' which is correct
+```
+
+### Fix 3: Add claim_id and patient_id to activity_logs
+
+The activity_logs table only has `lead_id`. Billing events (claim created, patient edited) need their own reference columns:
+
+```sql
+ALTER TABLE activity_logs
+  ADD COLUMN IF NOT EXISTS claim_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS patient_id VARCHAR;
+-- Both nullable — existing intake logs are unaffected
+```
+
+---
+
+## Section 4: All database migrations — run after the three pre-migration fixes
+
+Run every statement in this section. All use `IF NOT EXISTS` or `ADD COLUMN IF NOT EXISTS`. Safe to run against live data. Confirm every statement succeeds with no errors before proceeding.
+
+```sql
+-- ─────────────────────────────────────────────
+-- NEW TABLES
+-- ─────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS organizations (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name VARCHAR NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS practice_settings (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  practice_name VARCHAR NOT NULL DEFAULT '',
+  primary_npi VARCHAR(10),
+  tax_id VARCHAR(9),
+  taxonomy_code VARCHAR(10),
+  address JSONB DEFAULT '{}',
+  phone VARCHAR,
+  default_pos VARCHAR(2) DEFAULT '12',
+  organization_id VARCHAR REFERENCES organizations(id),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS providers (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  first_name VARCHAR NOT NULL,
+  last_name VARCHAR NOT NULL,
+  credentials VARCHAR,
+  npi VARCHAR(10) UNIQUE NOT NULL,
+  taxonomy_code VARCHAR(10),
+  individual_tax_id VARCHAR(9),
+  is_default BOOLEAN DEFAULT false,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS payers (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name VARCHAR NOT NULL,
+  payer_id VARCHAR,
+  timely_filing_days INTEGER DEFAULT 365,
+  auth_required BOOLEAN DEFAULT false,
+  billing_type VARCHAR DEFAULT 'professional',
+  is_active BOOLEAN DEFAULT true,
+  is_custom BOOLEAN DEFAULT false,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS hcpcs_codes (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  code VARCHAR(6) UNIQUE NOT NULL,
+  description_official TEXT NOT NULL,
+  description_plain TEXT,
+  unit_type VARCHAR NOT NULL,
+  unit_interval_minutes INTEGER,
+  default_pos VARCHAR(2) DEFAULT '12',
+  requires_modifier BOOLEAN DEFAULT false,
+  notes TEXT,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS hcpcs_rates (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  hcpcs_code VARCHAR(6) REFERENCES hcpcs_codes(code),
+  payer_id VARCHAR REFERENCES payers(id),
+  payer_name VARCHAR NOT NULL,
+  rate_per_unit DECIMAL(10,2) NOT NULL,
+  unit_interval_minutes INTEGER,
+  effective_date DATE NOT NULL,
+  end_date DATE,
+  is_override BOOLEAN DEFAULT false,
+  created_by VARCHAR,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS claim_templates (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  name VARCHAR NOT NULL,
+  provider_id VARCHAR REFERENCES providers(id),
+  payer_id VARCHAR REFERENCES payers(id),
+  place_of_service VARCHAR DEFAULT '12',
+  service_lines JSONB,
+  created_by VARCHAR,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ─────────────────────────────────────────────
+-- ADDITIONS TO EXISTING TABLES
+-- ─────────────────────────────────────────────
+
+-- claims: add billing workflow columns
+ALTER TABLE claims
+  ADD COLUMN IF NOT EXISTS provider_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS payer_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS service_date DATE,
+  ADD COLUMN IF NOT EXISTS place_of_service VARCHAR DEFAULT '12',
+  ADD COLUMN IF NOT EXISTS icd10_primary VARCHAR(10),
+  ADD COLUMN IF NOT EXISTS icd10_secondary JSONB,
+  ADD COLUMN IF NOT EXISTS authorization_number VARCHAR,
+  ADD COLUMN IF NOT EXISTS service_lines JSONB,
+  ADD COLUMN IF NOT EXISTS pdf_url VARCHAR,
+  ADD COLUMN IF NOT EXISTS submission_method VARCHAR DEFAULT 'manual',
+  ADD COLUMN IF NOT EXISTS availity_icn VARCHAR,
+  ADD COLUMN IF NOT EXISTS charge_overridden BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS created_by VARCHAR,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+
+-- encounters: add real billing fields
+-- Existing columns: id, patient_id, service_type, facility_type, admission_type, expected_start_date (all text)
+-- These stay. Add new columns for real claim data.
+ALTER TABLE encounters
+  ADD COLUMN IF NOT EXISTS provider_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS place_of_service VARCHAR DEFAULT '12',
+  ADD COLUMN IF NOT EXISTS service_date DATE,
+  ADD COLUMN IF NOT EXISTS authorization_number VARCHAR,
+  ADD COLUMN IF NOT EXISTS created_by VARCHAR,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();
+
+-- patients: enrich with billing and demographic fields
+-- IMPORTANT: dob is text — do not cast, preserve as text
+ALTER TABLE patients
+  ADD COLUMN IF NOT EXISTS first_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS last_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS preferred_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS phone VARCHAR,
+  ADD COLUMN IF NOT EXISTS email VARCHAR,
+  ADD COLUMN IF NOT EXISTS sex VARCHAR(10),
+  ADD COLUMN IF NOT EXISTS address JSONB,
+  ADD COLUMN IF NOT EXISTS group_number VARCHAR,
+  ADD COLUMN IF NOT EXISTS insured_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS relationship_to_insured VARCHAR,
+  ADD COLUMN IF NOT EXISTS authorization_number VARCHAR,
+  ADD COLUMN IF NOT EXISTS payer_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS referring_provider_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS referring_provider_npi VARCHAR,
+  ADD COLUMN IF NOT EXISTS default_provider_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS referral_source VARCHAR,
+  ADD COLUMN IF NOT EXISTS referral_partner_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS service_needed VARCHAR,
+  ADD COLUMN IF NOT EXISTS intake_completed BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS vob_verified BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS notes TEXT,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+
+-- leads: add referral partner name
+ALTER TABLE leads
+  ADD COLUMN IF NOT EXISTS referral_partner_name VARCHAR;
+
+-- vob_verifications: add context column (from pre-migration fix 2)
+ALTER TABLE vob_verifications
+  ADD COLUMN IF NOT EXISTS context VARCHAR DEFAULT 'intake';
+
+-- activity_logs: add billing reference columns (from pre-migration fix 3)
+ALTER TABLE activity_logs
+  ADD COLUMN IF NOT EXISTS claim_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS patient_id VARCHAR;
+```
+
+### After running migrations — seed default data
+
+**Seed default payers:**
+```typescript
+const defaultPayers = [
+  { name: 'VA Community Care', payer_id: 'VACCN', timely_filing_days: 180, auth_required: true },
+  { name: 'Medicare (Traditional)', payer_id: '00010', timely_filing_days: 365, auth_required: false },
+  { name: 'Medicare Advantage — UnitedHealthcare', payer_id: '87726', timely_filing_days: 365, auth_required: true },
+  { name: 'Medicare Advantage — Humana', payer_id: '61101', timely_filing_days: 365, auth_required: true },
+  { name: 'Medicaid — Texas', payer_id: 'TX_MDCD', timely_filing_days: 365, auth_required: true },
+  { name: 'Medicaid — California (Medi-Cal)', payer_id: 'CA_MDCL', timely_filing_days: 365, auth_required: true },
+  { name: 'Medicaid — Florida', payer_id: 'FL_MDCD', timely_filing_days: 365, auth_required: true },
+  { name: 'TRICARE', payer_id: 'TRICARE', timely_filing_days: 365, auth_required: true },
+  { name: 'Blue Cross Blue Shield', payer_id: 'BCBS', timely_filing_days: 365, auth_required: true },
+  { name: 'Aetna', payer_id: '60054', timely_filing_days: 365, auth_required: true },
+  { name: 'UnitedHealthcare (Commercial)', payer_id: '87726', timely_filing_days: 365, auth_required: true },
+  { name: 'Cigna', payer_id: '62308', timely_filing_days: 365, auth_required: true },
+  { name: 'Other / Custom', payer_id: null, timely_filing_days: 365, auth_required: false, is_custom: true }
+];
+// INSERT INTO payers using ON CONFLICT DO NOTHING to avoid duplicates on re-run
+```
+
+**Seed HCPCS priority codes:**
+```typescript
+const priorityCodes = [
+  {
+    code: 'G0299',
+    description_official: 'Direct skilled nursing services of a registered nurse (RN) in the home health or hospice setting, each 15 minutes',
+    description_plain: 'A registered nurse providing hands-on skilled care at the patient\'s home. Examples: wound care, medication management, IV therapy, health assessments. Billed per 15-minute interval.',
+    unit_type: 'time_based', unit_interval_minutes: 15, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'G0300',
+    description_official: 'Direct skilled nursing services of a licensed practical nurse (LPN) in the home health or hospice setting, each 15 minutes',
+    description_plain: 'An LPN providing skilled nursing care at the patient\'s home under RN supervision. Billed per 15-minute interval.',
+    unit_type: 'time_based', unit_interval_minutes: 15, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'G0151',
+    description_official: 'Services performed by a qualified physical therapist in the home health setting, each 15 minutes',
+    description_plain: 'A licensed physical therapist providing therapy at the patient\'s home — mobility training, exercise, and rehabilitation. Billed per 15-minute interval.',
+    unit_type: 'time_based', unit_interval_minutes: 15, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'G0152',
+    description_official: 'Services performed by a qualified occupational therapist in the home health setting, each 15 minutes',
+    description_plain: 'An occupational therapist helping the patient regain daily living skills (dressing, bathing, cooking) in their home. Billed per 15-minute interval.',
+    unit_type: 'time_based', unit_interval_minutes: 15, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'G0153',
+    description_official: 'Services performed by a qualified speech-language pathologist in the home health setting, each 15 minutes',
+    description_plain: 'A speech therapist treating communication, cognitive, or swallowing disorders at the patient\'s home. Billed per 15-minute interval.',
+    unit_type: 'time_based', unit_interval_minutes: 15, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'G0156',
+    description_official: 'Services performed by a home health aide in the home health or hospice setting, each 15 minutes',
+    description_plain: 'A home health aide helping with personal care, hygiene, and daily activities under nurse supervision. Billed per 15-minute interval.',
+    unit_type: 'time_based', unit_interval_minutes: 15, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'T1019',
+    description_official: 'Personal care services, per 15 minutes, not for an inpatient or resident of a hospital, ICF/MR or IMD',
+    description_plain: 'A personal care attendant helping with bathing, dressing, grooming, and mobility. Common in Medicaid personal care programs. Billed per 15-minute interval.',
+    unit_type: 'time_based', unit_interval_minutes: 15, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'T1020',
+    description_official: 'Personal care services, per diem',
+    description_plain: 'A full day of personal care attendant services billed per day rather than per interval. Used by certain Medicaid programs.',
+    unit_type: 'per_diem', unit_interval_minutes: null, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'S9123',
+    description_official: 'Nursing care, in the home; by registered nurse, per hour (use for services 2 hours or more)',
+    description_plain: 'RN home visit billed per hour. Used by some commercial payers that do not accept G-codes for home health nursing.',
+    unit_type: 'time_based', unit_interval_minutes: 60, default_pos: '12', requires_modifier: false
+  },
+  {
+    code: 'S9124',
+    description_official: 'Nursing care, in the home; by licensed practical nurse, per hour',
+    description_plain: 'LPN home visit billed per hour. Used by some commercial payers that do not accept G-codes.',
+    unit_type: 'time_based', unit_interval_minutes: 60, default_pos: '12', requires_modifier: false
+  }
+];
+// INSERT INTO hcpcs_codes using ON CONFLICT (code) DO NOTHING
+```
+
+**Seed VA Community Care 2025 rates:**
+```typescript
+// After payers and hcpcs_codes are seeded, look up the VA payer ID and seed rates
+const vaRates = [
+  { hcpcs_code: 'G0299', rate_per_unit: 14.25 },
+  { hcpcs_code: 'G0300', rate_per_unit: 11.80 },
+  { hcpcs_code: 'G0151', rate_per_unit: 13.50 },
+  { hcpcs_code: 'G0152', rate_per_unit: 13.50 },
+  { hcpcs_code: 'G0153', rate_per_unit: 13.50 },
+  { hcpcs_code: 'G0156', rate_per_unit: 6.20  },
+  { hcpcs_code: 'T1019', rate_per_unit: 6.20  },
+  { hcpcs_code: 'S9123', rate_per_unit: 57.00 },
+  { hcpcs_code: 'S9124', rate_per_unit: 42.00 }
+];
+// All with payer_name = 'VA Community Care', effective_date = '2025-01-01'
+// INSERT using ON CONFLICT DO NOTHING
+```
+
+---
+
+## Section 5: Module split — Wouter routing
+
+### New route structure
+
+```
+/                           → Module selector (post-login landing)
+/auth/login                 → Login (renamed from /login and /dashboard/login)
+/dashboard/login            → Legacy redirect → /auth/login
+
+/billing                    → Redirect to /billing/dashboard
+/billing/dashboard          → Billing dashboard
+/billing/claims             → Claims list
+/billing/claims/new         → Claim creation wizard
+/billing/claims/:id         → Claim detail
+/billing/claims/prior-auth  → Prior auth tracker (moved from intake)
+/billing/patients           → Patient list
+/billing/patients/new       → Create patient
+/billing/patients/:id       → Patient detail
+/billing/codes              → HCPCS code lookup
+/billing/intelligence       → Denial pattern intelligence (existing, moved)
+/billing/intelligence/rules → Prevention rules (existing, moved)
+/billing/intelligence/logs  → Activity log
+/billing/intelligence/reports → Compliance reports
+/billing/settings           → Settings hub
+/billing/settings/practice  → Practice info
+/billing/settings/providers → Provider list
+/billing/settings/payers    → Payer library
+/billing/settings/rates     → Rate tables
+
+/intake                     → Redirect to /intake/dashboard
+/intake/dashboard           → Intake dashboard (new)
+/intake/leads               → Leads list (renamed from /deals)
+/intake/leads/:id           → Lead detail (renamed from /deals/:id)
+/intake/analytics           → Lead analytics (renamed from /lead-analytics)
+/intake/chat                → Chat analytics
+/intake/messaging           → SMS + Email
+/intake/calls               → Vapi calls
+/intake/appointments        → Scheduling
+/intake/settings            → Intake settings
+```
+
+### Wouter implementation
+
+```tsx
+// App.tsx — full restructure
+import { Switch, Route, Redirect } from 'wouter';
+
+export default function App() {
+  return (
+    <Switch>
+      {/* Auth routes — no guard needed */}
+      <Route path="/auth/login" component={LoginPage} />
+      <Route path="/auth/register" component={RegisterPage} />
+
+      {/* Legacy redirects — preserve bookmarks */}
+      <Route path="/login">
+        <Redirect to="/auth/login" />
+      </Route>
+      <Route path="/dashboard/login">
+        <Redirect to="/auth/login" />
+      </Route>
+
+      {/* Module selector — post-login landing */}
+      <Route path="/">
+        <AuthGuard>
+          <ModuleSelector />
+        </AuthGuard>
+      </Route>
+
+      {/* Billing module */}
+      <Route path="/billing/:rest*">
+        <AuthGuard requiredRoles={['admin', 'rcm_manager']}>
+          <BillingLayout>
+            <BillingRouter />
+          </BillingLayout>
+        </AuthGuard>
+      </Route>
+
+      {/* Intake module */}
+      <Route path="/intake/:rest*">
+        <AuthGuard requiredRoles={['admin', 'intake']}>
+          <IntakeLayout>
+            <IntakeRouter />
+          </IntakeLayout>
+        </AuthGuard>
+      </Route>
+
+      {/* Dev only */}
+      <Route path="/brand-preview" component={BrandPreview} />
+    </Switch>
+  );
+}
+```
+
+```tsx
+// AuthGuard component
+function AuthGuard({ 
+  children, 
+  requiredRoles 
+}: { 
+  children: React.ReactNode, 
+  requiredRoles?: string[] 
+}) {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) return <LoadingScreen />;
+  if (!user) return <Redirect to="/auth/login" />;
+
+  if (requiredRoles && !requiredRoles.includes(user.role)) {
+    // Admin sees both — redirect to module selector
+    // Single-role users are redirected to their module automatically
+    return <Redirect to="/" />;
+  }
+
+  return <>{children}</>;
+}
+```
+
+```tsx
+// ModuleSelector — auto-redirect single-role users
+function ModuleSelector() {
+  const { user } = useAuth();
+
+  // Auto-redirect if user only has access to one module
+  if (user?.role === 'rcm_manager') return <Redirect to="/billing/dashboard" />;
+  if (user?.role === 'intake') return <Redirect to="/intake/dashboard" />;
+
+  // Admin sees both cards
+  return (
+    <div className="module-selector">
+      <ModuleCard
+        title="ClaimShield Billing"
+        description="Build, submit, and track your claims"
+        href="/billing/dashboard"
+      />
+      <ModuleCard
+        title="ClaimShield Intake"
+        description="Manage leads, calls, and patient intake"
+        href="/intake/dashboard"
+      />
+    </div>
+  );
+}
+```
+
+### GuidedChatWidget restriction
+
+Move the `GuidedChatWidget` from its current global render position to render only inside `IntakeLayout`. It has no place in the billing module. Remove it from any shared layout wrapper.
+
+---
+
+## Section 6: Phase 0 — Structural fixes
+
+Complete all Phase 0 items before building Phase 1 features.
+
+### 0.1 Backend RBAC middleware
+
+```typescript
+function requireRole(...roles: string[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthenticated' });
+    if (!roles.includes((req.user as any).role)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    next();
+  };
+}
+```
+
+Apply to route groups using new prefixes. When adding new `/api/billing/` and `/api/intake/` prefix routes, keep the old unprefixed routes temporarily by aliasing them. Remove old routes once the frontend has been updated to call the new ones.
+
+```typescript
+// Billing routes
+app.use('/api/billing/claims',      requireRole('admin', 'rcm_manager'), claimsRouter);
+app.use('/api/billing/patients',    requireRole('admin', 'rcm_manager'), patientsRouter);
+app.use('/api/billing/hcpcs',       requireRole('admin', 'rcm_manager'), hcpcsRouter);
+app.use('/api/billing/settings',    requireRole('admin', 'rcm_manager'), settingsRouter);
+app.use('/api/billing/intelligence',requireRole('admin', 'rcm_manager'), intelligenceRouter);
+app.use('/api/billing/providers',   requireRole('admin', 'rcm_manager'), providersRouter);
+app.use('/api/billing/payers',      requireRole('admin', 'rcm_manager'), payersRouter);
+
+// Intake routes
+app.use('/api/intake/leads',        requireRole('admin', 'intake'), leadsRouter);
+app.use('/api/intake/calls',        requireRole('admin', 'intake'), callsRouter);
+app.use('/api/intake/messaging',    requireRole('admin', 'intake'), messagingRouter);
+app.use('/api/intake/appointments', requireRole('admin', 'intake'), appointmentsRouter);
+
+// Shared — both modules
+app.use('/api/patients',            requireRole('admin', 'rcm_manager', 'intake'), sharedPatientsRouter);
+app.use('/api/vob',                 requireRole('admin', 'rcm_manager', 'intake'), vobRouter);
+app.use('/api/activity-logs',       requireRole('admin', 'rcm_manager', 'intake'), activityLogsRouter);
+```
+
+### 0.2 VerifyTX timeout fix
+
+Add timeout and retry to every VerifyTX API call:
+
+```typescript
+const VERIFYTX_TIMEOUT_MS = 30000;
+
+async function verifytxRequest(url: string, options: RequestInit = {}) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), VERIFYTX_TIMEOUT_MS);
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (err: any) {
+      if (attempt === 2 || err.name !== 'AbortError') throw err;
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+}
+```
+
+Cache the payers directory response for 24 hours — store result in the database or as a server-side variable. Never make a live API call just to populate a dropdown.
+
+**Manual VOB fallback:** When VerifyTX times out after both attempts, return a structured error to the frontend. The frontend shows:
+
+> "Verification service unavailable — enter coverage details manually"
+
+Manual VOB form fields: copay, deductible, out_of_pocket_max, effective_date, term_date, network_status (In-network / Out-of-network / Unknown), notes. Insert into `vob_verifications` with `status = 'manual'` and `context` set to the calling module's context.
+
+### 0.3 VOB dual-purpose design
+
+The `vob_verifications` table already has both `lead_id` and `patient_id` — the dual-context design works without restructuring.
+
+**Intake context** — triggered from lead detail, writes `context = 'intake'`, updates `leads.vob_status` and `leads.vob_score`.
+
+**Billing context** — triggered from patient detail (Eligibility tab) and claim wizard Step 3, writes `context = 'billing'`.
+
+**On patient conversion:** copy the most recent `vob_verifications` record for that lead (where `status = 'complete'` and `context = 'intake'`) to the billing patient record. Set `patients.vob_verified = true`. The biller sees the intake verification without re-running.
+
+The Eligibility tab on patient detail shows all VOB records for that patient — both `context = 'intake'` and `context = 'billing'` — sorted by `verified_at` DESC, labeled separately.
+
+### 0.4 Formal lead → patient conversion
+
+Add a **Convert to Patient** button on the lead detail page. Visible when `lead.status = 'qualified'` OR `lead.vob_status = 'complete'`.
+
+On click, show a confirmation modal with all data being transferred. On confirm:
+
+```typescript
+// Backend: POST /api/intake/leads/:id/convert
+async function convertLeadToPatient(leadId: string) {
+  const lead = await db.query('SELECT * FROM leads WHERE id = $1', [leadId]);
+  
+  // Upsert patient record — update if exists for this lead_id, create if not
+  const patient = await db.query(`
+    INSERT INTO patients (
+      id, lead_id, dob, state, insurance_carrier, member_id, plan_type,
+      first_name, last_name, preferred_name, phone, email,
+      referral_source, service_needed, intake_completed, vob_verified
+    ) VALUES (
+      gen_random_uuid()::text, $1, $2, $3, $4, $5, $6,
+      $7, $8, $9, $10, $11, $12, $13, true,
+      (SELECT COUNT(*) > 0 FROM vob_verifications WHERE lead_id = $1 AND status = 'complete')
+    )
+    ON CONFLICT (lead_id) DO UPDATE SET
+      first_name = EXCLUDED.first_name,
+      last_name = EXCLUDED.last_name,
+      phone = EXCLUDED.phone,
+      email = EXCLUDED.email,
+      insurance_carrier = EXCLUDED.insurance_carrier,
+      member_id = EXCLUDED.member_id,
+      plan_type = EXCLUDED.plan_type,
+      referral_source = EXCLUDED.referral_source,
+      intake_completed = true,
+      updated_at = NOW()
+    RETURNING *
+  `, [
+    lead.id, lead.dob, lead.state, lead.insurance_carrier, lead.member_id, lead.plan_type,
+    lead.first_name, lead.last_name, lead.preferred_name, lead.phone, lead.email,
+    lead.source, lead.service_needed
+  ]);
+  
+  // Update lead status
+  await db.query(
+    'UPDATE leads SET status = $1, handoff_status = $2 WHERE id = $3',
+    ['converted', 'completed', leadId]
+  );
+  
+  // Log to activity timeline
+  await logActivity({
+    leadId: leadId,
+    patientId: patient.id,
+    activityType: 'conversion',
+    description: 'Lead converted to patient — billing module notified',
+    performedBy: req.user.id
+  });
+  
+  // Fire billing handoff
+  await notifyBillingModule(patient);
+  
+  return patient;
+}
+```
+
+### 0.5 Intake → billing handoff
+
+```typescript
+// POST /api/billing/patients/from-intake
+// Called automatically on lead conversion
+async function receivePatientFromIntake(req, res) {
+  const data = req.body;
+  
+  // Find or update the patient record (it already exists from the conversion)
+  // Add billing-specific fields that intake doesn't capture
+  const patient = await db.query(`
+    UPDATE patients SET
+      vob_verified = $1,
+      updated_at = NOW()
+    WHERE lead_id = $2
+    RETURNING *
+  `, [data.vobVerified, data.leadId]);
+  
+  // Copy the most recent complete VOB from intake context
+  await db.query(`
+    UPDATE vob_verifications 
+    SET context = 'intake'
+    WHERE lead_id = $1 AND context IS NULL
+  `, [data.leadId]);
+  
+  res.json({ success: true, patientId: patient.id });
+}
+```
+
+### 0.6 Expand referral source
+
+Update the `source` field dropdown in the leads UI. No schema change needed — `leads.source` is already a text column. Update the frontend dropdown options:
+
+```
+Clinical referrals:
+  VA Community Care
+  Physician office
+  Hospital discharge planner
+  Skilled nursing facility transition
+  Hospice / palliative care transition
+
+Marketing / business development:
+  Google Search
+  Google Maps / Local listing
+  Facebook / Instagram
+  Referral partner          [shows leads.referral_partner_name text field]
+  Community event
+  Elder law attorney
+  Church / faith community
+  Word of mouth / family
+  Website chat              [auto-set on chat widget lead creation]
+  Inbound AI call           [auto-set on Vapi lead creation]
+  Other                     [shows free text field]
+```
+
+Auto-set on lead creation:
+- Chat widget creates lead → `source = 'Website chat'`
+- Vapi call creates lead → `source = 'Inbound AI call'`
+
+### 0.7 Fix AppSidebar
+
+Replace the hardcoded values in `AppSidebar`:
+
+```tsx
+// Replace hardcoded "RCM Admin" and "admin@claimshield.health"
+const { user } = useAuth();
+
+const roleLabel = {
+  admin: 'Admin',
+  rcm_manager: 'Billing Manager',
+  intake: 'Intake Coordinator'
+}[user?.role] ?? 'User';
+
+// In the footer:
+<span>{user?.name || user?.email}</span>
+<span>{roleLabel}</span>
+```
+
+### 0.8 Build separate sidebar components
+
+**BillingSidebar** (new component):
+```
+[ClaimShield • Billing]
+────────────────────────
+Dashboard
+Claims
+  New Claim ← prominent
+  All Claims
+  Denial Queue
+  Prior Auth
+Patients
+Code Lookup
+Intelligence
+  Denial Patterns
+  Prevention Rules
+  Activity Log
+  Reports
+────────────────────────
+Settings
+  Practice Info
+  Providers
+  Payers
+  Rate Tables
+────────────────────────
+[Switch to Intake]  ← admin only
+[userName]
+[roleLabel]
+[Sign out]
+```
+
+**IntakeSidebar** (update existing AppSidebar — remove billing items):
+```
+[ClaimShield • Intake]
+────────────────────────
+Dashboard
+Leads / Worklist
+Calls
+Messaging
+  SMS
+  Email
+Chat Analytics
+Appointments
+────────────────────────
+Settings
+────────────────────────
+[Switch to Billing]  ← admin only
+[userName]
+[roleLabel]
+[Sign out]
+```
+
+---
+
+## Section 7: Phase 1 — Billing core loop
+
+Build in the order listed. Confirm each item working before starting the next.
+
+### 7.1 Practice settings UI
+
+Four-tab settings page at `/billing/settings`.
+
+**Practice Info tab** — form for `practice_settings` table. All fields from the schema. Save button. On first visit with no record: show a "Complete your practice setup to start billing" prompt.
+
+**Providers tab** — table of providers. Add/Edit/Deactivate. NPI field uses Luhn validation:
+
+```typescript
+function validateNPI(npi: string): boolean {
+  if (!/^\d{10}$/.test(npi)) return false;
+  const withPrefix = '80840' + npi;
+  let sum = 0;
+  for (let i = 0; i < withPrefix.length; i++) {
+    let digit = parseInt(withPrefix[withPrefix.length - 1 - i]);
+    if (i % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
+    sum += digit;
+  }
+  return sum % 10 === 0;
+}
+```
+
+Only one provider can be `is_default = true`. Setting a new default removes it from all others in the same DB transaction.
+
+**Payers tab** — table of payers with Add Custom Payer. Pre-seeded payers are not deletable (deactivate only). Show note on `billing_type` field: "Facility billing (UB-04) is not supported in this release. Select Professional for all payers."
+
+**Rate Tables tab** — table of rates grouped by payer. Add/edit/delete. Show age warning banner when any rate's `effective_date` is more than 90 days ago: "Some rates may be outdated — last updated [date]. Check cms.gov for the current fee schedule."
+
+### 7.2 Patient management UI
+
+**Patient list** (`/billing/patients`):
+- Search: name, DOB, member ID, insurance_carrier
+- Filter: payer, referral source, intake_completed status
+- Columns: name, DOB, insurance carrier, last claim date, last claim status, "From Intake ✓" badge when `intake_completed = true`
+- "New Patient" button, "New Claim" quick button per row
+
+**Create patient** (`/billing/patients/new`):
+All fields from enriched patients schema. Required: first_name, last_name, dob (text input — preserve as text, do not cast). Payer selected from payers table dropdown.
+
+**Patient detail** (`/billing/patients/:id`) — four tabs:
+
+*Profile* — editable inline
+
+*Claims* — all claims WHERE `patient_id = [id]`. Columns: service_date (or created_at), first code from service_lines JSONB (or first cpt_codes entry for seeded data), amount, status badge, readiness_status badge. "New Claim" button. "Clone" on each row.
+
+*Eligibility* — all vob_verifications WHERE `patient_id = [id]` OR (look up lead via `lead_id`, then `WHERE lead_id = [lead_id]`). Show both intake and billing context, labeled. "Run Eligibility Check" button → triggers VerifyTX in billing context.
+
+*Notes* — timestamped free text, appended not replaced
+
+### 7.3 HCPCS code lookup
+
+**API:**
+```
+GET /api/billing/hcpcs/search?q=skilled+nursing
+GET /api/billing/hcpcs/:code
+```
+
+Search: ILIKE match on `code`, `description_official`, `description_plain`. Max 10 results. Exact code match ranked first.
+
+**Response shape:**
+```typescript
+{
+  code: string,
+  descriptionOfficial: string,
+  descriptionPlain: string,
+  unitType: 'time_based' | 'per_visit' | 'per_diem' | 'quantity',
+  unitIntervalMinutes: number | null,
+  defaultPos: string,
+  requiresModifier: boolean,
+  vaRate: number | null,     // from hcpcs_rates where payer_name = 'VA Community Care' and end_date IS NULL
+  notes: string | null
+}
+```
+
+**CPT fallback — critical:** When search returns zero results, do NOT show an empty state. Show:
+
+```
+No results for "[search term]"
+
+This may be a CPT code not yet in our library.
+You can still add it manually to your claim.
+
+[+ Enter code manually]
+```
+
+"Enter code manually" opens a small form:
+- Code (text, required)
+- Short description (text, required)
+- Unit type dropdown: Time-based / Per visit / Per diem / Quantity
+- Unit interval (minutes): number field, appears when Time-based selected
+- Rate per unit: decimal field
+
+The manually entered code populates the claim service line with `manual_entry: true` in the service_lines JSONB. It is NOT written to the `hcpcs_codes` table permanently. Every field needed to process and display the claim is stored directly in the service line.
+
+**Two surfaces:**
+1. Standalone page at `/billing/codes`
+2. Inline search panel that appears when the HCPCS code field in the claim wizard is focused
+
+### 7.4 Claim creation wizard
+
+Replaces the deprecated `/api/leads/:id/claim-packet` stub. Creates real claims with user-provided data.
+
+**Draft auto-save:** On wizard open, immediately create a draft claim record:
+```typescript
+// POST /api/billing/claims/draft
+// Returns { claimId } — used for all subsequent saves
+// status = 'draft'
+```
+
+Auto-save on every step transition. Abandon → draft persists in claims list with "Resume" button.
+
+**Step 1: Patient** ● ○ ○
+
+Search field: type name or DOB — live dropdown from patients table.
+
+On select: show patient summary card with name, DOB, payer, member ID, auth number on file, vob_verified badge. "Edit patient" → opens patient profile in a slide-over drawer without breaking wizard.
+
+If patient not found: "Create new patient" → inline form in drawer. On save, patient auto-selected.
+
+If arriving from patient detail "New Claim": patient pre-selected, advance automatically to Step 2.
+
+**Step 2: Service** ○ ● ○
+
+*Rendering provider* — dropdown from providers table. Auto-selects `is_default = true`.
+
+*Service date* — date picker, defaults to today.
+
+Validation on date:
+- Cannot be in the future
+- Cannot exceed `payers.timely_filing_days` days in the past for the selected patient's payer
+  - Look up patient's `payer_id` → query `payers.timely_filing_days`
+  - VA Community Care: 180 days. Medicare: 365 days. Others: per payer config.
+
+*Place of service* — dropdown: Home (12), Office (11), Assisted Living Facility (13), Telehealth - Patient Home (10), Outpatient Hospital (22), Other. Defaults to `practice_settings.default_pos`.
+
+*Load template* (optional) — dropdown of saved templates from `claim_templates`. Selecting one pre-fills provider, POS, and service lines.
+
+**Service lines** (1–6 supported):
+
+Each line:
+- HCPCS code field with inline search panel. When a code is selected:
+  - Description populates below
+  - Unit type and interval load from `hcpcs_codes`
+  - Rate loads from `hcpcs_rates` for this code + patient's payer
+  - Unit calculator appears (see below)
+- "What does this mean?" → opens code detail in side drawer
+- Modifier field (optional text): -GP, -59, -25, -KX, etc.
+- If `hcpcs_codes.requires_modifier = true`: show amber hint "Modifier often required — verify with payer"
+
+**Unit & charge calculator — fully payer-agnostic:**
+
+This is NOT VA-specific. It works for any time-based code with any payer. VA rates load from the rate table when VA is the selected payer. Other payers load their rates if configured, or show a manual rate entry field.
+
+```
+For time-based codes (unit_type = 'time_based'):
+┌─────────────────────────────────────────────────────┐
+│  Total service time:    [     ] hours                │
+│                                                      │
+│  Unit interval:         15 min      (from code)      │
+│  Units:                 [auto]      hours × (60÷15)  │
+│  Rate per unit:         $14.25      (from rate table)│
+│                         ─── or ───                   │
+│                         [      ]    Rate not on file  │
+│                                     — enter manually  │
+│  ─────────────────────────────────────────────────── │
+│  Total charge:          $[auto]     always editable   │
+└─────────────────────────────────────────────────────┘
+
+Formula:
+  units = Math.ceil(serviceHours × (60 / unitIntervalMinutes))
+  totalCharge = units × ratePerUnit
+  
+Show calculation steps explicitly — never just the final total.
+All dollar values: toFixed(2)
+All unit counts: displayed as integers or one decimal max
+```
+
+If rate is not in `hcpcs_rates` for this code + payer: rate field is empty and editable (required).
+If user edits total charge: set `charge_overridden: true` on the service line.
+
+For per-visit and per-diem codes: show Quantity (default 1) + Rate + Total.
+
+"Add another service line" link — up to 6 lines total.
+
+**Diagnosis codes:**
+
+ICD-10 search field — keyword or code number. Seed a lookup with the 40 most common home health diagnosis codes as a starting set:
+
+```typescript
+const commonHomeHealthDx = [
+  { code: 'I10', description: 'Essential (primary) hypertension' },
+  { code: 'E11.9', description: 'Type 2 diabetes mellitus without complications' },
+  { code: 'J44.1', description: 'COPD with acute exacerbation' },
+  { code: 'I63.9', description: 'Cerebral infarction, unspecified (stroke)' },
+  { code: 'G20', description: 'Parkinson\'s disease' },
+  { code: 'F03.90', description: 'Unspecified dementia without behavioral disturbance' },
+  { code: 'S72.001A', description: 'Fracture of unspecified part of neck of right femur' },
+  { code: 'L89.90', description: 'Pressure ulcer of unspecified site, unspecified stage' },
+  { code: 'L97.909', description: 'Non-pressure chronic ulcer of unspecified part of lower leg' },
+  { code: 'M17.11', description: 'Primary osteoarthritis, right knee' },
+  { code: 'Z87.39', description: 'Personal history of other musculoskeletal disorders' },
+  { code: 'I50.9', description: 'Heart failure, unspecified' },
+  { code: 'N18.3', description: 'Chronic kidney disease, stage 3' },
+  { code: 'Z96.641', description: 'Presence of right artificial hip joint' },
+  { code: 'M54.5', description: 'Low back pain' },
+  { code: 'R26.89', description: 'Other abnormalities of gait and mobility' },
+  { code: 'Z74.09', description: 'Other reduced mobility' },
+  { code: 'E78.5', description: 'Hyperlipidemia, unspecified' },
+  { code: 'I48.91', description: 'Unspecified atrial fibrillation' },
+  { code: 'Z79.01', description: 'Long-term (current) use of anticoagulants' }
+];
+// Store in a seeded icd10_common table or as a constant — searchable by code prefix and description
+```
+
+For codes not in the common list, show a "code not found — enter manually" path identical to the HCPCS fallback. Accept any text the user types as an ICD-10 code.
+
+Primary diagnosis required. Up to 3 additional secondaries.
+
+**Authorization:**
+Pre-filled from `patients.authorization_number`. Editable. "Save to patient profile" checkbox.
+
+**Step 3: Review** ○ ○ ●
+
+Summary layout:
+```
+PATIENT         [name, DOB, payer, member ID]              [Edit ✎]
+PROVIDER        [rendering name, NPI, credentials]         [Edit ✎]
+SERVICE         [date, place of service]                   [Edit ✎]
+AUTHORIZATION   [number or "None on file"]                 [Edit ✎]
+
+SERVICE LINES
+  G0299   Skilled nursing, RN   16 units × $14.25 = $228.00
+                                          TOTAL:    $228.00
+
+DIAGNOSIS CODES
+  Primary:    [code] — [description]
+  Secondary:  [code] — [description]
+```
+
+**Validation — runs automatically when Step 3 loads:**
+
+Hard errors (block Export PDF and Submit — Save as Draft still allowed):
+```
+PATIENT
+  ✗ Patient first name or last name is missing
+  ✗ Patient date of birth is missing
+  ✗ No payer / insurance carrier selected
+  ✗ Member ID is missing
+
+PROVIDER
+  ✗ No rendering provider selected
+  ✗ Provider NPI fails validation (Luhn checksum)
+
+SERVICE
+  ✗ Service date is missing
+  ✗ Service date is in the future
+  ✗ Service date is [N] days ago — exceeds [PayerName]'s [X]-day timely filing limit
+
+SERVICE LINES
+  ✗ No service lines added
+  ✗ Line [N]: no code entered
+  ✗ Line [N]: units/quantity is zero or negative
+  ✗ Line [N]: total charge is zero or missing
+
+DIAGNOSIS
+  ✗ No primary diagnosis code entered
+```
+
+Warnings (allow export with acknowledgment checkbox):
+```
+  ⚠ Authorization number is blank — [PayerName] requires prior authorization for this service type
+  ⚠ Code [X] commonly requires a modifier — verify with your payer before submitting
+  ⚠ Rate was entered manually on line [N] — confirm this matches your payer contract
+  ⚠ Units ([N]) on line [N] are unusually high — double-check service time calculation
+  ⚠ Patient eligibility has not been verified for this payer
+```
+
+**After validation: call the existing risk scoring endpoint** with the claim data and display the existing GREEN/YELLOW/RED readiness panel. Do not rewrite risk scoring — feed it real data via the existing endpoint.
+
+**Also write a claim_events record** on each status transition:
+```sql
+INSERT INTO claim_events (id, claim_id, type, timestamp, notes)
+VALUES (gen_random_uuid()::text, $1, 'Created', NOW(), 'Claim created via wizard')
+```
+
+**Actions at Step 3:**
+1. **Save as Draft** — saves all data to claims table, status = 'draft'
+2. **Generate Claim Summary PDF** — see Section 7.5
+3. **Save as Template** — prompts for name, saves to claim_templates
+4. **Submit to Availity** — Phase 2 placeholder, shows modal: "Direct submission coming in the next update. Download the PDF and upload to your Availity portal in the meantime."
+
+### 7.5 Claim summary PDF
+
+Install:
+```bash
+npm install @react-pdf/renderer
+```
+
+Generate a structured claim summary PDF — not a CMS-1500 form. The CMS-1500 is Phase 2.
+
+PDF content:
+```
+[ClaimShield wordmark]                      CLAIM SUMMARY
+                                            Generated: [datetime]
+                                            Claim ID: [id]
+═══════════════════════════════════════════════════════════════
+
+PATIENT INFORMATION
+Patient Name:         [first_name] [last_name]
+Date of Birth:        [dob]
+Sex:                  [sex]
+Insured Name:         [insured_name or same as patient]
+Relationship:         [relationship_to_insured]
+Payer:                [payer name from payers table]
+Member ID:            [member_id]
+Group Number:         [group_number]
+Authorization #:      [authorization_number or N/A]
+
+PROVIDER INFORMATION
+Billing Practice:     [practice_name]
+Billing NPI:          [primary_npi]
+Tax ID:               [tax_id]
+Rendering Provider:   [provider first] [provider last], [credentials]
+Rendering NPI:        [provider npi]
+Taxonomy Code:        [taxonomy_code]
+Referring Provider:   [referring_provider_name]
+Referring NPI:        [referring_provider_npi]
+
+SERVICE INFORMATION
+Date of Service:      [service_date]
+Place of Service:     [pos description] ([pos code])
+
+SERVICE LINES
+─────────────────────────────────────────────────────────────────
+Code      Mod    Description                   Units  Rate    Total
+G0299            Skilled nursing, RN              16  $14.25  $228.00
+─────────────────────────────────────────────────────────────────
+                                             CLAIM TOTAL:   $228.00
+
+DIAGNOSIS CODES
+A: [icd10_primary] — [description]
+B: [secondary codes if present]
+
+═══════════════════════════════════════════════════════════════
+ClaimShield claim summary. Submit via your Availity portal.
+Claim ID: [id]  |  Generated: [timestamp]
+
+NOTE: This is a claim summary for reference only. Medicare-
+certified home health agencies billing under a facility NPI
+require a UB-04 form, not a CMS-1500. Contact your billing
+consultant if you are unsure which form applies to you.
+```
+
+Store the PDF URL in `claims.pdf_url`. Make it re-downloadable from the claim detail view. Update claim status to 'exported' after PDF generation.
+
+### 7.6 Billing dashboard — Phase 1 final state
+
+Extend the existing dashboard component. Keep existing chart components and metric cards — replace seeded data queries with real ones.
+
+**Real data queries for pipeline cards:**
+```sql
+SELECT
+  COUNT(*) FILTER (WHERE status = 'paid') as paid_count,
+  COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0) as paid_amount,
+  COUNT(*) FILTER (WHERE status IN ('submitted','acknowledged','pending')) as in_process_count,
+  COALESCE(SUM(amount) FILTER (WHERE status IN ('submitted','acknowledged','pending')), 0) as in_process_amount,
+  COUNT(*) FILTER (WHERE status = 'draft') as draft_count,
+  COALESCE(SUM(amount) FILTER (WHERE status = 'draft'), 0) as draft_amount,
+  COUNT(*) FILTER (WHERE status IN ('denied','suspended')) as denied_count,
+  COALESCE(SUM(amount) FILTER (WHERE status IN ('denied','suspended')), 0) as denied_amount
+FROM claims
+```
+
+**"New Claim" button:** Add to the top-right of the billing module header — visible on every billing page, always. This is the single most important UI element in the billing module.
+
+**Action alerts** — pull from real data:
+```sql
+-- Denied claims
+SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM claims WHERE status IN ('denied','suspended')
+
+-- Stale drafts
+SELECT COUNT(*) FROM claims WHERE status = 'draft' AND created_at < NOW() - INTERVAL '7 days'
+
+-- Timely filing risk (within 30 days of limit)
+-- Requires join with payers via payer_id to get timely_filing_days
+-- Flag claims where service_date < NOW() - INTERVAL '(timely_filing_days - 30) days'
+-- and status NOT IN ('paid', 'denied')
+
+-- High risk
+SELECT COUNT(*) FROM claims WHERE readiness_status = 'RED' AND status NOT IN ('paid','denied')
+```
+
+**Recent patients row:** 8 most recent patients with claim activity. Each card: name, last service date, claim status dot, "New Claim" quick button.
+
+**Recent claims table:** Last 10 claims. Join patients on patient_id for name. Columns: patient name, service_date, first code, amount, status badge, readiness_status badge.
+
+### 7.7 Activity log and compliance reports
+
+**Activity Log** (`/billing/intelligence/logs`) — admin only:
+
+Query `activity_logs` for billing-related events (where `claim_id IS NOT NULL` or `patient_id IS NOT NULL`).
+
+Columns: timestamp, performed_by, activity_type, description, linked record (link to claim or patient).
+
+Filters: user, date range, activity_type.
+
+**Compliance reports** (`/billing/intelligence/reports`):
+
+Four report types using @react-pdf/renderer:
+
+1. **Access report** — `SELECT * FROM activity_logs WHERE activity_type IN ('view_patient','view_claim') AND created_at BETWEEN $1 AND $2`
+2. **Edit history report** — `SELECT * FROM activity_logs WHERE field IS NOT NULL AND created_at BETWEEN $1 AND $2`
+3. **Export report** — `SELECT * FROM activity_logs WHERE activity_type = 'export_pdf' AND created_at BETWEEN $1 AND $2`
+4. **Claims integrity report** — `SELECT c.*, p.first_name, p.last_name FROM claims c LEFT JOIN patients p ON c.patient_id = p.id WHERE c.created_at BETWEEN $1 AND $2`
+
+Each: date range picker (default last 30 days), "Generate PDF" button, download link.
+
+---
+
+## Section 8: Intake module cleanup
+
+These are targeted changes only. Do not rebuild anything in the intake module.
+
+### 8.1 Intake dashboard
+New page at `/intake/dashboard`:
+- Lead pipeline summary cards: New / Attempting / Contacted / Qualified / Converted (count + SLA breach count)
+- Today's scheduled appointments
+- Recent chat sessions (last 5)
+- Pending SMS / email queue count
+- Quick action: "Add new lead"
+
+### 8.2 Remove billing items from intake sidebar
+Strip from IntakeSidebar: Claims, Denial Patterns, Prevention Rules, Prior Auth Tracker, anything billing-related.
+
+### 8.3 Move prior auth tracker to billing
+Route: `/billing/claims/prior-auth`
+Data stays in the same table. Only the UI moves to the billing sidebar.
+
+### 8.4 Auto-set referral source
+- Lead created from chat widget → `leads.source = 'Website chat'`
+- Lead created from Vapi call → `leads.source = 'Inbound AI call'`
+Both set automatically on creation, not by the user.
+
+### 8.5 Convert to Patient button
+Add to lead detail view per Section 6.4. Visible when `status = 'qualified'` OR `vob_status = 'complete'`.
+
+---
+
+## Section 9: Exact build order
+
+Follow this sequence exactly. Do not skip ahead.
+
+```
+PRE-MIGRATION FIXES (complete first — 30–60 minutes total)
+  [P.1] Fix logout: add /api/auth/logout route + update frontend handler
+  [P.2] Confirm fix works: login, click logout, confirm session is destroyed,
+        confirm navigating to a protected route redirects to /auth/login
+
+DATABASE MIGRATIONS
+  [M.1] Run all SQL from Section 4 — confirm every statement succeeds
+  [M.2] Seed default payers (with ON CONFLICT DO NOTHING)
+  [M.3] Seed HCPCS priority codes (with ON CONFLICT DO NOTHING)
+  [M.4] Seed VA Community Care 2025 rates
+
+PHASE 0 — STRUCTURAL (must complete before Phase 1)
+  [0.1] Add requireRole() middleware to Express backend
+  [0.2] Apply requireRole to all route groups (alias old routes, add new prefixed ones)
+  [0.3] Restructure App.tsx routes using Wouter — /billing/*, /intake/*, /auth/*
+  [0.4] Build AuthGuard component with role-based redirect
+  [0.5] Build ModuleSelector page (auto-redirect single-role users)
+  [0.6] Build BillingSidebar component (new, separate from intake sidebar)
+  [0.7] Update IntakeSidebar — remove billing items, fix user label
+  [0.8] Restrict GuidedChatWidget to IntakeLayout only
+  [0.9] Build IntakeLayout and BillingLayout wrapper components
+  [0.10] Fix VerifyTX timeout + retry logic + manual VOB fallback
+  [0.11] Update VOB routes to write context = 'intake' or 'billing'
+  [0.12] Update referral source dropdown + auto-set for chat/Vapi lead creation
+  [0.13] Add Convert to Patient button to lead detail page
+  [0.14] Build intake → billing handoff API endpoint
+
+  VERIFY PHASE 0: Log in as each role (admin, rcm_manager, intake).
+  Confirm each role sees only the correct module.
+  Confirm billing routes return 403 for intake role and vice versa.
+  Confirm logout destroys the session.
+
+PHASE 1 — BILLING CORE (build in this order)
+  [1.1] Practice Settings UI (4 tabs: Practice, Providers, Payers, Rates)
+  [1.2] Patient list + create + detail views (4 tabs: Profile, Claims, Eligibility, Notes)
+  [1.3] HCPCS code search API + standalone lookup page + CPT manual fallback
+  [1.4] Claim creation wizard (Step 1 + 2 + 3 with full validation)
+        — connects to existing risk scoring engine
+        — writes to claims + encounters + claim_events tables
+        — draft auto-save
+  [1.5] Install @react-pdf/renderer + build claim summary PDF
+  [1.6] Update billing dashboard with real data queries + New Claim CTA
+  [1.7] Activity Log UI in Intelligence section
+  [1.8] Compliance Reports in Intelligence section
+
+PHASE 1 — INTAKE CLEANUP (run alongside billing, not before)
+  [I.1] Build intake dashboard at /intake/dashboard
+  [I.2] Move prior auth tracker to /billing/claims/prior-auth
+  [I.3] Auto-set referral source on lead creation (chat + Vapi)
+  [I.4] Confirm Convert to Patient button fires handoff API
+
+FINAL VERIFICATION
+  → rcm_manager login → sees only billing module
+  → intake login → sees only intake module
+  → admin login → sees module selector, can switch between both
+  → Create a new patient directly in billing
+  → Create a new claim from scratch using the wizard
+  → HCPCS code lookup returns results
+  → Enter a CPT code not in the library — manual fallback appears
+  → Unit calculator computes correctly: 4 hrs × 15-min intervals × $14.25/unit = $228.00
+  → Generate and download a claim summary PDF
+  → Risk scoring panel appears on Step 3 with GREEN/YELLOW/RED status
+  → Convert a lead to a patient in intake — patient appears in billing with "From Intake ✓"
+  → Denial intelligence page still loads with existing seeded data
+  → Logout destroys session — protected routes redirect to /auth/login
+```
+
+---
+
+## Section 10: What is not in scope — do not build
+
+| Feature | Reason deferred | When |
+|---|---|---|
+| Availity 837P submission | Requires partner enrollment (4–6 weeks) | Phase 2 |
+| Real-time eligibility via Availity 270/271 | Depends on enrollment | Phase 2 |
+| ERA/835 payment auto-posting | Depends on enrollment | Phase 2 |
+| Claim status polling 276/277 | Depends on enrollment | Phase 2 |
+| CMS-1500 pixel-accurate PDF | High effort — claim summary covers Phase 1 | Phase 2 |
+| UB-04 for facility billing | Different form + different client segment | Phase 3+ |
+| Secondary insurance / COB | 40–60% complexity — schema columns added now | Phase 2 |
+| Full ICD-10 database | Common codes seeded + manual fallback covers Phase 1 | Phase 3 |
+| AI coding assistant (natural language → code) | Needs Phase 1 data foundation first | Phase 5 |
+| Denial risk prediction (ML) | Needs 3+ months of real claim data | Phase 5 |
+| Mobile PWA for field staff | Phase 5 scope | Phase 5 |
+| Texas / CA / FL Medicaid expansion | Phase 3 scope | Phase 3 |
+| Organization-level multi-location UI | DB structure added, UI deferred | Phase 3 |
+| Formal BAA workflow + HIPAA certification | Sales motion, not MVP blocker | Phase 4 |
+| Bulk call campaigns | Intake feature, not prioritized | Phase 2 |
