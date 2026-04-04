@@ -1,0 +1,41 @@
+Both verifications passed. Move to Phase 1, step 1.3 — HCPCS code lookup.
+Build two things:
+1. Search API (already partially exists — extend it):
+GET /api/billing/hcpcs/search?q=skilled+nursing — ILIKE match on code, description_official, and description_plain. Return max 10 results. Exact code match ranked first (use ORDER BY CASE WHEN code ILIKE $1 THEN 0 ELSE 1 END). Return for each result: code, description_official, description_plain, unit_type, unit_interval_minutes, default_pos, requires_modifier, va_rate (join hcpcs_rates where payer_name = 'VA Community Care' and end_date IS NULL — return null if no rate exists).
+GET /api/billing/hcpcs/:code — single code with full detail including all rates across all payers.
+2. Standalone lookup page (/billing/codes):
+
+Large search bar prominent at top with placeholder "Search by code or description (e.g. G0299 or skilled nursing)"
+Results as cards below. Each card:
+
+[G0299]  Direct skilled nursing care, RN
+──────────────────────────────────────────
+Plain English: A registered nurse providing hands-on
+skilled care at the patient's home...
+
+Unit type:      Time-based (15 min intervals)
+VA rate (2025): $14.25 / unit
+Place of service: Home (12)
+
+[Use this code ▸]    [▼ More details]
+
+"More details" expands an accordion showing the full official description and notes
+"Use this code" copies the code to clipboard with a toast notification saying "Code G0299 copied — open a claim to use it"
+When search returns zero results, do NOT show an empty state. Show:
+
+No results for "[search term]"
+
+This may be a CPT code not in our library.
+You can still add it to a claim manually.
+
+[+ Enter code manually]
+"Enter code manually" opens a small form: code (text, required), short description (text, required), unit type dropdown (Time-based / Per visit / Per diem / Quantity), unit interval in minutes (number, appears only when Time-based selected), rate per unit (decimal). This form does NOT save to the hcpcs_codes table — it returns the values for use in the claim wizard. For now on the standalone page, it just copies the entered values to a "pending code" in sessionStorage with a toast "Code saved — open a claim to use it."
+3. Add the lookup to the BillingSidebar:
+Add "Code Lookup" as a nav item between Patients and Intelligence in the billing sidebar. Icon: Search or BookOpen.
+When done, show me:
+
+Search for "skilled nursing" — show me the result cards
+Search for "97110" (a CPT code not in the library) — show me the fallback and the manual entry form
+Confirm "Code Lookup" appears in the billing sidebar
+
+Do not move to step 1.4 until I confirm.

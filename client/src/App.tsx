@@ -107,7 +107,7 @@ function Router() {
           <BillingLayout><ClaimsPage /></BillingLayout>
         </AuthGuard>
       </Route>
-      <Route path="/billing/hcpcs">
+      <Route path="/billing/codes">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><BillingHcpcs /></BillingLayout>
         </AuthGuard>

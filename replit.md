@@ -40,7 +40,7 @@ Preferred communication style: Simple, everyday language.
 **Framework**: React 18 with TypeScript, using Vite as the build tool and dev server.
 
 **Routing**: Wouter for lightweight client-side routing. Two module route groups:
-- `/billing/*` — BillingLayout with BillingSidebar (Dashboard, Patients, Claims, HCPCS, Intelligence, Rules, Reports, Settings)
+- `/billing/*` — BillingLayout with BillingSidebar (Dashboard, Patients, Claims, Code Lookup, Intelligence, Rules, Reports, Settings)
 - `/intake/*` — IntakeLayout with IntakeSidebar + GuidedChatWidget (Dashboard, Chat Analytics, Lead Worklist, Scheduling)
 - `/` — ModuleSelector (admin sees both, single-role users auto-redirect)
 - `/auth/login` — Login page

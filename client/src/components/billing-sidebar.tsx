@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   ScrollText,
   BarChart3,
+  BookOpen,
 } from "lucide-react";
 import {
   Sidebar,
@@ -30,7 +31,7 @@ const billingNavItems = [
   { title: "Dashboard", url: "/billing/dashboard", icon: LayoutDashboard },
   { title: "Patients", url: "/billing/patients", icon: Users },
   { title: "Claims", url: "/billing/claims", icon: FileText },
-  { title: "HCPCS Codes", url: "/billing/hcpcs", icon: ScrollText },
+  { title: "Code Lookup", url: "/billing/codes", icon: BookOpen },
   { title: "Intelligence", url: "/billing/intelligence", icon: Brain },
   { title: "Rules", url: "/billing/rules", icon: Shield },
   { title: "Reports", url: "/billing/reports", icon: BarChart3 },

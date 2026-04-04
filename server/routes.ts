@@ -290,6 +290,49 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  app.get("/api/billing/hcpcs/search", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const q = (req.query.q as string || "").trim();
+      if (!q) return res.json([]);
+      const db = await import("./db").then(m => m.pool);
+      const pattern = `%${q}%`;
+      const { rows } = await db.query(
+        `SELECT h.code, h.description_official, h.description_plain, h.unit_type,
+                h.unit_interval_minutes, h.default_pos, h.requires_modifier, h.notes,
+                r.rate_per_unit AS va_rate
+         FROM hcpcs_codes h
+         LEFT JOIN hcpcs_rates r ON r.hcpcs_code = h.code
+           AND r.payer_name = 'VA Community Care' AND r.end_date IS NULL
+         WHERE h.is_active = true
+           AND (h.code ILIKE $1 OR h.description_official ILIKE $1 OR h.description_plain ILIKE $1)
+         ORDER BY CASE WHEN h.code ILIKE $2 THEN 0 ELSE 1 END, h.code
+         LIMIT 10`,
+        [pattern, q]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/hcpcs/:code", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows: codeRows } = await db.query(
+        "SELECT * FROM hcpcs_codes WHERE code = $1 AND is_active = true",
+        [req.params.code.toUpperCase()]
+      );
+      if (codeRows.length === 0) return res.status(404).json({ error: "Code not found" });
+      const { rows: rates } = await db.query(
+        "SELECT * FROM hcpcs_rates WHERE hcpcs_code = $1 ORDER BY payer_name",
+        [req.params.code.toUpperCase()]
+      );
+      res.json({ ...codeRows[0], rates });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/billing/hcpcs/:code/rates", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { rows } = await import("./db").then(m => m.pool.query(
