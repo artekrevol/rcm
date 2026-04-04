@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { validateNPI } from "@shared/npi-validation";
+import { generateAndDownloadClaimPdf } from "@/lib/generate-claim-pdf";
 
 const ICD10_COMMON = [
   { code: "Z51.11", desc: "Encounter for antineoplastic chemotherapy" },
@@ -660,6 +661,8 @@ export default function ClaimWizard() {
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [pdfGenerated, setPdfGenerated] = useState(false);
+  const [pdfGenerating, setPdfGenerating] = useState(false);
 
   const { data: wizardData } = useQuery<any>({
     queryKey: ["/api/billing/claims/wizard-data"],
@@ -1229,12 +1232,25 @@ export default function ClaimWizard() {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => toast({ title: "PDF generation coming in next update" })}
-                disabled={validationErrors.length > 0}
+                onClick={async () => {
+                  if (!claimId) return;
+                  setPdfGenerating(true);
+                  try {
+                    await generateAndDownloadClaimPdf(claimId);
+                    setPdfGenerated(true);
+                    queryClient.invalidateQueries({ queryKey: ["/api/billing/claims", claimId] });
+                    toast({ title: "Claim summary downloaded. Upload this file to your Availity portal to submit." });
+                  } catch (err: any) {
+                    toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
+                  } finally {
+                    setPdfGenerating(false);
+                  }
+                }}
+                disabled={validationErrors.length > 0 || pdfGenerating}
                 data-testid="button-generate-pdf"
               >
-                <FileText className="h-4 w-4 mr-2" />
-                Generate Claim Summary PDF
+                {pdfGenerating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileText className="h-4 w-4 mr-2" />}
+                {pdfGenerating ? "Generating PDF..." : pdfGenerated ? "Re-download PDF" : "Generate Claim Summary PDF"}
               </Button>
               <Button
                 onClick={() => setShowSubmitModal(true)}

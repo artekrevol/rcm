@@ -455,6 +455,58 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  app.get("/api/billing/claims/:id/pdf-data", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
+      const claim = claimResult.rows[0];
+
+      const patientResult = await db.query(
+        `SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
+        [claim.patient_id]
+      );
+      const patient = patientResult.rows[0] || null;
+
+      let provider = null;
+      if (claim.provider_id) {
+        const provResult = await db.query("SELECT * FROM providers WHERE id = $1", [claim.provider_id]);
+        provider = provResult.rows[0] || null;
+      }
+
+      const practiceResult = await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const practice = practiceResult.rows[0] || null;
+
+      let payerName = claim.payer || "";
+      if (claim.payer_id) {
+        const payerResult = await db.query("SELECT name FROM payers WHERE id = $1", [claim.payer_id]);
+        if (payerResult.rows[0]) payerName = payerResult.rows[0].name;
+      }
+
+      res.json({ claim, patient, provider, practice, payerName });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/billing/claims/:id/pdf-generated", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const timestamp = new Date().toISOString();
+      await db.query(
+        `UPDATE claims SET pdf_url = $1, status = CASE WHEN status IN ('draft', 'created') THEN 'exported' ELSE status END, updated_at = NOW() WHERE id = $2`,
+        [`generated:${timestamp}`, req.params.id]
+      );
+      await db.query(
+        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
+        [crypto.randomUUID(), req.params.id, "PDF Generated", `Claim summary PDF generated at ${timestamp}`]
+      );
+      res.json({ success: true, pdfUrl: `generated:${timestamp}` });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/billing/hcpcs", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM hcpcs_codes WHERE is_active = true ORDER BY code"));
@@ -1560,17 +1612,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.status(201).json({ claimId: claim.id });
   });
 
-  app.get("/api/claims/recent", async (req, res) => {
+  app.get("/api/claims/recent", requireRole("admin", "rcm_manager"), async (req, res) => {
     const claims = await storage.getClaims();
     res.json(claims.slice(0, 10));
   });
 
-  app.get("/api/claims", async (req, res) => {
+  app.get("/api/claims", requireRole("admin", "rcm_manager"), async (req, res) => {
     const claims = await storage.getClaims();
     res.json(claims);
   });
 
-  app.get("/api/claims/:id", async (req, res) => {
+  app.get("/api/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     const claim = await storage.getClaim(req.params.id);
     if (!claim) {
       return res.status(404).json({ error: "Claim not found" });
@@ -1578,22 +1630,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(claim);
   });
 
-  app.get("/api/claims/:id/events", async (req, res) => {
+  app.get("/api/claims/:id/events", requireRole("admin", "rcm_manager"), async (req, res) => {
     const events = await storage.getClaimEvents(req.params.id);
     res.json(events);
   });
 
-  app.get("/api/claims/:id/explanation", async (req, res) => {
+  app.get("/api/claims/:id/explanation", requireRole("admin", "rcm_manager"), async (req, res) => {
     const explanation = await storage.getRiskExplanation(req.params.id);
     res.json(explanation || null);
   });
 
-  app.get("/api/claims/:id/patient", async (req, res) => {
+  app.get("/api/claims/:id/patient", requireRole("admin", "rcm_manager"), async (req, res) => {
     const patient = await storage.getClaimPatient(req.params.id);
     res.json(patient || null);
   });
 
-  app.post("/api/claims/:id/submit", async (req, res) => {
+  app.post("/api/claims/:id/submit", requireRole("admin", "rcm_manager"), async (req, res) => {
     const claim = await storage.getClaim(req.params.id);
     if (!claim) {
       return res.status(404).json({ error: "Claim not found" });

@@ -161,9 +161,9 @@ Preferred communication style: Simple, everyday language.
 - ~~Patient Management UI~~ - Patient list with live search (name, DOB, carrier, member ID), create patient form (15+ fields, NPI validation, referral source dropdown), patient detail page with 4 tabs (Profile, Claims, Eligibility, Notes), atomic server-side note append, graceful handling of seeded patients with null names
 
 - ~~Claim Creation Wizard~~ - 3-step wizard at `/billing/claims/new` with patient search/select, draft claim auto-creation, service lines with time-based unit calculator (hours→units→rate→total), ICD-10 diagnosis search, authorization, auto-save on step advance, risk scoring panel (GREEN/YELLOW/RED), validation errors/warnings with acknowledgment, Save Draft / Generate PDF placeholder / Submit to Availity modal
+- ~~Claim Summary PDF~~ - Client-side PDF generation via @react-pdf/renderer with ClaimSummaryDocument component, buildClaimPdfData helper for both wizard-created and legacy seeded claims, auto-download with filename, status update to 'exported', claim_event logging, "Re-download PDF" label after first generation, PDF button on claim detail page, legacy claim fallback with footnote
 
 ### Future Enhancements
-- CMS-1500 PDF generation
 - Patient management CRUD
 - HCPCS code search and rate lookup UI
 - Practice settings configuration UI

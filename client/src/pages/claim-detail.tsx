@@ -24,15 +24,19 @@ import {
   AlertTriangle,
   CheckCircle2,
   ShieldAlert,
+  Loader2,
+  Download,
 } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
+import { generateAndDownloadClaimPdf } from "@/lib/generate-claim-pdf";
 
 export default function ClaimDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
   const [explainOpen, setExplainOpen] = useState(false);
+  const [pdfGenerating, setPdfGenerating] = useState(false);
 
   const { data: claim, isLoading: claimLoading } = useQuery<Claim>({
     queryKey: ["/api/claims", id],
@@ -126,6 +130,28 @@ export default function ClaimDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={async () => {
+              if (!id) return;
+              setPdfGenerating(true);
+              try {
+                await generateAndDownloadClaimPdf(id);
+                queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+                toast({ title: "Claim summary downloaded. Upload this file to your Availity portal to submit." });
+              } catch (err: any) {
+                toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
+              } finally {
+                setPdfGenerating(false);
+              }
+            }}
+            disabled={pdfGenerating}
+            data-testid="button-download-pdf"
+          >
+            {pdfGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {pdfGenerating ? "Generating..." : claim.pdfUrl ? "Re-download PDF" : "Generate PDF"}
+          </Button>
           <Button
             variant="outline"
             className="gap-2"
