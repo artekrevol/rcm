@@ -1,0 +1,19 @@
+Build the Providers tab first. The claim wizard needs at least one provider in the providers table before its dropdown can render, so this unblocks everything downstream.
+Build the Providers tab at /billing/settings/providers with:
+
+Table listing all rows from the providers table. Columns: name (first + last), credentials, NPI, taxonomy code, default badge, active/inactive status
+"Add Provider" button opens a form (modal or side panel — your choice based on the existing UI patterns in the codebase)
+Form fields: first name (required), last name (required), credentials dropdown (RN, LPN, PT, OT, SLP, HHA, PCA, plus "Other" with free text), NPI (required, 10 digits, validated with Luhn checksum — use the exact function from Section 7.1 of the build prompt), taxonomy code (optional), individual tax ID (optional)
+"Set as default" toggle — when toggled on for one provider, removes is_default = true from all other providers in the same DB transaction. Only one default allowed at a time.
+"Deactivate" action — sets is_active = false. Deactivated providers disappear from the claim form dropdown but their records are preserved. Show deactivated providers in the table with a grayed-out row and a "Reactivate" option.
+POST /api/billing/providers to create, PATCH /api/billing/providers/:id to update/deactivate
+
+Once Providers is working and I can add a provider through the UI, build these in order:
+
+Practice Info tab (/billing/settings/practice) — form for the practice_settings table fields
+Payers tab (/billing/settings/payers) — table of seeded payers, "Add Custom Payer" button, deactivate for default payers
+Rate Tables tab (/billing/settings/rates) — rates grouped by payer, add/edit/delete, age warning banner if any rate's effective_date is more than 90 days old
+
+Show me the Providers UI when it's ready. Do not move to step 1.2 (Patient management) until I confirm the settings UI looks correct.
+
+One thing to watch while it builds: the NPI Luhn validation. This is a specific algorithm that some AI tools get wrong by implementing plain Luhn instead of the NPI variant which prepends 80840 before running the checksum. If the validation rejects valid NPIs or accepts invalid ones, that's the cause. The exact function is in Section 7.1 of the prompt — make sure it uses the 80840 prefix.

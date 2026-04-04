@@ -147,7 +147,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/billing/payers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM payers WHERE is_active = true ORDER BY name"));
+      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM payers ORDER BY is_active DESC, name"));
       res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -156,7 +156,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM providers WHERE is_active = true ORDER BY last_name, first_name"));
+      const showAll = req.query.all === "true";
+      const whereClause = showAll ? "" : "WHERE is_active = true";
+      const { rows } = await import("./db").then(m => m.pool.query(`SELECT * FROM providers ${whereClause} ORDER BY is_active DESC, last_name, first_name`));
       res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -166,12 +168,77 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, isDefault } = req.body;
-      const { rows } = await import("./db").then(m => m.pool.query(
-        `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, is_default)
-         VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-        [firstName, lastName, credentials || null, npi, taxonomyCode || null, individualTaxId || null, isDefault || false]
-      ));
-      res.json(rows[0]);
+      if (!firstName?.trim() || !lastName?.trim() || !npi?.trim()) {
+        return res.status(400).json({ error: "firstName, lastName, and npi are required" });
+      }
+      if (!/^\d{10}$/.test(npi)) {
+        return res.status(400).json({ error: "NPI must be exactly 10 digits" });
+      }
+      const db = await import("./db").then(m => m.pool);
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        if (isDefault) {
+          await client.query("UPDATE providers SET is_default = false WHERE is_default = true");
+        }
+        const { rows } = await client.query(
+          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, is_default)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+          [firstName.trim(), lastName.trim(), credentials || null, npi, taxonomyCode || null, individualTaxId || null, isDefault || false]
+        );
+        await client.query("COMMIT");
+        res.json(rows[0]);
+      } catch (txErr) {
+        await client.query("ROLLBACK");
+        throw txErr;
+      } finally {
+        client.release();
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/billing/providers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, isDefault, isActive } = req.body;
+      if (npi !== undefined && !/^\d{10}$/.test(npi)) {
+        return res.status(400).json({ error: "NPI must be exactly 10 digits" });
+      }
+      const db = await import("./db").then(m => m.pool);
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        if (isDefault === true) {
+          await client.query("UPDATE providers SET is_default = false WHERE is_default = true");
+        }
+        const fields: string[] = [];
+        const values: any[] = [];
+        let idx = 1;
+        if (firstName !== undefined) { fields.push(`first_name = $${idx++}`); values.push(firstName); }
+        if (lastName !== undefined) { fields.push(`last_name = $${idx++}`); values.push(lastName); }
+        if (credentials !== undefined) { fields.push(`credentials = $${idx++}`); values.push(credentials); }
+        if (npi !== undefined) { fields.push(`npi = $${idx++}`); values.push(npi); }
+        if (taxonomyCode !== undefined) { fields.push(`taxonomy_code = $${idx++}`); values.push(taxonomyCode); }
+        if (individualTaxId !== undefined) { fields.push(`individual_tax_id = $${idx++}`); values.push(individualTaxId); }
+        if (isDefault !== undefined) { fields.push(`is_default = $${idx++}`); values.push(isDefault); }
+        if (isActive !== undefined) { fields.push(`is_active = $${idx++}`); values.push(isActive); }
+        fields.push(`updated_at = NOW()`);
+        values.push(id);
+        const { rows } = await client.query(
+          `UPDATE providers SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+          values
+        );
+        await client.query("COMMIT");
+        if (rows.length === 0) return res.status(404).json({ error: "Provider not found" });
+        res.json(rows[0]);
+      } catch (txErr) {
+        await client.query("ROLLBACK");
+        throw txErr;
+      } finally {
+        client.release();
+      }
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -226,6 +293,111 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [req.params.code]
       ));
       res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/payers", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { name, payerId, timelyFilingDays, authRequired, billingType } = req.body;
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `INSERT INTO payers (id, name, payer_id, timely_filing_days, auth_required, billing_type, is_active, is_custom)
+         VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, true, true) RETURNING *`,
+        [name, payerId || null, timelyFilingDays || 365, authRequired || false, billingType || 'professional']
+      );
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/billing/payers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { isActive, name, payerId, timelyFilingDays, authRequired } = req.body;
+      const db = await import("./db").then(m => m.pool);
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      if (isActive !== undefined) { fields.push(`is_active = $${idx++}`); values.push(isActive); }
+      if (name !== undefined) { fields.push(`name = $${idx++}`); values.push(name); }
+      if (payerId !== undefined) { fields.push(`payer_id = $${idx++}`); values.push(payerId); }
+      if (timelyFilingDays !== undefined) { fields.push(`timely_filing_days = $${idx++}`); values.push(timelyFilingDays); }
+      if (authRequired !== undefined) { fields.push(`auth_required = $${idx++}`); values.push(authRequired); }
+      if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
+      values.push(id);
+      const { rows } = await db.query(
+        `UPDATE payers SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "Payer not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/rates", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { rows } = await import("./db").then(m => m.pool.query(
+        `SELECT r.*, h.description_official, h.description_plain, h.unit_type
+         FROM hcpcs_rates r LEFT JOIN hcpcs_codes h ON r.hcpcs_code = h.code
+         ORDER BY r.payer_name, r.hcpcs_code`
+      ));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/rates", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { hcpcsCode, payerId, payerName, ratePerUnit, unitIntervalMinutes, effectiveDate, endDate } = req.body;
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `INSERT INTO hcpcs_rates (id, hcpcs_code, payer_id, payer_name, rate_per_unit, unit_interval_minutes, effective_date, end_date)
+         VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [hcpcsCode, payerId || null, payerName, ratePerUnit, unitIntervalMinutes || null, effectiveDate, endDate || null]
+      );
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/billing/rates/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { ratePerUnit, unitIntervalMinutes, effectiveDate, endDate } = req.body;
+      const db = await import("./db").then(m => m.pool);
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      if (ratePerUnit !== undefined) { fields.push(`rate_per_unit = $${idx++}`); values.push(ratePerUnit); }
+      if (unitIntervalMinutes !== undefined) { fields.push(`unit_interval_minutes = $${idx++}`); values.push(unitIntervalMinutes); }
+      if (effectiveDate !== undefined) { fields.push(`effective_date = $${idx++}`); values.push(effectiveDate); }
+      if (endDate !== undefined) { fields.push(`end_date = $${idx++}`); values.push(endDate); }
+      if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
+      values.push(id);
+      const { rows } = await db.query(
+        `UPDATE hcpcs_rates SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "Rate not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/billing/rates/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rowCount } = await db.query("DELETE FROM hcpcs_rates WHERE id = $1", [req.params.id]);
+      if (rowCount === 0) return res.status(404).json({ error: "Rate not found" });
+      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

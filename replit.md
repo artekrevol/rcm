@@ -157,6 +157,7 @@ Preferred communication style: Simple, everyday language.
 - ~~Module Split~~ - Separate billing and intake modules with role-based routing
 - ~~Billing API Routes~~ - HCPCS codes, payers, providers, practice settings
 - ~~Database Expansion~~ - 7 new tables, 40+ new columns across existing tables
+- ~~Practice Settings UI~~ - 4-tab settings page (Providers, Practice Info, Payers, Rate Tables) with NPI validation, default provider management, payer CRUD, rate table management with 90-day staleness warnings
 
 ### Future Enhancements
 - Billing claim creation wizard with service line builder
