@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import { validateNPI } from "@/lib/npi-validation";
+import { validateNPI } from "@shared/npi-validation";
 import {
   Plus,
   Star,

@@ -171,8 +171,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!firstName?.trim() || !lastName?.trim() || !npi?.trim()) {
         return res.status(400).json({ error: "firstName, lastName, and npi are required" });
       }
-      if (!/^\d{10}$/.test(npi)) {
-        return res.status(400).json({ error: "NPI must be exactly 10 digits" });
+      const { validateNPI } = await import("../shared/npi-validation");
+      if (!validateNPI(npi)) {
+        return res.status(400).json({ error: "Invalid NPI — must be 10 digits and pass the NPI checksum" });
       }
       const db = await import("./db").then(m => m.pool);
       const client = await db.connect();
@@ -203,8 +204,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const { id } = req.params;
       const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, isDefault, isActive } = req.body;
-      if (npi !== undefined && !/^\d{10}$/.test(npi)) {
-        return res.status(400).json({ error: "NPI must be exactly 10 digits" });
+      if (npi !== undefined) {
+        const { validateNPI } = await import("../shared/npi-validation");
+        if (!validateNPI(npi)) {
+          return res.status(400).json({ error: "Invalid NPI — must be 10 digits and pass the NPI checksum" });
+        }
       }
       const db = await import("./db").then(m => m.pool);
       const client = await db.connect();
