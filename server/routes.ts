@@ -281,6 +281,180 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  app.get("/api/billing/claims/wizard-data", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const [providers, payers, settings] = await Promise.all([
+        db.query("SELECT id, first_name, last_name, credentials, npi, is_default FROM providers WHERE is_active = true ORDER BY last_name"),
+        db.query("SELECT id, name, payer_id, timely_filing_days, auth_required, is_active FROM payers ORDER BY name"),
+        db.query("SELECT * FROM practice_settings LIMIT 1"),
+      ]);
+      res.json({
+        providers: providers.rows,
+        payers: payers.rows,
+        practiceSettings: settings.rows[0] || null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/claims/draft", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { patientId } = req.body;
+      if (!patientId) return res.status(400).json({ error: "Patient ID is required" });
+      const db = await import("./db").then(m => m.pool);
+      const patient = await db.query("SELECT * FROM patients WHERE id = $1", [patientId]);
+      if (patient.rows.length === 0) return res.status(404).json({ error: "Patient not found" });
+      const p = patient.rows[0];
+
+      const encounterId = crypto.randomUUID();
+      const claimId = crypto.randomUUID();
+      const now = new Date();
+
+      await db.query(
+        `INSERT INTO encounters (id, patient_id, service_type, facility_type, admission_type, expected_start_date, created_by, created_at)
+         VALUES ($1, $2, 'Home Health', 'Home', 'Elective', $3, $4, $5)`,
+        [encounterId, patientId, now.toISOString().split("T")[0], (req.user as any)?.email || null, now]
+      );
+
+      await db.query(
+        `INSERT INTO claims (id, patient_id, encounter_id, payer, cpt_codes, amount, status, risk_score, readiness_status, created_at, payer_id, authorization_number, created_by)
+         VALUES ($1, $2, $3, $4, $5::jsonb, 0, 'draft', 0, 'GREEN', $6, $7, $8, $9)`,
+        [claimId, patientId, encounterId, p.insurance_carrier || 'Unknown', '[]', now, p.payer_id || null, p.authorization_number || null, (req.user as any)?.email || null]
+      );
+
+      await db.query(
+        `INSERT INTO claim_events (id, claim_id, type, timestamp, notes)
+         VALUES ($1, $2, 'Created', $3, 'Claim created via wizard')`,
+        [crypto.randomUUID(), claimId, now]
+      );
+
+      res.status(201).json({ claimId, encounterId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/billing/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const existing = await db.query("SELECT id, status FROM claims WHERE id = $1", [req.params.id]);
+      if (existing.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
+
+      const allowedFields: Record<string, string> = {
+        payer: "payer", payerId: "payer_id", cptCodes: "cpt_codes", serviceLines: "service_lines",
+        amount: "amount", status: "status", riskScore: "risk_score", readinessStatus: "readiness_status",
+        providerId: "provider_id", serviceDate: "service_date", placeOfService: "place_of_service",
+        icd10Primary: "icd10_primary", icd10Secondary: "icd10_secondary", authorizationNumber: "authorization_number",
+        chargeOverridden: "charge_overridden", reason: "reason", nextStep: "next_step",
+      };
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      for (const [key, col] of Object.entries(allowedFields)) {
+        if (req.body[key] !== undefined) {
+          const val = req.body[key];
+          if (col === "cpt_codes" || col === "service_lines" || col === "icd10_secondary") {
+            fields.push(`${col} = $${idx}::jsonb`);
+            values.push(JSON.stringify(val));
+          } else {
+            fields.push(`${col} = $${idx}`);
+            values.push(val);
+          }
+          idx++;
+        }
+      }
+      if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
+      fields.push(`updated_at = NOW()`);
+      values.push(req.params.id);
+      const { rows } = await db.query(
+        `UPDATE claims SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+
+      if (req.body.encounterId) {
+        const encFields: string[] = [];
+        const encVals: any[] = [];
+        let eIdx = 1;
+        if (req.body.providerId !== undefined) { encFields.push(`provider_id = $${eIdx}`); encVals.push(req.body.providerId); eIdx++; }
+        if (req.body.serviceDate !== undefined) { encFields.push(`service_date = $${eIdx}`); encVals.push(req.body.serviceDate); eIdx++; }
+        if (req.body.placeOfService !== undefined) { encFields.push(`place_of_service = $${eIdx}`); encVals.push(req.body.placeOfService); eIdx++; }
+        if (req.body.authorizationNumber !== undefined) { encFields.push(`authorization_number = $${eIdx}`); encVals.push(req.body.authorizationNumber); eIdx++; }
+        if (encFields.length > 0) {
+          encVals.push(req.body.encounterId);
+          await db.query(`UPDATE encounters SET ${encFields.join(", ")} WHERE id = $${eIdx}`, encVals);
+        }
+      }
+
+      if (req.body.status && rows[0]) {
+        const oldStatus = existing.rows[0]?.status;
+        if (oldStatus !== req.body.status) {
+          await db.query(
+            "INSERT INTO claim_events (id, claim_id, type, timestamp, notes) VALUES ($1, $2, $3, $4, $5)",
+            [crypto.randomUUID(), req.params.id, "StatusChange", new Date(), `Status changed to ${req.body.status}`]
+          );
+        }
+      }
+
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/claims/:id/risk", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
+      const claim = claimResult.rows[0];
+
+      const patientResult = await db.query(
+        `SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
+        [claim.patient_id]
+      );
+      const patient = patientResult.rows[0];
+
+      let score = 0;
+      const factors: string[] = [];
+
+      if (!patient?.first_name || !patient?.last_name) { score += 15; factors.push("Patient name incomplete"); }
+      if (!patient?.dob) { score += 10; factors.push("Patient DOB missing"); }
+      if (!patient?.insurance_carrier) { score += 20; factors.push("No insurance carrier"); }
+      if (!patient?.member_id) { score += 15; factors.push("No member ID"); }
+      if (!patient?.vob_verified) { score += 10; factors.push("VOB not verified"); }
+      if (!claim.authorization_number) {
+        const payer = await db.query("SELECT auth_required FROM payers WHERE name = $1 OR id = $2", [claim.payer, claim.payer_id]);
+        if (payer.rows[0]?.auth_required) { score += 15; factors.push("Authorization required but missing"); }
+      }
+      if (!claim.icd10_primary) { score += 20; factors.push("Primary diagnosis missing"); }
+      const serviceLines = claim.service_lines || [];
+      if (serviceLines.length === 0) { score += 20; factors.push("No service lines"); }
+      if (claim.charge_overridden) { score += 5; factors.push("Charge manually overridden"); }
+
+      const serviceDate = claim.service_date;
+      if (serviceDate) {
+        const daysSince = Math.floor((Date.now() - new Date(serviceDate).getTime()) / 86400000);
+        const payerResult = await db.query("SELECT timely_filing_days FROM payers WHERE name = $1 OR id = $2", [claim.payer, claim.payer_id]);
+        const filingLimit = payerResult.rows[0]?.timely_filing_days || 365;
+        if (daysSince > filingLimit * 0.8) { score += 15; factors.push(`Service date ${daysSince} days ago — approaching ${filingLimit}-day filing limit`); }
+      }
+
+      const riskScore = Math.min(score, 100);
+      const readinessStatus = riskScore >= 60 ? "RED" : riskScore >= 30 ? "YELLOW" : "GREEN";
+
+      await db.query(
+        "UPDATE claims SET risk_score = $1, readiness_status = $2, updated_at = NOW() WHERE id = $3",
+        [riskScore, readinessStatus, req.params.id]
+      );
+
+      res.json({ riskScore, readinessStatus, factors });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/billing/hcpcs", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM hcpcs_codes WHERE is_active = true ORDER BY code"));

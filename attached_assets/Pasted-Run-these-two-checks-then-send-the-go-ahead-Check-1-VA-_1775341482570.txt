@@ -1,0 +1,144 @@
+Run these two checks then send the go-ahead:
+
+**Check 1 — VA rate is returning correctly:**
+> Run: `GET /api/billing/hcpcs/search?q=G0299` and show me the full JSON response for that one result. Confirm va_rate is 14.25 and not null.
+
+**Check 2 — Manual entry sessionStorage handoff:**
+> Search for "97110", click "Enter code manually", fill in the form with code=97110, description="Therapeutic exercises", unit type=Time-based, interval=15, rate=13.50, and submit. Then run `sessionStorage.getItem('pendingHcpcsCode')` in the browser console and show me the value.
+
+---
+
+Once both pass, send this to Replit:
+
+---
+
+Both checks confirmed. Move to Phase 1, step 1.4 — Claim creation wizard. This is the most important screen in the platform.
+
+**Architecture first — read this before writing any code:**
+
+The wizard creates records in three tables: `encounters`, `claims`, and `claim_events`. On Step 1 completion, immediately create a draft claim so the user's work is never lost. The shape must match the existing tables exactly:
+
+- `encounters`: id (varchar), patient_id, service_type (text, use "Home Health"), facility_type (text, use "Home"), admission_type (text, use "Elective"), expected_start_date (text, store as ISO date string), provider_id, place_of_service, service_date (date), authorization_number, created_by
+- `claims`: id (varchar), patient_id, encounter_id, payer (text — store payer name for backward compatibility with seeded data), payer_id (varchar FK), cpt_codes (jsonb — store array of code strings for backward compat), service_lines (jsonb — store full line item detail), amount (real — sum of all service line totals), status (text, 'draft'), risk_score (integer), readiness_status (text), service_date (date), place_of_service, icd10_primary, icd10_secondary (jsonb), authorization_number, provider_id, created_by, submission_method ('manual'), charge_overridden (boolean)
+- `claim_events`: id (varchar), claim_id, type ('Created'), timestamp, notes ('Claim created via wizard')
+
+Check if there's an existing risk scoring endpoint in routes.ts before building the wizard. Search for "risk" or "readiness" in the routes. The risk engine exists — the wizard should call it after Step 2 data is complete, not rebuild it.
+
+Also check sessionStorage for `pendingHcpcsCode` when Step 2 loads — if it exists, pre-populate the first service line and clear sessionStorage.
+
+**Build the wizard:**
+
+Route: `/billing/claims/new` with optional query param `?patientId=[id]`
+
+**Step 1: Patient** ● ○ ○
+
+- Search field: live search patients by name or DOB, dropdown results
+- On select: show patient summary card — name, DOB, insurance carrier, member ID, auth number on file, green "VOB Verified ✓" badge if vob_verified is true
+- "Edit patient" link opens patient profile in a new tab (do not break wizard flow)
+- If `?patientId` query param is present: pre-select that patient and advance to Step 2 automatically
+- If no patient found: "Create new patient" button navigates to `/billing/patients/new` in a new tab
+- On patient selected: POST to `/api/billing/claims/draft` with `{ patientId }` → creates draft claim and encounter, returns `{ claimId, encounterId }`. Store both IDs in component state. All subsequent saves PATCH this draft.
+
+**Step 2: Service** ○ ● ○
+
+*Rendering provider*: dropdown from active providers. Auto-selects `is_default = true` provider. Required.
+
+*Service date*: date picker defaulting to today. Validate:
+- Not in the future
+- Not older than patient's payer timely filing limit. Look up `payers.timely_filing_days` where `payers.name = patient.insurance_carrier` OR where `payers.id = patient.payer_id`. VA Community Care = 180 days, Medicare = 365 days, others per config. Show specific error: "This date is [N] days ago — VA Community Care requires claims within 180 days of service."
+
+*Place of service*: dropdown. Home (12), Office (11), Assisted Living Facility (13), Telehealth - Patient Home (10), Outpatient Hospital (22), Other. Default: Home (12).
+
+*Check sessionStorage for pendingHcpcsCode*: if it exists, pre-populate the first service line code field and clear it from sessionStorage.
+
+**Service lines** — each line:
+
+Code field: text input with inline search panel below it (reuse the search logic from the Code Lookup page — same API call, same card format, smaller). On code selected from search:
+- Populate description below field
+- Load unit_type, unit_interval_minutes, va_rate from API response
+- Show unit calculator if time-based
+
+Modifier field: text input, optional. If `requires_modifier = true` on the selected code, show amber inline hint: "This code commonly requires a modifier — verify with your payer."
+
+**Unit and charge calculator — critical, build this exactly:**
+
+```
+For time-based codes only (unit_type === 'time_based'):
+
+Service hours: [     ] (decimal input, e.g. 4.0 or 1.5)
+
+Unit interval: 15 min          ← from hcpcs_codes.unit_interval_minutes
+Units:         [auto]           ← Math.ceil(hours × (60 / interval))
+Rate/unit:     $14.25           ← from va_rate if VA payer, else "Enter rate"
+               [      ]         ← editable field, required if rate is null
+
+Total charge:  $[auto]          ← units × rate, always editable
+               [      ]         ← if user edits this, set charge_overridden: true on line
+
+Show the full calculation:
+"4.0 hrs × 4 units/hr = 16 units × $14.25 = $228.00"
+```
+
+For per-visit and per-diem: show Quantity (default 1) and Rate fields. Total = quantity × rate.
+
+If rate is not on file for the payer+code combination: rate field is empty and required. Show "Rate not on file — enter manually."
+
+"Add another service line" — up to 6 lines. Each line is independent.
+
+**CPT fallback within the wizard:** if the inline search returns no results, show the same "Enter code manually" link that opens the same form. The entered values populate the service line with `manual_entry: true`.
+
+**ICD-10 diagnosis:**
+
+Search field: search the 20 common home health codes seeded in the prompt PLUS allow free text code entry. Show code + description in results.
+
+Primary diagnosis required. Up to 3 additional secondaries labeled "Secondary 1", "Secondary 2", "Secondary 3."
+
+**Authorization:** pre-filled from `patient.authorization_number`. "Save to patient profile" checkbox.
+
+Auto-save: PATCH the draft claim every time the user advances a step.
+
+**Step 3: Review** ○ ○ ●
+
+Structured summary exactly as specified in Section 7.4 of the build prompt. Every section has an "Edit" link returning to the relevant step.
+
+**Validation on Step 3 load — hard errors (block Export, allow Save as Draft):**
+- Patient first or last name missing
+- Patient DOB missing  
+- No insurance carrier / payer
+- No member ID
+- No rendering provider selected
+- Provider NPI fails Luhn
+- Service date missing, in future, or exceeds timely filing
+- No service lines
+- Any line has zero units or zero total charge
+- No primary ICD-10 diagnosis
+
+**Warnings (show with acknowledgment checkbox):**
+- Auth number blank and payer.auth_required is true
+- Any code has requires_modifier = true and no modifier entered
+- Any line has charge_overridden: true
+- Units > 32 on any 15-min code
+- Patient vob_verified is false
+
+**After validation: call the existing risk scoring endpoint** with the claim data. Show the GREEN/YELLOW/RED readiness panel on Step 3. Find the risk endpoint in routes.ts before building this — do not rebuild it.
+
+**Write a claim_events record** on draft creation and on each status change.
+
+**Three action buttons at Step 3:**
+1. "Save as Draft" — PATCH claim status to 'draft', show success toast
+2. "Generate Claim Summary PDF" — placeholder for now, show "PDF generation coming in next update" toast. We will wire this in step 1.5 immediately after.
+3. "Submit to Availity" — show modal: "Direct submission coming in a future update. Use Generate PDF and upload to your Availity portal."
+
+**API endpoints needed:**
+- `POST /api/billing/claims/draft` — creates draft claim + encounter + claim_event
+- `PATCH /api/billing/claims/:id` — updates any claim fields
+- `GET /api/billing/claims/new-wizard-data` — returns active providers, active payers, practice settings (single call to pre-load Step 2 dropdowns)
+- `POST /api/billing/claims/:id/risk` — calls existing risk engine with claim data (or reuse existing endpoint if it already accepts a claim ID)
+
+When done, show me:
+1. The full wizard flow with a real patient selected
+2. The unit calculator working: enter 4 hours for G0299 → should show 16 units × $14.25 = $228.00
+3. Step 3 validation catching a missing primary diagnosis
+4. The GREEN/YELLOW/RED readiness panel appearing on Step 3
+
+Do not move to step 1.5 until I confirm the calculator math is correct.

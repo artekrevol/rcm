@@ -21,6 +21,7 @@ import PatientList from "@/pages/billing/patient-list";
 import PatientCreate from "@/pages/billing/patient-create";
 import PatientDetail from "@/pages/billing/patient-detail";
 import BillingHcpcs from "@/pages/billing/hcpcs";
+import ClaimWizard from "@/pages/billing/claim-wizard";
 import BillingSettings from "@/pages/billing/settings";
 import BillingReports from "@/pages/billing/reports";
 import ClaimsPage from "@/pages/claims";
@@ -95,6 +96,11 @@ function Router() {
       <Route path="/billing/patients">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><PatientList /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/claims/new">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ClaimWizard /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/claims/:id">
