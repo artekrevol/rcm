@@ -206,28 +206,28 @@ function PatientSearch({ onSelect, selectedPatient }: {
           onFocus={() => { if (patients.length > 0) setShowDropdown(true); }}
           onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
         />
+        {showDropdown && (
+          <Card className="absolute z-50 w-full mt-1 shadow-lg" data-testid="dropdown-patients">
+            <CardContent className="p-1 max-h-60 overflow-y-auto">
+              {patients.map((p: any) => (
+                <button
+                  key={p.id}
+                  className="w-full text-left px-3 py-2 hover:bg-accent rounded text-sm flex justify-between items-center"
+                  onClick={() => { onSelect(p); setShowDropdown(false); }}
+                  data-testid={`option-patient-${p.id}`}
+                >
+                  <span className="font-medium">
+                    {p.first_name || ""} {p.last_name || p.lead_name || "Unknown"}
+                  </span>
+                  <span className="text-muted-foreground text-xs">
+                    {p.dob || ""} {p.insurance_carrier ? `• ${p.insurance_carrier}` : ""}
+                  </span>
+                </button>
+              ))}
+            </CardContent>
+          </Card>
+        )}
       </div>
-      {showDropdown && (
-        <Card className="absolute z-50 w-full max-w-xl shadow-lg" data-testid="dropdown-patients">
-          <CardContent className="p-1 max-h-60 overflow-y-auto">
-            {patients.map((p: any) => (
-              <button
-                key={p.id}
-                className="w-full text-left px-3 py-2 hover:bg-accent rounded text-sm flex justify-between items-center"
-                onClick={() => { onSelect(p); setShowDropdown(false); }}
-                data-testid={`option-patient-${p.id}`}
-              >
-                <span className="font-medium">
-                  {p.first_name || ""} {p.last_name || p.lead_name || "Unknown"}
-                </span>
-                <span className="text-muted-foreground text-xs">
-                  {p.dob || ""} {p.insurance_carrier ? `• ${p.insurance_carrier}` : ""}
-                </span>
-              </button>
-            ))}
-          </CardContent>
-        </Card>
-      )}
       {debouncedSearch && patients.length === 0 && (
         <div className="text-sm text-muted-foreground flex items-center gap-2">
           No patients found.
