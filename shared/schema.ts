@@ -1,9 +1,8 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, real, date, decimal } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// User roles: admin, rcm_manager, intake
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").notNull().unique(),
@@ -16,12 +15,6 @@ export const insertUserSchema = createInsertSchema(users).omit({ id: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
-// Lead status: new, attempting_contact, contacted, qualified, unqualified, converted, lost
-// Priority: P0 (urgent), P1 (high), P2 (normal)
-// VOB Status: not_started, in_progress, verified, incomplete
-// Handoff Status: not_sent, sent, accepted
-// Next Action Type: call, callback, verify_insurance, request_docs, create_claim, none
-// Outcome Code: no_answer, left_voicemail, contacted, qualified, unqualified, insurance_missing, wrong_number
 export const leads = pgTable("leads", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -55,6 +48,7 @@ export const leads = pgTable("leads", {
   consentToCall: boolean("consent_to_call").notNull().default(true),
   ownerUserId: varchar("owner_user_id"),
   handoffStatus: text("handoff_status").notNull().default("not_sent"),
+  referralPartnerName: varchar("referral_partner_name"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -62,7 +56,6 @@ export const insertLeadSchema = createInsertSchema(leads).omit({ id: true, creat
 export type InsertLead = z.infer<typeof insertLeadSchema>;
 export type Lead = typeof leads.$inferSelect;
 
-// Patient linked to a lead
 export const patients = pgTable("patients", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   leadId: varchar("lead_id").notNull(),
@@ -71,13 +64,35 @@ export const patients = pgTable("patients", {
   insuranceCarrier: text("insurance_carrier").notNull(),
   memberId: text("member_id").notNull(),
   planType: text("plan_type").notNull(),
+  firstName: varchar("first_name"),
+  lastName: varchar("last_name"),
+  preferredName: varchar("preferred_name"),
+  phone: varchar("phone"),
+  email: varchar("email"),
+  sex: varchar("sex"),
+  address: jsonb("address").$type<Record<string, string>>(),
+  groupNumber: varchar("group_number"),
+  insuredName: varchar("insured_name"),
+  relationshipToInsured: varchar("relationship_to_insured"),
+  authorizationNumber: varchar("authorization_number"),
+  payerId: varchar("payer_id"),
+  referringProviderName: varchar("referring_provider_name"),
+  referringProviderNpi: varchar("referring_provider_npi"),
+  defaultProviderId: varchar("default_provider_id"),
+  referralSource: varchar("referral_source"),
+  referralPartnerName: varchar("referral_partner_name"),
+  serviceNeeded: varchar("service_needed"),
+  intakeCompleted: boolean("intake_completed").default(false),
+  vobVerified: boolean("vob_verified").default(false),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at"),
 });
 
 export const insertPatientSchema = createInsertSchema(patients).omit({ id: true });
 export type InsertPatient = z.infer<typeof insertPatientSchema>;
 export type Patient = typeof patients.$inferSelect;
 
-// Encounter (service request)
 export const encounters = pgTable("encounters", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   patientId: varchar("patient_id").notNull(),
@@ -85,13 +100,18 @@ export const encounters = pgTable("encounters", {
   facilityType: text("facility_type").notNull(),
   admissionType: text("admission_type").notNull(),
   expectedStartDate: text("expected_start_date").notNull(),
+  providerId: varchar("provider_id"),
+  placeOfService: varchar("place_of_service").default("12"),
+  serviceDate: date("service_date"),
+  authorizationNumber: varchar("authorization_number"),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 export const insertEncounterSchema = createInsertSchema(encounters).omit({ id: true });
 export type InsertEncounter = z.infer<typeof insertEncounterSchema>;
 export type Encounter = typeof encounters.$inferSelect;
 
-// Claim with risk scoring
 export const claims = pgTable("claims", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   patientId: varchar("patient_id").notNull(),
@@ -104,14 +124,27 @@ export const claims = pgTable("claims", {
   readinessStatus: text("readiness_status").notNull().default("GREEN"),
   reason: text("reason"),
   nextStep: text("next_step"),
+  providerId: varchar("provider_id"),
+  payerId: varchar("payer_id"),
+  serviceDate: date("service_date"),
+  placeOfService: varchar("place_of_service").default("12"),
+  icd10Primary: varchar("icd10_primary"),
+  icd10Secondary: jsonb("icd10_secondary").$type<string[]>(),
+  authorizationNumber: varchar("authorization_number"),
+  serviceLines: jsonb("service_lines").$type<any[]>(),
+  pdfUrl: varchar("pdf_url"),
+  submissionMethod: varchar("submission_method").default("manual"),
+  availityIcn: varchar("availity_icn"),
+  chargeOverridden: boolean("charge_overridden").default(false),
+  createdBy: varchar("created_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at"),
 });
 
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });
 export type InsertClaim = z.infer<typeof insertClaimSchema>;
 export type Claim = typeof claims.$inferSelect;
 
-// Claim events for timeline tracking
 export const claimEvents = pgTable("claim_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   claimId: varchar("claim_id").notNull(),
@@ -124,7 +157,6 @@ export const insertClaimEventSchema = createInsertSchema(claimEvents).omit({ id:
 export type InsertClaimEvent = z.infer<typeof insertClaimEventSchema>;
 export type ClaimEvent = typeof claimEvents.$inferSelect;
 
-// Denial records
 export const denials = pgTable("denials", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   claimId: varchar("claim_id").notNull(),
@@ -141,7 +173,6 @@ export const insertDenialSchema = createInsertSchema(denials).omit({ id: true, c
 export type InsertDenial = z.infer<typeof insertDenialSchema>;
 export type Denial = typeof denials.$inferSelect;
 
-// Prevention rules
 export const rules = pgTable("rules", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -162,7 +193,6 @@ export const insertRuleSchema = createInsertSchema(rules).omit({ id: true, creat
 export type InsertRule = z.infer<typeof insertRuleSchema>;
 export type Rule = typeof rules.$inferSelect;
 
-// Call records (Vapi or mock)
 export const calls = pgTable("calls", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   leadId: varchar("lead_id").notNull(),
@@ -203,7 +233,6 @@ export const insertCallSchema = createInsertSchema(calls).omit({ id: true, creat
 export type InsertCall = z.infer<typeof insertCallSchema>;
 export type Call = typeof calls.$inferSelect;
 
-// Prior Authorization tracking
 export const priorAuthorizations = pgTable("prior_authorizations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   encounterId: varchar("encounter_id").notNull(),
@@ -225,7 +254,6 @@ export const insertPriorAuthSchema = createInsertSchema(priorAuthorizations).omi
 export type InsertPriorAuth = z.infer<typeof insertPriorAuthSchema>;
 export type PriorAuth = typeof priorAuthorizations.$inferSelect;
 
-// Dashboard metrics type
 export type DashboardMetrics = {
   denialsPrevented: number;
   claimsAtRisk: number;
@@ -236,7 +264,6 @@ export type DashboardMetrics = {
   pendingClaims: number;
 };
 
-// Denial cluster for intelligence
 export type DenialCluster = {
   payer: string;
   cptCode: string;
@@ -251,7 +278,6 @@ export type DenialCluster = {
   };
 };
 
-// Risk explanation for explainability panel
 export type RiskExplanation = {
   inputs: { name: string; value: string; weight: number }[];
   factors: { name: string; contribution: number; description: string }[];
@@ -260,7 +286,6 @@ export type RiskExplanation = {
   recommendations: { action: string; priority: "high" | "medium" | "low"; completed: boolean }[];
 };
 
-// Email templates for automation
 export const emailTemplates = pgTable("email_templates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -275,7 +300,6 @@ export const insertEmailTemplateSchema = createInsertSchema(emailTemplates).omit
 export type InsertEmailTemplate = z.infer<typeof insertEmailTemplateSchema>;
 export type EmailTemplate = typeof emailTemplates.$inferSelect;
 
-// Email nurture sequences
 export const nurtureSections = pgTable("nurture_sequences", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
@@ -294,7 +318,6 @@ export const insertNurtureSequenceSchema = createInsertSchema(nurtureSections).o
 export type InsertNurtureSequence = z.infer<typeof insertNurtureSequenceSchema>;
 export type NurtureSequence = typeof nurtureSections.$inferSelect;
 
-// Email log for sent emails
 export const emailLogs = pgTable("email_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   leadId: varchar("lead_id").notNull(),
@@ -315,7 +338,6 @@ export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({ id: tru
 export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
 export type EmailLog = typeof emailLogs.$inferSelect;
 
-// Appointment availability slots
 export const availabilitySlots = pgTable("availability_slots", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   dayOfWeek: integer("day_of_week").notNull(),
@@ -329,7 +351,6 @@ export const insertAvailabilitySlotSchema = createInsertSchema(availabilitySlots
 export type InsertAvailabilitySlot = z.infer<typeof insertAvailabilitySlotSchema>;
 export type AvailabilitySlot = typeof availabilitySlots.$inferSelect;
 
-// Appointments
 export const appointments = pgTable("appointments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   leadId: varchar("lead_id").notNull(),
@@ -351,8 +372,6 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({ i
 export type InsertAppointment = z.infer<typeof insertAppointmentSchema>;
 export type Appointment = typeof appointments.$inferSelect;
 
-// Chat Sessions for persistence and analytics
-// Status: active, completed, abandoned
 export const chatSessions = pgTable("chat_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   visitorToken: text("visitor_token").notNull(),
@@ -375,8 +394,6 @@ export const insertChatSessionSchema = createInsertSchema(chatSessions).omit({ i
 export type InsertChatSession = z.infer<typeof insertChatSessionSchema>;
 export type ChatSession = typeof chatSessions.$inferSelect;
 
-// Chat Messages for conversation history
-// Type: bot, user, system
 export const chatMessages = pgTable("chat_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   sessionId: varchar("session_id").notNull(),
@@ -391,7 +408,6 @@ export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ i
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 
-// Chat Analytics aggregated metrics (daily snapshots)
 export const chatAnalytics = pgTable("chat_analytics", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   date: text("date").notNull(),
@@ -410,7 +426,6 @@ export const insertChatAnalyticsSchema = createInsertSchema(chatAnalytics).omit(
 export type InsertChatAnalytics = z.infer<typeof insertChatAnalyticsSchema>;
 export type ChatAnalytics = typeof chatAnalytics.$inferSelect;
 
-// VOB Verifications from VerifyTX
 export const vobVerifications = pgTable("vob_verifications", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   leadId: varchar("lead_id").notNull(),
@@ -439,6 +454,7 @@ export const vobVerifications = pgTable("vob_verifications", {
   pdfUrl: text("pdf_url"),
   rawResponse: jsonb("raw_response").$type<Record<string, unknown>>().default({}),
   errorMessage: text("error_message"),
+  context: varchar("context").default("intake"),
   verifiedAt: timestamp("verified_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -447,20 +463,132 @@ export const insertVobVerificationSchema = createInsertSchema(vobVerifications).
 export type InsertVobVerification = z.infer<typeof insertVobVerificationSchema>;
 export type VobVerification = typeof vobVerifications.$inferSelect;
 
-// Activity logs for tracking all deal/lead changes (HubSpot-style timeline)
 export const activityLogs = pgTable("activity_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  leadId: varchar("lead_id").notNull(),
-  activityType: text("activity_type").notNull(), // property_change, status_change, email_sent, sms_sent, call_made, note_added, etc.
-  field: text("field"), // For property changes, the field that changed
-  oldValue: text("old_value"), // Previous value
-  newValue: text("new_value"), // New value
-  description: text("description"), // Human-readable description
-  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}), // Additional context
-  performedBy: text("performed_by"), // User or "system"
+  leadId: varchar("lead_id"),
+  claimId: varchar("claim_id"),
+  patientId: varchar("patient_id"),
+  activityType: text("activity_type").notNull(),
+  field: text("field"),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  description: text("description"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  performedBy: text("performed_by"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const insertActivityLogSchema = createInsertSchema(activityLogs).omit({ id: true, createdAt: true });
 export type InsertActivityLog = z.infer<typeof insertActivityLogSchema>;
 export type ActivityLog = typeof activityLogs.$inferSelect;
+
+export const organizations = pgTable("organizations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type Organization = typeof organizations.$inferSelect;
+
+export const practiceSettings = pgTable("practice_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  practiceName: varchar("practice_name").notNull().default(""),
+  primaryNpi: varchar("primary_npi"),
+  taxId: varchar("tax_id"),
+  taxonomyCode: varchar("taxonomy_code"),
+  address: jsonb("address").$type<Record<string, string>>().default({}),
+  phone: varchar("phone"),
+  defaultPos: varchar("default_pos").default("12"),
+  organizationId: varchar("organization_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPracticeSettingsSchema = createInsertSchema(practiceSettings).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPracticeSettings = z.infer<typeof insertPracticeSettingsSchema>;
+export type PracticeSettings = typeof practiceSettings.$inferSelect;
+
+export const providers = pgTable("providers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  firstName: varchar("first_name").notNull(),
+  lastName: varchar("last_name").notNull(),
+  credentials: varchar("credentials"),
+  npi: varchar("npi").notNull().unique(),
+  taxonomyCode: varchar("taxonomy_code"),
+  individualTaxId: varchar("individual_tax_id"),
+  isDefault: boolean("is_default").default(false),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertProviderSchema = createInsertSchema(providers).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertProvider = z.infer<typeof insertProviderSchema>;
+export type Provider = typeof providers.$inferSelect;
+
+export const payers = pgTable("payers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name").notNull(),
+  payerId: varchar("payer_id"),
+  timelyFilingDays: integer("timely_filing_days").default(365),
+  authRequired: boolean("auth_required").default(false),
+  billingType: varchar("billing_type").default("professional"),
+  isActive: boolean("is_active").default(true),
+  isCustom: boolean("is_custom").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPayerSchema = createInsertSchema(payers).omit({ id: true, createdAt: true });
+export type InsertPayer = z.infer<typeof insertPayerSchema>;
+export type Payer = typeof payers.$inferSelect;
+
+export const hcpcsCodes = pgTable("hcpcs_codes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: varchar("code").notNull().unique(),
+  descriptionOfficial: text("description_official").notNull(),
+  descriptionPlain: text("description_plain"),
+  unitType: varchar("unit_type").notNull(),
+  unitIntervalMinutes: integer("unit_interval_minutes"),
+  defaultPos: varchar("default_pos").default("12"),
+  requiresModifier: boolean("requires_modifier").default(false),
+  notes: text("notes"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertHcpcsCodeSchema = createInsertSchema(hcpcsCodes).omit({ id: true, createdAt: true });
+export type InsertHcpcsCode = z.infer<typeof insertHcpcsCodeSchema>;
+export type HcpcsCode = typeof hcpcsCodes.$inferSelect;
+
+export const hcpcsRates = pgTable("hcpcs_rates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  hcpcsCode: varchar("hcpcs_code").notNull(),
+  payerId: varchar("payer_id"),
+  payerName: varchar("payer_name").notNull(),
+  ratePerUnit: real("rate_per_unit").notNull(),
+  unitIntervalMinutes: integer("unit_interval_minutes"),
+  effectiveDate: date("effective_date").notNull(),
+  endDate: date("end_date"),
+  isOverride: boolean("is_override").default(false),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertHcpcsRateSchema = createInsertSchema(hcpcsRates).omit({ id: true, createdAt: true });
+export type InsertHcpcsRate = z.infer<typeof insertHcpcsRateSchema>;
+export type HcpcsRate = typeof hcpcsRates.$inferSelect;
+
+export const claimTemplates = pgTable("claim_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name").notNull(),
+  providerId: varchar("provider_id"),
+  payerId: varchar("payer_id"),
+  placeOfService: varchar("place_of_service").default("12"),
+  serviceLines: jsonb("service_lines").$type<any[]>(),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertClaimTemplateSchema = createInsertSchema(claimTemplates).omit({ id: true, createdAt: true });
+export type InsertClaimTemplate = z.infer<typeof insertClaimTemplateSchema>;
+export type ClaimTemplate = typeof claimTemplates.$inferSelect;

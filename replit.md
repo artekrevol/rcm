@@ -2,17 +2,36 @@
 
 ## Overview
 
-Claim Shield Health is a healthcare revenue cycle management (RCM) platform designed to prevent claim denials before they happen. The application provides pre-claim risk assessment, real-time claim tracking, denial pattern intelligence, and automated prevention rules. It serves healthcare revenue cycle professionals who need to reduce denied claims and protect revenue.
+Claim Shield Health is a healthcare revenue cycle management (RCM) platform split into two modules:
 
-The platform demonstrates four core capabilities:
-1. **Pre-Claim Prevention** - Eligibility and authorization risk scoring before claim submission
-2. **Claim State Tracker** - Timeline-based claim monitoring with stuck claim detection
-3. **Denial Pattern Intelligence** - Clustering denial reasons and auto-generating prevention rules
-4. **Lead Management** - Patient intake with simulated AI voice agent integration
+1. **Billing Module** (`/billing/*` routes, `rcm_manager` role) — Claim creation, patient management, HCPCS code lookup, denial intelligence, prevention rules, reports, and practice settings.
+2. **Intake Module** (`/intake/*` routes, `intake` role) — Lead management, AI voice/SMS/email outreach, guided chat widget, VOB insurance verification, appointment scheduling, and chat analytics.
+
+Admin users (`admin` role) can access both modules via a Module Selector page.
 
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
+
+## Authentication & Authorization
+
+**Auth system**: Passport.js local strategy with bcrypt-hashed passwords, express-session with connect-pg-simple PostgreSQL session store.
+
+**Routes**:
+- `POST /api/auth/login` — Login with email/password
+- `POST /api/auth/logout` — Destroy session
+- `GET /api/auth/me` — Current user (returns 401 if unauthenticated)
+
+**Roles**: `admin` (both modules), `rcm_manager` (billing only), `intake` (intake only)
+
+**Middleware**: `requireAuth` (any authenticated user) and `requireRole(...roles)` (role-based access) in `server/auth.ts`, applied to `/api/billing/*` endpoints.
+
+**Frontend guards**: `AuthGuard` component wraps protected routes in `App.tsx`, redirecting unauthenticated users to `/auth/login` and unauthorized users to `/`.
+
+**Test users** (all password `demo123`):
+- `demo@claimshield.ai` — admin
+- `billing@claimshield.ai` — rcm_manager
+- `intake@claimshield.ai` — intake
 
 ## System Architecture
 
@@ -20,7 +39,11 @@ Preferred communication style: Simple, everyday language.
 
 **Framework**: React 18 with TypeScript, using Vite as the build tool and dev server.
 
-**Routing**: Wouter for lightweight client-side routing. Pages include dashboard, leads, claims, intelligence, rules, and demo scenarios.
+**Routing**: Wouter for lightweight client-side routing. Two module route groups:
+- `/billing/*` — BillingLayout with BillingSidebar (Dashboard, Patients, Claims, HCPCS, Intelligence, Rules, Reports, Settings)
+- `/intake/*` — IntakeLayout with IntakeSidebar + GuidedChatWidget (Dashboard, Chat Analytics, Lead Worklist, Scheduling)
+- `/` — ModuleSelector (admin sees both, single-role users auto-redirect)
+- `/auth/login` — Login page
 
 **State Management**: TanStack Query (React Query) for server state management with a centralized query client. No global client state library - component-level state with useState.
 
@@ -34,9 +57,9 @@ Preferred communication style: Simple, everyday language.
 
 **Framework**: Express.js running on Node.js with TypeScript.
 
-**API Design**: RESTful API endpoints under `/api/` prefix. Routes defined in `server/routes.ts` with a storage abstraction layer.
+**API Design**: RESTful API endpoints under `/api/` prefix. Routes defined in `server/routes.ts` with a storage abstraction layer. Billing-specific routes under `/api/billing/*` with role-based middleware.
 
-**Storage Pattern**: The storage interface in `server/storage.ts` abstracts all database operations. This allows swapping storage implementations without changing route handlers.
+**Storage Pattern**: The storage interface in `server/storage.ts` abstracts all database operations. Billing API routes use direct SQL via `pool.query` for new tables.
 
 **Development Server**: Vite middleware is integrated with Express during development for hot module replacement. Production serves static files from the `dist/public` directory.
 
@@ -45,15 +68,29 @@ Preferred communication style: Simple, everyday language.
 **Database**: PostgreSQL with Drizzle ORM. Schema defined in `shared/schema.ts` using Drizzle's PostgreSQL column types.
 
 **Schema Entities**:
-- Users (authentication)
+- Users (authentication with bcrypt passwords)
 - Leads (patient intake pipeline)
-- Patients (linked to leads with insurance info)
-- Encounters (service requests)
-- Claims (with risk scores and readiness status)
+- Patients (linked to leads with full demographics, insurance, referral info)
+- Encounters (service requests with provider and place of service)
+- Claims (with risk scores, service lines, ICD-10 codes, authorization, PDF URL)
 - ClaimEvents (timeline entries)
 - Denials (denial records with root causes)
 - Rules (prevention rules with trigger patterns)
 - Calls (voice call logs)
+- Organizations, PracticeSettings, Providers, Payers (billing configuration)
+- HcpcsCodes, HcpcsRates (service code lookup with payer-specific rates)
+- ClaimTemplates (reusable claim configurations)
+- PriorAuthorizations (auth tracking per encounter)
+- VobVerifications (insurance verification results with context field)
+- ActivityLogs (timeline with claim_id and patient_id)
+- EmailTemplates, NurtureSequences, EmailLogs (email automation)
+- AvailabilitySlots, Appointments (scheduling)
+- ChatSessions, ChatMessages, ChatAnalytics (chat widget persistence)
+
+**Seeded Data**:
+- 13 default payers (VA Community Care, Medicare, Medicaid, TRICARE, BCBS, Aetna, UHC, Cigna, etc.)
+- 10 HCPCS priority codes (G0299, G0300, G0151-G0156, T1019, T1020, S9123, S9124)
+- 9 VA Community Care 2025 rates
 
 **Migrations**: Drizzle Kit for schema migrations with `db:push` command.
 
@@ -73,6 +110,10 @@ Preferred communication style: Simple, everyday language.
 - **PostgreSQL** - Primary database, connection via `DATABASE_URL` environment variable
 - **Drizzle ORM** - Type-safe database client and query builder
 - **connect-pg-simple** - PostgreSQL session store for Express sessions
+
+### Authentication
+- **Passport.js** - Authentication framework with local strategy
+- **bcryptjs** - Password hashing
 
 ### UI Libraries
 - **Radix UI** - Headless UI primitives (dialog, dropdown, tabs, etc.)
@@ -106,24 +147,23 @@ Preferred communication style: Simple, everyday language.
 - ~~Call Notes & Transcript Viewer~~ - Display transcripts/summaries, manual notes
 - ~~Insurance Verification Display~~ - VOB results (copay, deductible, coverage)
 - ~~Prior Authorization Tracker~~ - Auth requests per encounter with status/expiration
-- ~~Auto-Fill Lead Data~~ - Call-extracted info (service needed, insurance carrier, member ID) auto-populates lead records
-- ~~Guided Chat Widget~~ - TalkFurther-style guided conversation for patient intake with tooltips, progress indicator, quick-reply buttons, lead qualification scoring, and appointment scheduling integration
-- ~~Chat Analytics Dashboard~~ - Tabbed interface with metrics/charts and All Conversations table with filtering, search, and pagination
-- ~~Returning Lead Notifications~~ - Email notification when known lead returns to website after >1 hour since last activity
-- ~~Welcome Back Personalization~~ - Returning leads see personalized greeting with their name and quick action buttons
-- ~~Enterprise Design System~~ - Updated UI matching connect-grow design patterns:
-  - MetricCard with variant backgrounds (blue/green/amber/red gradients)
-  - Time period selector tabs (Week/Month/Quarter/Year) on Dashboard and Intelligence
-  - Revenue Protected card with gradient background and split metrics
-  - High-risk alert banner on Claims page with action buttons
-  - Arrow trend indicators (ArrowUpRight/ArrowDownRight) replacing TrendingUp/Down
-  - Export Report buttons on Intelligence and Claims pages
+- ~~Auto-Fill Lead Data~~ - Call-extracted info auto-populates lead records
+- ~~Guided Chat Widget~~ - TalkFurther-style guided conversation (intake module only)
+- ~~Chat Analytics Dashboard~~ - Metrics/charts and conversations table
+- ~~Returning Lead Notifications~~ - Email notification for returning leads
+- ~~Welcome Back Personalization~~ - Returning leads see personalized greeting
+- ~~Enterprise Design System~~ - MetricCard variants, trend indicators, export buttons
+- ~~Real Auth System~~ - Passport.js + bcrypt + session-based authentication
+- ~~Module Split~~ - Separate billing and intake modules with role-based routing
+- ~~Billing API Routes~~ - HCPCS codes, payers, providers, practice settings
+- ~~Database Expansion~~ - 7 new tables, 40+ new columns across existing tables
 
 ### Future Enhancements
-- Revenue Impact Reporting - Estimated revenue protected
-- Payer Performance Scorecard - Denial rates, payment speeds
-- Bulk Call Campaigns - Queue multiple leads for AI calling
-- Task Assignment Queue - Assign leads/claims to team members
-- Automated Follow-up Reminders - Auth expiration alerts
-- Real-time Eligibility API - Live insurance verification
-- Claim Submission Integration - Connect to clearinghouse
+- Billing claim creation wizard with service line builder
+- CMS-1500 PDF generation
+- Patient management CRUD
+- HCPCS code search and rate lookup UI
+- Practice settings configuration UI
+- Billing reports and analytics
+- Intake → Billing handoff API
+- VerifyTX timeout/retry fix

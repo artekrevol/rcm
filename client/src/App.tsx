@@ -4,102 +4,149 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { AppSidebar } from "@/components/app-sidebar";
-import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { AuthGuard } from "@/components/auth-guard";
+import { IntakeLayout } from "@/components/intake-layout";
+import { BillingLayout } from "@/components/billing-layout";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
-import { GuidedChatWidget } from "@/components/guided-chat-widget";
+import ModuleSelector from "@/pages/module-selector";
+
 import DashboardPage from "@/pages/dashboard";
 import DealsPage from "@/pages/deals";
 import DealDetailPage from "@/pages/deal-detail";
+import LeadAnalyticsPage from "@/pages/lead-analytics";
+
+import BillingDashboard from "@/pages/billing/dashboard";
+import BillingPatients from "@/pages/billing/patients";
+import BillingHcpcs from "@/pages/billing/hcpcs";
+import BillingSettings from "@/pages/billing/settings";
+import BillingReports from "@/pages/billing/reports";
 import ClaimsPage from "@/pages/claims";
 import ClaimDetailPage from "@/pages/claim-detail";
 import IntelligencePage from "@/pages/intelligence";
 import RulesPage from "@/pages/rules";
-import LeadAnalyticsPage from "@/pages/lead-analytics";
-import BrandPreviewPage from "@/pages/brand-preview";
-
-function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
-  const style = {
-    "--sidebar-width": "16rem",
-    "--sidebar-width-icon": "3.5rem",
-  };
-
-  return (
-    <SidebarProvider style={style as React.CSSProperties}>
-      <div className="flex h-screen w-full">
-        <AppSidebar />
-        <div className="flex flex-col flex-1 min-w-0">
-          <header className="flex items-center justify-between gap-4 p-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
-            <div className="flex items-center gap-3">
-              <SidebarTrigger data-testid="button-sidebar-toggle" />
-            </div>
-            <div className="flex items-center gap-2">
-              <ThemeToggle />
-            </div>
-          </header>
-          <main className="flex-1 overflow-auto bg-muted/30">
-            {children}
-          </main>
-        </div>
-      </div>
-    </SidebarProvider>
-  );
-}
 
 function Router() {
   return (
     <Switch>
       <Route path="/">
-        <Redirect to="/dashboard" />
+        <AuthGuard>
+          <ModuleSelector />
+        </AuthGuard>
       </Route>
-      <Route path="/login" component={LoginPage} />
+
+      <Route path="/auth/login" component={LoginPage} />
+
+      {/* Legacy redirect */}
+      <Route path="/login">
+        <Redirect to="/auth/login" />
+      </Route>
+
+      {/* ===== INTAKE MODULE ===== */}
+      <Route path="/intake/dashboard">
+        <AuthGuard allowedRoles={["admin", "intake"]}>
+          <IntakeLayout><DashboardPage /></IntakeLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/intake/deals/:id">
+        <AuthGuard allowedRoles={["admin", "intake"]}>
+          <IntakeLayout><DealDetailPage /></IntakeLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/intake/deals">
+        <AuthGuard allowedRoles={["admin", "intake"]}>
+          <IntakeLayout><DealsPage /></IntakeLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/intake/lead-analytics">
+        <AuthGuard allowedRoles={["admin", "intake"]}>
+          <IntakeLayout><LeadAnalyticsPage /></IntakeLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/intake/scheduling">
+        <AuthGuard allowedRoles={["admin", "intake"]}>
+          <IntakeLayout>
+            <div className="p-6">
+              <h1 className="text-2xl font-semibold" data-testid="text-page-title">Scheduling</h1>
+              <p className="text-muted-foreground mt-1">Appointment management and availability</p>
+            </div>
+          </IntakeLayout>
+        </AuthGuard>
+      </Route>
+
+      {/* ===== BILLING MODULE ===== */}
+      <Route path="/billing/dashboard">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><BillingDashboard /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/patients">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><BillingPatients /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/claims/:id">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ClaimDetailPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/claims">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ClaimsPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/hcpcs">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><BillingHcpcs /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/intelligence">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><IntelligencePage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/rules">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><RulesPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/reports">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><BillingReports /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/settings">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><BillingSettings /></BillingLayout>
+        </AuthGuard>
+      </Route>
+
+      {/* Legacy route redirects */}
       <Route path="/dashboard">
-        <AuthenticatedLayout>
-          <DashboardPage />
-        </AuthenticatedLayout>
-      </Route>
-      <Route path="/deals">
-        <AuthenticatedLayout>
-          <DealsPage />
-        </AuthenticatedLayout>
+        <Redirect to="/" />
       </Route>
       <Route path="/deals/:id">
-        <AuthenticatedLayout>
-          <DealDetailPage />
-        </AuthenticatedLayout>
+        {(params) => <Redirect to={`/intake/deals/${params.id}`} />}
       </Route>
-      <Route path="/claims">
-        <AuthenticatedLayout>
-          <ClaimsPage />
-        </AuthenticatedLayout>
+      <Route path="/deals">
+        <Redirect to="/intake/deals" />
       </Route>
       <Route path="/claims/:id">
-        <AuthenticatedLayout>
-          <ClaimDetailPage />
-        </AuthenticatedLayout>
+        {(params) => <Redirect to={`/billing/claims/${params.id}`} />}
+      </Route>
+      <Route path="/claims">
+        <Redirect to="/billing/claims" />
       </Route>
       <Route path="/intelligence">
-        <AuthenticatedLayout>
-          <IntelligencePage />
-        </AuthenticatedLayout>
+        <Redirect to="/billing/intelligence" />
       </Route>
       <Route path="/rules">
-        <AuthenticatedLayout>
-          <RulesPage />
-        </AuthenticatedLayout>
+        <Redirect to="/billing/rules" />
       </Route>
       <Route path="/lead-analytics">
-        <AuthenticatedLayout>
-          <LeadAnalyticsPage />
-        </AuthenticatedLayout>
+        <Redirect to="/intake/lead-analytics" />
       </Route>
-      <Route path="/brand-preview">
-        <AuthenticatedLayout>
-          <BrandPreviewPage />
-        </AuthenticatedLayout>
-      </Route>
+
       <Route component={NotFound} />
     </Switch>
   );
@@ -112,7 +159,6 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <Router />
-          <GuidedChatWidget />
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

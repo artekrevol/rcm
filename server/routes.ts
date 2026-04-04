@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
+import { requireAuth, requireRole } from "./auth";
 import {
   insertLeadSchema,
   insertRuleSchema,
@@ -142,6 +143,103 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   
   app.get("/api/payers", async (req, res) => {
     res.json(allPayers);
+  });
+
+  app.get("/api/billing/payers", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM payers WHERE is_active = true ORDER BY name"));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM providers WHERE is_active = true ORDER BY last_name, first_name"));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, isDefault } = req.body;
+      const { rows } = await import("./db").then(m => m.pool.query(
+        `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, is_default)
+         VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [firstName, lastName, credentials || null, npi, taxonomyCode || null, individualTaxId || null, isDefault || false]
+      ));
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM practice_settings LIMIT 1"));
+      res.json(rows[0] || null);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos } = req.body;
+      const db = await import("./db").then(m => m.pool);
+      const existing = await db.query("SELECT id FROM practice_settings LIMIT 1");
+      if (existing.rows.length > 0) {
+        const { rows } = await db.query(
+          `UPDATE practice_settings SET practice_name=$1, primary_npi=$2, tax_id=$3, taxonomy_code=$4, address=$5, phone=$6, default_pos=$7, updated_at=NOW() WHERE id=$8 RETURNING *`,
+          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', existing.rows[0].id]
+        );
+        res.json(rows[0]);
+      } else {
+        const { rows } = await db.query(
+          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12']
+        );
+        res.json(rows[0]);
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/hcpcs", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM hcpcs_codes WHERE is_active = true ORDER BY code"));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/hcpcs/:code/rates", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { rows } = await import("./db").then(m => m.pool.query(
+        "SELECT * FROM hcpcs_rates WHERE hcpcs_code = $1 ORDER BY payer_name",
+        [req.params.code]
+      ));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/patients", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { rows } = await import("./db").then(m => m.pool.query(
+        "SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id ORDER BY p.created_at DESC"
+      ));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get("/api/dashboard/metrics", async (req, res) => {
