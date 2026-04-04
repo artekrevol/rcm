@@ -1,0 +1,49 @@
+Both verifications are clean. NPI validation is enforced at both layers, transaction logic is solid. Send this to Replit now:
+
+Both verifications passed. Move to Phase 1, step 1.2 — Patient management UI.
+
+Build in this order within step 1.2:
+
+Patient list (/billing/patients):
+
+    Search by name, DOB, insurance_carrier, member_id — live search as user types
+    Columns: name (first_name + last_name), DOB, insurance carrier, last claim date (join claims on patient_id, get MAX service_date or MAX created_at if service_date is null), last claim status, "From Intake ✓" badge when intake_completed = true
+    "New Patient" button top-right
+    "New Claim" quick button on each row — navigates to /billing/claims/new?patientId=[id]
+    Empty state when no patients: "No patients yet. Add your first patient or convert a lead from the Intake module."
+
+Create patient (/billing/patients/new):
+
+    Required: first_name, last_name, dob — text input, store exactly as entered, do NOT cast to date type, patients.dob is text in the database
+    Optional: sex (Male/Female/Other), insurance_carrier (free text or select from payers table), member_id, group_number, insured_name, relationship_to_insured (Self/Spouse/Child/Other), authorization_number, referring_provider_name, referring_provider_npi (same Luhn validation), referral_source (full expanded dropdown from Section 6.6 of the build prompt — all 15+ options, partner name field appears when "Referral partner" is selected), default_provider_id (dropdown from active providers), phone, email, address fields, notes
+
+Patient detail (/billing/patients/:id) — four tabs:
+
+Profile: all fields editable inline, Save button, "From Intake ✓" badge with conversion date if intake_completed is true
+
+Claims: SELECT * FROM claims WHERE patient_id = $1 ORDER BY created_at DESC. For code display: use first element of service_lines JSONB if present, fall back to first element of cpt_codes JSONB for seeded records. Use service_date if present, fall back to created_at. "New Claim" button pre-selecting this patient. "Clone" button on each row — placeholder for now.
+
+Eligibility: SELECT * FROM vob_verifications WHERE patient_id = $1 OR lead_id = (SELECT lead_id FROM patients WHERE id = $1) ORDER BY verified_at DESC. Label each row with its context value. "Run Eligibility Check" button shows "Coming in next update" tooltip.
+
+Notes: patients.notes stored as JSON array [{text, timestamp, author}]. Show as a timeline. New notes append to the array — do not overwrite existing notes. Save the full updated array on each new note.
+
+API endpoints needed:
+
+    GET /api/billing/patients — with search query param
+    GET /api/billing/patients/:id
+    POST /api/billing/patients
+    PATCH /api/billing/patients/:id
+    GET /api/billing/patients/:id/claims
+    GET /api/billing/patients/:id/vob
+
+All under requireRole('admin', 'rcm_manager').
+
+When done, show me:
+
+    The patient list with search working
+    A newly created patient's detail view with all four tabs visible
+    The Claims tab showing existing seeded claim data for at least one patient
+
+Do not move to step 1.3 until I confirm.
+
+One note to watch for: the seeded patients table is very thin — most have only id, lead_id, dob, state, insurance_carrier, member_id, plan_type. When the patient list renders, first_name and last_name will be null on seeded records. Make sure the list handles this gracefully — show "Unknown Patient" or the lead name as fallback rather than a blank row or a crash.

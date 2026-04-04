@@ -17,7 +17,9 @@ import DealDetailPage from "@/pages/deal-detail";
 import LeadAnalyticsPage from "@/pages/lead-analytics";
 
 import BillingDashboard from "@/pages/billing/dashboard";
-import BillingPatients from "@/pages/billing/patients";
+import PatientList from "@/pages/billing/patient-list";
+import PatientCreate from "@/pages/billing/patient-create";
+import PatientDetail from "@/pages/billing/patient-detail";
 import BillingHcpcs from "@/pages/billing/hcpcs";
 import BillingSettings from "@/pages/billing/settings";
 import BillingReports from "@/pages/billing/reports";
@@ -80,9 +82,19 @@ function Router() {
           <BillingLayout><BillingDashboard /></BillingLayout>
         </AuthGuard>
       </Route>
+      <Route path="/billing/patients/new">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><PatientCreate /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/patients/:id">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><PatientDetail /></BillingLayout>
+        </AuthGuard>
+      </Route>
       <Route path="/billing/patients">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
-          <BillingLayout><BillingPatients /></BillingLayout>
+          <BillingLayout><PatientList /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/claims/:id">

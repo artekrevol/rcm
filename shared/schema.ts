@@ -58,12 +58,12 @@ export type Lead = typeof leads.$inferSelect;
 
 export const patients = pgTable("patients", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  leadId: varchar("lead_id").notNull(),
+  leadId: varchar("lead_id"),
   dob: text("dob").notNull(),
-  state: text("state").notNull(),
-  insuranceCarrier: text("insurance_carrier").notNull(),
-  memberId: text("member_id").notNull(),
-  planType: text("plan_type").notNull(),
+  state: text("state"),
+  insuranceCarrier: text("insurance_carrier"),
+  memberId: text("member_id"),
+  planType: text("plan_type"),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   preferredName: varchar("preferred_name"),

@@ -158,6 +158,7 @@ Preferred communication style: Simple, everyday language.
 - ~~Billing API Routes~~ - HCPCS codes, payers, providers, practice settings
 - ~~Database Expansion~~ - 7 new tables, 40+ new columns across existing tables
 - ~~Practice Settings UI~~ - 4-tab settings page (Providers, Practice Info, Payers, Rate Tables) with NPI validation, default provider management, payer CRUD, rate table management with 90-day staleness warnings
+- ~~Patient Management UI~~ - Patient list with live search (name, DOB, carrier, member ID), create patient form (15+ fields, NPI validation, referral source dropdown), patient detail page with 4 tabs (Profile, Claims, Eligibility, Notes), atomic server-side note append, graceful handling of seeded patients with null names
 
 ### Future Enhancements
 - Billing claim creation wizard with service line builder

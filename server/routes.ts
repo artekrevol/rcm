@@ -409,9 +409,191 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/billing/patients", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { rows } = await import("./db").then(m => m.pool.query(
-        "SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id ORDER BY p.created_at DESC"
-      ));
+      const search = (req.query.search as string || "").trim().toLowerCase();
+      const db = await import("./db").then(m => m.pool);
+      let query = `
+        SELECT p.*, l.name as lead_name,
+          (SELECT MAX(COALESCE(c.service_date::text, c.created_at::text)) FROM claims c WHERE c.patient_id = p.id) as last_claim_date,
+          (SELECT c.status FROM claims c WHERE c.patient_id = p.id ORDER BY COALESCE(c.service_date, c.created_at::date) DESC LIMIT 1) as last_claim_status
+        FROM patients p
+        LEFT JOIN leads l ON p.lead_id = l.id
+      `;
+      const params: any[] = [];
+      if (search) {
+        query += ` WHERE (
+          LOWER(COALESCE(p.first_name, '')) LIKE $1
+          OR LOWER(COALESCE(p.last_name, '')) LIKE $1
+          OR LOWER(COALESCE(p.first_name || ' ' || p.last_name, '')) LIKE $1
+          OR LOWER(COALESCE(l.name, '')) LIKE $1
+          OR LOWER(COALESCE(p.dob, '')) LIKE $1
+          OR LOWER(COALESCE(p.insurance_carrier, '')) LIKE $1
+          OR LOWER(COALESCE(p.member_id, '')) LIKE $1
+        )`;
+        params.push(`%${search}%`);
+      }
+      query += ` ORDER BY p.created_at DESC`;
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/patients/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
+        [req.params.id]
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "Patient not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/patients", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const {
+        firstName, lastName, dob, sex, insuranceCarrier, memberId, groupNumber,
+        insuredName, relationshipToInsured, authorizationNumber, referringProviderName,
+        referringProviderNpi, referralSource, referralPartnerName, defaultProviderId,
+        serviceNeeded, phone, email, preferredName, state, planType, address, payerId
+      } = req.body;
+      if (!firstName?.trim() || !lastName?.trim() || !dob?.trim()) {
+        return res.status(400).json({ error: "firstName, lastName, and dob are required" });
+      }
+      if (referringProviderNpi) {
+        const { validateNPI } = await import("../shared/npi-validation");
+        if (!validateNPI(referringProviderNpi)) {
+          return res.status(400).json({ error: "Invalid referring provider NPI" });
+        }
+      }
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `INSERT INTO patients (
+          id, first_name, last_name, dob, sex, insurance_carrier, member_id, group_number,
+          insured_name, relationship_to_insured, authorization_number, referring_provider_name,
+          referring_provider_npi, referral_source, referral_partner_name, default_provider_id,
+          service_needed, phone, email, preferred_name, state, plan_type, address, payer_id, created_at
+        ) VALUES (
+          gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7,
+          $8, $9, $10, $11, $12, $13, $14, $15,
+          $16, $17, $18, $19, $20, $21, $22, $23, NOW()
+        ) RETURNING *`,
+        [
+          firstName.trim(), lastName.trim(), dob, sex || null, insuranceCarrier || null,
+          memberId || null, groupNumber || null, insuredName || null,
+          relationshipToInsured || null, authorizationNumber || null,
+          referringProviderName || null, referringProviderNpi || null,
+          referralSource || null, referralPartnerName || null, defaultProviderId || null,
+          serviceNeeded || null, phone || null, email || null, preferredName || null,
+          state || null, planType || null, address ? JSON.stringify(address) : null, payerId || null
+        ]
+      );
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/billing/patients/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      const allowedFields: Record<string, string> = {
+        firstName: "first_name", lastName: "last_name", dob: "dob", sex: "sex",
+        insuranceCarrier: "insurance_carrier", memberId: "member_id", groupNumber: "group_number",
+        insuredName: "insured_name", relationshipToInsured: "relationship_to_insured",
+        authorizationNumber: "authorization_number", referringProviderName: "referring_provider_name",
+        referringProviderNpi: "referring_provider_npi", referralSource: "referral_source",
+        referralPartnerName: "referral_partner_name", defaultProviderId: "default_provider_id",
+        serviceNeeded: "service_needed", phone: "phone", email: "email",
+        preferredName: "preferred_name", state: "state", planType: "plan_type",
+        payerId: "payer_id", notes: "notes"
+      };
+      if (req.body.referringProviderNpi) {
+        const { validateNPI } = await import("../shared/npi-validation");
+        if (!validateNPI(req.body.referringProviderNpi)) {
+          return res.status(400).json({ error: "Invalid referring provider NPI" });
+        }
+      }
+      for (const [key, col] of Object.entries(allowedFields)) {
+        if (req.body[key] !== undefined) {
+          fields.push(`${col} = $${idx++}`);
+          values.push(req.body[key]);
+        }
+      }
+      if (req.body.address !== undefined) {
+        fields.push(`address = $${idx++}`);
+        values.push(JSON.stringify(req.body.address));
+      }
+      if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
+      fields.push(`updated_at = NOW()`);
+      values.push(id);
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `UPDATE patients SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "Patient not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/patients/:id/claims", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `SELECT * FROM claims WHERE patient_id = $1 ORDER BY created_at DESC`,
+        [req.params.id]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/patients/:id/notes", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { text, author } = req.body;
+      if (!text?.trim()) return res.status(400).json({ error: "Note text is required" });
+      const db = await import("./db").then(m => m.pool);
+      const newNote = { text: text.trim(), timestamp: new Date().toISOString(), author: author || "Current User" };
+      const existing = await db.query("SELECT notes FROM patients WHERE id = $1", [req.params.id]);
+      if (existing.rows.length === 0) return res.status(404).json({ error: "Patient not found" });
+      let notes: any[] = [];
+      try {
+        const raw = existing.rows[0].notes;
+        if (raw) notes = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (!Array.isArray(notes)) notes = [];
+      } catch { notes = []; }
+      notes.push(newNote);
+      const { rows } = await db.query(
+        "UPDATE patients SET notes = $1, updated_at = NOW() WHERE id = $2 RETURNING notes",
+        [JSON.stringify(notes), req.params.id]
+      );
+      res.json({ notes: rows[0].notes });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/patients/:id/vob", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `SELECT * FROM vob_verifications
+         WHERE patient_id = $1
+            OR lead_id = (SELECT lead_id FROM patients WHERE id = $1)
+         ORDER BY verified_at DESC`,
+        [req.params.id]
+      );
       res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
