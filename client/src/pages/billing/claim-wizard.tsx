@@ -25,6 +25,12 @@ import {
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Search,
   User,
   FileText,
@@ -37,6 +43,7 @@ import {
   Loader2,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
   Shield,
   Copy,
   Clock,
@@ -698,6 +705,8 @@ export default function ClaimWizard() {
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [pdfGenerated, setPdfGenerated] = useState(false);
   const [pdfGenerating, setPdfGenerating] = useState(false);
+  const [cms1500Loading, setCms1500Loading] = useState(false);
+  const [cms1500Done, setCms1500Done] = useState(false);
 
   const { data: wizardData } = useQuery<any>({
     queryKey: ["/api/billing/claims/wizard-data"],
@@ -1265,28 +1274,71 @@ export default function ClaimWizard() {
                 {saveMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Save as Draft
               </Button>
-              <Button
-                variant="outline"
-                onClick={async () => {
-                  if (!claimId) return;
-                  setPdfGenerating(true);
-                  try {
-                    await generateAndDownloadClaimPdf(claimId);
-                    setPdfGenerated(true);
-                    queryClient.invalidateQueries({ queryKey: ["/api/billing/claims", claimId] });
-                    toast({ title: "Claim summary downloaded. Upload this file to your Availity portal to submit." });
-                  } catch (err: any) {
-                    toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
-                  } finally {
-                    setPdfGenerating(false);
-                  }
-                }}
-                disabled={validationErrors.length > 0 || pdfGenerating}
-                data-testid="button-generate-pdf"
-              >
-                {pdfGenerating ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileText className="h-4 w-4 mr-2" />}
-                {pdfGenerating ? "Generating PDF..." : pdfGenerated ? "Re-download PDF" : "Generate Claim Summary PDF"}
-              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    disabled={validationErrors.length > 0 || pdfGenerating || cms1500Loading}
+                    data-testid="button-generate-pdf"
+                  >
+                    {(pdfGenerating || cms1500Loading) ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <FileText className="h-4 w-4 mr-2" />}
+                    {(pdfGenerating || cms1500Loading) ? "Generating..." : "Download PDF"}
+                    <ChevronDown className="h-4 w-4 ml-2" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    data-testid="menu-cms1500-wizard"
+                    onClick={async () => {
+                      if (!claimId) return;
+                      setCms1500Loading(true);
+                      try {
+                        const { buildCMS1500DataFromClaim, generateCMS1500PDF } = await import('@/lib/generate-cms1500');
+                        const formData = await buildCMS1500DataFromClaim(claimId);
+                        const pdfBytes = await generateCMS1500PDF(formData);
+                        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `CMS1500-${formData.patientLastName || 'claim'}-${formData.serviceDate || 'date'}.pdf`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        await fetch(`/api/billing/claims/${claimId}/pdf-generated`, { method: 'PATCH', credentials: 'include' });
+                        queryClient.invalidateQueries({ queryKey: ["/api/billing/claims", claimId] });
+                        setCms1500Done(true);
+                        toast({ title: "CMS-1500 downloaded", description: "Upload this form to your Availity portal to submit the claim." });
+                      } catch (err: any) {
+                        toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
+                      } finally {
+                        setCms1500Loading(false);
+                      }
+                    }}
+                  >
+                    {cms1500Done ? "Re-download CMS-1500 form" : "CMS-1500 form"} — for Availity upload
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    data-testid="menu-summary-pdf-wizard"
+                    onClick={async () => {
+                      if (!claimId) return;
+                      setPdfGenerating(true);
+                      try {
+                        await generateAndDownloadClaimPdf(claimId);
+                        setPdfGenerated(true);
+                        queryClient.invalidateQueries({ queryKey: ["/api/billing/claims", claimId] });
+                        toast({ title: "Claim summary downloaded." });
+                      } catch (err: any) {
+                        toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
+                      } finally {
+                        setPdfGenerating(false);
+                      }
+                    }}
+                  >
+                    Claim summary — readable format
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button
                 onClick={() => setShowSubmitModal(true)}
                 disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged)}

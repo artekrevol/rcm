@@ -14,6 +14,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   ArrowLeft,
   HelpCircle,
   Building2,
@@ -26,6 +32,7 @@ import {
   ShieldAlert,
   Loader2,
   Download,
+  ChevronDown,
 } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
@@ -37,6 +44,8 @@ export default function ClaimDetailPage() {
   const { toast } = useToast();
   const [explainOpen, setExplainOpen] = useState(false);
   const [pdfGenerating, setPdfGenerating] = useState(false);
+  const [cms1500Loading, setCms1500Loading] = useState(false);
+  const [cms1500Done, setCms1500Done] = useState(false);
 
   const { data: claim, isLoading: claimLoading } = useQuery<Claim>({
     queryKey: ["/api/claims", id],
@@ -130,28 +139,71 @@ export default function ClaimDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            className="gap-2"
-            onClick={async () => {
-              if (!id) return;
-              setPdfGenerating(true);
-              try {
-                await generateAndDownloadClaimPdf(id);
-                queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
-                toast({ title: "Claim summary downloaded. Upload this file to your Availity portal to submit." });
-              } catch (err: any) {
-                toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
-              } finally {
-                setPdfGenerating(false);
-              }
-            }}
-            disabled={pdfGenerating}
-            data-testid="button-download-pdf"
-          >
-            {pdfGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-            {pdfGenerating ? "Generating..." : claim.pdfUrl ? "Re-download PDF" : "Generate PDF"}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="gap-2"
+                disabled={pdfGenerating || cms1500Loading}
+                data-testid="button-download-pdf"
+              >
+                {(pdfGenerating || cms1500Loading) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                {(pdfGenerating || cms1500Loading) ? "Generating..." : "Download PDF"}
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                data-testid="menu-cms1500"
+                onClick={async () => {
+                  if (!id) return;
+                  setCms1500Loading(true);
+                  try {
+                    const { buildCMS1500DataFromClaim, generateCMS1500PDF } = await import('@/lib/generate-cms1500');
+                    const formData = await buildCMS1500DataFromClaim(id);
+                    const pdfBytes = await generateCMS1500PDF(formData);
+                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `CMS1500-${formData.patientLastName || 'claim'}-${formData.serviceDate || 'date'}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    await fetch(`/api/billing/claims/${id}/pdf-generated`, { method: 'PATCH', credentials: 'include' });
+                    queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+                    setCms1500Done(true);
+                    toast({ title: "CMS-1500 downloaded", description: "Upload this form to your Availity portal to submit the claim." });
+                  } catch (err: any) {
+                    toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
+                  } finally {
+                    setCms1500Loading(false);
+                  }
+                }}
+              >
+                {cms1500Done ? "Re-download CMS-1500 form" : "CMS-1500 form"} — for Availity upload
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                data-testid="menu-summary-pdf"
+                onClick={async () => {
+                  if (!id) return;
+                  setPdfGenerating(true);
+                  try {
+                    await generateAndDownloadClaimPdf(id);
+                    queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+                    toast({ title: "Claim summary downloaded." });
+                  } catch (err: any) {
+                    toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
+                  } finally {
+                    setPdfGenerating(false);
+                  }
+                }}
+              >
+                Claim summary — readable format
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="outline"
             className="gap-2"

@@ -515,6 +515,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [crypto.randomUUID(), claimId, now]
       );
 
+      await db.query(
+        `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [crypto.randomUUID(), claimId, patientId, 'created', 'Claim draft created via wizard', (req.user as any)?.id || null]
+      );
+
       res.status(201).json({ claimId, encounterId });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -579,7 +584,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             "INSERT INTO claim_events (id, claim_id, type, timestamp, notes) VALUES ($1, $2, $3, $4, $5)",
             [crypto.randomUUID(), req.params.id, "StatusChange", new Date(), `Status changed to ${req.body.status}`]
           );
+          await db.query(
+            `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, field, old_value, new_value, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [crypto.randomUUID(), req.params.id, rows[0].patient_id, 'status_change', 'status', oldStatus, req.body.status, `Claim status changed from ${oldStatus} to ${req.body.status}`, (req.user as any)?.id || null]
+          );
         }
+      }
+
+      if (Object.keys(req.body).some(k => k !== 'status' && k !== 'encounterId' && allowedFields[k])) {
+        await db.query(
+          `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [crypto.randomUUID(), req.params.id, rows[0]?.patient_id, 'updated', 'Claim data updated', (req.user as any)?.id || null]
+        );
       }
 
       res.json(rows[0]);
@@ -685,6 +701,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await db.query(
         `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
         [crypto.randomUUID(), req.params.id, "PDF Generated", `Claim summary PDF generated at ${timestamp}`]
+      );
+      const claimRow = await db.query("SELECT patient_id FROM claims WHERE id = $1", [req.params.id]);
+      await db.query(
+        `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [crypto.randomUUID(), req.params.id, claimRow.rows[0]?.patient_id || null, 'export_pdf', 'Claim PDF generated', (req.user as any)?.id || null]
       );
       res.json({ success: true, pdfUrl: `generated:${timestamp}` });
     } catch (err: any) {
