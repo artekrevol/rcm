@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -574,12 +574,46 @@ function ICD10Search({ label, value, onChange, testId }: {
 }) {
   const [q, setQ] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
+  const [apiResults, setApiResults] = useState<{ code: string; desc: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const filtered = q.trim()
-    ? ICD10_COMMON.filter(
-        (d) => d.code.toLowerCase().includes(q.toLowerCase()) || d.desc.toLowerCase().includes(q.toLowerCase())
-      ).slice(0, 8)
-    : ICD10_COMMON.slice(0, 8);
+  useEffect(() => {
+    if (!q.trim() || q.trim().length < 2) {
+      setApiResults([]);
+      return;
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/billing/icd10/search?q=${encodeURIComponent(q.trim())}`, { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          setApiResults(data.map((r: any) => ({ code: r.code, desc: r.description })));
+        } else {
+          setApiResults(ICD10_COMMON.filter(
+            (d) => d.code.toLowerCase().includes(q.toLowerCase()) || d.desc.toLowerCase().includes(q.toLowerCase())
+          ).slice(0, 8));
+        }
+      } catch {
+        setApiResults(ICD10_COMMON.filter(
+          (d) => d.code.toLowerCase().includes(q.toLowerCase()) || d.desc.toLowerCase().includes(q.toLowerCase())
+        ).slice(0, 8));
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [q]);
+
+  const filtered = q.trim() && q.trim().length >= 2
+    ? apiResults
+    : q.trim()
+      ? ICD10_COMMON.filter(
+          (d) => d.code.toLowerCase().includes(q.toLowerCase()) || d.desc.toLowerCase().includes(q.toLowerCase())
+        ).slice(0, 8)
+      : ICD10_COMMON.slice(0, 8);
 
   return (
     <div className="space-y-1.5">
@@ -605,6 +639,7 @@ function ICD10Search({ label, value, onChange, testId }: {
           />
           {showDropdown && (
             <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-48 overflow-y-auto">
+              {loading && <div className="px-3 py-2 text-sm text-muted-foreground">Searching...</div>}
               {filtered.map((d) => (
                 <button
                   key={d.code}
@@ -616,7 +651,7 @@ function ICD10Search({ label, value, onChange, testId }: {
                   <span className="truncate">{d.desc}</span>
                 </button>
               ))}
-              {q.trim() && filtered.length === 0 && (
+              {q.trim() && !loading && filtered.length === 0 && (
                 <button
                   className="w-full text-left px-3 py-1.5 hover:bg-accent text-sm text-primary"
                   onMouseDown={() => { onChange({ code: q.trim().toUpperCase(), desc: "Custom code" }); setQ(""); setShowDropdown(false); }}

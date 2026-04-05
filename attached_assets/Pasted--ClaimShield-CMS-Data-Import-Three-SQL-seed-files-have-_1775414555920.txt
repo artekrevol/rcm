@@ -1,0 +1,365 @@
+# ClaimShield — CMS Data Import
+# Three SQL seed files have been generated and are ready to import.
+# Read everything before running any commands.
+
+---
+
+## What these files contain
+
+| File | Records | Size | Contents |
+|---|---|---|---|
+| hcpcs_seed.sql | 8,259 codes | 2.7 MB | Full HCPCS Level II code set from CMS |
+| icd10_seed.sql | 97,584 codes | 21 MB | Full ICD-10-CM diagnosis code set from CMS |
+| cpt_rvu_seed.sql | 16,645 codes | 3.2 MB | CPT/HCPCS codes with CMS RVU data and descriptions |
+
+All three files have been uploaded to the Replit project. Confirm their locations before running anything:
+
+```bash
+ls -lh hcpcs_seed.sql icd10_seed.sql cpt_rvu_seed.sql
+```
+
+If they are not in the root directory, check for them in the uploads folder or the project root and note their exact paths before proceeding.
+
+---
+
+## Step 1: Create the icd10_codes table
+
+The `hcpcs_codes` table already exists from the Phase 1 migration. The `icd10_codes` table does not exist yet. The `cpt_rvu_seed.sql` file likely creates its own table. Before running any seed file, check what CREATE TABLE statements each file contains:
+
+```bash
+head -30 hcpcs_seed.sql
+head -30 icd10_seed.sql
+head -30 cpt_rvu_seed.sql
+```
+
+Show me the first 30 lines of each file. This tells us:
+1. Whether each file includes its own CREATE TABLE statement
+2. Whether the files use INSERT or UPSERT (ON CONFLICT) syntax
+3. The exact column names being inserted
+
+**Do not run any seed file until you have shown me the first 30 lines of each.**
+
+---
+
+## Step 2: Check for conflicts with existing data
+
+The `hcpcs_codes` table already has 10 hand-seeded priority codes with custom plain-English descriptions. These must be preserved — do not overwrite them.
+
+Run this before importing hcpcs_seed.sql:
+
+```sql
+SELECT code, description_plain FROM hcpcs_codes WHERE description_plain IS NOT NULL;
+```
+
+Show me the result. These are the rows with hand-written plain-English descriptions that the seed file must not overwrite.
+
+The import for hcpcs_seed.sql must use:
+```sql
+ON CONFLICT (code) DO UPDATE SET
+  description_official = EXCLUDED.description_official
+  -- DO NOT update description_plain — preserve hand-written descriptions
+```
+
+If the seed file uses a different conflict strategy, we need to modify it before running. Show me the conflict handling in the seed file before importing.
+
+---
+
+## Step 3: Run the imports in order
+
+Run the three files in this exact order. Do not run the next file until the previous one completes successfully.
+
+### 3a: Import HCPCS codes
+
+The ICD-10 file is 21 MB and may time out if run as a single transaction in Replit. Run it in chunks if needed (see Step 3b).
+
+For HCPCS (2.7 MB) — should run fine as a single command:
+
+```bash
+psql $DATABASE_URL < hcpcs_seed.sql
+```
+
+After running, confirm the import:
+```sql
+SELECT COUNT(*) FROM hcpcs_codes;
+-- Expected: ~8,259 (was 10 before import)
+
+SELECT code, description_official FROM hcpcs_codes WHERE code = 'G0299';
+-- Expected: the existing row with its hand-written description_plain preserved
+
+SELECT code, description_plain FROM hcpcs_codes WHERE description_plain IS NOT NULL;
+-- Expected: same 10 rows as before — plain descriptions must not be overwritten
+```
+
+Show me all three query results before moving to 3b.
+
+### 3b: Import ICD-10 codes (21 MB — needs special handling)
+
+The ICD-10 file is large enough to potentially time out. Run it with a longer timeout and check progress:
+
+```bash
+psql $DATABASE_URL \
+  --command="\timing" \
+  < icd10_seed.sql
+```
+
+If it times out or errors partway through, run it in chunks instead:
+
+```bash
+# Split into chunks of 10,000 rows and run each
+split -l 10000 icd10_seed.sql icd10_chunk_
+for chunk in icd10_chunk_*; do
+  echo "Running $chunk..."
+  psql $DATABASE_URL < $chunk
+done
+```
+
+After running, confirm:
+```sql
+SELECT COUNT(*) FROM icd10_codes;
+-- Expected: ~97,584
+
+SELECT code, description FROM icd10_codes WHERE code = 'I10';
+-- Expected: row for Essential (primary) hypertension
+
+SELECT code, description FROM icd10_codes WHERE code = 'G20';
+-- Expected: row for Parkinson's disease
+```
+
+Show me all three query results before moving to 3c.
+
+### 3c: Import CPT/RVU codes
+
+```bash
+psql $DATABASE_URL < cpt_rvu_seed.sql
+```
+
+After running, confirm:
+```sql
+-- Check what table was created (may be cpt_codes or a different name)
+SELECT table_name FROM information_schema.tables 
+WHERE table_schema = 'public' 
+AND table_name LIKE '%cpt%';
+
+-- Check row count (use the actual table name from above)
+SELECT COUNT(*) FROM cpt_codes;
+-- Expected: ~16,645
+
+-- Spot check a known CPT code
+SELECT code, description FROM cpt_codes WHERE code = '97110';
+-- Expected: row for therapeutic exercises
+```
+
+Show me all three query results before moving to Step 4.
+
+---
+
+## Step 4: Update the HCPCS search endpoint
+
+The current search endpoint at `GET /api/billing/hcpcs/search` only queries the `hcpcs_codes` table. Update it to search across all three tables in a single UNION ALL query so CPT codes from physician referrals return real descriptions instead of triggering the manual fallback.
+
+Find the existing search endpoint in routes.ts and replace the SQL query with:
+
+```sql
+SELECT 
+  code,
+  description_official as description,
+  description_plain,
+  unit_type,
+  unit_interval_minutes,
+  default_pos,
+  requires_modifier,
+  notes,
+  'hcpcs' as source,
+  (SELECT rate_per_unit FROM hcpcs_rates 
+   WHERE hcpcs_code = hcpcs_codes.code 
+   AND payer_name = 'VA Community Care' 
+   AND end_date IS NULL 
+   LIMIT 1) as va_rate
+FROM hcpcs_codes
+WHERE is_active = true
+AND (
+  code ILIKE $1
+  OR description_official ILIKE $1
+  OR description_plain ILIKE $1
+)
+
+UNION ALL
+
+SELECT 
+  code,
+  description as description,
+  NULL as description_plain,
+  unit_type,
+  NULL as unit_interval_minutes,
+  NULL as default_pos,
+  false as requires_modifier,
+  NULL as notes,
+  'cpt' as source,
+  NULL as va_rate
+FROM cpt_codes
+WHERE (
+  code ILIKE $1
+  OR description ILIKE $1
+)
+AND NOT EXISTS (
+  SELECT 1 FROM hcpcs_codes WHERE code = cpt_codes.code
+)
+
+ORDER BY
+  CASE WHEN code ILIKE $2 THEN 0 ELSE 1 END,
+  source,
+  code
+LIMIT 20
+```
+
+Parameters: `$1` = `%${query}%` (for ILIKE contains search), `$2` = exact code match for ranking.
+
+The `NOT EXISTS` clause on the CPT union prevents duplicate results when a code appears in both tables (some codes are in both HCPCS and CPT).
+
+**Also update the ICD-10 search in the claim wizard.** Find where ICD-10 codes are currently searched (likely a small hardcoded array of 20 common codes) and replace it with a database query:
+
+```typescript
+// New ICD-10 search endpoint
+// GET /api/billing/icd10/search?q=hypertension
+
+app.get('/api/billing/icd10/search',
+  requireRole('admin', 'rcm_manager'),
+  async (req, res) => {
+    const q = String(req.query.q || '').trim();
+    if (!q || q.length < 2) return res.json([]);
+
+    const results = await pool.query(`
+      SELECT code, description, is_header
+      FROM icd10_codes
+      WHERE is_active = true
+      AND is_header = false
+      AND (
+        code ILIKE $1
+        OR description ILIKE $2
+      )
+      ORDER BY
+        CASE WHEN code ILIKE $1 THEN 0 ELSE 1 END,
+        LENGTH(code),
+        code
+      LIMIT 15
+    `, [`${q}%`, `%${q}%`]);
+
+    res.json(results.rows);
+  }
+);
+```
+
+Update the ICD-10 search field in the claim wizard to call this endpoint instead of filtering the hardcoded array. Keep the hardcoded array as a fallback if the endpoint fails.
+
+---
+
+## Step 5: Update the CPT manual fallback behavior
+
+Previously, searching for a CPT code like "97110" returned no results and showed the "Enter code manually" fallback. After this import, it should return the real CPT description.
+
+Test this after the import and endpoint update:
+
+```bash
+curl -b cookies.txt \
+  "http://localhost:5000/api/billing/hcpcs/search?q=97110"
+```
+
+Expected result: a response containing the CPT 97110 description ("Therapeutic exercises") from the cpt_codes table with `source: "cpt"`.
+
+If this returns results correctly, the manual fallback is now truly a last resort for codes not in any dataset — exactly what it should be.
+
+---
+
+## Step 6: Add ICD-10 route to App.tsx and wire the wizard
+
+The ICD-10 search endpoint is new. Update the claim wizard's diagnosis code search to use it:
+
+Find the component where ICD-10 codes are searched (likely in the claim wizard Step 2 component). Replace the current implementation:
+
+```typescript
+// Old: filter from hardcoded array
+const results = commonHomeHealthDx.filter(dx =>
+  dx.code.includes(query) || dx.description.toLowerCase().includes(query.toLowerCase())
+);
+
+// New: fetch from database
+const [icd10Results, setIcd10Results] = useState<{code: string, description: string}[]>([]);
+const [icd10Loading, setIcd10Loading] = useState(false);
+
+const searchICD10 = useDebouncedCallback(async (query: string) => {
+  if (!query || query.length < 2) {
+    setIcd10Results([]);
+    return;
+  }
+  setIcd10Loading(true);
+  try {
+    const res = await fetch(
+      `/api/billing/icd10/search?q=${encodeURIComponent(query)}`,
+      { credentials: 'include' }
+    );
+    const data = await res.json();
+    setIcd10Results(data);
+  } catch {
+    // Fall back to hardcoded common codes on error
+    setIcd10Results(commonHomeHealthDx.filter(dx =>
+      dx.code.includes(query) ||
+      dx.description.toLowerCase().includes(query.toLowerCase())
+    ));
+  } finally {
+    setIcd10Loading(false);
+  }
+}, 300);
+```
+
+Keep the `commonHomeHealthDx` array in the code as the fallback — it activates if the API call fails.
+
+---
+
+## Step 7: Verify end-to-end
+
+Run these four tests after all imports and code changes are complete:
+
+**Test 1 — HCPCS search still works:**
+Search "skilled nursing" in the code lookup page → G0299 should still appear with its VA rate ($14.25) and plain-English description intact.
+
+**Test 2 — CPT code now returns real result:**
+Search "97110" in the code lookup page → should return a result with the real CPT description from the cpt_codes table instead of the "no results" fallback.
+
+**Test 3 — ICD-10 search covers full dataset:**
+In the claim wizard Step 2, type "L89" in the ICD-10 search → should return multiple pressure ulcer codes from the full ICD-10 dataset, not just the 20 hardcoded common codes.
+
+**Test 4 — Existing plain-English descriptions preserved:**
+Run: `SELECT code, description_plain FROM hcpcs_codes WHERE description_plain IS NOT NULL;`
+Should return exactly 10 rows with the hand-written descriptions. None should be null or overwritten with official CMS descriptions.
+
+Report pass or fail for each test with one line of evidence.
+
+---
+
+## If anything fails
+
+**hcpcs_seed.sql import fails with duplicate key error:**
+The ON CONFLICT clause is not working as expected. Show me the exact error and the first INSERT statement in the file so we can fix the conflict strategy.
+
+**icd10_seed.sql times out:**
+Use the chunked approach in Step 3b. If even 10,000-row chunks time out, reduce to 5,000.
+
+**cpt_rvu_seed.sql creates a different table name than `cpt_codes`:**
+Check with `\dt` in psql. Use the actual table name throughout and update the search endpoint query accordingly.
+
+**ICD-10 table already exists from a prior migration:**
+Run `SELECT COUNT(*) FROM icd10_codes;` first. If it already has rows, check if the seed file uses ON CONFLICT. If not, you may need to TRUNCATE the table before importing (confirm with me first before truncating).
+
+**Search returns duplicate results (same code from both hcpcs_codes and cpt_codes):**
+The NOT EXISTS clause in the UNION ALL handles this for exact code matches. If duplicates still appear, add a DISTINCT ON (code) wrapper around the full query.
+
+---
+
+## Do not rebuild any existing features
+
+This prompt only adds data and updates two search endpoints. Do not modify:
+- The existing claim wizard UI
+- The existing hcpcs_rates table or VA rate data
+- The existing 10 hand-seeded HCPCS priority codes
+- The existing claim summary PDF or CMS-1500 PDF features
+- Any authentication, RBAC, or routing code

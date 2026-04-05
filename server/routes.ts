@@ -708,16 +708,39 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const db = await import("./db").then(m => m.pool);
       const pattern = `%${q}%`;
       const { rows } = await db.query(
-        `SELECT h.code, h.description_official, h.description_plain, h.unit_type,
-                h.unit_interval_minutes, h.default_pos, h.requires_modifier, h.notes,
-                r.rate_per_unit AS va_rate
-         FROM hcpcs_codes h
-         LEFT JOIN hcpcs_rates r ON r.hcpcs_code = h.code
-           AND r.payer_name = 'VA Community Care' AND r.end_date IS NULL
-         WHERE h.is_active = true
-           AND (h.code ILIKE $1 OR h.description_official ILIKE $1 OR h.description_plain ILIKE $1)
-         ORDER BY CASE WHEN h.code ILIKE $2 THEN 0 ELSE 1 END, h.code
-         LIMIT 10`,
+        `SELECT code, description_official, description_plain, unit_type,
+                unit_interval_minutes, default_pos, requires_modifier, notes,
+                source, va_rate
+         FROM (
+           SELECT h.code, h.description_official, h.description_plain, h.unit_type,
+                  h.unit_interval_minutes, h.default_pos, h.requires_modifier, h.notes,
+                  'hcpcs' as source,
+                  (SELECT rate_per_unit FROM hcpcs_rates
+                   WHERE hcpcs_code = h.code
+                   AND payer_name = 'VA Community Care'
+                   AND end_date IS NULL
+                   LIMIT 1) as va_rate
+           FROM hcpcs_codes h
+           WHERE h.is_active = true
+             AND (h.code ILIKE $1 OR h.description_official ILIKE $1 OR h.description_plain ILIKE $1)
+
+           UNION ALL
+
+           SELECT c.code, c.description as description_official,
+                  NULL as description_plain, c.unit_type,
+                  NULL as unit_interval_minutes, NULL as default_pos,
+                  false as requires_modifier, NULL as notes,
+                  'cpt' as source, NULL as va_rate
+           FROM cpt_codes c
+           WHERE c.is_active = true
+             AND (c.code ILIKE $1 OR c.description ILIKE $1)
+             AND NOT EXISTS (SELECT 1 FROM hcpcs_codes WHERE code = c.code)
+         ) combined
+         ORDER BY
+           CASE WHEN code ILIKE $2 THEN 0 ELSE 1 END,
+           source,
+           code
+         LIMIT 20`,
         [pattern, q]
       );
       res.json(rows);
@@ -750,6 +773,30 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         "SELECT * FROM hcpcs_rates WHERE hcpcs_code = $1 ORDER BY payer_name",
         [req.params.code]
       ));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/icd10/search", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const q = String(req.query.q || "").trim();
+      if (!q || q.length < 2) return res.json([]);
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `SELECT code, description, is_header
+         FROM icd10_codes
+         WHERE is_active = true
+           AND is_header = false
+           AND (code ILIKE $1 OR description ILIKE $2)
+         ORDER BY
+           CASE WHEN code ILIKE $1 THEN 0 ELSE 1 END,
+           LENGTH(code),
+           code
+         LIMIT 15`,
+        [`${q}%`, `%${q}%`]
+      );
       res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });

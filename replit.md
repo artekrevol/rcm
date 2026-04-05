@@ -67,7 +67,7 @@ Preferred communication style: Simple, everyday language.
 
 **Database**: PostgreSQL with Drizzle ORM. Schema defined in `shared/schema.ts` using Drizzle's PostgreSQL column types.
 
-**Schema Entities**:
+**Schema Entities (Drizzle ORM)**:
 - Users (authentication with bcrypt passwords)
 - Leads (patient intake pipeline)
 - Patients (linked to leads with full demographics, insurance, referral info)
@@ -87,9 +87,15 @@ Preferred communication style: Simple, everyday language.
 - AvailabilitySlots, Appointments (scheduling)
 - ChatSessions, ChatMessages, ChatAnalytics (chat widget persistence)
 
+**SQL-Only Tables** (created via seed SQL, not in Drizzle schema):
+- `icd10_codes` — 97,584 ICD-10-CM 2025 codes (code, description, is_header, is_active)
+- `cpt_codes` — 16,645 CPT/HCPCS RVU codes (code, description, work_rvu, unit_type, is_active)
+
 **Seeded Data**:
 - 13 default payers (VA Community Care, Medicare, Medicaid, TRICARE, BCBS, Aetna, UHC, Cigna, etc.)
-- 10 HCPCS priority codes (G0299, G0300, G0151-G0156, T1019, T1020, S9123, S9124)
+- 8,259 HCPCS Level II codes (10 with hand-written plain-English descriptions: G0299, G0300, G0151-G0156, T1019, T1020, S9123, S9124)
+- 97,584 ICD-10-CM 2025 diagnosis codes
+- 16,645 CPT/RVU codes with CMS work RVU values
 - 9 VA Community Care 2025 rates
 
 **Migrations**: Drizzle Kit for schema migrations with `db:push` command.
@@ -169,6 +175,7 @@ Preferred communication style: Simple, everyday language.
 - ~~Prior Auth in Billing~~ - /billing/claims/prior-auth page listing all prior authorizations with status badges, expiration tracking; sidebar link under Claims
 - ~~Convert Lead to Patient~~ - "Convert to Patient" button on qualified/contacted/converted leads, confirmation modal with lead data preview, creates patient in billing with referral source from lead source, sets handoff_status = 'complete'
 - ~~Chat Widget Source Tag~~ - Chat widget lead creation auto-sets source = "Website chat"
+- ~~CMS Data Import~~ - Full HCPCS Level II (8,259), ICD-10-CM (97,584), CPT/RVU (16,645) code sets imported from CMS 2025 files; HCPCS search endpoint updated with UNION ALL for CPT codes; new ICD-10 search endpoint; claim wizard ICD-10 search uses API with hardcoded fallback
 
 ### Future Enhancements
 - VerifyTX timeout/retry fix
