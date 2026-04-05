@@ -1544,8 +1544,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const db = await import("./db").then(m => m.pool);
       const { rows } = await db.query(
-        `INSERT INTO patients (id, lead_id, first_name, last_name, dob, email, phone, insurance_carrier, member_id, plan_type, state, service_needed, referral_source)
-         SELECT gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+        `INSERT INTO patients (id, lead_id, first_name, last_name, dob, email, phone, insurance_carrier, member_id, plan_type, state, service_needed, referral_source, intake_completed)
+         SELECT gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true
          WHERE NOT EXISTS (SELECT 1 FROM patients WHERE lead_id = $1)
          RETURNING *`,
         [lead.id, firstName, lastName, "", lead.email || null, lead.phone || null,
