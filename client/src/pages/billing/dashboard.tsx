@@ -1,12 +1,75 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { FileText, DollarSign, AlertTriangle, CheckCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  FileText,
+  DollarSign,
+  AlertTriangle,
+  CheckCircle,
+  Clock,
+  Shield,
+  XCircle,
+  Plus,
+  ChevronRight,
+  User,
+} from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { MetricCard } from "@/components/metric-card";
+import { Link } from "wouter";
+import { format } from "date-fns";
+
+function formatCurrency(n: number) {
+  if (n >= 1000) return `$${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
+  return `$${n.toLocaleString()}`;
+}
+
+function statusDot(status: string) {
+  if (status === "paid") return "bg-green-500";
+  if (["denied", "suspended"].includes(status)) return "bg-red-500";
+  if (["submitted", "acknowledged", "pending"].includes(status)) return "bg-yellow-500";
+  return "bg-gray-400";
+}
+
+function StatusBadgeSmall({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    paid: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+    denied: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+    draft: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400",
+    exported: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    submitted: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
+    pending: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${colors[status] || colors.draft}`} data-testid={`badge-status-${status}`}>
+      {status}
+    </span>
+  );
+}
 
 export default function BillingDashboard() {
-  const { data: metrics } = useQuery<any>({
-    queryKey: ["/api/dashboard/metrics"],
+  const { data: stats, isLoading } = useQuery<any>({
+    queryKey: ["/api/billing/dashboard/stats"],
   });
+
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-6">
+        <Skeleton className="h-8 w-64" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-28" />)}
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-20" />)}
+        </div>
+      </div>
+    );
+  }
+
+  const pipeline = stats?.pipeline || { paid: { count: 0, amount: 0 }, inProcess: { count: 0, amount: 0 }, draft: { count: 0, amount: 0 }, denied: { count: 0, amount: 0 } };
+  const alerts = stats?.alerts || { deniedClaims: { count: 0, amount: 0 }, staleDrafts: 0, timelyFilingRisk: 0, highRiskClaims: 0 };
+  const recentPatients = stats?.recentPatients || [];
+  const recentClaims = stats?.recentClaims || [];
 
   return (
     <div className="p-6 space-y-6">
@@ -15,43 +78,181 @@ export default function BillingDashboard() {
         <p className="text-muted-foreground">Claims overview and revenue cycle metrics</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-pipeline">
         <MetricCard
-          title="Total Claims"
-          value={metrics?.totalClaims ?? 0}
-          icon={<FileText className="h-5 w-5" />}
-          variant="blue"
-        />
-        <MetricCard
-          title="Revenue Protected"
-          value={`$${((metrics?.revenueProtected ?? 0) / 1000).toFixed(0)}K`}
-          icon={<DollarSign className="h-5 w-5" />}
-          variant="green"
-        />
-        <MetricCard
-          title="Claims at Risk"
-          value={metrics?.claimsAtRisk ?? 0}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          variant="amber"
-        />
-        <MetricCard
-          title="Denials Prevented"
-          value={metrics?.denialsPrevented ?? 0}
+          title="Paid"
+          value={pipeline.paid.count}
+          subtitle={formatCurrency(pipeline.paid.amount)}
           icon={<CheckCircle className="h-5 w-5" />}
           variant="green"
         />
+        <MetricCard
+          title="In Process"
+          value={pipeline.inProcess.count}
+          subtitle={formatCurrency(pipeline.inProcess.amount)}
+          icon={<Clock className="h-5 w-5" />}
+          variant="blue"
+        />
+        <MetricCard
+          title="Drafts"
+          value={pipeline.draft.count}
+          subtitle={formatCurrency(pipeline.draft.amount)}
+          icon={<FileText className="h-5 w-5" />}
+          variant="default"
+        />
+        <MetricCard
+          title="Denied"
+          value={pipeline.denied.count}
+          subtitle={formatCurrency(pipeline.denied.amount)}
+          icon={<XCircle className="h-5 w-5" />}
+          variant="amber"
+        />
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Activity</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-muted-foreground text-sm">
-            Billing dashboard with claim creation wizard, patient management, and reporting coming soon.
-          </p>
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-alerts">
+        <Link href="/billing/claims?status=denied">
+          <Card className="cursor-pointer hover:border-red-300 transition-colors" data-testid="alert-denied">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+                <XCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">Denied Claims</p>
+                <p className="text-lg font-bold text-red-600">{alerts.deniedClaims.count}</p>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+        <Link href="/billing/claims?status=draft">
+          <Card className="cursor-pointer hover:border-yellow-300 transition-colors" data-testid="alert-stale-drafts">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center shrink-0">
+                <Clock className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">Stale Drafts</p>
+                <p className="text-lg font-bold text-yellow-600">{alerts.staleDrafts}</p>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+        <Link href="/billing/claims">
+          <Card className="cursor-pointer hover:border-orange-300 transition-colors" data-testid="alert-timely-filing">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center shrink-0">
+                <AlertTriangle className="h-5 w-5 text-orange-600 dark:text-orange-400" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">Filing Risk</p>
+                <p className="text-lg font-bold text-orange-600">{alerts.timelyFilingRisk}</p>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+        <Link href="/billing/claims">
+          <Card className="cursor-pointer hover:border-red-300 transition-colors" data-testid="alert-high-risk">
+            <CardContent className="p-4 flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+                <Shield className="h-5 w-5 text-red-600 dark:text-red-400" />
+              </div>
+              <div>
+                <p className="text-sm font-medium">High Risk</p>
+                <p className="text-lg font-bold text-red-600">{alerts.highRiskClaims}</p>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+      </div>
+
+      {recentPatients.length > 0 && (
+        <div data-testid="section-recent-patients">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold">Recent Patients</h2>
+            <Link href="/billing/patients">
+              <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground" data-testid="link-all-patients">
+                View all <ChevronRight className="h-4 w-4" />
+              </Button>
+            </Link>
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {recentPatients.map((p: any) => (
+              <Card key={p.id} className="min-w-[200px] shrink-0" data-testid={`card-patient-${p.id?.slice(0, 8)}`}>
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-2.5 w-2.5 rounded-full ${statusDot(p.last_claim_status || "")}`} />
+                    <p className="font-medium text-sm truncate">
+                      {p.first_name || ""} {p.last_name || p.lead_name || "Unknown"}
+                    </p>
+                  </div>
+                  {p.last_service_date && (
+                    <p className="text-xs text-muted-foreground">
+                      Last: {format(new Date(p.last_service_date), "MMM d, yyyy")}
+                    </p>
+                  )}
+                  {p.insurance_carrier && (
+                    <p className="text-xs text-muted-foreground truncate">{p.insurance_carrier}</p>
+                  )}
+                  <Link href={`/billing/claims/new?patientId=${p.id}`}>
+                    <Button variant="outline" size="sm" className="w-full gap-1 mt-1" data-testid={`button-new-claim-patient-${p.id?.slice(0, 8)}`}>
+                      <Plus className="h-3 w-3" /> New Claim
+                    </Button>
+                  </Link>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div data-testid="section-recent-claims">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Recent Claims</h2>
+          <Link href="/billing/claims">
+            <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground" data-testid="link-all-claims">
+              View all <ChevronRight className="h-4 w-4" />
+            </Button>
+          </Link>
+        </div>
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="text-left p-3 font-medium text-muted-foreground">Claim ID</th>
+                    <th className="text-left p-3 font-medium text-muted-foreground">Patient</th>
+                    <th className="text-left p-3 font-medium text-muted-foreground">Payer</th>
+                    <th className="text-right p-3 font-medium text-muted-foreground">Amount</th>
+                    <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
+                    <th className="text-left p-3 font-medium text-muted-foreground">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentClaims.map((c: any) => (
+                    <tr key={c.id} className="border-b last:border-0 hover:bg-muted/30 cursor-pointer" data-testid={`row-claim-${c.id?.slice(0, 8)}`}>
+                      <td className="p-3">
+                        <Link href={`/billing/claims/${c.id}`} className="font-mono text-primary hover:underline">
+                          {c.id?.slice(0, 8)}
+                        </Link>
+                      </td>
+                      <td className="p-3">{c.patient_name || "Unknown"}</td>
+                      <td className="p-3 text-muted-foreground">{c.payer || "—"}</td>
+                      <td className="p-3 text-right font-medium">${(c.amount || 0).toLocaleString()}</td>
+                      <td className="p-3"><StatusBadgeSmall status={c.status} /></td>
+                      <td className="p-3 text-muted-foreground">
+                        {c.created_at ? format(new Date(c.created_at), "MMM d, yyyy") : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                  {recentClaims.length === 0 && (
+                    <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No claims yet. Create your first claim to get started.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

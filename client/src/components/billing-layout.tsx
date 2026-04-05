@@ -1,6 +1,9 @@
 import { BillingSidebar } from "@/components/billing-sidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Button } from "@/components/ui/button";
+import { Plus } from "lucide-react";
+import { Link } from "wouter";
 
 const style = {
   "--sidebar-width": "16rem",
@@ -19,6 +22,12 @@ export function BillingLayout({ children }: { children: React.ReactNode }) {
             </div>
             <div className="flex items-center gap-2">
               <ThemeToggle />
+              <Link href="/billing/claims/new">
+                <Button size="sm" className="gap-1.5" data-testid="button-new-claim-header">
+                  <Plus className="h-4 w-4" />
+                  New Claim
+                </Button>
+              </Link>
             </div>
           </header>
           <main className="flex-1 overflow-auto bg-muted/30">

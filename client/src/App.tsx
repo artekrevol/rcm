@@ -24,6 +24,8 @@ import BillingHcpcs from "@/pages/billing/hcpcs";
 import ClaimWizard from "@/pages/billing/claim-wizard";
 import BillingSettings from "@/pages/billing/settings";
 import BillingReports from "@/pages/billing/reports";
+import ActivityLogPage from "@/pages/billing/activity-log";
+import ComplianceReportsPage from "@/pages/billing/compliance-reports";
 import ClaimsPage from "@/pages/claims";
 import ClaimDetailPage from "@/pages/claim-detail";
 import IntelligencePage from "@/pages/intelligence";
@@ -116,6 +118,16 @@ function Router() {
       <Route path="/billing/codes">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><BillingHcpcs /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/intelligence/logs">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ActivityLogPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/intelligence/reports">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ComplianceReportsPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/intelligence">

@@ -1,0 +1,102 @@
+Step 1.5 confirmed. Move to Phase 1, steps 1.6 and 1.7 together — Billing dashboard with real data and the Activity Log + Compliance Reports. These can be built in parallel since they don't depend on each other.
+Step 1.6 — Billing dashboard real data:
+The existing dashboard already has metric cards and charts. Do not rebuild them. Update the data queries to use real claims data instead of seeded demo data.
+Replace the existing dashboard data fetching with this endpoint:
+GET /api/billing/dashboard/stats
+Returns:
+typescript{
+  pipeline: {
+    paid: { count: number, amount: number },
+    inProcess: { count: number, amount: number },
+    draft: { count: number, amount: number },
+    denied: { count: number, amount: number }
+  },
+  alerts: {
+    deniedClaims: { count: number, amount: number },
+    staleDrafts: number,      // drafts older than 7 days
+    timelyFilingRisk: number, // claims within 30 days of their payer's timely filing limit
+    highRiskClaims: number    // readiness_status = 'RED' and status not in ('paid','denied')
+  },
+  recentPatients: Patient[],  // last 8 patients with claim activity
+  recentClaims: Claim[]       // last 10 claims with patient name joined
+}
+SQL for pipeline cards:
+sqlSELECT
+  COUNT(*) FILTER (WHERE status = 'paid') as paid_count,
+  COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0) as paid_amount,
+  COUNT(*) FILTER (WHERE status IN ('submitted','acknowledged','pending')) as in_process_count,
+  COALESCE(SUM(amount) FILTER (WHERE status IN ('submitted','acknowledged','pending')), 0) as in_process_amount,
+  COUNT(*) FILTER (WHERE status = 'draft') as draft_count,
+  COALESCE(SUM(amount) FILTER (WHERE status = 'draft'), 0) as draft_amount,
+  COUNT(*) FILTER (WHERE status IN ('denied','suspended')) as denied_count,
+  COALESCE(SUM(amount) FILTER (WHERE status IN ('denied','suspended')), 0) as denied_amount
+FROM claims
+SQL for stale drafts alert:
+sqlSELECT COUNT(*) FROM claims WHERE status = 'draft' AND created_at < NOW() - INTERVAL '7 days'
+SQL for recent claims with patient name:
+sqlSELECT c.*, 
+  COALESCE(p.first_name || ' ' || p.last_name, p.lead_id, 'Unknown Patient') as patient_name
+FROM claims c
+LEFT JOIN patients p ON c.patient_id = p.id
+ORDER BY c.created_at DESC
+LIMIT 10
+For timely filing risk — join claims with payers on payer name to get timely_filing_days, flag claims where service_date < NOW() - (timely_filing_days - 30) days and status not in ('paid', 'denied', 'draft'). If service_date is null, skip that claim.
+Add a persistent "New Claim" button to the billing header. This is the single most important UI element. It must be visible on every billing page, not just the dashboard. Add it to the BillingLayout header component — right side, always visible, primary button style, navigates to /billing/claims/new.
+Action alerts panel on dashboard: show the four alert types as clickable cards. Denied claims card links to /billing/claims?status=denied. Stale drafts links to /billing/claims?status=draft. Others link to /billing/claims with appropriate filters.
+Recent patients row: horizontally scrollable row of up to 8 patients. Each card shows name, last service date, last claim status dot (green=paid, yellow=in-process, red=denied), and a "New Claim" button.
+Step 1.7 — Activity Log and Compliance Reports:
+Add two new tabs to the Intelligence section, accessible at /billing/intelligence/logs and /billing/intelligence/reports. Add them to the intelligence nav in BillingSidebar.
+Activity Log (/billing/intelligence/logs) — admin only (check user.role === 'admin' on this page, show "Admin access required" if not admin):
+GET /api/billing/activity-logs?startDate=&endDate=&activityType=&performedBy=
+Query activity_logs where claim_id IS NOT NULL OR patient_id IS NOT NULL. Join users table on performed_by to get user email. Sort by created_at DESC. Limit 200.
+Display as a table:
+
+Timestamp (formatted as "Apr 3, 2026 2:34 PM")
+User (performed_by email)
+Action (activity_type)
+Record (link to claim or patient — use claim_id or patient_id)
+Detail (description field)
+
+Filters: date range picker, activity type dropdown (created/updated/exported/viewed), performed by (text search).
+Compliance Reports (/billing/intelligence/reports) — admin only:
+Four report cards, each with a description, date range picker, and "Generate PDF" button. Use @react-pdf/renderer (already installed). Generate client-side.
+Report 1 — Access Report:
+sqlSELECT al.*, u.email as user_email 
+FROM activity_logs al
+LEFT JOIN users u ON al.performed_by = u.id
+WHERE al.activity_type IN ('view_patient','view_claim','exported')
+AND al.created_at BETWEEN $1 AND $2
+ORDER BY al.created_at DESC
+Report 2 — Edit History:
+sqlSELECT al.*, u.email as user_email
+FROM activity_logs al  
+LEFT JOIN users u ON al.performed_by = u.id
+WHERE al.field IS NOT NULL
+AND al.created_at BETWEEN $1 AND $2
+ORDER BY al.created_at DESC
+Report 3 — Export Report:
+sqlSELECT al.*, u.email as user_email, c.amount, c.status
+FROM activity_logs al
+LEFT JOIN users u ON al.performed_by = u.id
+LEFT JOIN claims c ON al.claim_id = c.id
+WHERE al.activity_type = 'export_pdf'
+AND al.created_at BETWEEN $1 AND $2
+ORDER BY al.created_at DESC
+Report 4 — Claims Integrity:
+sqlSELECT c.id, c.status, c.amount, c.created_at, c.updated_at, c.service_date,
+  c.readiness_status, c.submission_method,
+  COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name
+FROM claims c
+LEFT JOIN patients p ON c.patient_id = p.id
+WHERE c.created_at BETWEEN $1 AND $2
+ORDER BY c.created_at DESC
+Each PDF report uses a simple table layout — header row with column names, data rows, report title and date range at top, "Generated by ClaimShield" footer. Same @react-pdf/renderer approach as claim-pdf.tsx.
+Note: activity_logs currently has mostly intake-related entries (lead_id set, claim_id and patient_id null). The queries above will return limited results until billing actions generate log entries. This is expected — the table and UI should work correctly even when returning zero rows. Show an empty state: "No activity recorded in this period. Activity is logged as your team creates and manages claims."
+When done, show me:
+
+The dashboard pipeline cards with real claim counts and dollar amounts
+The "New Claim" button visible in the billing header on a non-dashboard page (e.g., the patients list)
+The Activity Log page loading without errors (even if showing empty state)
+One compliance report generating as a PDF
+
+Do not move to step 1.8 (Intake cleanup) until I confirm.

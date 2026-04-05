@@ -281,6 +281,137 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  app.get("/api/billing/dashboard/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const [pipelineResult, staleDraftsResult, highRiskResult, timelyResult, recentPatientsResult, recentClaimsResult] = await Promise.all([
+        db.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE status = 'paid') as paid_count,
+            COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0) as paid_amount,
+            COUNT(*) FILTER (WHERE status IN ('submitted','acknowledged','pending')) as in_process_count,
+            COALESCE(SUM(amount) FILTER (WHERE status IN ('submitted','acknowledged','pending')), 0) as in_process_amount,
+            COUNT(*) FILTER (WHERE status = 'draft') as draft_count,
+            COALESCE(SUM(amount) FILTER (WHERE status = 'draft'), 0) as draft_amount,
+            COUNT(*) FILTER (WHERE status IN ('denied','suspended')) as denied_count,
+            COALESCE(SUM(amount) FILTER (WHERE status IN ('denied','suspended')), 0) as denied_amount
+          FROM claims
+        `),
+        db.query(`SELECT COUNT(*)::int as count FROM claims WHERE status = 'draft' AND created_at < NOW() - INTERVAL '7 days'`),
+        db.query(`SELECT COUNT(*)::int as count FROM claims WHERE readiness_status = 'RED' AND status NOT IN ('paid','denied')`),
+        db.query(`
+          SELECT COUNT(*)::int as count FROM (
+            SELECT DISTINCT ON (c.id) c.id
+            FROM claims c
+            LEFT JOIN payers p ON c.payer_id = p.id OR LOWER(p.name) = LOWER(c.payer)
+            WHERE c.service_date IS NOT NULL
+              AND c.status NOT IN ('paid', 'denied', 'draft')
+              AND c.service_date < NOW() - ((COALESCE(p.timely_filing_days, 365) - 30) || ' days')::interval
+          ) t
+        `),
+        db.query(`
+          SELECT p.id, p.first_name, p.last_name, p.insurance_carrier,
+            latest.last_service_date, latest.last_claim_status,
+            l.name as lead_name
+          FROM patients p
+          INNER JOIN (
+            SELECT DISTINCT ON (patient_id) patient_id, service_date as last_service_date, status as last_claim_status, created_at
+            FROM claims ORDER BY patient_id, created_at DESC
+          ) latest ON latest.patient_id = p.id
+          LEFT JOIN leads l ON p.lead_id = l.id
+          ORDER BY latest.created_at DESC
+          LIMIT 8
+        `),
+        db.query(`
+          SELECT c.*,
+            COALESCE(p.first_name || ' ' || p.last_name, l.name, 'Unknown Patient') as patient_name
+          FROM claims c
+          LEFT JOIN patients p ON c.patient_id = p.id
+          LEFT JOIN leads l ON p.lead_id = l.id
+          ORDER BY c.created_at DESC
+          LIMIT 10
+        `),
+      ]);
+
+      const p = pipelineResult.rows[0];
+      res.json({
+        pipeline: {
+          paid: { count: parseInt(p.paid_count), amount: parseFloat(p.paid_amount) },
+          inProcess: { count: parseInt(p.in_process_count), amount: parseFloat(p.in_process_amount) },
+          draft: { count: parseInt(p.draft_count), amount: parseFloat(p.draft_amount) },
+          denied: { count: parseInt(p.denied_count), amount: parseFloat(p.denied_amount) },
+        },
+        alerts: {
+          deniedClaims: { count: parseInt(p.denied_count), amount: parseFloat(p.denied_amount) },
+          staleDrafts: staleDraftsResult.rows[0].count,
+          timelyFilingRisk: timelyResult.rows[0].count,
+          highRiskClaims: highRiskResult.rows[0].count,
+        },
+        recentPatients: recentPatientsResult.rows,
+        recentClaims: recentClaimsResult.rows,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/activity-logs", requireRole("admin"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { startDate, endDate, activityType, performedBy } = req.query;
+      let query = `
+        SELECT al.*, u.email as user_email
+        FROM activity_logs al
+        LEFT JOIN users u ON al.performed_by::text = u.id::text
+        WHERE (al.claim_id IS NOT NULL OR al.patient_id IS NOT NULL)
+      `;
+      const params: any[] = [];
+      let idx = 1;
+      if (startDate) { query += ` AND al.created_at >= $${idx++}`; params.push(startDate); }
+      if (endDate) { query += ` AND al.created_at <= $${idx++}`; params.push(endDate); }
+      if (activityType && activityType !== "all") { query += ` AND al.activity_type = $${idx++}`; params.push(activityType); }
+      if (performedBy) { query += ` AND (u.email ILIKE $${idx++})`; params.push(`%${performedBy}%`); }
+      query += ` ORDER BY al.created_at DESC LIMIT 200`;
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/compliance-report/:type", requireRole("admin"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { startDate, endDate } = req.query;
+      const start = startDate || new Date(Date.now() - 30 * 86400000).toISOString();
+      const end = endDate || new Date().toISOString();
+      const type = req.params.type;
+      let query = "";
+      const params = [start, end];
+
+      switch (type) {
+        case "access":
+          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.activity_type IN ('view_patient','view_claim','exported','export_pdf') AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC`;
+          break;
+        case "edit-history":
+          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.field IS NOT NULL AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC`;
+          break;
+        case "export":
+          query = `SELECT al.*, u.email as user_email, c.amount, c.status as claim_status FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text LEFT JOIN claims c ON al.claim_id::text = c.id::text WHERE al.activity_type = 'export_pdf' AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC`;
+          break;
+        case "claims-integrity":
+          query = `SELECT c.id, c.status, c.amount, c.created_at, c.updated_at, c.service_date, c.readiness_status, c.submission_method, COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name FROM claims c LEFT JOIN patients p ON c.patient_id = p.id WHERE c.created_at BETWEEN $1 AND $2 ORDER BY c.created_at DESC`;
+          break;
+        default:
+          return res.status(400).json({ error: "Invalid report type" });
+      }
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/billing/claims/wizard-data", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);

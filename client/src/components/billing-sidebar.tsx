@@ -11,6 +11,7 @@ import {
   ScrollText,
   BarChart3,
   BookOpen,
+  ClipboardList,
 } from "lucide-react";
 import {
   Sidebar,
@@ -33,6 +34,8 @@ const billingNavItems = [
   { title: "Claims", url: "/billing/claims", icon: FileText },
   { title: "Code Lookup", url: "/billing/codes", icon: BookOpen },
   { title: "Intelligence", url: "/billing/intelligence", icon: Brain },
+  { title: "Activity Log", url: "/billing/intelligence/logs", icon: ScrollText },
+  { title: "Compliance", url: "/billing/intelligence/reports", icon: ClipboardList },
   { title: "Rules", url: "/billing/rules", icon: Shield },
   { title: "Reports", url: "/billing/reports", icon: BarChart3 },
   { title: "Settings", url: "/billing/settings", icon: Settings },
