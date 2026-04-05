@@ -1,0 +1,773 @@
+# ClaimShield — CMS-1500 PDF Generation
+# Add this feature to the existing ClaimShield billing module.
+# Read everything before writing any code.
+
+---
+
+## What this feature does
+
+Replace the current "claim summary PDF" with a properly formatted CMS-1500 form (version 02/12) that can be uploaded directly to Availity's portal or any payer that accepts PDF claims.
+
+The current build has a @react-pdf/renderer claim summary that shows claim data in a readable format. That stays as a secondary "readable" export. This feature adds a second PDF type — the official CMS-1500 form with correct field positioning — as the primary submission document.
+
+---
+
+## Approach: overlay on blank form background
+
+The CMS-1500 form has 33 numbered boxes with exact x/y coordinates defined by CMS. The cleanest approach is:
+
+1. Use the official blank CMS-1500 form as a background image
+2. Overlay data fields as absolutely positioned text at the correct coordinates
+3. Generate and download the completed form client-side
+
+**Do not use @react-pdf/renderer for this feature.** It does not support absolute positioning with the precision needed for form field overlay. Use `pdf-lib` instead — it was built for exactly this use case (overlaying text on existing PDFs).
+
+---
+
+## Step 1: Install pdf-lib
+
+```bash
+npm install pdf-lib
+```
+
+Confirm it installs without conflicts before writing any code.
+
+---
+
+## Step 2: Get the blank CMS-1500 form
+
+The official blank CMS-1500 (02/12 version) is publicly available. In the client-side PDF generation code, fetch the blank form from a reliable public source:
+
+```typescript
+const CMS1500_BLANK_URL = 'https://www.cms.gov/Medicare/CMS-Forms/CMS-Forms/downloads/cms1500.pdf';
+```
+
+If that URL is blocked by CORS, host the blank form as a static asset in the Replit project:
+- Download cms1500.pdf from CMS.gov
+- Place it in `client/public/cms1500-blank.pdf`
+- Reference it as `/cms1500-blank.pdf` in the code
+
+The static asset approach is more reliable — use it as the default.
+
+---
+
+## Step 3: Field coordinate mapping
+
+The CMS-1500 form uses a coordinate system where (0,0) is the bottom-left of the page. The page is 8.5" × 11" = 612 × 792 points at 72 DPI.
+
+**Critical:** pdf-lib uses points (72 per inch) with origin at bottom-left. The coordinates below are calibrated for the standard CMS-1500 02/12 form. If the blank PDF you use is a different scale, all coordinates will be off — test with Box 1a first before mapping all 33 boxes.
+
+```typescript
+// CMS-1500 field coordinate map
+// Format: [x, y, maxWidth] — all values in PDF points (72 per inch)
+// x = distance from left edge
+// y = distance from bottom edge  
+// maxWidth = maximum text width before truncation
+
+const CMS1500_FIELDS = {
+  // Box 1 — Insurance type checkboxes (Medicare / Medicaid / TRICARE / etc.)
+  // These are checkboxes — place an "X" at the appropriate coordinate
+  insuranceTypeMedicare:    [44,  688, 10],
+  insuranceTypeMedicaid:    [94,  688, 10],
+  insuranceTypeTricare:     [140, 688, 10],
+  insuranceTypeChampva:     [186, 688, 10],
+  insuranceTypeGroupHealth: [234, 688, 10],
+  insuranceTypeFeca:        [282, 688, 10],
+  insuranceTypeOther:       [320, 688, 10],
+
+  // Box 1a — Insured's ID number
+  insuredIdNumber:          [374, 688, 180],
+
+  // Box 2 — Patient's name (Last, First, MI)
+  patientName:              [44,  660, 200],
+
+  // Box 3 — Patient's birth date (MM/DD/YYYY) and sex
+  patientDobMM:             [258, 660, 20],
+  patientDobDD:             [282, 660, 20],
+  patientDobYY:             [306, 660, 40],
+  patientSexMale:           [360, 660, 10],   // place "X" if male
+  patientSexFemale:         [396, 660, 10],   // place "X" if female
+
+  // Box 4 — Insured's name
+  insuredName:              [374, 660, 200],
+
+  // Box 5 — Patient's address
+  patientAddress:           [44,  636, 200],
+  patientCity:              [44,  618, 140],
+  patientState:             [188, 618, 30],
+  patientZip:               [226, 618, 60],
+  patientPhone:             [292, 618, 80],
+
+  // Box 6 — Patient's relationship to insured
+  relationshipSelf:         [374, 636, 10],   // X
+  relationshipSpouse:       [408, 636, 10],   // X
+  relationshipChild:        [444, 636, 10],   // X
+  relationshipOther:        [480, 636, 10],   // X
+
+  // Box 7 — Insured's address (skip if same as patient)
+  insuredAddress:           [374, 618, 180],
+  insuredCity:              [374, 600, 120],
+  insuredState:             [498, 600, 30],
+  insuredZip:               [374, 582, 60],
+  insuredPhone:             [444, 582, 80],
+
+  // Box 9 — Other insured's name (skip for Phase 1 — secondary insurance deferred)
+  // Box 10 — Condition related to
+  conditionEmployment:      [44,  546, 10],   // X for yes
+  conditionAutoAccident:    [44,  530, 10],   // X for yes
+  conditionOtherAccident:   [44,  514, 10],   // X for yes
+
+  // Box 11 — Insured's policy/group number
+  insuredGroupNumber:       [374, 546, 180],
+
+  // Box 11a — Insured's date of birth / sex
+  insuredDobMM:             [374, 530, 20],
+  insuredDobDD:             [398, 530, 20],
+  insuredDobYY:             [422, 530, 40],
+  insuredSexMale:           [480, 530, 10],
+  insuredSexFemale:         [510, 530, 10],
+
+  // Box 12 — Patient's signature (always "Signature on File")
+  patientSignature:         [44,  478, 200],
+
+  // Box 13 — Insured's signature
+  insuredSignature:         [374, 478, 180],
+
+  // Box 14 — Date of current illness (service date)
+  currentIllnessMM:         [44,  454, 20],
+  currentIllnessDD:         [68,  454, 20],
+  currentIllnessYY:         [92,  454, 40],
+
+  // Box 17 — Name of referring provider
+  referringProviderName:    [186, 430, 180],
+
+  // Box 17a — Other ID (leave blank)
+  // Box 17b — NPI of referring provider
+  referringProviderNPI:     [400, 430, 120],
+
+  // Box 21 — Diagnosis codes (ICD-10) — positions A, B, C, D
+  diagnosisA:               [44,  378, 80],
+  diagnosisB:               [160, 378, 80],
+  diagnosisC:               [44,  360, 80],
+  diagnosisD:               [160, 360, 80],
+
+  // Box 23 — Prior authorization number
+  priorAuthNumber:          [374, 390, 180],
+
+  // Box 24 — Service lines (6 lines, each with 6 sub-fields)
+  // Line 1
+  line1DateFrom:            [44,  326, 50],
+  line1DateTo:              [94,  326, 50],
+  line1PlaceOfService:      [148, 326, 20],
+  line1ProcedureCode:       [196, 326, 50],
+  line1Modifier:            [250, 326, 30],
+  line1DiagnosisPointer:    [300, 326, 20],
+  line1Charges:             [330, 326, 60],
+  line1Units:               [398, 326, 30],
+  line1NPI:                 [444, 326, 100],
+
+  // Line 2
+  line2DateFrom:            [44,  308, 50],
+  line2DateTo:              [94,  308, 50],
+  line2PlaceOfService:      [148, 308, 20],
+  line2ProcedureCode:       [196, 308, 50],
+  line2Modifier:            [250, 308, 30],
+  line2DiagnosisPointer:    [300, 308, 20],
+  line2Charges:             [330, 308, 60],
+  line2Units:               [398, 308, 30],
+  line2NPI:                 [444, 308, 100],
+
+  // Line 3
+  line3DateFrom:            [44,  290, 50],
+  line3DateTo:              [94,  290, 50],
+  line3PlaceOfService:      [148, 290, 20],
+  line3ProcedureCode:       [196, 290, 50],
+  line3Modifier:            [250, 290, 30],
+  line3DiagnosisPointer:    [300, 290, 20],
+  line3Charges:             [330, 290, 60],
+  line3Units:               [398, 290, 30],
+  line3NPI:                 [444, 290, 100],
+
+  // Line 4
+  line4DateFrom:            [44,  272, 50],
+  line4DateTo:              [94,  272, 50],
+  line4PlaceOfService:      [148, 272, 20],
+  line4ProcedureCode:       [196, 272, 50],
+  line4Modifier:            [250, 272, 30],
+  line4DiagnosisPointer:    [300, 272, 20],
+  line4Charges:             [330, 272, 60],
+  line4Units:               [398, 272, 30],
+  line4NPI:                 [444, 272, 100],
+
+  // Line 5
+  line5DateFrom:            [44,  254, 50],
+  line5DateTo:              [94,  254, 50],
+  line5PlaceOfService:      [148, 254, 20],
+  line5ProcedureCode:       [196, 254, 50],
+  line5Modifier:            [250, 254, 30],
+  line5DiagnosisPointer:    [300, 254, 20],
+  line5Charges:             [330, 254, 60],
+  line5Units:               [398, 254, 30],
+  line5NPI:                 [444, 254, 100],
+
+  // Line 6
+  line6DateFrom:            [44,  236, 50],
+  line6DateTo:              [94,  236, 50],
+  line6PlaceOfService:      [148, 236, 20],
+  line6ProcedureCode:       [196, 236, 50],
+  line6Modifier:            [250, 236, 30],
+  line6DiagnosisPointer:    [300, 236, 20],
+  line6Charges:             [330, 236, 60],
+  line6Units:               [398, 236, 30],
+  line6NPI:                 [444, 236, 100],
+
+  // Box 25 — Federal tax ID
+  federalTaxId:             [44,  210, 80],
+  taxIdTypeEIN:             [128, 210, 10],   // X for EIN
+  taxIdTypeSSN:             [144, 210, 10],   // X for SSN
+
+  // Box 26 — Patient account number
+  patientAccountNumber:     [186, 210, 80],
+
+  // Box 27 — Accept assignment (always "X" for Yes)
+  acceptAssignmentYes:      [300, 210, 10],
+
+  // Box 28 — Total charge
+  totalCharge:              [330, 210, 60],
+
+  // Box 29 — Amount paid (leave blank or 0.00)
+  amountPaid:               [398, 210, 50],
+
+  // Box 31 — Signature of physician
+  physicianSignature:       [44,  176, 160],
+  signatureDate:            [210, 176, 80],
+
+  // Box 32 — Service facility location (for home health = patient address)
+  serviceFacilityName:      [44,  152, 180],
+  serviceFacilityAddress:   [44,  136, 180],
+  serviceFacilityCity:      [44,  120, 120],
+  serviceFacilityNPI:       [44,  104, 100],
+
+  // Box 33 — Billing provider info
+  billingProviderName:      [310, 152, 200],
+  billingProviderAddress:   [310, 136, 200],
+  billingProviderCity:      [310, 120, 200],
+  billingProviderPhone:     [310, 104, 100],
+  billingProviderNPI:       [420, 104, 100],
+};
+```
+
+---
+
+## Step 4: PDF generation function
+
+Create `client/src/lib/generate-cms1500.ts`:
+
+```typescript
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+
+interface CMS1500Data {
+  // Patient
+  patientFirstName: string;
+  patientLastName: string;
+  patientDob: string;           // stored as text — parse carefully
+  patientSex: string;
+  patientAddress: string;
+  patientCity: string;
+  patientState: string;
+  patientZip: string;
+  patientPhone: string;
+
+  // Insurance
+  insuredName: string;
+  insuredIdNumber: string;      // member ID
+  groupNumber: string;
+  relationshipToInsured: string;
+  insuredDob: string;
+  policyType: string;           // determines Box 1 checkbox
+
+  // Provider
+  renderingProviderName: string;
+  renderingProviderNPI: string;
+  renderingProviderCredentials: string;
+  referringProviderName: string;
+  referringProviderNPI: string;
+
+  // Practice
+  practiceNPI: string;
+  practiceTaxId: string;
+  practiceName: string;
+  practiceAddress: string;
+  practiceCity: string;
+  practiceState: string;
+  practiceZip: string;
+  practicePhone: string;
+
+  // Claim
+  serviceDate: string;
+  placeOfService: string;
+  authorizationNumber: string;
+  icd10Primary: string;
+  icd10Secondary: string[];
+
+  // Service lines
+  serviceLines: Array<{
+    code: string;
+    modifier?: string;
+    units: number;
+    charge: number;
+    diagnosisPointer: string;   // 'A', 'B', 'C', or 'D'
+  }>;
+
+  totalCharge: number;
+  claimId: string;
+}
+
+export async function generateCMS1500PDF(data: CMS1500Data): Promise<Uint8Array> {
+  // Load the blank CMS-1500 form
+  const blankFormBytes = await fetch('/cms1500-blank.pdf').then(r => r.arrayBuffer());
+  const pdfDoc = await PDFDocument.load(blankFormBytes);
+  const pages = pdfDoc.getPages();
+  const page = pages[0];
+  
+  // Embed Helvetica font (closest to the form's typewriter font)
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontSize = 8;  // Standard size for CMS-1500 fields
+  const textColor = rgb(0, 0, 0);
+
+  // Helper function to draw text at field position
+  function drawField(x: number, y: number, text: string, size: number = fontSize) {
+    if (!text) return;
+    page.drawText(text.toString().toUpperCase(), {
+      x,
+      y,
+      size,
+      font,
+      color: textColor,
+    });
+  }
+
+  // Helper to draw an X checkbox
+  function drawX(x: number, y: number) {
+    page.drawText('X', { x, y, size: fontSize, font, color: textColor });
+  }
+
+  // Box 1 — Insurance type
+  const payer = data.policyType?.toLowerCase() || '';
+  if (payer.includes('medicare')) drawX(...CMS1500_FIELDS.insuranceTypeMedicare as [number, number]);
+  else if (payer.includes('medicaid')) drawX(...CMS1500_FIELDS.insuranceTypeMedicaid as [number, number]);
+  else if (payer.includes('tricare')) drawX(...CMS1500_FIELDS.insuranceTypeTricare as [number, number]);
+  else if (payer.includes('va') || payer.includes('champva')) drawX(...CMS1500_FIELDS.insuranceTypeChampva as [number, number]);
+  else drawX(...CMS1500_FIELDS.insuranceTypeOther as [number, number]);
+
+  // Box 1a — Insured's ID
+  drawField(...CMS1500_FIELDS.insuredIdNumber as [number, number], data.insuredIdNumber);
+
+  // Box 2 — Patient name (Last, First, MI format)
+  const patientNameFormatted = `${data.patientLastName}, ${data.patientFirstName}`;
+  drawField(...CMS1500_FIELDS.patientName as [number, number], patientNameFormatted);
+
+  // Box 3 — DOB and sex
+  // DOB is stored as text — try to parse it flexibly
+  try {
+    const dobParts = parseDOB(data.patientDob);
+    if (dobParts) {
+      drawField(...CMS1500_FIELDS.patientDobMM as [number, number], dobParts.mm);
+      drawField(...CMS1500_FIELDS.patientDobDD as [number, number], dobParts.dd);
+      drawField(...CMS1500_FIELDS.patientDobYY as [number, number], dobParts.yy);
+    }
+  } catch (e) {
+    // DOB parse failed — draw raw text in MM field area as fallback
+    drawField(...CMS1500_FIELDS.patientDobMM as [number, number], data.patientDob || '');
+  }
+
+  const sex = data.patientSex?.toLowerCase() || '';
+  if (sex === 'male' || sex === 'm') drawX(...CMS1500_FIELDS.patientSexMale as [number, number]);
+  else if (sex === 'female' || sex === 'f') drawX(...CMS1500_FIELDS.patientSexFemale as [number, number]);
+
+  // Box 4 — Insured name
+  const insuredName = data.relationshipToInsured?.toLowerCase() === 'self'
+    ? patientNameFormatted
+    : data.insuredName || patientNameFormatted;
+  drawField(...CMS1500_FIELDS.insuredName as [number, number], insuredName);
+
+  // Box 5 — Patient address
+  drawField(...CMS1500_FIELDS.patientAddress as [number, number], data.patientAddress || '');
+  drawField(...CMS1500_FIELDS.patientCity as [number, number], data.patientCity || '');
+  drawField(...CMS1500_FIELDS.patientState as [number, number], data.patientState || '');
+  drawField(...CMS1500_FIELDS.patientZip as [number, number], data.patientZip || '');
+  drawField(...CMS1500_FIELDS.patientPhone as [number, number], data.patientPhone || '');
+
+  // Box 6 — Relationship
+  const rel = data.relationshipToInsured?.toLowerCase() || 'self';
+  if (rel === 'self') drawX(...CMS1500_FIELDS.relationshipSelf as [number, number]);
+  else if (rel === 'spouse') drawX(...CMS1500_FIELDS.relationshipSpouse as [number, number]);
+  else if (rel === 'child') drawX(...CMS1500_FIELDS.relationshipChild as [number, number]);
+  else drawX(...CMS1500_FIELDS.relationshipOther as [number, number]);
+
+  // Box 11 — Group number
+  drawField(...CMS1500_FIELDS.insuredGroupNumber as [number, number], data.groupNumber || '');
+
+  // Box 12 and 13 — Signatures on file
+  drawField(...CMS1500_FIELDS.patientSignature as [number, number], 'SIGNATURE ON FILE');
+  drawField(...CMS1500_FIELDS.insuredSignature as [number, number], 'SIGNATURE ON FILE');
+
+  // Box 14 — Service date
+  try {
+    const svcDate = new Date(data.serviceDate);
+    if (!isNaN(svcDate.getTime())) {
+      const mm = String(svcDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(svcDate.getDate()).padStart(2, '0');
+      const yy = String(svcDate.getFullYear());
+      drawField(...CMS1500_FIELDS.currentIllnessMM as [number, number], mm);
+      drawField(...CMS1500_FIELDS.currentIllnessDD as [number, number], dd);
+      drawField(...CMS1500_FIELDS.currentIllnessYY as [number, number], yy);
+    }
+  } catch (e) {
+    drawField(...CMS1500_FIELDS.currentIllnessMM as [number, number], data.serviceDate || '');
+  }
+
+  // Box 17 — Referring provider
+  drawField(...CMS1500_FIELDS.referringProviderName as [number, number], data.referringProviderName || '');
+  drawField(...CMS1500_FIELDS.referringProviderNPI as [number, number], data.referringProviderNPI || '');
+
+  // Box 21 — Diagnosis codes
+  if (data.icd10Primary) drawField(...CMS1500_FIELDS.diagnosisA as [number, number], data.icd10Primary);
+  if (data.icd10Secondary?.[0]) drawField(...CMS1500_FIELDS.diagnosisB as [number, number], data.icd10Secondary[0]);
+  if (data.icd10Secondary?.[1]) drawField(...CMS1500_FIELDS.diagnosisC as [number, number], data.icd10Secondary[1]);
+  if (data.icd10Secondary?.[2]) drawField(...CMS1500_FIELDS.diagnosisD as [number, number], data.icd10Secondary[2]);
+
+  // Box 23 — Prior auth number
+  drawField(...CMS1500_FIELDS.priorAuthNumber as [number, number], data.authorizationNumber || '');
+
+  // Box 24 — Service lines
+  const lineFields = [
+    { from: CMS1500_FIELDS.line1DateFrom, to: CMS1500_FIELDS.line1DateTo, pos: CMS1500_FIELDS.line1PlaceOfService, proc: CMS1500_FIELDS.line1ProcedureCode, mod: CMS1500_FIELDS.line1Modifier, dx: CMS1500_FIELDS.line1DiagnosisPointer, charge: CMS1500_FIELDS.line1Charges, units: CMS1500_FIELDS.line1Units, npi: CMS1500_FIELDS.line1NPI },
+    { from: CMS1500_FIELDS.line2DateFrom, to: CMS1500_FIELDS.line2DateTo, pos: CMS1500_FIELDS.line2PlaceOfService, proc: CMS1500_FIELDS.line2ProcedureCode, mod: CMS1500_FIELDS.line2Modifier, dx: CMS1500_FIELDS.line2DiagnosisPointer, charge: CMS1500_FIELDS.line2Charges, units: CMS1500_FIELDS.line2Units, npi: CMS1500_FIELDS.line2NPI },
+    { from: CMS1500_FIELDS.line3DateFrom, to: CMS1500_FIELDS.line3DateTo, pos: CMS1500_FIELDS.line3PlaceOfService, proc: CMS1500_FIELDS.line3ProcedureCode, mod: CMS1500_FIELDS.line3Modifier, dx: CMS1500_FIELDS.line3DiagnosisPointer, charge: CMS1500_FIELDS.line3Charges, units: CMS1500_FIELDS.line3Units, npi: CMS1500_FIELDS.line3NPI },
+    { from: CMS1500_FIELDS.line4DateFrom, to: CMS1500_FIELDS.line4DateTo, pos: CMS1500_FIELDS.line4PlaceOfService, proc: CMS1500_FIELDS.line4ProcedureCode, mod: CMS1500_FIELDS.line4Modifier, dx: CMS1500_FIELDS.line4DiagnosisPointer, charge: CMS1500_FIELDS.line4Charges, units: CMS1500_FIELDS.line4Units, npi: CMS1500_FIELDS.line4NPI },
+    { from: CMS1500_FIELDS.line5DateFrom, to: CMS1500_FIELDS.line5DateTo, pos: CMS1500_FIELDS.line5PlaceOfService, proc: CMS1500_FIELDS.line5ProcedureCode, mod: CMS1500_FIELDS.line5Modifier, dx: CMS1500_FIELDS.line5DiagnosisPointer, charge: CMS1500_FIELDS.line5Charges, units: CMS1500_FIELDS.line5Units, npi: CMS1500_FIELDS.line5NPI },
+    { from: CMS1500_FIELDS.line6DateFrom, to: CMS1500_FIELDS.line6DateTo, pos: CMS1500_FIELDS.line6PlaceOfService, proc: CMS1500_FIELDS.line6ProcedureCode, mod: CMS1500_FIELDS.line6Modifier, dx: CMS1500_FIELDS.line6DiagnosisPointer, charge: CMS1500_FIELDS.line6Charges, units: CMS1500_FIELDS.line6Units, npi: CMS1500_FIELDS.line6NPI },
+  ];
+
+  data.serviceLines.forEach((line, i) => {
+    if (i >= 6) return;
+    const fields = lineFields[i];
+    const serviceDateFormatted = formatServiceDate(data.serviceDate);
+    drawField(...fields.from as [number, number], serviceDateFormatted);
+    drawField(...fields.to as [number, number], serviceDateFormatted);
+    drawField(...fields.pos as [number, number], data.placeOfService || '12');
+    drawField(...fields.proc as [number, number], line.code);
+    if (line.modifier) drawField(...fields.mod as [number, number], line.modifier);
+    drawField(...fields.dx as [number, number], line.diagnosisPointer || 'A');
+    drawField(...fields.charge as [number, number], line.charge.toFixed(2));
+    drawField(...fields.units as [number, number], String(line.units));
+    drawField(...fields.npi as [number, number], data.renderingProviderNPI);
+  });
+
+  // Box 25 — Tax ID
+  const taxId = data.practiceTaxId?.replace('-', '') || '';
+  drawField(...CMS1500_FIELDS.federalTaxId as [number, number], taxId);
+  drawX(...CMS1500_FIELDS.taxIdTypeEIN as [number, number]); // Always EIN for agencies
+
+  // Box 26 — Patient account (use claim ID truncated to 14 chars)
+  drawField(...CMS1500_FIELDS.patientAccountNumber as [number, number], data.claimId.slice(0, 14));
+
+  // Box 27 — Accept assignment
+  drawX(...CMS1500_FIELDS.acceptAssignmentYes as [number, number]);
+
+  // Box 28 — Total charge
+  drawField(...CMS1500_FIELDS.totalCharge as [number, number], data.totalCharge.toFixed(2));
+
+  // Box 29 — Amount paid (blank)
+  drawField(...CMS1500_FIELDS.amountPaid as [number, number], '0.00');
+
+  // Box 31 — Physician signature
+  drawField(...CMS1500_FIELDS.physicianSignature as [number, number], 
+    `${data.renderingProviderName}, ${data.renderingProviderCredentials}`);
+  drawField(...CMS1500_FIELDS.signatureDate as [number, number], 
+    formatServiceDate(data.serviceDate));
+
+  // Box 32 — Service facility (for home health = patient address)
+  drawField(...CMS1500_FIELDS.serviceFacilityName as [number, number], 
+    `${data.patientLastName}, ${data.patientFirstName}`);
+  drawField(...CMS1500_FIELDS.serviceFacilityAddress as [number, number], 
+    data.patientAddress || '');
+  drawField(...CMS1500_FIELDS.serviceFacilityCity as [number, number], 
+    `${data.patientCity || ''} ${data.patientState || ''} ${data.patientZip || ''}`);
+
+  // Box 33 — Billing provider
+  drawField(...CMS1500_FIELDS.billingProviderName as [number, number], data.practiceName);
+  drawField(...CMS1500_FIELDS.billingProviderAddress as [number, number], data.practiceAddress || '');
+  drawField(...CMS1500_FIELDS.billingProviderCity as [number, number], 
+    `${data.practiceCity || ''} ${data.practiceState || ''} ${data.practiceZip || ''}`);
+  drawField(...CMS1500_FIELDS.billingProviderPhone as [number, number], data.practicePhone || '');
+  drawField(...CMS1500_FIELDS.billingProviderNPI as [number, number], data.practiceNPI || '');
+
+  return await pdfDoc.save();
+}
+
+// Helper: parse DOB stored as text into MM/DD/YYYY parts
+function parseDOB(dob: string): { mm: string; dd: string; yy: string } | null {
+  if (!dob) return null;
+  // Try ISO format: 1985-03-15
+  const isoMatch = dob.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return { yy: isoMatch[1], mm: isoMatch[2], dd: isoMatch[3] };
+  // Try MM/DD/YYYY
+  const usMatch = dob.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (usMatch) return { mm: usMatch[1].padStart(2,'0'), dd: usMatch[2].padStart(2,'0'), yy: usMatch[3] };
+  // Try MM/DD/YY
+  const shortMatch = dob.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (shortMatch) return { mm: shortMatch[1].padStart(2,'0'), dd: shortMatch[2].padStart(2,'0'), yy: `20${shortMatch[3]}` };
+  return null;
+}
+
+// Helper: format service date as MMDDYYYY for Box 24
+function formatServiceDate(dateStr: string): string {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const yyyy = String(d.getFullYear());
+    return `${mm}${dd}${yyyy}`;
+  } catch {
+    return dateStr;
+  }
+}
+```
+
+---
+
+## Step 5: Data assembly function
+
+Create a function that pulls all the data needed for the CMS-1500 from the existing API endpoints and assembles the `CMS1500Data` object:
+
+```typescript
+// In client/src/lib/generate-cms1500.ts (add to existing file)
+
+export async function buildCMS1500DataFromClaim(claimId: string): Promise<CMS1500Data> {
+  // Reuse the existing pdf-data endpoint which already fetches
+  // claim + patient + provider + practice + payer
+  const response = await fetch(`/api/billing/claims/${claimId}/pdf-data`, {
+    credentials: 'include'
+  });
+  if (!response.ok) throw new Error('Failed to fetch claim data');
+  const { claim, patient, provider, practiceSettings, payerName } = await response.json();
+
+  // Parse address from JSONB if stored that way
+  const address = typeof patient.address === 'object' ? patient.address : {};
+
+  // Parse service lines — wizard claims have service_lines JSONB
+  // Seeded claims only have cpt_codes array
+  let serviceLines = [];
+  if (claim.service_lines && Array.isArray(claim.service_lines)) {
+    serviceLines = claim.service_lines.map((line: any, i: number) => ({
+      code: line.code || line.hcpcsCode || '',
+      modifier: line.modifier || '',
+      units: Number(line.units) || 1,
+      charge: Number(line.totalCharge || line.charge || 0),
+      diagnosisPointer: ['A','B','C','D','E','F'][i] || 'A'
+    }));
+  } else if (claim.cpt_codes && Array.isArray(claim.cpt_codes)) {
+    // Seeded claim fallback
+    const chargePerLine = Number(claim.amount || 0) / claim.cpt_codes.length;
+    serviceLines = claim.cpt_codes.map((code: string, i: number) => ({
+      code,
+      modifier: '',
+      units: 1,
+      charge: chargePerLine,
+      diagnosisPointer: ['A','B','C','D','E','F'][i] || 'A'
+    }));
+  }
+
+  // Parse ICD-10 secondary from JSONB
+  let icd10Secondary: string[] = [];
+  if (claim.icd10_secondary) {
+    icd10Secondary = Array.isArray(claim.icd10_secondary)
+      ? claim.icd10_secondary
+      : JSON.parse(claim.icd10_secondary);
+  }
+
+  return {
+    patientFirstName: patient.first_name || '',
+    patientLastName: patient.last_name || '',
+    patientDob: patient.dob || '',
+    patientSex: patient.sex || '',
+    patientAddress: address.street || patient.address || '',
+    patientCity: address.city || '',
+    patientState: address.state || patient.state || '',
+    patientZip: address.zip || '',
+    patientPhone: patient.phone || '',
+
+    insuredName: patient.insured_name || `${patient.first_name || ''} ${patient.last_name || ''}`.trim(),
+    insuredIdNumber: patient.member_id || '',
+    groupNumber: patient.group_number || '',
+    relationshipToInsured: patient.relationship_to_insured || 'Self',
+    insuredDob: patient.dob || '',
+    policyType: payerName || patient.insurance_carrier || '',
+
+    renderingProviderName: provider ? `${provider.first_name} ${provider.last_name}` : '',
+    renderingProviderNPI: provider?.npi || '',
+    renderingProviderCredentials: provider?.credentials || '',
+    referringProviderName: patient.referring_provider_name || '',
+    referringProviderNPI: patient.referring_provider_npi || '',
+
+    practiceNPI: practiceSettings?.primary_npi || '',
+    practiceTaxId: practiceSettings?.tax_id || '',
+    practiceName: practiceSettings?.practice_name || 'ClaimShield Provider',
+    practiceAddress: practiceSettings?.address?.street || '',
+    practiceCity: practiceSettings?.address?.city || '',
+    practiceState: practiceSettings?.address?.state || '',
+    practiceZip: practiceSettings?.address?.zip || '',
+    practicePhone: practiceSettings?.phone || '',
+
+    serviceDate: claim.service_date || claim.created_at || '',
+    placeOfService: claim.place_of_service || '12',
+    authorizationNumber: claim.authorization_number || '',
+    icd10Primary: claim.icd10_primary || '',
+    icd10Secondary,
+
+    serviceLines,
+    totalCharge: Number(claim.amount) || 0,
+    claimId: claim.id
+  };
+}
+```
+
+---
+
+## Step 6: Wire into the UI
+
+Update the claim wizard Step 3 and claim detail page to offer two PDF options:
+
+```typescript
+// Replace the single PDF button with a dropdown or two buttons:
+
+// Option A: Two separate buttons
+<button onClick={() => generateAndDownloadCMS1500(claimId)}>
+  Download CMS-1500 Form
+</button>
+<button onClick={() => generateAndDownloadSummary(claimId)}>
+  Download Claim Summary
+</button>
+
+// Option B: Single dropdown button
+<DropdownButton label="Download PDF">
+  <DropdownItem onClick={() => generateAndDownloadCMS1500(claimId)}>
+    CMS-1500 Form (for Availity upload)
+  </DropdownItem>
+  <DropdownItem onClick={() => generateAndDownloadSummary(claimId)}>
+    Claim Summary (readable format)
+  </DropdownItem>
+</DropdownButton>
+```
+
+Use Option B (dropdown) — cleaner UX, both options available without cluttering the interface.
+
+The download function:
+```typescript
+async function generateAndDownloadCMS1500(claimId: string) {
+  setLoadingCMS1500(true);
+  try {
+    const data = await buildCMS1500DataFromClaim(claimId);
+    const pdfBytes = await generateCMS1500PDF(data);
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `CMS1500-${data.patientLastName}-${data.serviceDate || 'claim'}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    // Update claim record
+    await fetch(`/api/billing/claims/${claimId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ 
+        pdf_url: `cms1500:generated:${new Date().toISOString()}`,
+        status: claim.status === 'draft' ? 'exported' : claim.status
+      })
+    });
+    
+    toast({ title: 'CMS-1500 downloaded', description: 'Upload this form to your Availity portal to submit.' });
+  } catch (err) {
+    toast({ title: 'PDF generation failed', description: String(err), variant: 'destructive' });
+  } finally {
+    setLoadingCMS1500(false);
+  }
+}
+```
+
+---
+
+## Step 7: Coordinate calibration (important)
+
+The coordinates in Step 3 are based on the standard CMS-1500 02/12 form at 612×792 points. Different PDF versions of the blank form may have slightly different scaling. After building, **test with a real form by generating a test claim and visually inspecting the output PDF** before telling me it's done.
+
+Check these specific fields first since they're the most critical:
+- Box 1a (member ID) — top right area
+- Box 2 (patient name) — top left area
+- Box 24 line 1 (first service line) — middle of form
+- Box 33 (billing provider) — bottom right
+
+If any fields are misaligned, the fix is to adjust the x/y coordinates in the `CMS1500_FIELDS` map. Add 10–20 points to y to move text up, subtract to move down. Add to x to move right, subtract to move left.
+
+To help with calibration, add a **calibration mode** that draws a small dot at every field coordinate — this makes it easy to see where each field is landing without needing to fill in real data:
+
+```typescript
+// Debug only — shows all field positions as dots
+function drawCalibrationDots(page: any, font: any) {
+  Object.entries(CMS1500_FIELDS).forEach(([name, [x, y]]) => {
+    page.drawCircle({ x, y, size: 2, color: rgb(1, 0, 0) });
+    page.drawText(name.slice(0, 6), { x: x + 3, y, size: 5, font, color: rgb(1, 0, 0) });
+  });
+}
+```
+
+Run calibration mode first, look at the output, adjust coordinates, then run with real data.
+
+---
+
+## Step 8: Blank form hosting
+
+Download the official CMS-1500 blank form and add it to the project as a static asset:
+
+1. The official form is at: `https://www.cms.gov/Medicare/CMS-Forms/CMS-Forms/downloads/cms1500.pdf`
+2. Download it and save as `client/public/cms1500-blank.pdf`
+3. Verify it loads: navigate to `[your-replit-url]/cms1500-blank.pdf` in the browser — it should show the blank form
+
+If the CMS URL doesn't work at build time, use a wget or curl command in the shell to download it:
+```bash
+wget -O client/public/cms1500-blank.pdf \
+  "https://www.cms.gov/Medicare/CMS-Forms/CMS-Forms/downloads/cms1500.pdf"
+```
+
+---
+
+## What NOT to do
+
+- Do not use @react-pdf/renderer for this feature — it cannot position text absolutely on an existing PDF background
+- Do not try to draw the entire CMS-1500 form from scratch using pdf-lib rectangles and lines — it will never look exactly right and takes 10x longer
+- Do not skip the coordinate calibration step — fields that are off by 20 points will land outside their boxes and the form will be unreadable
+- Do not remove the existing claim summary PDF — it stays as a secondary option
+
+---
+
+## Definition of done
+
+1. `npm install pdf-lib` confirms installation
+2. `cms1500-blank.pdf` loads at `/cms1500-blank.pdf` in the browser
+3. Calibration mode shows dots landing inside the correct boxes on the form
+4. Generating a CMS-1500 for the Jane Doe VA Community Care claim downloads a PDF where:
+   - Box 1a shows her member ID
+   - Box 2 shows her name in Last, First format
+   - Box 21 shows I10 (her diagnosis code)
+   - Box 24 line 1 shows G0299, 16 units, $228.00
+   - Box 33 shows the practice NPI
+5. The dropdown in the claim wizard and claim detail page offers both "CMS-1500 Form" and "Claim Summary"
+6. Downloading CMS-1500 updates the claim's pdf_url field
+
+Report back with a description of what each key field shows in the test output before declaring this done. Do not just say "it works" — show me the specific field values that appeared in the generated form.
