@@ -1,0 +1,50 @@
+All checks confirmed. Move to Phase 1, final step — Intake module cleanup. This is step 1.8 from the build order. These are targeted changes only — do not rebuild anything in the intake module.
+I.1 — Intake dashboard at /intake/dashboard
+The intake module currently has no real dashboard. Build one at /intake/dashboard that shows:
+
+Lead pipeline summary: five metric cards in a row — New / Attempting Contact / Contacted / Qualified / Converted. Query:
+
+sqlSELECT status, COUNT(*) as count FROM leads GROUP BY status
+Also show an SLA breach count on the "Attempting Contact" and "Contacted" cards — count leads where sla_deadline_at < NOW() and status matches.
+
+Today's appointments: query appointments table for DATE(scheduled_at) = CURRENT_DATE (check the appointments table column names first). Show as a simple list with patient/lead name and time.
+Recent chat sessions: last 5 entries from chat_sessions table (check column names first). Show session ID, lead name if linked, and created_at.
+Quick action button: "Add New Lead" — navigates to the lead creation flow (wherever that currently exists in the intake module).
+
+Check the actual column names in the appointments and chat_sessions tables before writing any queries:
+sqlSELECT column_name FROM information_schema.columns WHERE table_name = 'appointments';
+SELECT column_name FROM information_schema.columns WHERE table_name = 'chat_sessions';
+I.2 — Move prior auth tracker to billing
+The prior authorization tracker currently lives somewhere in the intake module. Find it and move it:
+
+Add route /billing/claims/prior-auth in App.tsx
+Add "Prior Auth" as a sub-item under Claims in BillingSidebar (between "All Claims" and "Denial Queue")
+The page component itself can stay where it is — just update the route and sidebar link
+Do NOT remove the old route yet if intake users are actively using it — add the billing route as an alias first
+
+I.3 — Auto-set referral source on lead creation
+Find where leads are created from the chat widget and from Vapi calls in the backend routes. In both places, add:
+
+Chat widget lead creation → set source = 'Website chat' automatically
+Vapi call lead creation → set source = 'Inbound AI call' automatically
+
+Search routes.ts for where leads are INSERT'd from chat or call contexts. Show me the relevant code before changing it — I want to confirm the right insertion points before the change is made.
+I.4 — Confirm Convert to Patient button is wired correctly
+Navigate to the intake module as intake@claimshield.ai. Find a lead with status = 'qualified' or vob_status = 'complete'. Does the "Convert to Patient" button appear? Click it — does the confirmation modal show the patient data correctly? After confirming, does the patient appear in the billing module patient list?
+Run this check and report back the result before marking I.4 complete.
+When all four intake cleanup items are done, run the full final verification from Section 9 of the build prompt:
+
+rcm_manager login sees only billing
+intake login sees only intake
+admin sees module selector
+Create a new patient in billing
+Create a new claim with the wizard
+HCPCS lookup returns results
+Enter a CPT code not in library — manual fallback appears
+Unit calculator: 4 hrs × 15-min intervals × $14.25 = $228.00
+Generate and download a claim summary PDF
+Risk scoring panel shows on Step 3
+Convert a lead to patient — patient appears in billing with "From Intake ✓"
+Logout destroys session
+
+Report back each item as pass or fail with one line of evidence.

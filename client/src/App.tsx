@@ -11,6 +11,7 @@ import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import ModuleSelector from "@/pages/module-selector";
 
+import IntakeDashboard from "@/pages/intake/dashboard";
 import DashboardPage from "@/pages/dashboard";
 import DealsPage from "@/pages/deals";
 import DealDetailPage from "@/pages/deal-detail";
@@ -24,6 +25,7 @@ import BillingHcpcs from "@/pages/billing/hcpcs";
 import ClaimWizard from "@/pages/billing/claim-wizard";
 import BillingSettings from "@/pages/billing/settings";
 import BillingReports from "@/pages/billing/reports";
+import PriorAuthPage from "@/pages/billing/prior-auth";
 import ActivityLogPage from "@/pages/billing/activity-log";
 import ComplianceReportsPage from "@/pages/billing/compliance-reports";
 import ClaimsPage from "@/pages/claims";
@@ -50,7 +52,7 @@ function Router() {
       {/* ===== INTAKE MODULE ===== */}
       <Route path="/intake/dashboard">
         <AuthGuard allowedRoles={["admin", "intake"]}>
-          <IntakeLayout><DashboardPage /></IntakeLayout>
+          <IntakeLayout><IntakeDashboard /></IntakeLayout>
         </AuthGuard>
       </Route>
       <Route path="/intake/deals/:id">
@@ -103,6 +105,11 @@ function Router() {
       <Route path="/billing/claims/new">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><ClaimWizard /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/claims/prior-auth">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><PriorAuthPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/claims/:id">

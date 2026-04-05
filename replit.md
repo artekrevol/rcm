@@ -165,7 +165,10 @@ Preferred communication style: Simple, everyday language.
 - ~~Billing Dashboard Real Data~~ - GET /api/billing/dashboard/stats with pipeline (paid/in-process/draft/denied counts + amounts), 4 alert cards (denied, stale drafts, timely filing risk, high risk), recent patients by latest claim activity, recent claims table; persistent "New Claim" button in BillingLayout header
 - ~~Activity Log~~ - /billing/intelligence/logs, admin-only, filterable table (date range, activity type, performer) with claim/patient links
 - ~~Compliance Reports~~ - /billing/intelligence/reports, admin-only, 4 PDF report types (Access, Edit History, Export, Claims Integrity) with date range pickers and client-side PDF generation
+- ~~Intake Dashboard~~ - /intake/dashboard with lead pipeline summary (5 status cards with SLA breach badges), today's appointments, recent chat sessions, "Add New Lead" button
+- ~~Prior Auth in Billing~~ - /billing/claims/prior-auth page listing all prior authorizations with status badges, expiration tracking; sidebar link under Claims
+- ~~Convert Lead to Patient~~ - "Convert to Patient" button on qualified/contacted/converted leads, confirmation modal with lead data preview, creates patient in billing with referral source from lead source, sets handoff_status = 'complete'
+- ~~Chat Widget Source Tag~~ - Chat widget lead creation auto-sets source = "Website chat"
 
 ### Future Enhancements
-- Intake → Billing handoff API
 - VerifyTX timeout/retry fix

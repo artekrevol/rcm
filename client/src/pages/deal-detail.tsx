@@ -15,6 +15,14 @@ import { ScheduleAppointmentDialog } from "@/components/schedule-appointment-dia
 import { VobVerificationCard } from "@/components/vob-verification-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -50,6 +58,7 @@ import {
   PlayCircle,
   RefreshCw,
   Send,
+  UserPlus,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -207,6 +216,27 @@ export default function DealDetailPage() {
     },
     onError: () => {
       toast({ title: "Failed to sync patient data", variant: "destructive" });
+    },
+  });
+
+  const [convertModalOpen, setConvertModalOpen] = useState(false);
+  const convertToPatientMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/leads/${id}/convert-to-patient`);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "patient"] });
+      setConvertModalOpen(false);
+      if (data.alreadyExisted) {
+        toast({ title: "Patient record already exists", description: `${data.patient.firstName} ${data.patient.lastName}` });
+      } else {
+        toast({ title: "Lead converted to patient", description: `${data.patient.firstName} ${data.patient.lastName} added to billing.` });
+      }
+    },
+    onError: () => {
+      toast({ title: "Failed to convert lead", variant: "destructive" });
     },
   });
 
@@ -548,6 +578,23 @@ export default function DealDetailPage() {
             <Calendar className="h-4 w-4" />
             Schedule
           </Button>
+          {!patient && (lead?.status === "qualified" || lead?.status === "contacted" || lead?.status === "converted") && (
+            <Button
+              size="sm"
+              variant="default"
+              className="gap-1 bg-blue-600 hover:bg-blue-700"
+              onClick={() => setConvertModalOpen(true)}
+              data-testid="button-convert-patient"
+            >
+              <UserPlus className="h-4 w-4" />
+              Convert to Patient
+            </Button>
+          )}
+          {patient && (
+            <Badge variant="outline" className="text-emerald-600 border-emerald-300 gap-1" data-testid="badge-patient-linked">
+              <CheckCircle className="h-3 w-3" /> Patient Linked
+            </Badge>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <span>
@@ -1084,6 +1131,55 @@ export default function DealDetailPage() {
         leadId={lead.id}
         leadName={lead.name}
       />
+
+      <Dialog open={convertModalOpen} onOpenChange={setConvertModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Convert Lead to Patient</DialogTitle>
+            <DialogDescription>
+              This will create a patient record in the billing module from this lead's data.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <p className="text-muted-foreground text-xs">Name</p>
+                <p className="font-medium">{lead.name || "Unknown"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Email</p>
+                <p className="font-medium">{lead.email || "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Phone</p>
+                <p className="font-medium">{lead.phone || "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Insurance</p>
+                <p className="font-medium">{lead.insuranceCarrier || "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Member ID</p>
+                <p className="font-medium">{lead.memberId || "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Source</p>
+                <p className="font-medium">{lead.source || "—"}</p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConvertModalOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => convertToPatientMutation.mutate()}
+              disabled={convertToPatientMutation.isPending}
+              data-testid="button-confirm-convert"
+            >
+              {convertToPatientMutation.isPending ? "Converting..." : "Confirm Conversion"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

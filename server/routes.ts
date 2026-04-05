@@ -281,6 +281,41 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  app.get("/api/intake/dashboard/stats", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const [pipelineResult, appointmentsResult, chatsResult] = await Promise.all([
+        db.query(`
+          SELECT l.status, COUNT(*)::int as count,
+            COUNT(*) FILTER (WHERE l.sla_deadline_at IS NOT NULL AND l.sla_deadline_at < NOW())::int as sla_breach_count
+          FROM leads l
+          GROUP BY l.status
+        `),
+        db.query(`
+          SELECT a.id, a.title, a.scheduled_at, a.status, l.name as lead_name
+          FROM appointments a
+          LEFT JOIN leads l ON a.lead_id = l.id
+          WHERE DATE(a.scheduled_at) = CURRENT_DATE
+          ORDER BY a.scheduled_at ASC
+        `),
+        db.query(`
+          SELECT cs.id, cs.status, cs.started_at, l.name as lead_name
+          FROM chat_sessions cs
+          LEFT JOIN leads l ON cs.lead_id = l.id
+          ORDER BY cs.started_at DESC
+          LIMIT 5
+        `),
+      ]);
+      res.json({
+        pipeline: pipelineResult.rows,
+        todayAppointments: appointmentsResult.rows,
+        recentChats: chatsResult.rows,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/billing/dashboard/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
@@ -350,6 +385,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         recentPatients: recentPatientsResult.rows,
         recentClaims: recentClaimsResult.rows,
       });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/prior-auths", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(`
+        SELECT pa.*,
+          COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name,
+          pa.payer as payer_name,
+          c.id as claim_id
+        FROM prior_authorizations pa
+        LEFT JOIN patients p ON pa.patient_id = p.id
+        LEFT JOIN claims c ON c.encounter_id = pa.encounter_id
+        ORDER BY pa.requested_date DESC
+      `);
+      res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1470,6 +1524,46 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
     
     res.json(updatedPatient);
+  });
+
+  app.post("/api/leads/:id/convert-to-patient", requireAuth, async (req, res) => {
+    try {
+      const lead = await storage.getLead(req.params.id);
+      if (!lead) {
+        return res.status(404).json({ error: "Lead not found" });
+      }
+
+      const existingPatient = await storage.getPatientByLeadId(req.params.id);
+      if (existingPatient) {
+        return res.json({ patient: existingPatient, alreadyExisted: true });
+      }
+
+      const nameParts = (lead.name || "").trim().split(/\s+/);
+      const firstName = lead.firstName || nameParts[0] || "Unknown";
+      const lastName = lead.lastName || nameParts.slice(1).join(" ") || "Unknown";
+
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `INSERT INTO patients (id, lead_id, first_name, last_name, dob, email, phone, insurance_carrier, member_id, plan_type, state, service_needed, referral_source)
+         SELECT gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+         WHERE NOT EXISTS (SELECT 1 FROM patients WHERE lead_id = $1)
+         RETURNING *`,
+        [lead.id, firstName, lastName, "", lead.email || null, lead.phone || null,
+         lead.insuranceCarrier || null, lead.memberId || null, lead.planType || null,
+         lead.state || null, lead.serviceNeeded || null, lead.source || "From Intake"]
+      );
+
+      if (rows.length === 0) {
+        const existingNow = await storage.getPatientByLeadId(req.params.id);
+        return res.json({ patient: existingNow, alreadyExisted: true });
+      }
+
+      await db.query("UPDATE leads SET handoff_status = 'sent' WHERE id = $1", [req.params.id]);
+
+      res.json({ patient: rows[0], alreadyExisted: false });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Manual sync of patient data to lead

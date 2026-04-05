@@ -12,6 +12,7 @@ import {
   BarChart3,
   BookOpen,
   ClipboardList,
+  ShieldCheck,
 } from "lucide-react";
 import {
   Sidebar,
@@ -32,6 +33,7 @@ const billingNavItems = [
   { title: "Dashboard", url: "/billing/dashboard", icon: LayoutDashboard },
   { title: "Patients", url: "/billing/patients", icon: Users },
   { title: "Claims", url: "/billing/claims", icon: FileText },
+  { title: "Prior Auth", url: "/billing/claims/prior-auth", icon: ShieldCheck },
   { title: "Code Lookup", url: "/billing/codes", icon: BookOpen },
   { title: "Intelligence", url: "/billing/intelligence", icon: Brain },
   { title: "Activity Log", url: "/billing/intelligence/logs", icon: ScrollText },

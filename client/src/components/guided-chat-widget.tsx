@@ -863,7 +863,7 @@ function GuidedChatContent() {
         name: data.name || "Website Visitor",
         phone: data.phone?.replace(/\D/g, '') || "",
         email: data.email || "",
-        source: "chat_widget",
+        source: "Website chat",
         status: "new",
         priority,
         serviceNeeded: data.treatmentType || "",
