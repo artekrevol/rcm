@@ -13,6 +13,7 @@ import {
   BookOpen,
   ClipboardList,
   ShieldCheck,
+  UserCog,
 } from "lucide-react";
 import {
   Sidebar,
@@ -41,7 +42,8 @@ const billingNavItems = [
   { title: "Rules", url: "/billing/rules", icon: Shield },
   { title: "Reports", url: "/billing/reports", icon: BarChart3 },
   { title: "Settings", url: "/billing/settings", icon: Settings },
-];
+  { title: "User Management", url: "/billing/settings/users", icon: UserCog, adminOnly: true },
+] as const;
 
 export function BillingSidebar() {
   const [location] = useLocation();
@@ -74,7 +76,9 @@ export function BillingSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {billingNavItems.map((item) => (
+              {billingNavItems
+                .filter((item) => !("adminOnly" in item && item.adminOnly) || user?.role === "admin")
+                .map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild

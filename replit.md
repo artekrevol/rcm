@@ -15,16 +15,22 @@ Preferred communication style: Simple, everyday language.
 
 ## Authentication & Authorization
 
-**Auth system**: Passport.js local strategy with bcrypt-hashed passwords, express-session with connect-pg-simple PostgreSQL session store.
+**Auth system**: Passport.js local strategy with bcrypt-hashed passwords, express-session with connect-pg-simple PostgreSQL session store. Session table is created inline via `ensureSessionTable()` (no dependency on bundled SQL files). Production requires `SESSION_SECRET` env var (fails fast if missing). Plaintext legacy passwords are auto-rehashed on successful login.
 
 **Routes**:
 - `POST /api/auth/login` — Login with email/password
 - `POST /api/auth/logout` — Destroy session
 - `GET /api/auth/me` — Current user (returns 401 if unauthenticated)
 
+**Admin User Management API** (admin-only):
+- `GET /api/admin/users` — List all users (no passwords)
+- `POST /api/admin/users` — Create user (email, name, role, password; bcrypt-hashed)
+- `PATCH /api/admin/users/:id` — Update user name/role/password
+- `DELETE /api/admin/users/:id` — Delete user (cannot delete self)
+
 **Roles**: `admin` (both modules), `rcm_manager` (billing only), `intake` (intake only)
 
-**Middleware**: `requireAuth` (any authenticated user) and `requireRole(...roles)` (role-based access) in `server/auth.ts`, applied to `/api/billing/*` endpoints.
+**Middleware**: `requireAuth` (any authenticated user) and `requireRole(...roles)` (role-based access) in `server/auth.ts`, applied to `/api/billing/*` and `/api/admin/*` endpoints.
 
 **Frontend guards**: `AuthGuard` component wraps protected routes in `App.tsx`, redirecting unauthenticated users to `/auth/login` and unauthorized users to `/`.
 
@@ -40,7 +46,7 @@ Preferred communication style: Simple, everyday language.
 **Framework**: React 18 with TypeScript, using Vite as the build tool and dev server.
 
 **Routing**: Wouter for lightweight client-side routing. Two module route groups:
-- `/billing/*` — BillingLayout with BillingSidebar (Dashboard, Patients, Claims, Code Lookup, Intelligence, Rules, Reports, Settings)
+- `/billing/*` — BillingLayout with BillingSidebar (Dashboard, Patients, Claims, Code Lookup, Intelligence, Rules, Reports, Settings, User Management[admin-only])
 - `/intake/*` — IntakeLayout with IntakeSidebar + GuidedChatWidget (Dashboard, Chat Analytics, Lead Worklist, Scheduling)
 - `/` — ModuleSelector (admin sees both, single-role users auto-redirect)
 - `/auth/login` — Login page
@@ -176,6 +182,8 @@ Preferred communication style: Simple, everyday language.
 - ~~Convert Lead to Patient~~ - "Convert to Patient" button on qualified/contacted/converted leads, confirmation modal with lead data preview, creates patient in billing with referral source from lead source, sets handoff_status = 'complete'
 - ~~Chat Widget Source Tag~~ - Chat widget lead creation auto-sets source = "Website chat"
 - ~~CMS Data Import~~ - Full HCPCS Level II (8,259), ICD-10-CM (97,584), CPT/RVU (16,645) code sets imported from CMS 2025 files; HCPCS search endpoint updated with UNION ALL for CPT codes; new ICD-10 search endpoint; claim wizard ICD-10 search uses API with hardcoded fallback
+- ~~Auth Hardening~~ - Inline session table creation (no bundled SQL dependency), production SESSION_SECRET enforcement, automatic plaintext password rehash on login, seed script hashes all passwords with bcrypt
+- ~~Admin User Management~~ - /billing/settings/users page (admin-only), create/edit/delete users, reset passwords, role assignment; sidebar link visible only to admins; API routes with full validation
 
 ### Future Enhancements
 - VerifyTX timeout/retry fix

@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { users, leads, patients, encounters, claims, claimEvents, denials, rules } from "@shared/schema";
 import { allPayers as realPayers } from "./payers";
+import { hashPassword } from "./auth";
 
 const cptCodeDetails: Record<string, { description: string; avgAmount: number }> = {
   "99213": { description: "Office visit, established patient, 20-29 min", avgAmount: 125 },
@@ -146,12 +147,14 @@ async function seed() {
     process.exit(0);
   }
 
-  await db.insert(users).values({
-    email: "admin@claimshield.ai",
-    password: "admin123",
-    role: "admin",
-    name: "System Administrator",
-  }).onConflictDoNothing();
+  const demoPassword = await hashPassword("demo123");
+
+  await db.insert(users).values([
+    { email: "demo@claimshield.ai", password: demoPassword, role: "admin", name: "Demo Admin" },
+    { email: "billing@claimshield.ai", password: demoPassword, role: "rcm_manager", name: "Billing Manager" },
+    { email: "intake@claimshield.ai", password: demoPassword, role: "intake", name: "Intake Coordinator" },
+    { email: "admin@claimshield.ai", password: await hashPassword("admin123"), role: "admin", name: "System Administrator" },
+  ]).onConflictDoNothing();
 
   const leadData = [];
   for (let i = 0; i < 12; i++) {

@@ -5,8 +5,21 @@ import connectPgSimple from "connect-pg-simple";
 import bcrypt from "bcryptjs";
 import { type Express } from "express";
 import { storage } from "./storage";
+import { pool } from "./db";
 
 const PgSession = connectPgSimple(session);
+
+export async function ensureSessionTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL COLLATE "default",
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL,
+      CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
+    );
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+  `);
+}
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 10);
@@ -19,17 +32,31 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
+export function needsRehash(hash: string): boolean {
+  return !hash.startsWith("$2");
+}
+
+async function rehashIfNeeded(userId: string, password: string, currentHash: string): Promise<void> {
+  if (needsRehash(currentHash)) {
+    const newHash = await hashPassword(password);
+    await pool.query("UPDATE users SET password = $1 WHERE id = $2", [newHash, userId]);
+  }
+}
+
 export function setupAuth(app: Express) {
-  const sessionSecret = process.env.SESSION_SECRET || "claimshield-dev-secret";
   const isProduction = process.env.NODE_ENV === "production";
+  const sessionSecret = process.env.SESSION_SECRET;
+
+  if (!sessionSecret && isProduction) {
+    throw new Error("SESSION_SECRET environment variable is required in production");
+  }
 
   app.use(
     session({
       store: new PgSession({
         conString: process.env.DATABASE_URL,
-        createTableIfMissing: true,
       }),
-      secret: sessionSecret,
+      secret: sessionSecret || "claimshield-dev-secret",
       resave: false,
       saveUninitialized: false,
       cookie: {
@@ -57,6 +84,7 @@ export function setupAuth(app: Express) {
           if (!valid) {
             return done(null, false, { message: "Invalid email or password" });
           }
+          rehashIfNeeded(user.id, password, user.password).catch(() => {});
           return done(null, user);
         } catch (err) {
           return done(err);

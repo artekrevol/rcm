@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
-import { requireAuth, requireRole } from "./auth";
+import { requireAuth, requireRole, hashPassword } from "./auth";
 import {
   insertLeadSchema,
   insertRuleSchema,
@@ -461,6 +461,107 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       const { rows } = await db.query(query, params);
       res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/admin/users", requireRole("admin"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query("SELECT id, email, name, role FROM users ORDER BY email");
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/users", requireRole("admin"), async (req, res) => {
+    try {
+      const { email, name, role, password } = req.body;
+      if (!email?.trim() || !name?.trim() || !password || !role) {
+        return res.status(400).json({ error: "email, name, role, and password are required" });
+      }
+      if (!["admin", "rcm_manager", "intake"].includes(role)) {
+        return res.status(400).json({ error: "Invalid role" });
+      }
+      if (password.length < 6) {
+        return res.status(400).json({ error: "Password must be at least 6 characters" });
+      }
+      const existing = await storage.getUserByEmail(email.trim().toLowerCase());
+      if (existing) {
+        return res.status(409).json({ error: "A user with this email already exists" });
+      }
+      const hashed = await hashPassword(password);
+      const user = await storage.createUser({
+        email: email.trim().toLowerCase(),
+        name: name.trim(),
+        role,
+        password: hashed,
+      });
+      const { password: _, ...safeUser } = user;
+      res.json(safeUser);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/admin/users/:id", requireRole("admin"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { name, role, password } = req.body;
+      const db = await import("./db").then(m => m.pool);
+
+      const existing = await db.query("SELECT id FROM users WHERE id = $1", [id]);
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (name !== undefined) { fields.push(`name = $${idx++}`); values.push(name.trim()); }
+      if (role !== undefined) {
+        if (!["admin", "rcm_manager", "intake"].includes(role)) {
+          return res.status(400).json({ error: "Invalid role" });
+        }
+        fields.push(`role = $${idx++}`); values.push(role);
+      }
+      if (password !== undefined) {
+        if (password.length < 6) {
+          return res.status(400).json({ error: "Password must be at least 6 characters" });
+        }
+        const hashed = await hashPassword(password);
+        fields.push(`password = $${idx++}`); values.push(hashed);
+      }
+
+      if (fields.length === 0) {
+        return res.status(400).json({ error: "No fields to update" });
+      }
+
+      values.push(id);
+      const { rows } = await db.query(
+        `UPDATE users SET ${fields.join(", ")} WHERE id = $${idx} RETURNING id, email, name, role`,
+        values
+      );
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/admin/users/:id", requireRole("admin"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const currentUser = (req as any).user;
+      if (currentUser.id === id) {
+        return res.status(400).json({ error: "Cannot delete your own account" });
+      }
+      const db = await import("./db").then(m => m.pool);
+      const { rowCount } = await db.query("DELETE FROM users WHERE id = $1", [id]);
+      if (rowCount === 0) return res.status(404).json({ error: "User not found" });
+      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

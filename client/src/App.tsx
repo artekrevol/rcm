@@ -28,6 +28,7 @@ import BillingReports from "@/pages/billing/reports";
 import PriorAuthPage from "@/pages/billing/prior-auth";
 import ActivityLogPage from "@/pages/billing/activity-log";
 import ComplianceReportsPage from "@/pages/billing/compliance-reports";
+import UserManagement from "@/pages/billing/user-management";
 import ClaimsPage from "@/pages/claims";
 import ClaimDetailPage from "@/pages/claim-detail";
 import IntelligencePage from "@/pages/intelligence";
@@ -150,6 +151,11 @@ function Router() {
       <Route path="/billing/reports">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><BillingReports /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/settings/users">
+        <AuthGuard allowedRoles={["admin"]}>
+          <BillingLayout><UserManagement /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/settings">
