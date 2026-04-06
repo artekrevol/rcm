@@ -114,6 +114,14 @@ export async function getUserForAuth(email: string): Promise<UserRecord | null> 
   return rows[0] || null;
 }
 
+export async function getUserByEmail(email: string): Promise<SafeUser | null> {
+  const { rows } = await pool.query(
+    "SELECT id, email, name, role, created_at FROM users WHERE email = $1",
+    [email]
+  );
+  return rows[0] || null;
+}
+
 export async function getUserById(id: string): Promise<SafeUser | null> {
   const { rows } = await pool.query(
     "SELECT id, email, name, role, created_at FROM users WHERE id = $1",

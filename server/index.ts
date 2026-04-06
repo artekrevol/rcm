@@ -23,8 +23,6 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-setupAuth(app);
-
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -64,6 +62,7 @@ app.use((req, res, next) => {
 
 (async () => {
   await ensureSessionTable();
+  setupAuth(app);
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

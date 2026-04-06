@@ -280,6 +280,9 @@ export default function UserManagement() {
                 placeholder="Min 8 characters"
                 data-testid="input-new-user-password"
               />
+              {createForm.password.length > 0 && createForm.password.length < 8 && (
+                <p className="text-sm text-destructive">Password must be at least 8 characters</p>
+              )}
             </div>
           </div>
           <DialogFooter>
@@ -354,6 +357,9 @@ export default function UserManagement() {
               placeholder="Min 8 characters"
               data-testid="input-reset-password"
             />
+            {newPassword.length > 0 && newPassword.length < 8 && (
+              <p className="text-sm text-destructive">Password must be at least 8 characters</p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setResetPasswordUser(null); setNewPassword(""); }}>Cancel</Button>
