@@ -47,6 +47,9 @@ export function setupAuth(app: Express) {
     session({
       store: new PgSession({
         conString: process.env.DATABASE_URL,
+        createTableIfMissing: false,
+        pruneSessionInterval: 60 * 15,
+        tableName: "session",
       }),
       secret: sessionSecret || "claimshield-dev-secret",
       resave: false,
