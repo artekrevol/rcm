@@ -1,12 +1,78 @@
 import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import session from "express-session";
-import connectPgSimple from "connect-pg-simple";
 import bcrypt from "bcryptjs";
 import { type Express } from "express";
 import { pool } from "./db";
+import { Store } from "express-session";
 
-const PgSession = connectPgSimple(session);
+class PgSessionStore extends Store {
+  private pruneInterval: ReturnType<typeof setInterval> | null = null;
+
+  constructor() {
+    super();
+    this.pruneInterval = setInterval(() => this.pruneSessions(), 15 * 60 * 1000);
+    if (this.pruneInterval.unref) this.pruneInterval.unref();
+  }
+
+  async get(sid: string, callback: (err?: any, session?: session.SessionData | null) => void) {
+    try {
+      const result = await pool.query(
+        'SELECT sess FROM "session" WHERE sid = $1 AND expire > NOW()',
+        [sid]
+      );
+      callback(null, result.rows[0]?.sess || null);
+    } catch (err) {
+      callback(err);
+    }
+  }
+
+  async set(sid: string, sess: session.SessionData, callback?: (err?: any) => void) {
+    try {
+      const maxAge = (sess.cookie?.maxAge) || 86400000;
+      const expire = new Date(Date.now() + maxAge);
+      await pool.query(
+        `INSERT INTO "session" (sid, sess, expire) VALUES ($1, $2, $3)
+         ON CONFLICT (sid) DO UPDATE SET sess = $2, expire = $3`,
+        [sid, JSON.stringify(sess), expire]
+      );
+      callback?.();
+    } catch (err) {
+      callback?.(err);
+    }
+  }
+
+  async destroy(sid: string, callback?: (err?: any) => void) {
+    try {
+      await pool.query('DELETE FROM "session" WHERE sid = $1', [sid]);
+      callback?.();
+    } catch (err) {
+      callback?.(err);
+    }
+  }
+
+  async touch(sid: string, sess: session.SessionData, callback?: (err?: any) => void) {
+    try {
+      const maxAge = (sess.cookie?.maxAge) || 86400000;
+      const expire = new Date(Date.now() + maxAge);
+      await pool.query(
+        'UPDATE "session" SET expire = $1 WHERE sid = $2',
+        [expire, sid]
+      );
+      callback?.();
+    } catch (err) {
+      callback?.(err);
+    }
+  }
+
+  private async pruneSessions() {
+    try {
+      await pool.query('DELETE FROM "session" WHERE expire < NOW()');
+    } catch (err) {
+      console.error("Session prune error:", err);
+    }
+  }
+}
 
 export async function ensureSessionTable() {
   await pool.query(`
@@ -45,12 +111,7 @@ export function setupAuth(app: Express) {
 
   app.use(
     session({
-      store: new PgSession({
-        conString: process.env.DATABASE_URL,
-        createTableIfMissing: false,
-        pruneSessionInterval: 60 * 15,
-        tableName: "session",
-      }),
+      store: new PgSessionStore(),
       secret: sessionSecret || "claimshield-dev-secret",
       resave: false,
       saveUninitialized: false,
