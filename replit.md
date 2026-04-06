@@ -34,7 +34,7 @@ Preferred communication style: Simple, everyday language.
 
 **Frontend guards**: `AuthGuard` component wraps protected routes in `App.tsx`, redirecting unauthenticated users to `/auth/login` and unauthorized users to `/`.
 
-**Test users** (all password `demo123`):
+**Test users** (password `demo123` for existing dev DB, `demo1234` for fresh seeds):
 - `demo@claimshield.ai` — admin
 - `billing@claimshield.ai` — rcm_manager
 - `intake@claimshield.ai` — intake

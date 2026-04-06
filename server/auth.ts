@@ -4,7 +4,6 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import bcrypt from "bcryptjs";
 import { type Express } from "express";
-import { storage } from "./storage";
 import { pool } from "./db";
 
 const PgSession = connectPgSimple(session);
@@ -34,13 +33,6 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 
 export function needsRehash(hash: string): boolean {
   return !hash.startsWith("$2");
-}
-
-async function rehashIfNeeded(userId: string, password: string, currentHash: string): Promise<void> {
-  if (needsRehash(currentHash)) {
-    const newHash = await hashPassword(password);
-    await pool.query("UPDATE users SET password = $1 WHERE id = $2", [newHash, userId]);
-  }
 }
 
 export function setupAuth(app: Express) {
@@ -76,7 +68,8 @@ export function setupAuth(app: Express) {
       { usernameField: "email" },
       async (email, password, done) => {
         try {
-          const user = await storage.getUserByEmail(email);
+          const { getUserForAuth, rehashIfNeeded } = await import("./services/user-service");
+          const user = await getUserForAuth(email);
           if (!user) {
             return done(null, false, { message: "Invalid email or password" });
           }
@@ -99,7 +92,8 @@ export function setupAuth(app: Express) {
 
   passport.deserializeUser(async (id: string, done) => {
     try {
-      const user = await storage.getUser(id);
+      const { getUserById } = await import("./services/user-service");
+      const user = await getUserById(id);
       done(null, user || null);
     } catch (err) {
       done(err);

@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { users, leads, patients, encounters, claims, claimEvents, denials, rules } from "@shared/schema";
 import { allPayers as realPayers } from "./payers";
-import { hashPassword } from "./auth";
+import { createUser } from "./services/user-service";
 
 const cptCodeDetails: Record<string, { description: string; avgAmount: number }> = {
   "99213": { description: "Office visit, established patient, 20-29 min", avgAmount: 125 },
@@ -147,14 +147,18 @@ async function seed() {
     process.exit(0);
   }
 
-  const demoPassword = await hashPassword("demo123");
-
-  await db.insert(users).values([
-    { email: "demo@claimshield.ai", password: demoPassword, role: "admin", name: "Demo Admin" },
-    { email: "billing@claimshield.ai", password: demoPassword, role: "rcm_manager", name: "Billing Manager" },
-    { email: "intake@claimshield.ai", password: demoPassword, role: "intake", name: "Intake Coordinator" },
-    { email: "admin@claimshield.ai", password: await hashPassword("admin123"), role: "admin", name: "System Administrator" },
-  ]).onConflictDoNothing();
+  const seedUsers = [
+    { email: "demo@claimshield.ai", password: "demo1234", role: "admin", name: "Demo Admin" },
+    { email: "billing@claimshield.ai", password: "demo1234", role: "rcm_manager", name: "Billing Manager" },
+    { email: "intake@claimshield.ai", password: "demo1234", role: "intake", name: "Intake Coordinator" },
+    { email: "admin@claimshield.ai", password: "admin1234", role: "admin", name: "System Administrator" },
+  ];
+  for (const u of seedUsers) {
+    try {
+      await createUser(u);
+    } catch {
+    }
+  }
 
   const leadData = [];
   for (let i = 0; i < 12; i++) {

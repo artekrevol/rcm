@@ -55,7 +55,7 @@ const ROLE_COLORS: Record<string, string> = {
   intake: "bg-green-100 text-green-700 border-green-200 dark:bg-green-950 dark:text-green-300 dark:border-green-800",
 };
 
-type UserRow = { id: string; email: string; name: string; role: string };
+type UserRow = { id: string; email: string; name: string; role: string; created_at: string };
 
 export default function UserManagement() {
   const { toast } = useToast();
@@ -119,7 +119,7 @@ export default function UserManagement() {
 
   const resetPasswordMutation = useMutation({
     mutationFn: async ({ id, password }: { id: string; password: string }) => {
-      const res = await apiRequest("PATCH", `/api/admin/users/${id}`, { password });
+      const res = await apiRequest("PATCH", `/api/admin/users/${id}/password`, { password });
       return res.json();
     },
     onSuccess: () => {
@@ -191,6 +191,7 @@ export default function UserManagement() {
                     <TableHead>Name</TableHead>
                     <TableHead>Email</TableHead>
                     <TableHead>Role</TableHead>
+                    <TableHead>Created</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -203,6 +204,9 @@ export default function UserManagement() {
                         <Badge variant="outline" className={ROLE_COLORS[u.role] || ""}>
                           {ROLE_LABELS[u.role] || u.role}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm" data-testid={`text-created-${u.id}`}>
+                        {u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -273,7 +277,7 @@ export default function UserManagement() {
                 type="password"
                 value={createForm.password}
                 onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                placeholder="Min 6 characters"
+                placeholder="Min 8 characters"
                 data-testid="input-new-user-password"
               />
             </div>
@@ -282,7 +286,7 @@ export default function UserManagement() {
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancel</Button>
             <Button
               onClick={() => createMutation.mutate(createForm)}
-              disabled={createMutation.isPending || !createForm.email || !createForm.name || !createForm.password}
+              disabled={createMutation.isPending || !createForm.email || !createForm.name || createForm.password.length < 8}
               data-testid="button-create-user-submit"
             >
               {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
@@ -347,7 +351,7 @@ export default function UserManagement() {
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Min 6 characters"
+              placeholder="Min 8 characters"
               data-testid="input-reset-password"
             />
           </div>
@@ -355,7 +359,7 @@ export default function UserManagement() {
             <Button variant="outline" onClick={() => { setResetPasswordUser(null); setNewPassword(""); }}>Cancel</Button>
             <Button
               onClick={() => resetPasswordUser && resetPasswordMutation.mutate({ id: resetPasswordUser.id, password: newPassword })}
-              disabled={resetPasswordMutation.isPending || newPassword.length < 6}
+              disabled={resetPasswordMutation.isPending || newPassword.length < 8}
               data-testid="button-reset-password-submit"
             >
               {resetPasswordMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
