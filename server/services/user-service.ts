@@ -7,7 +7,7 @@ export interface UserRecord {
   name: string;
   role: string;
   password: string;
-  created_at: string;
+  created_at: string | null;
 }
 
 export interface SafeUser {
@@ -15,11 +15,22 @@ export interface SafeUser {
   email: string;
   name: string;
   role: string;
-  created_at: string;
+  created_at: string | null;
 }
 
 const VALID_ROLES = ["admin", "rcm_manager", "intake"];
 const MIN_PASSWORD_LENGTH = 8;
+
+let columnEnsured = false;
+async function ensureCreatedAtColumn(): Promise<void> {
+  if (columnEnsured) return;
+  try {
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`);
+    columnEnsured = true;
+  } catch {
+    columnEnsured = true;
+  }
+}
 
 function toSafeUser(user: UserRecord): SafeUser {
   const { password, ...safe } = user;
@@ -48,6 +59,7 @@ export async function createUser(data: {
   if (!data.name?.trim()) throw new Error("Name is required");
   validateRole(data.role);
   validatePassword(data.password);
+  await ensureCreatedAtColumn();
 
   const email = data.email.trim().toLowerCase();
 
@@ -107,6 +119,7 @@ export async function updateUser(
 }
 
 export async function getUserForAuth(email: string): Promise<UserRecord | null> {
+  await ensureCreatedAtColumn();
   const { rows } = await pool.query(
     "SELECT id, email, name, role, password, created_at FROM users WHERE email = $1",
     [email]
@@ -123,6 +136,7 @@ export async function getUserByEmail(email: string): Promise<SafeUser | null> {
 }
 
 export async function getUserById(id: string): Promise<SafeUser | null> {
+  await ensureCreatedAtColumn();
   const { rows } = await pool.query(
     "SELECT id, email, name, role, created_at FROM users WHERE id = $1",
     [id]
@@ -131,6 +145,7 @@ export async function getUserById(id: string): Promise<SafeUser | null> {
 }
 
 export async function listUsers(): Promise<SafeUser[]> {
+  await ensureCreatedAtColumn();
   const { rows } = await pool.query(
     "SELECT id, email, name, role, created_at FROM users ORDER BY email"
   );
