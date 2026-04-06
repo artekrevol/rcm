@@ -1,0 +1,261 @@
+Two production bugs need to be fixed permanently. The goal is not just to fix the current broken state but to make it structurally impossible for these problems to happen again. Do not touch any billing, intake, or claim features.
+
+Fix 1 — Session table initialization (permanent fix)
+In server/auth.ts, find the connect-pg-simple session store configuration. Remove createTableIfMissing: true entirely — this option reads a SQL file from the package directory at runtime which does not exist in production builds.
+Replace it with inline session table creation that runs once when the server starts. Find the database initialization block in server/index.ts or wherever the pool is first used, and add this before any routes are registered:
+typescript// Ensure session table exists — runs on every startup, safe to repeat
+async function ensureSessionTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL COLLATE "default",
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL,
+      CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE
+    );
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+  `);
+}
+Call await ensureSessionTable() during server startup before app.listen(). The IF NOT EXISTS clauses make this completely safe to run on every deploy.
+
+Fix 2 — Centralized user creation service (permanent fix)
+The root cause of the plain text password problem is that user creation happens in multiple places (seed scripts, admin routes, future signup) and each place is responsible for remembering to hash the password. That's a bug waiting to happen every time.
+Create a single user service file at server/services/user-service.ts that is the only place in the entire codebase that creates or updates users. Every other part of the system calls this service — nothing ever writes directly to the users table.
+typescript// server/services/user-service.ts
+
+import bcrypt from 'bcryptjs';
+import { pool } from '../db';
+
+const SALT_ROUNDS = 10;
+
+export interface CreateUserParams {
+  email: string;
+  password: string;
+  role: 'admin' | 'rcm_manager' | 'intake' | 'viewer';
+  firstName?: string;
+  lastName?: string;
+}
+
+export interface UpdatePasswordParams {
+  userId: string;
+  newPassword: string;
+}
+
+// The ONLY function that creates users anywhere in the system.
+// Always hashes the password. Never stores plain text.
+export async function createUser(params: CreateUserParams) {
+  const { email, password, role, firstName, lastName } = params;
+
+  // Validate before touching the database
+  if (!email || !password || !role) {
+    throw new Error('email, password, and role are required');
+  }
+  if (password.length < 8) {
+    throw new Error('Password must be at least 8 characters');
+  }
+  
+  const validRoles = ['admin', 'rcm_manager', 'intake', 'viewer'];
+  if (!validRoles.includes(role)) {
+    throw new Error(`Invalid role. Must be one of: ${validRoles.join(', ')}`);
+  }
+
+  // Check for duplicate email
+  const existing = await pool.query(
+    'SELECT id FROM users WHERE LOWER(email) = LOWER($1)',
+    [email]
+  );
+  if (existing.rows.length > 0) {
+    throw new Error(`A user with email ${email} already exists`);
+  }
+
+  // Hash always happens here — nowhere else
+  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
+  const result = await pool.query(
+    `INSERT INTO users (id, email, password, role, first_name, last_name, created_at, updated_at)
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, NOW(), NOW())
+     RETURNING id, email, role, first_name, last_name, created_at`,
+    [email.toLowerCase(), passwordHash, role, firstName || null, lastName || null]
+  );
+
+  return result.rows[0];
+}
+
+// The ONLY function that updates passwords anywhere in the system.
+export async function updatePassword(params: UpdatePasswordParams) {
+  const { userId, newPassword } = params;
+
+  if (!newPassword || newPassword.length < 8) {
+    throw new Error('Password must be at least 8 characters');
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+  await pool.query(
+    'UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2',
+    [passwordHash, userId]
+  );
+}
+
+// Safe user lookup — never returns the password hash
+export async function getUserByEmail(email: string) {
+  const result = await pool.query(
+    'SELECT id, email, role, first_name, last_name, created_at FROM users WHERE LOWER(email) = LOWER($1)',
+    [email]
+  );
+  return result.rows[0] || null;
+}
+
+// For authentication only — returns the hash so Passport can compare
+export async function getUserForAuth(email: string) {
+  const result = await pool.query(
+    'SELECT id, email, password, role FROM users WHERE LOWER(email) = LOWER($1)',
+    [email]
+  );
+  return result.rows[0] || null;
+}
+
+Fix 3 — Update auth to use the service
+In server/auth.ts, update the Passport local strategy to use getUserForAuth from the user service instead of querying the database directly:
+typescriptimport { getUserForAuth } from './services/user-service';
+
+passport.use(new LocalStrategy(
+  { usernameField: 'email' },
+  async (email, password, done) => {
+    try {
+      const user = await getUserForAuth(email);
+      if (!user) {
+        return done(null, false, { message: 'Invalid credentials' });
+      }
+      const isValid = await bcrypt.compare(password, user.password);
+      if (!isValid) {
+        return done(null, false, { message: 'Invalid credentials' });
+      }
+      return done(null, user);
+    } catch (err) {
+      return done(err);
+    }
+  }
+));
+
+Fix 4 — Update the seed script to use the service
+Find the database seed script (likely in server/seed.ts or db/seed.ts or wherever the demo users are created). Replace any direct INSERT INTO users calls with calls to createUser:
+typescriptimport { createUser } from './services/user-service';
+
+// Replace all user INSERT statements with:
+await createUser({ email: 'admin@claimshield.ai', password: 'admin123', role: 'admin' });
+await createUser({ email: 'demo@claimshield.ai', password: 'demo123', role: 'admin' });
+await createUser({ email: 'billing@claimshield.ai', password: 'billing123', role: 'rcm_manager' });
+await createUser({ email: 'intake@claimshield.ai', password: 'intake123', role: 'intake' });
+The createUser function handles the duplicate check, so if these users already exist it will throw an error. Wrap each call in a try/catch that skips on duplicate:
+typescriptasync function seedUserSafe(params: CreateUserParams) {
+  try {
+    await createUser(params);
+    console.log(`Created user: ${params.email}`);
+  } catch (err: any) {
+    if (err.message?.includes('already exists')) {
+      console.log(`User already exists, skipping: ${params.email}`);
+    } else {
+      throw err;
+    }
+  }
+}
+
+Fix 5 — Fix the broken passwords in the Railway database right now
+Add a one-time migration endpoint that re-hashes all users whose passwords are not bcrypt hashes. A bcrypt hash always starts with $2a$ or $2b$. Any password that doesn't start with that pattern is plain text and needs to be fixed.
+typescript// Add to routes temporarily — remove after running once
+app.post('/api/admin/rehash-passwords',
+  requireRole('admin'),
+  async (req, res) => {
+    const users = await pool.query(
+      "SELECT id, password FROM users WHERE password NOT LIKE '$2%'"
+    );
+    
+    let fixed = 0;
+    for (const user of users.rows) {
+      const hash = await bcrypt.hash(user.password, 10);
+      await pool.query(
+        'UPDATE users SET password = $1 WHERE id = $2',
+        [hash, user.id]
+      );
+      fixed++;
+    }
+    
+    res.json({ 
+      message: `Fixed ${fixed} user(s)`,
+      affected: users.rows.length 
+    });
+  }
+);
+Because this endpoint requires admin role and the admin password is currently broken, call it directly from the Railway shell instead:
+bash# In Railway shell or via railway run:
+node -e "
+const bcrypt = require('bcryptjs');
+const { Pool } = require('pg');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+async function fix() {
+  const users = await pool.query(\"SELECT id, email, password FROM users WHERE password NOT LIKE '\\\$2%'\");
+  console.log('Fixing', users.rows.length, 'users');
+  for (const user of users.rows) {
+    const hash = await bcrypt.hash(user.password, 10);
+    await pool.query('UPDATE users SET password = \$1 WHERE id = \$2', [hash, user.id]);
+    console.log('Fixed:', user.email);
+  }
+  await pool.end();
+}
+
+fix().catch(console.error);
+"
+
+Fix 6 — Add user management to the admin UI
+Now that createUser is a safe, validated service, wire it into a simple admin user management page at /billing/settings/users (admin role only).
+The page needs three things:
+A table of existing users showing email, role, and created date. No passwords ever displayed.
+A "Create User" form with fields: email, temporary password, role dropdown (Admin / Billing Manager / Intake / Viewer). On submit, calls POST /api/admin/users which calls createUser. Returns the new user record. Shows success toast with the user's email.
+A "Reset Password" button on each row that opens a modal for entering a new password. Calls PATCH /api/admin/users/:id/password which calls updatePassword.
+Backend endpoints:
+typescript// GET /api/admin/users — list all users (admin only)
+app.get('/api/admin/users', requireRole('admin'), async (req, res) => {
+  const result = await pool.query(
+    'SELECT id, email, role, first_name, last_name, created_at FROM users ORDER BY created_at DESC'
+  );
+  res.json(result.rows);
+});
+
+// POST /api/admin/users — create new user (admin only)
+app.post('/api/admin/users', requireRole('admin'), async (req, res) => {
+  try {
+    const { email, password, role, firstName, lastName } = req.body;
+    const user = await createUser({ email, password, role, firstName, lastName });
+    res.json(user);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// PATCH /api/admin/users/:id/password — reset password (admin only)
+app.patch('/api/admin/users/:id/password', requireRole('admin'), async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    await updatePassword({ userId: req.params.id, newPassword });
+    res.json({ message: 'Password updated' });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+Add "Users" as a sub-item under Settings in BillingSidebar, admin only — hide it for all other roles.
+
+Verification checklist — report each as pass or fail:
+
+Deploy to Railway — no ENOENT table.sql errors in logs
+Run the rehash script in Railway shell — confirm it reports users fixed
+Login at claimshield.health with admin@claimshield.ai / admin123 → HTTP 200, reaches module selector
+Login with billing@claimshield.ai / billing123 → lands on /billing/dashboard
+Navigate to Settings → Users as admin → user list loads
+Create a new test user test@claimshield.ai with role Viewer → user appears in list
+Login as test@claimshield.ai with the password you set → successful login
+Reset the test user's password from the admin UI → login with new password works
+Attempt to create a duplicate email → error message appears, no crash
+Attempt to create a user with a 7-character password → validation error appears
+
+Remove the /api/admin/rehash-passwords endpoint after the Railway fix is confirmed working.

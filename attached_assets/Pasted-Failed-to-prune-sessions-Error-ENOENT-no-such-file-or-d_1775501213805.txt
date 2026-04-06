@@ -1,0 +1,122 @@
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+Error: ENOENT: no such file or directory, open '/app/dist/table.sql'
+Error: ENOENT: no such file or directory, open '/app/dist/table.sql'
+Error: ENOENT: no such file or directory, open '/app/dist/table.sql'
+Error: ENOENT: no such file or directory, open '/app/dist/table.sql'
+Error: ENOENT: no such file or directory, open '/app/dist/table.sql'
+Error: ENOENT: no such file or directory, open '/app/dist/table.sql'
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Failed to prune sessions: [Error: ENOENT: no such file or directory, open '/app/dist/table.sql'] {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/app/dist/table.sql'
+}
+Error: ENOENT: no such file or directory, open '/app/dist/table.sql'
+Error: ENOENT: no such file or directory, open '/app/dist/table.sql'
