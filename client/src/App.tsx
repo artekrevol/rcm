@@ -129,12 +129,12 @@ function Router() {
         </AuthGuard>
       </Route>
       <Route path="/billing/intelligence/logs">
-        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+        <AuthGuard allowedRoles={["admin"]}>
           <BillingLayout><ActivityLogPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/intelligence/reports">
-        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+        <AuthGuard allowedRoles={["admin"]}>
           <BillingLayout><ComplianceReportsPage /></BillingLayout>
         </AuthGuard>
       </Route>

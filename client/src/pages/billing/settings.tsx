@@ -46,6 +46,8 @@ import {
   DollarSign,
   Trash2,
   Pencil,
+  MapPin,
+  Clock,
 } from "lucide-react";
 
 const CREDENTIAL_OPTIONS = ["RN", "LPN", "PT", "OT", "SLP", "HHA", "PCA", "Other"];
@@ -355,14 +357,34 @@ function PracticeInfoTab() {
     city: "",
     state: "",
     zip: "",
+    billingLocation: "",
   });
   const [npiError, setNpiError] = useState("");
+  const [locationSearch, setLocationSearch] = useState("");
 
   const { data: settings, isLoading } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
     queryFn: async () => {
       const res = await fetch("/api/billing/practice-settings");
       if (!res.ok) throw new Error("Failed to load");
+      return res.json();
+    },
+  });
+
+  const { data: vaLocations } = useQuery<string[]>({
+    queryKey: ["/api/billing/va-locations"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/va-locations");
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const { data: ratesAge } = useQuery<{ lastUpdated: string | null }>({
+    queryKey: ["/api/billing/va-rates-age"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/va-rates-age");
+      if (!res.ok) return { lastUpdated: null };
       return res.json();
     },
   });
@@ -382,10 +404,19 @@ function PracticeInfoTab() {
         city: addr.city || "",
         state: addr.state || "",
         zip: addr.zip || "",
+        billingLocation: settings.billing_location || "",
       });
       setInitialized(true);
     }
   }, [settings, initialized]);
+
+  const filteredLocations = (vaLocations || []).filter(
+    (loc) => loc.toLowerCase().includes(locationSearch.toLowerCase())
+  );
+
+  const ratesStale = ratesAge?.lastUpdated
+    ? (Date.now() - new Date(ratesAge.lastUpdated).getTime()) > 90 * 24 * 60 * 60 * 1000
+    : false;
 
   const saveMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -414,6 +445,7 @@ function PracticeInfoTab() {
       phone: form.phone || null,
       defaultPos: form.defaultPos,
       address: { street: form.street, city: form.city, state: form.state, zip: form.zip },
+      billingLocation: form.billingLocation || null,
     });
   }
 
@@ -470,6 +502,41 @@ function PracticeInfoTab() {
           </Select>
         </div>
       </div>
+      <div className="space-y-2">
+        <Label className="flex items-center gap-1.5"><MapPin className="h-4 w-4" />VA Fee Schedule Location</Label>
+        <p className="text-xs text-muted-foreground">Select the location that matches your practice's billing address. This determines the VA reimbursement rate used in your claims.</p>
+        <Select value={form.billingLocation} onValueChange={(v) => setForm({ ...form, billingLocation: v })}>
+          <SelectTrigger data-testid="select-billing-location">
+            <SelectValue placeholder="Select VA billing location..." />
+          </SelectTrigger>
+          <SelectContent>
+            <div className="p-2">
+              <Input
+                placeholder="Search locations..."
+                value={locationSearch}
+                onChange={(e) => setLocationSearch(e.target.value)}
+                className="h-8 text-sm"
+                data-testid="input-location-search"
+              />
+            </div>
+            {filteredLocations.map((loc) => (
+              <SelectItem key={loc} value={loc}>{loc}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {ratesStale && (
+        <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md p-3" data-testid="banner-rates-stale">
+          <Clock className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-medium text-amber-800 dark:text-amber-200">VA fee schedule rates may be outdated</p>
+            <p className="text-amber-700 dark:text-amber-300">
+              Rates were last updated {ratesAge?.lastUpdated ? new Date(ratesAge.lastUpdated).toLocaleDateString() : "unknown"}.
+              CMS updates rates annually in January. Download the new fee schedule from CMS.gov and contact support to update your rates.
+            </p>
+          </div>
+        </div>
+      )}
       <div>
         <h4 className="text-sm font-medium mb-3">Address</h4>
         <div className="grid gap-4">

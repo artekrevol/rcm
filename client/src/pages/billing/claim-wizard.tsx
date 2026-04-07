@@ -99,6 +99,8 @@ interface ServiceLine {
   requiresModifier: boolean;
   manualEntry: boolean;
   vaRate: string | null;
+  locationName: string | null;
+  isAverageRate: boolean;
 }
 
 function emptyLine(): ServiceLine {
@@ -106,7 +108,7 @@ function emptyLine(): ServiceLine {
     code: "", description: "", modifier: "", unitType: "per_visit",
     unitIntervalMinutes: null, hours: "", units: "1", ratePerUnit: "",
     totalCharge: "", chargeOverridden: false, requiresModifier: false,
-    manualEntry: false, vaRate: null,
+    manualEntry: false, vaRate: null, locationName: null, isAverageRate: false,
   };
 }
 
@@ -363,23 +365,43 @@ function InlineCodeSearch({ onSelect }: { onSelect: (result: any) => void }) {
   );
 }
 
-function ServiceLineRow({ line, index, onChange, onRemove, patientPayer }: {
+function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billingLocation }: {
   line: ServiceLine; index: number;
   onChange: (index: number, updates: Partial<ServiceLine>) => void;
   onRemove: (index: number) => void;
   patientPayer: string | null;
+  billingLocation: string | null;
 }) {
   const [showCodeSearch, setShowCodeSearch] = useState(false);
 
-  function handleCodeSelect(result: any) {
+  async function handleCodeSelect(result: any) {
     const isVA = patientPayer?.toLowerCase().includes("va");
-    const rate = isVA && result.va_rate ? String(result.va_rate) : "";
+    let rate = "";
+    let locationName: string | null = null;
+    let isAverageRate = false;
+
+    if (isVA && result.code) {
+      try {
+        const params = new URLSearchParams({ code: result.code });
+        if (billingLocation) params.set("location", billingLocation);
+        const res = await fetch(`/api/billing/va-rate?${params}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.rate_per_unit) {
+            rate = String(data.rate_per_unit);
+            locationName = data.location_name || null;
+            isAverageRate = !!data.is_average;
+          }
+        }
+      } catch {}
+    }
+
     onChange(index, {
       code: result.code,
       description: result.description_plain || result.description_official || "",
       unitType: result.unit_type || "per_visit",
       unitIntervalMinutes: result.unit_interval_minutes || null,
-      vaRate: result.va_rate ? String(result.va_rate) : null,
+      vaRate: rate || (result.va_rate ? String(result.va_rate) : null),
       ratePerUnit: rate,
       requiresModifier: result.requires_modifier || false,
       manualEntry: result.manual || false,
@@ -387,6 +409,8 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer }: {
       units: result.unit_type === "time_based" ? "" : "1",
       totalCharge: "",
       chargeOverridden: false,
+      locationName,
+      isAverageRate,
     });
     setShowCodeSearch(false);
   }
@@ -464,6 +488,17 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer }: {
         <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 dark:bg-amber-950/20 p-2 rounded">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           This code commonly requires a modifier — verify with your payer.
+        </div>
+      )}
+      {line.code && line.locationName && (
+        <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1" data-testid={`text-location-rate-${index}`}>
+          {line.code} — {line.locationName} — ${parseFloat(line.ratePerUnit || "0").toFixed(2)}/unit
+        </div>
+      )}
+      {line.code && line.isAverageRate && (
+        <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 dark:bg-amber-950/20 p-2 rounded" data-testid={`banner-avg-rate-${index}`}>
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          VA billing location not configured. Using national average rate. Set your location in Practice Settings for accurate rates.
         </div>
       )}
 

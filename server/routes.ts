@@ -259,23 +259,80 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos } = req.body;
+      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation } = req.body;
       const db = await import("./db").then(m => m.pool);
       const existing = await db.query("SELECT id FROM practice_settings LIMIT 1");
       if (existing.rows.length > 0) {
         const { rows } = await db.query(
-          `UPDATE practice_settings SET practice_name=$1, primary_npi=$2, tax_id=$3, taxonomy_code=$4, address=$5, phone=$6, default_pos=$7, updated_at=NOW() WHERE id=$8 RETURNING *`,
-          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', existing.rows[0].id]
+          `UPDATE practice_settings SET practice_name=$1, primary_npi=$2, tax_id=$3, taxonomy_code=$4, address=$5, phone=$6, default_pos=$7, billing_location=$9, updated_at=NOW() WHERE id=$8 RETURNING *`,
+          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', existing.rows[0].id, billingLocation || null]
         );
         res.json(rows[0]);
       } else {
         const { rows } = await db.query(
-          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12']
+          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', billingLocation || null]
         );
         res.json(rows[0]);
       }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/va-locations", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query("SELECT DISTINCT location_name FROM va_location_rates ORDER BY location_name");
+      res.json(rows.map((r: any) => r.location_name));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/va-rate", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const code = (req.query.code as string || "").trim().toUpperCase();
+      const location = (req.query.location as string || "").trim().toUpperCase();
+      if (!code) return res.status(400).json({ error: "code is required" });
+      const db = await import("./db").then(m => m.pool);
+      if (location) {
+        const { rows } = await db.query(
+          `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
+                  hc.unit_type, hc.unit_interval_minutes, hc.description_plain
+           FROM va_location_rates vlr
+           LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
+           WHERE vlr.hcpcs_code = $1 AND UPPER(vlr.location_name) = $2
+             AND vlr.is_non_reimbursable = false
+           LIMIT 1`,
+          [code, location]
+        );
+        if (rows.length > 0) return res.json(rows[0]);
+      }
+      const { rows: avgRows } = await db.query(
+        `SELECT ROUND(AVG(facility_rate)::numeric, 2) as rate_per_unit
+         FROM va_location_rates
+         WHERE hcpcs_code = $1 AND is_non_reimbursable = false`,
+        [code]
+      );
+      res.json({
+        rate_per_unit: avgRows[0]?.rate_per_unit || null,
+        location_name: null,
+        is_average: true,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/va-rates-age", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        "SELECT MIN(last_updated) as oldest_update FROM va_location_rates"
+      );
+      res.json({ lastUpdated: rows[0]?.oldest_update || null });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -445,16 +502,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       switch (type) {
         case "access":
-          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.activity_type IN ('view_patient','view_claim','exported','export_pdf') AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC`;
+          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.activity_type IN ('view_patient','view_claim','exported','export_pdf') AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC LIMIT 500`;
           break;
         case "edit-history":
-          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.field IS NOT NULL AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC`;
+          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.field IS NOT NULL AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC LIMIT 500`;
           break;
         case "export":
-          query = `SELECT al.*, u.email as user_email, c.amount, c.status as claim_status FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text LEFT JOIN claims c ON al.claim_id::text = c.id::text WHERE al.activity_type = 'export_pdf' AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC`;
+          query = `SELECT al.*, u.email as user_email, c.amount, c.status as claim_status FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text LEFT JOIN claims c ON al.claim_id::text = c.id::text WHERE al.activity_type = 'export_pdf' AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC LIMIT 500`;
           break;
         case "claims-integrity":
-          query = `SELECT c.id, c.status, c.amount, c.created_at, c.updated_at, c.service_date, c.readiness_status, c.submission_method, COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name FROM claims c LEFT JOIN patients p ON c.patient_id = p.id WHERE c.created_at BETWEEN $1 AND $2 ORDER BY c.created_at DESC`;
+          query = `SELECT c.id, c.status, c.amount, c.created_at, c.updated_at, c.service_date, c.readiness_status, c.submission_method, COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name FROM claims c LEFT JOIN patients p ON c.patient_id = p.id WHERE c.created_at BETWEEN $1 AND $2 ORDER BY c.created_at DESC LIMIT 500`;
           break;
         default:
           return res.status(400).json({ error: "Invalid report type" });
@@ -792,11 +849,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
            SELECT h.code, h.description_official, h.description_plain, h.unit_type,
                   h.unit_interval_minutes, h.default_pos, h.requires_modifier, h.notes,
                   'hcpcs' as source,
-                  (SELECT rate_per_unit FROM hcpcs_rates
+                  (SELECT ROUND(AVG(facility_rate)::numeric, 2) FROM va_location_rates
                    WHERE hcpcs_code = h.code
-                   AND payer_name = 'VA Community Care'
-                   AND end_date IS NULL
-                   LIMIT 1) as va_rate
+                   AND is_non_reimbursable = false) as va_rate
            FROM hcpcs_codes h
            WHERE h.is_active = true
              AND (h.code ILIKE $1 OR h.description_official ILIKE $1 OR h.description_plain ILIKE $1)
@@ -807,7 +862,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
                   NULL as description_plain, c.unit_type,
                   NULL as unit_interval_minutes, NULL as default_pos,
                   false as requires_modifier, NULL as notes,
-                  'cpt' as source, NULL as va_rate
+                  'cpt' as source,
+                  (SELECT ROUND(AVG(facility_rate)::numeric, 2) FROM va_location_rates
+                   WHERE hcpcs_code = c.code
+                   AND is_non_reimbursable = false) as va_rate
            FROM cpt_codes c
            WHERE c.is_active = true
              AND (c.code ILIKE $1 OR c.description ILIKE $1)

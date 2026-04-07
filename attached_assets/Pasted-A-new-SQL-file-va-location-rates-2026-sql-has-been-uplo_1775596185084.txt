@@ -1,0 +1,99 @@
+A new SQL file va_location_rates_2026.sql has been uploaded to the project root. This file contains VA Community Care fee schedule rates for 2026, broken down by location — 2,160 rows covering 20 home health HCPCS codes across 108 geographic locations. Read everything before writing any code.
+Step 1 — Run the SQL file
+bashpsql $DATABASE_URL < va_location_rates_2026.sql
+This creates the va_location_rates table and populates it. After running, confirm:
+sqlSELECT COUNT(*) FROM va_location_rates;
+-- Expected: 2160
+
+SELECT hcpcs_code, location_name, facility_rate 
+FROM va_location_rates 
+WHERE hcpcs_code = 'G0299' 
+AND location_name IN ('AUSTIN','DALLAS','HOUSTON')
+ORDER BY location_name;
+-- Expected: Austin=$32.19, Dallas=$34.00, Houston=$34.00
+Show both results before proceeding.
+
+Step 2 — Add location field to practice settings
+The unit calculator currently uses a single hardcoded rate. It needs to look up the correct rate based on where the practice is located.
+Check the practice_settings table columns:
+sqlSELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'practice_settings';
+If a billing_location or state or city column does not already exist, add one:
+sqlALTER TABLE practice_settings 
+ADD COLUMN IF NOT EXISTS billing_location VARCHAR;
+This is the field the practice sets once in their settings to indicate which VA fee schedule locality applies to them.
+
+Step 3 — Add location selector to practice settings UI
+In the Practice Settings page (billing module, Settings tab), add a new field: VA Billing Location.
+This is a searchable dropdown populated from the database:
+typescript// New endpoint
+GET /api/billing/va-locations
+
+// Returns list of unique locations for the dropdown
+SELECT DISTINCT location_name 
+FROM va_location_rates 
+ORDER BY location_name;
+The dropdown shows all 108 location names. The selected value is saved to practice_settings.billing_location.
+Display it in the settings form under the existing NPI and tax ID fields with a label: "VA Fee Schedule Location" and helper text: "Select the location that matches your practice's billing address. This determines the VA reimbursement rate used in your claims."
+
+Step 4 — Update the unit calculator to use location-based rates
+Find the rate lookup in the claim wizard — currently it queries hcpcs_rates for a hardcoded VA rate. Replace this with a location-aware lookup.
+New rate query — add this to the existing GET /api/billing/hcpcs/search endpoint response, and also expose it as a separate endpoint for the wizard to call when a code is selected:
+sql-- GET /api/billing/va-rate?code=G0299&location=AUSTIN
+SELECT 
+  vlr.facility_rate as rate_per_unit,
+  vlr.location_name,
+  hc.unit_type,
+  hc.unit_interval_minutes,
+  hc.description_plain
+FROM va_location_rates vlr
+LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
+WHERE vlr.hcpcs_code = $1
+AND vlr.location_name = $2
+AND vlr.is_non_reimbursable = false
+LIMIT 1
+If no location is configured in practice settings, fall back to a national average:
+sqlSELECT ROUND(AVG(facility_rate)::numeric, 2) as rate_per_unit
+FROM va_location_rates
+WHERE hcpcs_code = $1
+AND is_non_reimbursable = false
+In the claim wizard unit calculator, when a HCPCS code is selected:
+
+Fetch the practice's billing_location from practice settings
+Call /api/billing/va-rate?code={code}&location={billing_location}
+Use the returned rate in the unit calculation
+Show the location name next to the rate so the biller can see which locality rate is being used: e.g. "G0299 — Austin, TX — $32.19/unit"
+
+If practice has no billing location set, show a yellow warning banner in the wizard: "VA billing location not configured. Using national average rate. Set your location in Practice Settings for accurate rates."
+
+Step 5 — Update the existing hcpcs_rates table
+The hcpcs_rates table has 9 hand-seeded rates that are now superseded by the location-based table. Do not delete them — they may be used elsewhere. Instead, mark them as legacy:
+sqlALTER TABLE hcpcs_rates ADD COLUMN IF NOT EXISTS is_legacy BOOLEAN DEFAULT false;
+UPDATE hcpcs_rates SET is_legacy = true WHERE payer_name = 'VA Community Care';
+The rate lookup in Step 4 uses va_location_rates exclusively. The old hcpcs_rates rows stay for reference but are no longer used in calculations.
+
+Step 6 — Add a rate age warning
+The existing system had a 90-day age warning on VA rates. Keep that logic but point it at the new table. Add a last_updated column with a note:
+sqlALTER TABLE va_location_rates 
+ADD COLUMN IF NOT EXISTS last_updated TIMESTAMP DEFAULT NOW();
+In Practice Settings, show a banner if last_updated is older than 90 days: "VA fee schedule rates were last updated [date]. CMS updates rates annually in January. Download the new fee schedule from CMS.gov and contact support to update your rates."
+
+Step 7 — Verify end to end
+
+In Practice Settings, set billing location to "AUSTIN"
+Open the claim wizard, select G0299
+Confirm the rate shown is $32.19 (not $14.25 or any other value)
+Enter 4 hours → confirm 16 units × $32.19 = $514.40 total
+Change billing location to "HOUSTON" in settings
+Return to wizard, select G0299 again
+Confirm rate is now $34.00 and 4 hours = $544.00
+
+Report the exact unit calculator output for both locations before declaring this done.
+
+Do not modify:
+
+The HCPCS code library or ICD-10 search
+The CMS-1500 PDF generation
+Authentication or routing
+Any intake module code
