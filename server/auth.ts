@@ -109,6 +109,10 @@ export function setupAuth(app: Express) {
     throw new Error("SESSION_SECRET environment variable is required in production");
   }
 
+  if (isProduction) {
+    app.set("trust proxy", 1);
+  }
+
   app.use(
     session({
       store: new PgSessionStore(),
