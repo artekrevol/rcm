@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import type { Server } from "http";
+import crypto from "crypto";
 import { storage } from "./storage";
 import { requireAuth, requireRole } from "./auth";
 import {
