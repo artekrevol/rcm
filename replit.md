@@ -30,7 +30,7 @@ Preferred communication style: Simple, everyday language.
 
 **Roles**: `admin` (both modules), `rcm_manager` (billing only), `intake` (intake only)
 
-**Middleware**: `requireAuth` (any authenticated user) and `requireRole(...roles)` (role-based access) in `server/auth.ts`, applied to `/api/billing/*` and `/api/admin/*` endpoints.
+**Middleware**: `requireAuth` (any authenticated user) and `requireRole(...roles)` (role-based access) in `server/auth.ts`. Applied to ALL API endpoints except public-facing ones (chat widget init, chat messages, availability slots, lead creation POST, confirmation emails, Vapi webhook). Billing endpoints require `admin` or `rcm_manager`, intake endpoints require `admin` or `intake`.
 
 **Frontend guards**: `AuthGuard` component wraps protected routes in `App.tsx`, redirecting unauthenticated users to `/auth/login` and unauthorized users to `/`.
 
@@ -103,6 +103,8 @@ Preferred communication style: Simple, everyday language.
 - 97,584 ICD-10-CM 2025 diagnosis codes
 - 16,645 CPT/RVU codes with CMS work RVU values
 - 9 VA Community Care 2025 rates
+
+**Performance Indexes**: Critical indexes added on `claims(patient_id, status, created_at, payer)`, `patients(lead_id, first_name, last_name)`, `activity_logs(created_at, claim_id, patient_id)`, `leads(status, email)`, and GIN full-text search indexes on `hcpcs_codes(description)`, `icd10_codes(description)`, `cpt_codes(description)`.
 
 **Migrations**: Drizzle Kit for schema migrations with `db:push` command.
 
@@ -184,6 +186,10 @@ Preferred communication style: Simple, everyday language.
 - ~~CMS Data Import~~ - Full HCPCS Level II (8,259), ICD-10-CM (97,584), CPT/RVU (16,645) code sets imported from CMS 2025 files; HCPCS search endpoint updated with UNION ALL for CPT codes; new ICD-10 search endpoint; claim wizard ICD-10 search uses API with hardcoded fallback
 - ~~Auth Hardening~~ - Inline session table creation (no bundled SQL dependency), production SESSION_SECRET enforcement, automatic plaintext password rehash on login, seed script hashes all passwords with bcrypt
 - ~~Admin User Management~~ - /billing/settings/users page (admin-only), create/edit/delete users, reset passwords, role assignment; sidebar link visible only to admins; API routes with full validation
+
+- ~~API Security Hardening~~ - All intake endpoints (leads, calls, SMS, email, VOB, appointments, analytics) protected with requireRole("admin", "intake"); all billing endpoints (intelligence, rules, prior-auth) protected with requireRole("admin", "rcm_manager"); public chat widget endpoints kept open
+- ~~Database Performance Indexes~~ - 15 indexes added across claims, patients, activity_logs, leads, hcpcs_codes, icd10_codes, cpt_codes tables including GIN full-text search indexes
+- ~~Data Integrity Cleanup~~ - Backfilled 96 patients with null names from linked leads; removed 4 orphaned claims and 5 unlinked activity logs
 
 ### Future Enhancements
 - VerifyTX timeout/retry fix

@@ -1,0 +1,894 @@
+# ClaimShield — Full Technical & UI/UX QA Audit
+# Platform: www.claimshield.health
+# Version: 2.0 — April 2026
+#
+# READ THIS ENTIRE DOCUMENT BEFORE DOING ANYTHING.
+# Your job is AUDIT AND REPORT ONLY.
+# Do not fix anything. Do not refactor anything.
+# Do not change a single line of code until the full report is complete,
+# reviewed, and explicitly approved. Any premature fix will corrupt the audit.
+
+---
+
+## Your role
+
+You are a senior QA engineer and UX specialist conducting a full end-to-end audit of ClaimShield — a two-module medical billing SaaS for home health and home care agencies. The platform has two modules:
+
+- **ClaimShield Intake** (`/intake/*`) — lead capture, qualification, AI outreach, insurance verification
+- **ClaimShield Billing** (`/billing/*`) — claim creation, submission, denial management, compliance reporting
+
+You will produce one structured audit report covering three areas:
+1. **Technical QA** — every broken, inconsistent, or error-producing behavior
+2. **UI/UX Audit** — every friction point, confusing pattern, or unnecessary step
+3. **Flow Optimization** — the ideal simplified flow for each major workflow, preserving all compliance requirements
+
+The report is the deliverable. No code changes until it is approved.
+
+---
+
+## How to conduct the audit
+
+Work through each section methodically. For each area:
+
+**A — Read the code** to understand the actual implementation, not assumptions
+**B — Trace every data flow** from user action → API call → database → response → UI update
+**C — Simulate every user journey** step by step as if you are operating the interface
+**D — Check every failure path** — what happens when inputs are wrong, APIs fail, or data is missing
+**E — Rate the UX** — would a non-technical home care office manager understand this on first use?
+
+Use this scoring system throughout:
+- 🔴 **Critical** — broken functionality, data loss risk, security issue, or compliance violation
+- 🟡 **Major** — significantly hurts usability or causes frequent confusion
+- 🟢 **Minor** — small improvement opportunity, low urgency
+- ✅ **Pass** — working correctly, no issues
+
+---
+
+# PART 1: TECHNICAL QA
+
+---
+
+## 1.1 Authentication & Session Management
+
+Test every auth scenario and document the actual behavior:
+
+**Login flow (`/auth/login` or equivalent):**
+- [ ] Valid credentials for each role (admin, rcm_manager, intake) — does each land on the correct destination?
+- [ ] Invalid password — is the error message generic ("Invalid credentials") rather than specific ("Wrong password")?
+- [ ] Non-existent email — same generic error, or does it reveal the email doesn't exist?
+- [ ] Empty email field submitted
+- [ ] Empty password field submitted
+- [ ] SQL injection attempt in email field — is it sanitized?
+- [ ] Is there any rate limiting on failed login attempts?
+
+**Session behavior:**
+- [ ] After login, refresh the page — does the session persist?
+- [ ] Open a new tab to a protected route — are you still authenticated?
+- [ ] What happens when a session expires mid-workflow (e.g., mid claim wizard)? Does it save the draft or lose it?
+- [ ] After logout, press the browser back button — does any protected content appear?
+- [ ] After logout, manually navigate to `/billing/dashboard` — what happens?
+- [ ] After logout, call `GET /api/auth/me` — expected: 401
+
+**Role enforcement:**
+- [ ] As intake user, navigate directly to `/billing/dashboard` — expected: redirect, not 403 error page
+- [ ] As rcm_manager, navigate directly to `/intake/dashboard` — expected: redirect
+- [ ] As rcm_manager, call `GET /api/billing/intelligence/logs` — expected: 403
+- [ ] As intake user, call `GET /api/billing/claims` — expected: 403
+- [ ] As admin, confirm access to both modules and all admin-only routes
+
+**Document for each failure:** URL, role, expected behavior, actual behavior, severity rating.
+
+---
+
+## 1.2 API Endpoint Security Audit
+
+Read every route definition in `routes.ts` (or equivalent). For each endpoint, verify:
+
+- [ ] Does it have `requireRole()` or equivalent auth middleware?
+- [ ] Does it validate required fields before hitting the database?
+- [ ] Does it return a clean JSON error (not a raw database error with table/column names) on failure?
+- [ ] Does it handle the case where a record doesn't exist (404 vs 500)?
+- [ ] Does it sanitize user-supplied strings used in queries?
+
+**Produce a table:**
+
+| Endpoint | Method | Has Auth? | Validates Input? | Clean Errors? | Issues |
+|---|---|---|---|---|---|
+
+Flag every endpoint missing any of these. Pay special attention to:
+- Any endpoint that creates, updates, or deletes records
+- Any endpoint that returns PHI (patient data, claim data)
+- The `/api/admin/*` endpoints — are they truly restricted to admin role?
+
+---
+
+## 1.3 Database Health Check
+
+Run these diagnostic queries and include the full results in the report:
+
+```sql
+-- 1. Orphaned claims (claim pointing to non-existent patient)
+SELECT c.id, c.patient_id, c.status, c.amount
+FROM claims c
+LEFT JOIN patients p ON c.patient_id = p.id
+WHERE p.id IS NULL;
+
+-- 2. Claims missing critical fields
+SELECT id, status, created_at
+FROM claims
+WHERE patient_id IS NULL
+   OR amount IS NULL
+   OR payer IS NULL
+   OR status IS NULL;
+
+-- 3. Patients with null names (broken conversion)
+SELECT id, first_name, last_name, lead_id, intake_completed, created_at
+FROM patients
+WHERE first_name IS NULL AND last_name IS NULL;
+
+-- 4. Users with unhashed passwords (security critical)
+SELECT id, email, role, created_at
+FROM users
+WHERE password NOT LIKE '$2%';
+
+-- 5. Activity logs with no record linkage
+SELECT COUNT(*) as unlinked_logs
+FROM activity_logs
+WHERE claim_id IS NULL
+  AND patient_id IS NULL
+  AND lead_id IS NULL;
+
+-- 6. Leads converted but with no corresponding patient
+SELECT l.id, l.name, l.handoff_status, l.status
+FROM leads l
+WHERE l.handoff_status = 'sent'
+AND NOT EXISTS (
+  SELECT 1 FROM patients p WHERE p.lead_id = l.id
+);
+
+-- 7. VA location rates table health
+SELECT COUNT(*) as total_rates,
+  COUNT(DISTINCT location_name) as locations,
+  COUNT(DISTINCT hcpcs_code) as codes
+FROM va_location_rates;
+
+-- 8. Session table exists and has active sessions
+SELECT COUNT(*) as active_sessions,
+  COUNT(*) FILTER (WHERE expire < NOW()) as expired_sessions
+FROM session;
+
+-- 9. HCPCS/ICD-10/CPT code counts
+SELECT
+  (SELECT COUNT(*) FROM hcpcs_codes) as hcpcs_codes,
+  (SELECT COUNT(*) FROM icd10_codes) as icd10_codes,
+  (SELECT COUNT(*) FROM cpt_codes) as cpt_codes;
+
+-- 10. Duplicate payers
+SELECT name, COUNT(*) as count
+FROM payers
+GROUP BY LOWER(name)
+HAVING COUNT(*) > 1;
+```
+
+---
+
+## 1.4 Claim Wizard — Deep Technical Audit
+
+The claim wizard is the most critical workflow. Trace every step in the code.
+
+**Step 1 — Patient Selection:**
+- [ ] Patient search: does partial first name return results?
+- [ ] Patient search: does partial last name return results?
+- [ ] Patient search: does DOB search work?
+- [ ] What renders when the patients table is empty?
+- [ ] Can you advance to Step 2 without selecting a patient? What stops you?
+- [ ] Does "From Intake ✓" badge display for patients converted from intake?
+- [ ] Is there a "Create New Patient" shortcut from the wizard if the patient doesn't exist?
+
+**Step 2 — Service Details:**
+- [ ] HCPCS search: type "G02" — does it return G0299 and related codes?
+- [ ] HCPCS search: type "skilled nursing" — does it return G0299?
+- [ ] HCPCS search: type a CPT code (e.g., "97110") — does the CPT fallback appear correctly?
+- [ ] After selecting G0299: does the unit calculator appear automatically?
+- [ ] Unit calculator: enter 4.0 hours — does it compute exactly 16 units × location rate = total?
+- [ ] Unit calculator: does it pull the rate from `va_location_rates` for the practice's configured location?
+- [ ] Unit calculator: if no billing location is configured, does a warning appear?
+- [ ] ICD-10 search: type "hypertension" — does it search the full 97,584-code database?
+- [ ] ICD-10 search: type "I10" — does it return the exact code?
+- [ ] Can you advance to Step 3 without an ICD-10 code?
+- [ ] Can you advance to Step 3 without a procedure code?
+- [ ] Does the authorization number pre-fill if the patient has one on file?
+- [ ] If the user closes the browser mid-Step 2, is a draft saved?
+
+**Step 3 — Review:**
+- [ ] Does the risk scoring panel load and display GREEN/YELLOW/RED?
+- [ ] Are all Step 2 entries accurately reflected in the Step 3 summary?
+- [ ] Does "Generate Claim Summary PDF" work? Does it download?
+- [ ] Does "Download CMS-1500 Form" work? Does it download?
+- [ ] Does the dropdown offer both PDF options?
+- [ ] After PDF download, does the claim status update to 'exported'?
+- [ ] Can you go back to Step 2 from Step 3 without losing data?
+- [ ] What happens if you click "Submit" on a RED risk claim?
+
+**Cross-step:**
+- [ ] Browser back button mid-wizard: does it lose data or navigate away?
+- [ ] Clicking a sidebar link mid-wizard: is the user warned about unsaved changes?
+- [ ] Duplicate claim detection: create the same claim twice — is it flagged?
+
+---
+
+## 1.5 PDF Generation Audit
+
+- [ ] Claim Summary PDF: does it generate for a wizard-created claim with all sections populated?
+- [ ] Claim Summary PDF: does it generate for a legacy seeded claim (cpt_codes fallback)?
+- [ ] CMS-1500 Form: does it generate and download?
+- [ ] CMS-1500 Form: are Box 1a (member ID), Box 2 (patient name), Box 21 (ICD-10), Box 24 (service lines), and Box 33 (billing provider NPI) correctly populated?
+- [ ] Does either PDF generation fail silently, or is an error shown to the user?
+- [ ] After PDF generation: does claim.pdf_url update in the database?
+- [ ] After PDF generation: does the button label change to "Re-download"?
+- [ ] Does the download fail in any browser? (Check for Blob URL issues)
+
+---
+
+## 1.6 Intake Module — Technical Audit
+
+**Lead creation:**
+- [ ] "Add New Lead" from dashboard: does the form submit and create a record?
+- [ ] Chat widget: does a completed chat flow create a lead with source = "Website chat"?
+- [ ] Are all required fields validated before the lead is created?
+
+**AI Voice Call (Vapi):**
+- [ ] Does initiating a call from the lead detail page trigger correctly?
+- [ ] Is the call transcript saved after completion?
+- [ ] Is extracted data (insurance, demographics) auto-populated on the lead?
+- [ ] What happens if the Vapi call fails — is an error shown?
+
+**SMS (Twilio):**
+- [ ] Does sending an SMS from the lead detail page work?
+- [ ] Is the sent SMS logged in the activity timeline?
+- [ ] What happens if the Twilio send fails?
+
+**Email (Gmail SMTP):**
+- [ ] Does sending an email from the lead detail page work?
+- [ ] Are templates (Welcome, Insurance Request, etc.) loading correctly?
+- [ ] Is the sent email logged in the activity timeline?
+
+**VOB Verification:**
+- [ ] Does the VOB check trigger and return results?
+- [ ] Does the VOB score update on the lead after completion?
+- [ ] What happens if VerifyTX times out? Is the manual fallback offered?
+
+**Lead status changes:**
+- [ ] Do status changes (New → Attempting Contact → Contacted → Qualified → Converted) save correctly?
+- [ ] Are status changes logged in the activity timeline?
+- [ ] Does dragging a lead in Board View update its status?
+
+---
+
+## 1.7 Lead-to-Patient Conversion — Full Flow Audit
+
+This is the cross-module handoff. Trace every step in the code.
+
+- [ ] "Convert to Patient" button: does it appear for leads with correct status (qualified/contacted/converted)?
+- [ ] Does it appear for leads that have already been converted? If so, what happens if clicked twice?
+- [ ] Confirmation modal: does it show the lead's name, email, phone, insurance, member ID, and source?
+- [ ] After confirmation: is the patient record created in the patients table?
+- [ ] Data mapping: verify each field transfers correctly (name → first/last name parsed, carrier, member ID, plan type, state, source → referral source)
+- [ ] Does the lead's handoff_status update to 'sent' after conversion?
+- [ ] Does the converted patient appear in `/billing/patients`?
+- [ ] Does the "From Intake ✓" badge appear on the patient in billing?
+- [ ] Is intake_completed = true on the patient record?
+- [ ] Is the lead_id correctly set on the patient record?
+- [ ] Run: `SELECT * FROM patients WHERE lead_id IS NOT NULL LIMIT 5` — do the fields match?
+- [ ] Race condition: can the same lead be converted twice simultaneously? Is there a guard?
+
+---
+
+## 1.8 Navigation & Routing
+
+Check every sidebar link and every navigation action:
+
+**Billing sidebar — verify each route loads without errors:**
+- [ ] Dashboard (`/billing/dashboard`)
+- [ ] Patients (`/billing/patients`)
+- [ ] Claims (`/billing/claims`)
+- [ ] Prior Auth (`/billing/claims/prior-auth`)
+- [ ] New Claim (`/billing/claims/new`)
+- [ ] Code Lookup (`/billing/codes`)
+- [ ] Intelligence (`/billing/intelligence`)
+- [ ] Activity Log (`/billing/intelligence/logs`) — admin only
+- [ ] Compliance Reports (`/billing/intelligence/reports`) — admin only
+- [ ] Prevention Rules (`/billing/rules`)
+- [ ] Reports (`/billing/reports`)
+- [ ] Settings (`/billing/settings`)
+- [ ] User Management (`/billing/settings/users`) — admin only
+
+**Intake sidebar — verify each route loads:**
+- [ ] Dashboard (`/intake/dashboard`)
+- [ ] Lead Worklist (`/intake/deals`)
+- [ ] Chat Analytics (`/intake/lead-analytics`)
+- [ ] Scheduling (`/intake/scheduling`)
+
+**Global:**
+- [ ] Does the "New Claim" button appear in the billing layout header on EVERY billing page?
+- [ ] Does "Switch Module" appear for admin users?
+- [ ] Are there any 404 pages accessible from normal navigation?
+- [ ] Are there any pages that render a blank white screen?
+
+---
+
+## 1.9 Error State Coverage
+
+For each of these scenarios, document what the user actually sees:
+
+| Scenario | Expected | Actual | Severity |
+|---|---|---|---|
+| API returns 500 on claim save | Toast error with message | ? | ? |
+| API returns 500 on patient search | Error state in dropdown | ? | ? |
+| PDF generation fails | Toast error, no silent fail | ? | ? |
+| Vapi call fails to connect | Error message on lead page | ? | ? |
+| VerifyTX timeout | Retry option + manual fallback | ? | ? |
+| Network offline mid-wizard | Unsaved changes warning | ? | ? |
+| Session expires mid-wizard | Redirect to login, draft preserved | ? | ? |
+| VA rate not found for location | Warning banner in wizard | ? | ? |
+| No practice settings configured | Prompt to configure settings | ? | ? |
+| Empty patients table | Empty state with CTA | ? | ? |
+| Empty claims table | Empty state with CTA | ? | ? |
+
+---
+
+# PART 2: UI/UX AUDIT
+
+---
+
+For every screen, rate each dimension 1–5:
+- **Clarity (C)** — Can a non-technical user understand this screen without training?
+- **Efficiency (E)** — Is this the minimum steps to accomplish the task?
+- **Feedback (F)** — Does the user always know what happened after an action?
+- **Error Recovery (ER)** — Can the user understand and fix errors easily?
+- **Consistency (CS)** — Do similar actions look and behave the same throughout?
+
+Flag anything scoring 3 or below for redesign recommendation.
+
+---
+
+## 2.1 Login Page
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+Evaluate:
+- Is it clear this is a medical billing platform (not generic)?
+- Are demo credentials visible or documented anywhere for new users?
+- Does the error message tell the user what went wrong without being a security risk?
+- Does the form maintain the email after a failed attempt so the user doesn't retype?
+- Is there a "Forgot Password" flow? If not, how does a locked-out user recover?
+- Is the loading state visible during login?
+
+---
+
+## 2.2 Module Selector (Admin)
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+Evaluate:
+- Are the two module cards (Intake / Billing) immediately clear in their purpose?
+- Does each card describe what the module does in one sentence?
+- Is it obvious how to switch back to this screen from within a module?
+- Is this screen necessary, or could admin default to their most-used module with a visible switch?
+
+---
+
+## 2.3 Intake Dashboard (`/intake/dashboard`)
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+Evaluate each section:
+
+**Pipeline cards (New / Attempting / Contacted / Qualified / Converted):**
+- Do the card labels make sense to a non-billing person?
+- Are the SLA breach badges visually distinct enough to trigger urgency?
+- Do the cards link to the worklist filtered by that status?
+- Is the order of statuses (left to right) the natural progression a user would read?
+
+**Today's Appointments:**
+- What renders when there are no appointments today? Is the empty state helpful?
+- Is there a quick-add appointment action from this section?
+
+**Recent Chat Sessions:**
+- Is this section useful at a glance, or just noise?
+- Does it link directly to the relevant chat session?
+
+**Add New Lead button:**
+- Is it the most prominent action on the page?
+- Does the form it opens have the right fields in the right order?
+
+---
+
+## 2.4 Lead Worklist (`/intake/deals`)
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+**Table/worklist view:**
+- Are the smart queue filters (SLA Breach, Not Contacted, Incomplete VOB, Ready for Claim) labeled clearly?
+- Is the default sort order correct (most urgent first)?
+- Do the quick actions (AI call, SMS, email, status update) work inline without navigating away?
+- Is the VOB score visually meaningful at a glance (progress bar? colored badge?)?
+- Are column headers sortable and is it obvious which column is sorted?
+- What is the empty state when no leads match a filter?
+
+**Board view:**
+- Does drag and drop work reliably?
+- Is there visual feedback during drag?
+- Do status column names match the status values used elsewhere in the system?
+- Is there a way to see lead detail without leaving the board?
+
+**Navigation between views:**
+- Is the toggle between Table and Board immediately obvious?
+- Does switching views preserve the active filter?
+
+---
+
+## 2.5 Lead Detail Page (`/intake/deals/:id`)
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+This is the highest-traffic page in the Intake module. Audit exhaustively.
+
+**Information architecture:**
+- Is the most important information (name, contact, insurance status) visible without scrolling?
+- Is the VOB completeness score prominent?
+- Is the activity timeline immediately findable without hunting?
+- Are outreach tools (call, SMS, email) one click away from this page?
+
+**VOB Verification Card:**
+- Is it clear which fields are missing vs. complete?
+- Is the risk classification (Low/Medium/High) explained anywhere?
+- When verification is triggered, is there a loading state?
+- When verification completes, does the card update without a page refresh?
+
+**Activity Timeline:**
+- Are entries sorted most-recent-first?
+- Are call transcripts readable inline or do they require a click-to-expand?
+- Is AI-extracted data clearly distinguished from manually entered data?
+- Are unread entries visually distinct from read ones?
+
+**Outreach actions:**
+- Are the call/SMS/email buttons labeled clearly?
+- Can an SMS be sent without navigating to a separate page?
+- Is there feedback after sending (success toast, entry in timeline)?
+- Are email templates selectable before sending, or is it always a blank compose?
+
+**Convert to Patient:**
+- Is this button visually prominent enough given its importance?
+- Is the confirmation modal detailed enough for the user to verify they're converting the right person?
+- Is there an explanation of what "converting" means and what happens next?
+- After conversion, does the button disappear or change to "Patient Linked"?
+
+---
+
+## 2.6 Billing Dashboard (`/billing/dashboard`)
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+**Pipeline cards (Paid / In Process / Drafts / Denied):**
+- Are dollar amounts formatted clearly ($13,973 not 13973)?
+- Are card labels intuitive for a non-specialist (what does "In Process" mean?)?
+- Do the cards link to the filtered claims view?
+- Is the visual hierarchy clear — which number matters most at a glance?
+
+**Alert cards (Denied / Stale Drafts / Timely Filing Risk / High Risk):**
+- Are these presented urgently enough to drive action?
+- Do they explain WHY something is an alert, not just THAT it is?
+- Is the action to take visible from the alert (not just a link to a filtered list)?
+
+**Recent Claims table:**
+- Does it show enough information (patient name, payer, amount, status, date) to be useful without clicking through?
+- Is status visually coded (color dots, badges)?
+- Does clicking a row navigate to the claim detail?
+
+**Recent Patients row:**
+- Is the horizontal scroll pattern discoverable?
+- Does each patient card show enough to be useful (name, last service, last claim status)?
+
+**New Claim button:**
+- Is it in the same position on every billing page?
+- Is it visually prominent (primary button style)?
+
+---
+
+## 2.7 Claim Wizard (`/billing/claims/new`)
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+The claim wizard is the most critical UX. Every friction point is a denial risk.
+
+**Step indicator:**
+- Is the progress (Step 1/2/3) visible and clear?
+- Does it show completed steps as checkmarks?
+- Can the user click back to a previous step without losing data?
+
+**Step 1 — Patient selection:**
+- Is it clear the user needs to search, not scroll?
+- What is the empty state if no patients exist yet?
+- Is the "From Intake ✓" badge explanatory enough?
+- Should there be a "Create New Patient" shortcut here instead of requiring a separate navigation?
+
+**Step 2 — Service details:**
+- Is the HCPCS/CPT search prominently placed?
+- When a code is selected, does the unit calculator appear smoothly without disrupting the flow?
+- Is the unit calculation shown in a way that the user can verify it (hours → units → rate → total)?
+- Is the ICD-10 diagnosis search easy to find and use?
+- Are required fields marked with asterisks or equivalent visual indicators?
+- Is the authorization number field clearly labeled and positioned near relevant insurance context?
+- Are there too many fields on this step — could any be moved to an "Advanced" section?
+
+**Step 3 — Review:**
+- Is this a genuine review step or just a summary screen?
+- Is the risk scoring panel explained (what does RED mean? what should the user do about it)?
+- Is the PDF download action prominent and clearly labeled?
+- Is the submit/export action clearly distinct from the cancel action?
+- What happens after the claim is exported — where does the user go?
+
+**Global wizard issues:**
+- Is there a "Save and Exit" option at any point?
+- If the user has to leave mid-wizard, is the draft clearly visible in the claims list?
+- Is the draft labeled "Draft" prominently in the claims list so it's easy to find and resume?
+
+---
+
+## 2.8 Patient Detail Page
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+- Are the four tabs (Profile, Claims, Eligibility, Notes) labeled clearly?
+- Does the Claims tab show the patient's claim history in a usable format?
+- Is the "New Claim" shortcut available from the patient's claims tab?
+- Are notes append-only with timestamps and user attribution visible?
+- Is the "From Intake ✓" badge visible and explanatory?
+- Is the eligibility tab useful — does it show VOB/insurance status clearly?
+
+---
+
+## 2.9 Claims List (`/billing/claims`)
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+- Are claims sortable by status, date, patient, payer, and amount?
+- Is the status visually coded (color badges)?
+- Is filtering intuitive — can the user filter by status in one click?
+- Is the dollar amount formatted clearly?
+- Does clicking a row navigate to the claim detail correctly?
+- Is the empty state helpful (first-time user with no claims)?
+
+---
+
+## 2.10 Claim Detail Page
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+- Is the full claim status lifecycle visible (not just the current status)?
+- Are the service lines shown in a readable format?
+- Is it clear how to download the PDF from this page?
+- Is the status change action (e.g., mark as paid) prominent?
+- Are notes shown with user attribution and timestamp?
+- Is there a link back to the patient from this page?
+- For denied claims — is the denial reason clearly shown, and is there an obvious "Fix and Resubmit" action?
+
+---
+
+## 2.11 Practice Settings (`/billing/settings`)
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+- Do the tab labels (Providers, Practice Info, Payers, Rate Tables) clearly indicate their contents?
+- Is NPI validation feedback immediate (inline) when entering an NPI?
+- Is the VA Fee Schedule Location dropdown clearly explained — do users know what this setting affects?
+- Is the rate staleness warning visible enough to actually trigger action?
+- Is there an indication of which fields are required?
+- After saving, is there confirmation that the settings were saved?
+
+---
+
+## 2.12 Intelligence & Denial Prevention
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+- Is the Denial Pattern Intelligence page understandable to a non-technical biller?
+- Are denial patterns grouped in a way that makes action obvious?
+- Does "Generate Prevention Rule" actually create a working rule?
+- On the Prevention Rules page, is it clear what each rule does?
+- Is enabling/disabling a rule one click and immediately visible?
+- Is there an explanation of how prevention rules interact with the claim wizard?
+
+---
+
+## 2.13 Compliance Reports
+
+Rate: C[ ] E[ ] F[ ] ER[ ] CS[ ]
+
+- Are the four report types (Access, Edit History, Export, Claims Integrity) clearly differentiated?
+- Is the date range picker intuitive?
+- Is the PDF generated quickly enough that the user doesn't think it failed?
+- Is there a loading indicator during PDF generation?
+- Is the output PDF readable and formatted professionally?
+
+---
+
+# PART 3: FLOW OPTIMIZATION
+
+---
+
+## Instructions for this section
+
+For each major workflow below:
+
+1. **Document the CURRENT flow** — every step, exactly as it works today
+2. **Identify friction points** — steps that are redundant, confusing, or interruptive
+3. **Propose the IDEAL flow** — minimum steps needed to accomplish the task while maintaining all compliance requirements
+4. **Mark compliance-critical steps** — anything that must remain regardless of simplification (audit trails, required fields, authorization checks)
+5. **Estimate impact** — what is the reduction in steps or time?
+
+---
+
+## 3.1 New Patient Intake → First Claim Flow
+
+This is the full end-to-end user journey from a new referral to a submitted claim.
+
+**Document and optimize:**
+1. Lead enters system (chat / call / manual entry)
+2. Lead is qualified (VOB completed)
+3. Lead is converted to patient
+4. Patient appears in billing
+5. Claim is created for the patient
+6. Claim is reviewed and exported/submitted
+
+**Questions to address:**
+- At what point should billing staff first become involved — step 3, 4, or 5?
+- Can the draft claim pre-populate more fields from the lead data than it currently does?
+- Is the handoff notification between intake and billing clear enough?
+- How many screens does a biller touch between "patient appears in billing" and "claim exported"?
+- Could steps 4 and 5 be collapsed into a single action?
+
+---
+
+## 3.2 Claim Creation Wizard
+
+**Document and optimize:**
+- How many clicks from the "New Claim" button to a completed draft?
+- How many fields does the user fill manually vs. auto-populated?
+- Which fields could be auto-populated but currently aren't?
+- Is the 3-step structure the right length, or could it be 2 steps?
+- Could the HCPCS code selection and ICD-10 selection be on the same step?
+
+**Compliance requirements that cannot be removed:**
+- Patient identification with verification
+- Procedure code with diagnosis pointer
+- Provider NPI
+- Place of service
+- Service date
+- Authorization number (when required by payer)
+- Risk scoring before submission
+
+---
+
+## 3.3 Denial-to-Resubmission Flow
+
+**Document the current flow** when a claim is denied:
+1. Biller sees denied claim in dashboard
+2. Biller navigates to claim detail
+3. Biller reads denial reason
+4. Biller identifies fix
+5. Biller corrects the claim
+6. Biller resubmits
+
+**Evaluate:**
+- Is the denial reason shown in plain English or just a code?
+- Is the specific field that caused the denial highlighted?
+- Can the biller fix and resubmit from the claim detail page, or must they go back through the wizard?
+- Is there a one-click "Create Corrected Claim" that pre-fills from the denied claim?
+- What is the minimum number of steps this flow can be reduced to?
+
+---
+
+## 3.4 Lead Follow-Up Outreach Flow
+
+**Document the current flow** for following up with a non-responsive lead:
+1. Biller/intake staff identifies lead needing follow-up
+2. Decides on outreach method
+3. Initiates outreach
+4. Updates lead status
+5. Logs the interaction
+6. Schedules next follow-up
+
+**Evaluate:**
+- Are steps 4 and 5 automated (do they happen as a result of the outreach action)?
+- Is step 6 prompted by the system or manual?
+- How many clicks from "identify lead" to "outreach sent and logged"?
+- Could the worklist drive this more aggressively (auto-surfacing the right lead at the right time)?
+
+---
+
+## 3.5 Compliance Reporting Flow
+
+**Document the current flow** for generating a monthly compliance report:
+1. Admin navigates to Compliance Reports
+2. Selects report type
+3. Sets date range
+4. Clicks Generate
+5. Waits for PDF
+6. Downloads PDF
+
+**Evaluate:**
+- Is this fast enough or does it feel slow?
+- Should reports be schedulable (auto-generated monthly and emailed)?
+- Are the four report types the right set, or are there reports that should be added/removed?
+- Could a compliance dashboard replace the need to generate PDFs for routine checks?
+
+---
+
+# PART 4: ADDITIONAL AUDIT APPROACHES
+
+---
+
+## 4.1 First-Time User Experience
+
+Simulate being a brand-new user of ClaimShield — an office manager at a home care agency who has never used billing software. Walk through:
+
+1. Logging in for the first time
+2. Setting up the practice (NPI, tax ID, VA billing location)
+3. Adding a provider
+4. Adding their first patient
+5. Creating their first claim
+6. Downloading the claim PDF
+
+Document every point of confusion, missing instruction, or required prior knowledge. Rate the overall onboarding experience 1–10 and explain why.
+
+**Does the platform need:**
+- A setup wizard for first-time configuration?
+- Inline tooltips explaining billing terminology?
+- Example/placeholder text in complex fields?
+- A guided first-claim walkthrough?
+
+---
+
+## 4.2 Mobile and Responsive Audit
+
+On a 375px wide viewport (iPhone SE) or by narrowing the browser window:
+
+- [ ] Does the login page render correctly?
+- [ ] Does the billing dashboard stack correctly?
+- [ ] Does the claim wizard Step 2 (complex form) remain usable?
+- [ ] Does the sidebar collapse or overlap content?
+- [ ] Are tables horizontally scrollable when content exceeds width?
+- [ ] Are touch targets (buttons, links) at least 44px tall?
+- [ ] Is any critical information hidden or cut off on mobile?
+
+Rate mobile usability 1–10.
+
+---
+
+## 4.3 Performance Audit
+
+Check the following for performance issues:
+
+- [ ] How long does the HCPCS search take to return results? (Should be < 300ms)
+- [ ] How long does the ICD-10 search take? (97,584 codes — needs proper indexing)
+- [ ] How long does the billing dashboard load? (Should be < 1s)
+- [ ] Are there any N+1 query patterns — endpoints that run one query per item in a loop?
+- [ ] Are there any unindexed columns used in frequent WHERE clauses?
+
+Run this to check for missing indexes on commonly queried columns:
+
+```sql
+-- Check indexes on claims table
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'claims';
+
+-- Check indexes on patients table
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'patients';
+
+-- Check indexes on hcpcs_codes (used in search)
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'hcpcs_codes';
+
+-- Check indexes on icd10_codes (used in search)
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'icd10_codes';
+
+-- Check indexes on va_location_rates (used in wizard)
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'va_location_rates';
+```
+
+Flag any table used in search or lookup that is missing an index on the searched column.
+
+---
+
+## 4.4 Accessibility Audit
+
+Check the most-used screens for basic accessibility:
+
+- [ ] Do all form fields have associated `<label>` elements?
+- [ ] Do all buttons have descriptive text (not just icons)?
+- [ ] Do icon-only buttons have `aria-label` attributes?
+- [ ] Are error messages associated with their fields via `aria-describedby`?
+- [ ] Is the color contrast ratio sufficient for the primary text colors?
+- [ ] Can the claim wizard be completed using keyboard only (Tab, Enter, Space)?
+- [ ] Do modal dialogs trap focus correctly?
+
+---
+
+## 4.5 Terminology Consistency Audit
+
+The platform uses medical billing terminology that must be consistent throughout. Check for inconsistencies between:
+
+- The sidebar labels vs. the page titles they link to
+- The API response field names vs. the UI labels
+- The status values in the database vs. the status labels shown to users
+- The terms used in error messages vs. the terms used in the UI
+
+Document every mismatch in a terminology table:
+
+| Location | Term Used | Should Be | Severity |
+|---|---|---|---|
+
+---
+
+# REPORT STRUCTURE
+
+Produce the final report in exactly this format:
+
+---
+
+## EXECUTIVE SUMMARY
+3–4 sentences: Overall health of the platform, top 3 critical issues, top 3 UX improvements.
+
+## CRITICAL ISSUES (🔴)
+Numbered list. Each item: Issue, Location, Evidence (code reference or query result), Risk, Recommended Fix.
+
+## MAJOR ISSUES (🟡)
+Same format. These are high-priority UX and functional issues that significantly impact usability.
+
+## MINOR ISSUES (🟢)
+Same format. Quick wins and polish items.
+
+## DATABASE HEALTH REPORT
+Full results from all 10 diagnostic queries in section 1.3, with interpretation.
+
+## UX SCORECARD
+Table of every screen with ratings across Clarity / Efficiency / Feedback / Error Recovery / Consistency.
+Lowest-scoring screens highlighted in red.
+
+## FLOW OPTIMIZATION PROPOSALS
+For each of the 5 workflows in Part 3:
+- Current flow (numbered steps)
+- Friction points identified
+- Proposed ideal flow (numbered steps)
+- Compliance-critical steps marked with ⚖️
+- Step reduction: [X steps → Y steps]
+
+## FIRST-TIME USER EXPERIENCE SCORE
+Rating 1–10 with specific findings. Recommendations for onboarding improvements.
+
+## PERFORMANCE FLAGS
+Any slow queries, missing indexes, or N+1 patterns found.
+
+## RECOMMENDED PRIORITY ORDER
+Top 20 items to fix, ranked by: (Severity × Frequency of user impact). For each: ticket-style description, estimated effort (S/M/L), and which phase it belongs in.
+
+---
+
+## CONSTRAINTS
+
+- Do not change any code during the audit
+- Do not skip any section — if a feature is not built, say so explicitly
+- Do not assume functionality works — verify it in the code
+- Every finding needs evidence: a code line reference, a query result, or a UI observation
+- Compliance-critical features (audit logging, role enforcement, bcrypt hashing, session security) must be treated as non-negotiable — they cannot be removed in any optimization proposal
+- When proposing flow optimizations, the minimum bar is: no fewer audit trail entries than the current implementation produces

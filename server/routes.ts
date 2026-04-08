@@ -141,7 +141,7 @@ async function syncPatientToLead(patient: Patient, extractedData?: any): Promise
 
 export async function registerRoutes(server: Server, app: Express): Promise<void> {
   
-  app.get("/api/payers", async (req, res) => {
+  app.get("/api/payers", requireAuth, async (req, res) => {
     res.json(allPayers);
   });
 
@@ -1288,13 +1288,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(alerts.slice(0, 5));
   });
 
-  app.get("/api/leads", async (req, res) => {
+  app.get("/api/leads", requireRole("admin", "intake"), async (req, res) => {
     const leads = await storage.getLeads();
     res.json(leads);
   });
 
   // Worklist API with queue filtering
-  app.get("/api/leads/worklist", async (req, res) => {
+  app.get("/api/leads/worklist", requireRole("admin", "intake"), async (req, res) => {
     const allLeads = await storage.getLeads();
     const queue = req.query.queue as string || "all";
     const now = new Date();
@@ -1368,7 +1368,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     });
   });
 
-  app.get("/api/leads/:id", async (req, res) => {
+  app.get("/api/leads/:id", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
       return res.status(404).json({ error: "Lead not found" });
@@ -1419,7 +1419,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // PATCH endpoint for quick actions and lead updates
-  app.patch("/api/leads/:id", async (req, res) => {
+  app.patch("/api/leads/:id", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
       return res.status(404).json({ error: "Lead not found" });
@@ -1642,18 +1642,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(updated);
   });
 
-  app.get("/api/leads/:id/calls", async (req, res) => {
+  app.get("/api/leads/:id/calls", requireRole("admin", "intake"), async (req, res) => {
     const calls = await storage.getCallsByLeadId(req.params.id);
     res.json(calls);
   });
 
-  app.get("/api/leads/:id/patient", async (req, res) => {
+  app.get("/api/leads/:id/patient", requireRole("admin", "intake"), async (req, res) => {
     const patient = await storage.getPatientByLeadId(req.params.id);
     res.json(patient || null);
   });
 
   // Update patient and sync to lead
-  app.patch("/api/leads/:id/patient", async (req, res) => {
+  app.patch("/api/leads/:id/patient", requireRole("admin", "intake"), async (req, res) => {
     const patient = await storage.getPatientByLeadId(req.params.id);
     if (!patient) {
       return res.status(404).json({ error: "Patient not found for this lead" });
@@ -1716,7 +1716,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(updatedPatient);
   });
 
-  app.post("/api/leads/:id/convert-to-patient", requireAuth, async (req, res) => {
+  app.post("/api/leads/:id/convert-to-patient", requireRole("admin", "intake"), async (req, res) => {
     try {
       const lead = await storage.getLead(req.params.id);
       if (!lead) {
@@ -1757,7 +1757,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Manual sync of patient data to lead
-  app.post("/api/leads/:id/sync-patient", async (req, res) => {
+  app.post("/api/leads/:id/sync-patient", requireRole("admin", "intake"), async (req, res) => {
     const patient = await storage.getPatientByLeadId(req.params.id);
     if (!patient) {
       return res.status(404).json({ error: "No patient record found for this lead" });
@@ -1805,7 +1805,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Get lead context for call prep preview
-  app.get("/api/leads/:id/call-context", async (req, res) => {
+  app.get("/api/leads/:id/call-context", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
       return res.status(404).json({ error: "Lead not found" });
@@ -1896,7 +1896,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     });
   });
 
-  app.post("/api/leads/:id/call", async (req, res) => {
+  app.post("/api/leads/:id/call", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
       return res.status(404).json({ error: "Lead not found" });
@@ -1980,7 +1980,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.status(201).json(call);
   });
 
-  app.post("/api/leads/:id/claim-packet", async (req, res) => {
+  app.post("/api/leads/:id/claim-packet", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
       return res.status(404).json({ error: "Lead not found" });
@@ -2080,22 +2080,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json({ success: true });
   });
 
-  app.get("/api/intelligence/clusters", async (req, res) => {
+  app.get("/api/intelligence/clusters", requireRole("admin", "rcm_manager"), async (req, res) => {
     const clusters = await storage.getDenialClusters();
     res.json(clusters);
   });
 
-  app.get("/api/intelligence/top-patterns", async (req, res) => {
+  app.get("/api/intelligence/top-patterns", requireRole("admin", "rcm_manager"), async (req, res) => {
     const patterns = await storage.getTopPatterns();
     res.json(patterns);
   });
 
-  app.get("/api/rules", async (req, res) => {
+  app.get("/api/rules", requireRole("admin", "rcm_manager"), async (req, res) => {
     const rules = await storage.getRules();
     res.json(rules);
   });
 
-  app.post("/api/rules", async (req, res) => {
+  app.post("/api/rules", requireRole("admin", "rcm_manager"), async (req, res) => {
     const parsed = insertRuleSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.message });
@@ -2104,7 +2104,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.status(201).json(rule);
   });
 
-  app.post("/api/rules/generate", async (req, res) => {
+  app.post("/api/rules/generate", requireRole("admin", "rcm_manager"), async (req, res) => {
     const { payer, cptCode, rootCause, suggestedRule } = req.body;
     
     const rule = await storage.createRule({
@@ -2120,7 +2120,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.status(201).json(rule);
   });
 
-  app.patch("/api/rules/:id", async (req, res) => {
+  app.patch("/api/rules/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     const rule = await storage.updateRule(req.params.id, req.body);
     if (!rule) {
       return res.status(404).json({ error: "Rule not found" });
@@ -2128,7 +2128,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(rule);
   });
 
-  app.delete("/api/rules/:id", async (req, res) => {
+  app.delete("/api/rules/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     await storage.deleteRule(req.params.id);
     res.json({ success: true });
   });
@@ -2234,7 +2234,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     };
   };
 
-  app.post("/api/vapi/outbound-call", async (req, res) => {
+  app.post("/api/vapi/outbound-call", requireRole("admin", "intake"), async (req, res) => {
     const { leadId } = req.body;
     
     const vapiApiKey = process.env.VAPI_API_KEY;
@@ -2305,7 +2305,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
-  app.get("/api/vapi/call-status/:vapiCallId", async (req, res) => {
+  app.get("/api/vapi/call-status/:vapiCallId", requireRole("admin", "intake"), async (req, res) => {
     const vapiApiKey = process.env.VAPI_API_KEY;
     
     if (!vapiApiKey) {
@@ -2422,7 +2422,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Manually refresh call data from Vapi API
-  app.post("/api/calls/:id/refresh", async (req, res) => {
+  app.post("/api/calls/:id/refresh", requireRole("admin", "intake"), async (req, res) => {
     const call = await storage.getCall(req.params.id);
     if (!call) {
       return res.status(404).json({ error: "Call not found" });
@@ -2509,7 +2509,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Call history and notes
-  app.get("/api/calls/:id", async (req, res) => {
+  app.get("/api/calls/:id", requireRole("admin", "intake"), async (req, res) => {
     const call = await storage.getCall(req.params.id);
     if (!call) {
       return res.status(404).json({ error: "Call not found" });
@@ -2517,7 +2517,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(call);
   });
 
-  app.patch("/api/calls/:id", async (req, res) => {
+  app.patch("/api/calls/:id", requireRole("admin", "intake"), async (req, res) => {
     const call = await storage.updateCall(req.params.id, req.body);
     if (!call) {
       return res.status(404).json({ error: "Call not found" });
@@ -2526,17 +2526,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Prior Authorization routes
-  app.get("/api/prior-auth/encounter/:encounterId", async (req, res) => {
+  app.get("/api/prior-auth/encounter/:encounterId", requireRole("admin", "rcm_manager"), async (req, res) => {
     const auths = await storage.getPriorAuthsByEncounterId(req.params.encounterId);
     res.json(auths);
   });
 
-  app.get("/api/prior-auth/patient/:patientId", async (req, res) => {
+  app.get("/api/prior-auth/patient/:patientId", requireRole("admin", "rcm_manager"), async (req, res) => {
     const auths = await storage.getPriorAuthsByPatientId(req.params.patientId);
     res.json(auths);
   });
 
-  app.get("/api/prior-auth/:id", async (req, res) => {
+  app.get("/api/prior-auth/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     const auth = await storage.getPriorAuth(req.params.id);
     if (!auth) {
       return res.status(404).json({ error: "Prior authorization not found" });
@@ -2544,12 +2544,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(auth);
   });
 
-  app.post("/api/prior-auth", async (req, res) => {
+  app.post("/api/prior-auth", requireRole("admin", "rcm_manager"), async (req, res) => {
     const auth = await storage.createPriorAuth(req.body);
     res.status(201).json(auth);
   });
 
-  app.patch("/api/prior-auth/:id", async (req, res) => {
+  app.patch("/api/prior-auth/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     const auth = await storage.updatePriorAuth(req.params.id, req.body);
     if (!auth) {
       return res.status(404).json({ error: "Prior authorization not found" });
@@ -2562,7 +2562,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // ============================================
 
   // Send SMS to a lead
-  app.post("/api/leads/:id/sms", async (req, res) => {
+  app.post("/api/leads/:id/sms", requireRole("admin", "intake"), async (req, res) => {
     if (!twilioClient || !twilioMessagingServiceSid) {
       return res.status(503).json({ error: "SMS service not configured" });
     }
@@ -2727,7 +2727,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Check SMS configuration status
-  app.get("/api/sms/status", async (req, res) => {
+  app.get("/api/sms/status", requireRole("admin", "intake"), async (req, res) => {
     res.json({
       configured: !!twilioClient,
       phoneNumber: twilioPhoneNumber ? twilioPhoneNumber.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") : null,
@@ -2737,13 +2737,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // ==================== EMAIL AUTOMATION ====================
 
   // Get all email templates
-  app.get("/api/email-templates", async (req, res) => {
+  app.get("/api/email-templates", requireRole("admin", "intake"), async (req, res) => {
     const templates = await storage.getEmailTemplates();
     res.json(templates);
   });
 
   // Create email template
-  app.post("/api/email-templates", async (req, res) => {
+  app.post("/api/email-templates", requireRole("admin", "intake"), async (req, res) => {
     const result = insertEmailTemplateSchema.safeParse(req.body);
     if (!result.success) {
       return res.status(400).json({ error: result.error.flatten() });
@@ -2753,7 +2753,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Update email template
-  app.patch("/api/email-templates/:id", async (req, res) => {
+  app.patch("/api/email-templates/:id", requireRole("admin", "intake"), async (req, res) => {
     const template = await storage.updateEmailTemplate(req.params.id, req.body);
     if (!template) {
       return res.status(404).json({ error: "Template not found" });
@@ -2762,19 +2762,19 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Delete email template
-  app.delete("/api/email-templates/:id", async (req, res) => {
+  app.delete("/api/email-templates/:id", requireRole("admin", "intake"), async (req, res) => {
     await storage.deleteEmailTemplate(req.params.id);
     res.status(204).send();
   });
 
   // Get all nurture sequences
-  app.get("/api/nurture-sequences", async (req, res) => {
+  app.get("/api/nurture-sequences", requireRole("admin", "intake"), async (req, res) => {
     const sequences = await storage.getNurtureSequences();
     res.json(sequences);
   });
 
   // Create nurture sequence
-  app.post("/api/nurture-sequences", async (req, res) => {
+  app.post("/api/nurture-sequences", requireRole("admin", "intake"), async (req, res) => {
     const result = insertNurtureSequenceSchema.safeParse(req.body);
     if (!result.success) {
       return res.status(400).json({ error: result.error.flatten() });
@@ -2784,7 +2784,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Update nurture sequence
-  app.patch("/api/nurture-sequences/:id", async (req, res) => {
+  app.patch("/api/nurture-sequences/:id", requireRole("admin", "intake"), async (req, res) => {
     const sequence = await storage.updateNurtureSequence(req.params.id, req.body);
     if (!sequence) {
       return res.status(404).json({ error: "Sequence not found" });
@@ -2793,7 +2793,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Delete nurture sequence
-  app.delete("/api/nurture-sequences/:id", async (req, res) => {
+  app.delete("/api/nurture-sequences/:id", requireRole("admin", "intake"), async (req, res) => {
     await storage.deleteNurtureSequence(req.params.id);
     res.status(204).send();
   });
@@ -2879,7 +2879,7 @@ Warmly,
   };
 
   // Send email to lead
-  app.post("/api/leads/:id/email", async (req, res) => {
+  app.post("/api/leads/:id/email", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
       return res.status(404).json({ error: "Lead not found" });
@@ -2993,19 +2993,19 @@ Warmly,
   });
 
   // Get email logs for a lead
-  app.get("/api/leads/:id/emails", async (req, res) => {
+  app.get("/api/leads/:id/emails", requireRole("admin", "intake"), async (req, res) => {
     const emails = await storage.getEmailLogsByLeadId(req.params.id);
     res.json(emails);
   });
 
   // Get activity logs for a lead (HubSpot-style timeline)
-  app.get("/api/leads/:id/activity", async (req, res) => {
+  app.get("/api/leads/:id/activity", requireRole("admin", "intake"), async (req, res) => {
     const activities = await storage.getActivityLogsByLeadId(req.params.id);
     res.json(activities);
   });
 
   // Get email configuration status
-  app.get("/api/email/status", async (req, res) => {
+  app.get("/api/email/status", requireRole("admin", "intake"), async (req, res) => {
     res.json({
       configured: !!emailTransporter,
       fromEmail: fromEmail,
@@ -3131,7 +3131,7 @@ Warmly,
   });
 
   // List available email presets
-  app.get("/api/email/presets", async (req, res) => {
+  app.get("/api/email/presets", requireRole("admin", "intake"), async (req, res) => {
     const presets = Object.entries(emailPresets).map(([id, template]) => ({
       id,
       name: id.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
@@ -3143,13 +3143,13 @@ Warmly,
   // ==================== APPOINTMENT SCHEDULING ====================
 
   // Get all availability slots
-  app.get("/api/availability", async (req, res) => {
+  app.get("/api/availability", requireRole("admin", "intake"), async (req, res) => {
     const slots = await storage.getAvailabilitySlots();
     res.json(slots);
   });
 
   // Create availability slot
-  app.post("/api/availability", async (req, res) => {
+  app.post("/api/availability", requireRole("admin", "intake"), async (req, res) => {
     const result = insertAvailabilitySlotSchema.safeParse(req.body);
     if (!result.success) {
       return res.status(400).json({ error: result.error.flatten() });
@@ -3159,7 +3159,7 @@ Warmly,
   });
 
   // Update availability slot
-  app.patch("/api/availability/:id", async (req, res) => {
+  app.patch("/api/availability/:id", requireRole("admin", "intake"), async (req, res) => {
     const slot = await storage.updateAvailabilitySlot(req.params.id, req.body);
     if (!slot) {
       return res.status(404).json({ error: "Slot not found" });
@@ -3168,25 +3168,25 @@ Warmly,
   });
 
   // Delete availability slot
-  app.delete("/api/availability/:id", async (req, res) => {
+  app.delete("/api/availability/:id", requireRole("admin", "intake"), async (req, res) => {
     await storage.deleteAvailabilitySlot(req.params.id);
     res.status(204).send();
   });
 
   // Get all appointments
-  app.get("/api/appointments", async (req, res) => {
+  app.get("/api/appointments", requireRole("admin", "intake"), async (req, res) => {
     const appointments = await storage.getAppointments();
     res.json(appointments);
   });
 
   // Get appointments for a lead
-  app.get("/api/leads/:id/appointments", async (req, res) => {
+  app.get("/api/leads/:id/appointments", requireRole("admin", "intake"), async (req, res) => {
     const appointments = await storage.getAppointmentsByLeadId(req.params.id);
     res.json(appointments);
   });
 
   // Create appointment for a lead
-  app.post("/api/leads/:id/appointments", async (req, res) => {
+  app.post("/api/leads/:id/appointments", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
     if (!lead) {
       return res.status(404).json({ error: "Lead not found" });
@@ -3217,7 +3217,7 @@ Warmly,
   });
 
   // Update appointment
-  app.patch("/api/appointments/:id", async (req, res) => {
+  app.patch("/api/appointments/:id", requireRole("admin", "intake"), async (req, res) => {
     const appointment = await storage.updateAppointment(req.params.id, req.body);
     if (!appointment) {
       return res.status(404).json({ error: "Appointment not found" });
@@ -3226,7 +3226,7 @@ Warmly,
   });
 
   // Cancel appointment
-  app.post("/api/appointments/:id/cancel", async (req, res) => {
+  app.post("/api/appointments/:id/cancel", requireRole("admin", "intake"), async (req, res) => {
     const { reason } = req.body;
     const appointment = await storage.updateAppointment(req.params.id, {
       status: "cancelled",
@@ -3247,7 +3247,7 @@ Warmly,
   });
 
   // Confirm appointment
-  app.post("/api/appointments/:id/confirm", async (req, res) => {
+  app.post("/api/appointments/:id/confirm", requireRole("admin", "intake"), async (req, res) => {
     const appointment = await storage.updateAppointment(req.params.id, {
       status: "confirmed",
       confirmedAt: new Date(),
@@ -3323,7 +3323,7 @@ Warmly,
   });
 
   // Seed default availability if none exists
-  app.post("/api/availability/seed", async (req, res) => {
+  app.post("/api/availability/seed", requireRole("admin", "intake"), async (req, res) => {
     const existing = await storage.getAvailabilitySlots();
     if (existing.length > 0) {
       return res.json({ message: "Availability already configured", slots: existing });
@@ -3594,13 +3594,13 @@ Warmly,
   // ==================== CHAT ANALYTICS ====================
 
   // Get chat analytics stats
-  app.get("/api/chat-analytics/stats", async (req, res) => {
+  app.get("/api/chat-analytics/stats", requireRole("admin", "intake"), async (req, res) => {
     const stats = await storage.getChatSessionStats();
     res.json(stats);
   });
 
   // Get call analytics stats
-  app.get("/api/calls-analytics/stats", async (req, res) => {
+  app.get("/api/calls-analytics/stats", requireRole("admin", "intake"), async (req, res) => {
     try {
       const leads = await storage.getLeads();
       let totalCalls = 0;
@@ -3649,7 +3649,7 @@ Warmly,
   });
 
   // Get time-series data for charts
-  app.get("/api/chat-analytics/timeseries", async (req, res) => {
+  app.get("/api/chat-analytics/timeseries", requireRole("admin", "intake"), async (req, res) => {
     const { days = "30" } = req.query;
     const numDays = parseInt(days as string) || 30;
     
@@ -3696,13 +3696,13 @@ Warmly,
   });
 
   // Get all chat sessions (for admin view)
-  app.get("/api/chat-sessions", async (req, res) => {
+  app.get("/api/chat-sessions", requireRole("admin", "intake"), async (req, res) => {
     const sessions = await storage.getChatSessions();
     res.json(sessions);
   });
 
   // Get session with messages
-  app.get("/api/chat-sessions/:id", async (req, res) => {
+  app.get("/api/chat-sessions/:id", requireRole("admin", "intake"), async (req, res) => {
     const session = await storage.getChatSession(req.params.id);
     if (!session) {
       return res.status(404).json({ error: "Session not found" });
@@ -3711,8 +3711,7 @@ Warmly,
     res.json({ session, messages });
   });
 
-  // Get daily analytics
-  app.get("/api/chat-analytics", async (req, res) => {
+  app.get("/api/chat-analytics", requireRole("admin", "intake"), async (req, res) => {
     const { startDate, endDate } = req.query;
     const analytics = await storage.getChatAnalytics(
       startDate as string | undefined,
@@ -3724,7 +3723,7 @@ Warmly,
   // ============ VOB VERIFICATION (VerifyTX) ============
   
   // Search payers (requires at least 2 characters)
-  app.get("/api/verifytx/payers", async (req, res) => {
+  app.get("/api/verifytx/payers", requireRole("admin", "intake"), async (req, res) => {
     const { getVerifyTxClient } = await import("./verifytx");
     const client = getVerifyTxClient();
     
@@ -3757,19 +3756,19 @@ Warmly,
   });
 
   // Get VOB verifications for a lead
-  app.get("/api/leads/:id/vob-verifications", async (req, res) => {
+  app.get("/api/leads/:id/vob-verifications", requireRole("admin", "intake"), async (req, res) => {
     const verifications = await storage.getVobVerificationsByLeadId(req.params.id);
     res.json(verifications);
   });
 
   // Get latest VOB verification for a lead
-  app.get("/api/leads/:id/vob-verifications/latest", async (req, res) => {
+  app.get("/api/leads/:id/vob-verifications/latest", requireRole("admin", "intake"), async (req, res) => {
     const verification = await storage.getLatestVobVerificationByLeadId(req.params.id);
     res.json(verification || null);
   });
 
   // Verify insurance benefits for a lead
-  app.post("/api/leads/:id/verify-insurance", async (req, res) => {
+  app.post("/api/leads/:id/verify-insurance", requireRole("admin", "intake"), async (req, res) => {
     const { getVerifyTxClient, mapVerifyTxResponse } = await import("./verifytx");
     const client = getVerifyTxClient();
     
@@ -3904,7 +3903,7 @@ Warmly,
   });
 
   // Re-verify existing VOB
-  app.post("/api/vob-verifications/:id/reverify", async (req, res) => {
+  app.post("/api/vob-verifications/:id/reverify", requireRole("admin", "intake"), async (req, res) => {
     const { getVerifyTxClient, mapVerifyTxResponse } = await import("./verifytx");
     const client = getVerifyTxClient();
     
@@ -3946,7 +3945,7 @@ Warmly,
   });
 
   // Export VOB as PDF
-  app.get("/api/vob-verifications/:id/pdf", async (req, res) => {
+  app.get("/api/vob-verifications/:id/pdf", requireRole("admin", "intake"), async (req, res) => {
     const { getVerifyTxClient } = await import("./verifytx");
     const client = getVerifyTxClient();
     
@@ -3985,7 +3984,7 @@ Warmly,
   });
 
   // Check VerifyTX configuration status
-  app.get("/api/verifytx/status", async (req, res) => {
+  app.get("/api/verifytx/status", requireRole("admin", "intake"), async (req, res) => {
     const { getVerifyTxClient } = await import("./verifytx");
     const client = getVerifyTxClient();
     res.json({ 
