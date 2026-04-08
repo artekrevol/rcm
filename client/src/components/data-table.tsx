@@ -7,7 +7,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Column<T> {
@@ -15,6 +15,7 @@ interface Column<T> {
   header: string;
   render: (item: T) => React.ReactNode;
   className?: string;
+  sortable?: boolean;
 }
 
 interface DataTableProps<T> {
@@ -28,6 +29,9 @@ interface DataTableProps<T> {
   totalPages?: number;
   onPageChange?: (page: number) => void;
   className?: string;
+  sortKey?: string | null;
+  sortDir?: "asc" | "desc";
+  onSort?: (key: string) => void;
 }
 
 export function DataTable<T>({
@@ -41,6 +45,9 @@ export function DataTable<T>({
   totalPages = 1,
   onPageChange,
   className,
+  sortKey,
+  sortDir,
+  onSort,
 }: DataTableProps<T>) {
   if (isLoading) {
     return (
@@ -85,8 +92,19 @@ export function DataTable<T>({
         <TableHeader>
           <TableRow>
             {columns.map((col) => (
-              <TableHead key={col.key} className={cn("whitespace-nowrap", col.className)}>
-                {col.header}
+              <TableHead
+                key={col.key}
+                className={cn("whitespace-nowrap", col.className, col.sortable && onSort && "cursor-pointer select-none")}
+                onClick={col.sortable && onSort ? () => onSort(col.key) : undefined}
+              >
+                <span className="inline-flex items-center">
+                  {col.header}
+                  {col.sortable && onSort && (
+                    sortKey === col.key
+                      ? (sortDir === "asc" ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />)
+                      : <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />
+                  )}
+                </span>
               </TableHead>
             ))}
           </TableRow>

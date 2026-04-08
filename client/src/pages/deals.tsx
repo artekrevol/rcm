@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,7 +52,8 @@ import {
 import { 
   Plus, Phone, User, Search, Filter, LayoutList, LayoutGrid, 
   MoreHorizontal, CheckCircle, XCircle, UserPlus, Clock, AlertTriangle,
-  PhoneCall, PhoneForwarded, FileCheck, FileText, Send, Ban, Pencil
+  PhoneCall, PhoneForwarded, FileCheck, FileText, Send, Ban, Pencil,
+  ArrowUpDown, ArrowUp, ArrowDown
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import type { Lead, InsertLead, Call } from "@shared/schema";
@@ -161,8 +162,14 @@ function NextActionBadge({ actionType, dueAt }: { actionType?: string; dueAt?: s
   );
 }
 
+type LeadSortKey = "name" | "status" | "lastContactedAt" | "vobScore" | "attemptCount" | null;
+type LeadSortDir = "asc" | "desc";
+
 export default function DealsPage() {
   const [, setLocation] = useLocation();
+  const searchStr = useSearch();
+  const urlParams = new URLSearchParams(searchStr);
+  const urlStatus = urlParams.get("status");
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -171,7 +178,10 @@ export default function DealsPage() {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [attemptsModalLead, setAttemptsModalLead] = useState<Lead | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeQueue, setActiveQueue] = useState("all");
+  const [activeQueue, setActiveQueue] = useState(urlStatus ? "all" : "all");
+  const [statusFilterFromUrl, setStatusFilterFromUrl] = useState(urlStatus || "");
+  const [leadSortKey, setLeadSortKey] = useState<LeadSortKey>(null);
+  const [leadSortDir, setLeadSortDir] = useState<LeadSortDir>("asc");
   const [viewMode, setViewMode] = useState<"worklist" | "board">(() => {
     return (localStorage.getItem("leadsView") as "worklist" | "board") || "worklist";
   });
@@ -295,14 +305,45 @@ export default function DealsPage() {
     }
   };
 
-  const filteredLeads = (worklistData?.rows || []).filter((lead) => {
-    if (!searchQuery) return true;
-    return (
-      lead.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lead.phone.includes(searchQuery) ||
-      lead.email?.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  });
+  function toggleLeadSort(key: LeadSortKey) {
+    if (leadSortKey === key) {
+      setLeadSortDir(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setLeadSortKey(key);
+      setLeadSortDir("asc");
+    }
+  }
+
+  function LeadSortIcon({ col }: { col: LeadSortKey }) {
+    if (leadSortKey !== col) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
+    return leadSortDir === "asc" ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />;
+  }
+
+  const filteredLeads = useMemo(() => {
+    let leads = (worklistData?.rows || []).filter((lead) => {
+      if (statusFilterFromUrl && lead.status !== statusFilterFromUrl) return false;
+      if (!searchQuery) return true;
+      return (
+        lead.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        lead.phone.includes(searchQuery) ||
+        lead.email?.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    });
+    if (leadSortKey) {
+      leads = [...leads].sort((a: any, b: any) => {
+        let cmp = 0;
+        switch (leadSortKey) {
+          case "name": cmp = (a.name || "").localeCompare(b.name || ""); break;
+          case "status": cmp = (a.status || "").localeCompare(b.status || ""); break;
+          case "lastContactedAt": cmp = new Date(a.lastContactedAt || 0).getTime() - new Date(b.lastContactedAt || 0).getTime(); break;
+          case "vobScore": cmp = (a.vobScore || 0) - (b.vobScore || 0); break;
+          case "attemptCount": cmp = (a.attemptCount || 0) - (b.attemptCount || 0); break;
+        }
+        return leadSortDir === "desc" ? -cmp : cmp;
+      });
+    }
+    return leads;
+  }, [worklistData?.rows, searchQuery, statusFilterFromUrl, leadSortKey, leadSortDir]);
 
   const leadStatuses = ["new", "contacted", "qualified", "unqualified", "converted"];
   const boardLeads = allLeads?.filter((lead) => {
@@ -502,6 +543,15 @@ export default function DealsPage() {
         </div>
       </div>
 
+      {statusFilterFromUrl && (
+        <div className="flex items-center gap-2 p-2 rounded-md bg-primary/10 border border-primary/20" data-testid="banner-status-filter">
+          <span className="text-sm">Filtered by status: <strong>{statusFilterFromUrl.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}</strong></span>
+          <Button variant="ghost" size="sm" onClick={() => setStatusFilterFromUrl("")} data-testid="button-clear-status-filter">
+            <XCircle className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
       {viewMode === "worklist" && (
         <>
           {/* Manager KPI Strip */}
@@ -593,16 +643,26 @@ export default function DealsPage() {
                 <Table>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="w-[200px]">Lead</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead className="w-[200px] cursor-pointer select-none" onClick={() => toggleLeadSort("name")}>
+                        <span className="inline-flex items-center">Lead<LeadSortIcon col="name" /></span>
+                      </TableHead>
+                      <TableHead className="cursor-pointer select-none" onClick={() => toggleLeadSort("status")}>
+                        <span className="inline-flex items-center">Status<LeadSortIcon col="status" /></span>
+                      </TableHead>
                       <TableHead>Next Action</TableHead>
                       <TableHead>Priority</TableHead>
                       <TableHead>Last Outcome</TableHead>
-                      <TableHead className="text-center">Attempts</TableHead>
-                      <TableHead>VOB Completeness</TableHead>
+                      <TableHead className="text-center cursor-pointer select-none" onClick={() => toggleLeadSort("attemptCount")}>
+                        <span className="inline-flex items-center justify-center">Attempts<LeadSortIcon col="attemptCount" /></span>
+                      </TableHead>
+                      <TableHead className="cursor-pointer select-none" onClick={() => toggleLeadSort("vobScore")}>
+                        <span className="inline-flex items-center">VOB Completeness<LeadSortIcon col="vobScore" /></span>
+                      </TableHead>
                       <TableHead>Insurance</TableHead>
                       <TableHead>Service</TableHead>
-                      <TableHead>Created</TableHead>
+                      <TableHead className="cursor-pointer select-none" onClick={() => toggleLeadSort("lastContactedAt")}>
+                        <span className="inline-flex items-center">Created<LeadSortIcon col="lastContactedAt" /></span>
+                      </TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
                   </TableHeader>

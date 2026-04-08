@@ -840,7 +840,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const q = (req.query.q as string || "").trim();
       if (!q) return res.json([]);
       const db = await import("./db").then(m => m.pool);
-      const pattern = `%${q}%`;
+      const codePattern = `${q}%`;
       const { rows } = await db.query(
         `SELECT code, description_official, description_plain, unit_type,
                 unit_interval_minutes, default_pos, requires_modifier, notes,
@@ -854,7 +854,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
                    AND is_non_reimbursable = false) as va_rate
            FROM hcpcs_codes h
            WHERE h.is_active = true
-             AND (h.code ILIKE $1 OR h.description_official ILIKE $1 OR h.description_plain ILIKE $1)
+             AND (h.code ILIKE $1
+               OR to_tsvector('english', h.description_official) @@ plainto_tsquery('english', $2)
+               OR to_tsvector('english', COALESCE(h.description_plain, '')) @@ plainto_tsquery('english', $2))
 
            UNION ALL
 
@@ -868,15 +870,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
                    AND is_non_reimbursable = false) as va_rate
            FROM cpt_codes c
            WHERE c.is_active = true
-             AND (c.code ILIKE $1 OR c.description ILIKE $1)
+             AND (c.code ILIKE $1
+               OR to_tsvector('english', c.description) @@ plainto_tsquery('english', $2))
              AND NOT EXISTS (SELECT 1 FROM hcpcs_codes WHERE code = c.code)
          ) combined
          ORDER BY
-           CASE WHEN code ILIKE $2 THEN 0 ELSE 1 END,
+           CASE WHEN code ILIKE $3 THEN 0 ELSE 1 END,
            source,
            code
          LIMIT 20`,
-        [pattern, q]
+        [codePattern, q, q]
       );
       res.json(rows);
     } catch (err: any) {
@@ -924,13 +927,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
          FROM icd10_codes
          WHERE is_active = true
            AND is_header = false
-           AND (code ILIKE $1 OR description ILIKE $2)
+           AND (code ILIKE $1
+             OR to_tsvector('english', description) @@ plainto_tsquery('english', $2))
          ORDER BY
            CASE WHEN code ILIKE $1 THEN 0 ELSE 1 END,
            LENGTH(code),
            code
          LIMIT 15`,
-        [`${q}%`, `%${q}%`]
+        [`${q}%`, q]
       );
       res.json(rows);
     } catch (err: any) {
@@ -3602,42 +3606,29 @@ Warmly,
   // Get call analytics stats
   app.get("/api/calls-analytics/stats", requireRole("admin", "intake"), async (req, res) => {
     try {
-      const leads = await storage.getLeads();
-      let totalCalls = 0;
-      let totalDuration = 0;
-      let answeredCalls = 0;
-      let missedCalls = 0;
-      let voicemailCalls = 0;
-      
-      for (const lead of leads) {
-        const calls = await storage.getCallsByLeadId(lead.id);
-        totalCalls += calls.length;
-        
-        for (const call of calls) {
-          if (call.duration) {
-            totalDuration += call.duration;
-          }
-          if (call.status === "completed") {
-            answeredCalls++;
-          } else if (call.status === "no-answer") {
-            missedCalls++;
-          } else if (call.status === "voicemail") {
-            voicemailCalls++;
-          }
-        }
-      }
-      
-      const avgDuration = totalCalls > 0 ? Math.round(totalDuration / totalCalls) : 0;
-      const answeredRate = totalCalls > 0 ? Math.round((answeredCalls / totalCalls) * 100) : 0;
-      const missedRate = totalCalls > 0 ? Math.round((missedCalls / totalCalls) * 100) : 0;
-      const voicemailRate = totalCalls > 0 ? Math.round((voicemailCalls / totalCalls) * 100) : 0;
-      
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(`
+        SELECT
+          COUNT(c.id)::int AS "totalCalls",
+          COUNT(CASE WHEN c.status = 'completed' THEN 1 END)::int AS "answeredCalls",
+          COUNT(CASE WHEN c.status = 'no-answer' THEN 1 END)::int AS "missedCalls",
+          COUNT(CASE WHEN c.status = 'voicemail' THEN 1 END)::int AS "voicemailCalls",
+          COALESCE(ROUND(AVG(c.duration))::int, 0) AS "avgDuration",
+          COALESCE(SUM(COALESCE(c.duration, 0))::int, 0) AS "totalDuration"
+        FROM calls c
+      `);
+      const stats = rows[0];
+      const totalCalls = stats.totalCalls || 0;
+      const answeredRate = totalCalls > 0 ? Math.round((stats.answeredCalls / totalCalls) * 100) : 0;
+      const missedRate = totalCalls > 0 ? Math.round((stats.missedCalls / totalCalls) * 100) : 0;
+      const voicemailRate = totalCalls > 0 ? Math.round((stats.voicemailCalls / totalCalls) * 100) : 0;
+
       res.json({
         totalCalls,
-        answeredCalls,
-        missedCalls,
-        voicemailCalls,
-        avgDuration,
+        answeredCalls: stats.answeredCalls || 0,
+        missedCalls: stats.missedCalls || 0,
+        voicemailCalls: stats.voicemailCalls || 0,
+        avgDuration: stats.avgDuration || 0,
         answeredRate,
         missedRate,
         voicemailRate,

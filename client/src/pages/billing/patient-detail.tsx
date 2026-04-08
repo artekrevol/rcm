@@ -23,12 +23,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { validateNPI } from "@shared/npi-validation";
@@ -40,7 +34,6 @@ import {
   Shield,
   MessageSquare,
   Plus,
-  Copy,
   AlertTriangle,
   CheckCircle2,
   Clock,
@@ -391,7 +384,6 @@ function ClaimsTab({ patientId }: { patientId: string }) {
                 <TableHead>Payer</TableHead>
                 <TableHead>Amount</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -411,18 +403,6 @@ function ClaimsTab({ patientId }: { patientId: string }) {
                     <Badge variant="outline" className={statusColor(c.status)}>
                       {c.status?.charAt(0).toUpperCase() + c.status?.slice(1)}
                     </Badge>
-                  </TableCell>
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button variant="ghost" size="sm" data-testid={`button-clone-claim-${c.id}`}>
-                            <Copy className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Clone claim (coming soon)</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
                   </TableCell>
                 </TableRow>
               ))}
@@ -450,17 +430,6 @@ function EligibilityTab({ patientId }: { patientId: string }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium">Eligibility Verifications</h3>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="outline" data-testid="button-run-eligibility">
-                <Shield className="h-4 w-4 mr-2" />
-                Run Eligibility Check
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Coming in next update</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
       </div>
 
       {vobs.length === 0 ? (

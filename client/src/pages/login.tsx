@@ -90,6 +90,9 @@ export default function LoginPage() {
                   "Sign in"
                 )}
               </Button>
+              <p className="text-xs text-center text-muted-foreground pt-2" data-testid="text-forgot-password">
+                Forgot your password? Contact your administrator.
+              </p>
             </form>
           </CardContent>
         </Card>

@@ -1,0 +1,81 @@
+Fix the following items in priority order. Do not start Phase 2 features yet. These are all targeted, contained changes.
+Fix 1 — Step 2 validation in claim wizard (S)
+In the claim wizard, the "Next" button on Step 2 should validate required fields before advancing to Step 3. Minimum required to advance:
+
+At least one service line with a code and units
+At least one ICD-10 diagnosis code
+Provider selected
+
+Show inline error messages on the specific fields that are incomplete. Do not allow advancing to Step 3 with an empty service line section or no diagnosis code. The Submit button on Step 3 already blocks this — the goal is to surface the issue earlier so the user doesn't go through the whole review only to be sent back.
+Fix 2 — Draft resume flow (M)
+Currently when a user navigates away from the claim wizard mid-creation, draft claims accumulate silently and there is no way to resume them. Fix this:
+
+On the claim wizard landing page (/billing/claims/new), before showing Step 1, check for existing drafts belonging to the current user: SELECT id, patient_id, created_at FROM claims WHERE status = 'draft' AND created_at > NOW() - INTERVAL '7 days'
+If drafts exist, show a dismissible banner above the wizard: "You have [N] unfinished claim(s). [View drafts]" linking to the claims list filtered by draft status
+When a user clicks a draft claim from the claims list, it should open the claim wizard pre-populated with that draft's data at Step 2 (since Step 1 — patient — is already saved)
+
+Fix 3 — Intake dashboard pipeline cards are not clickable (S)
+The pipeline cards on the intake dashboard (New, Attempting Contact, Contacted, Qualified, Converted) show counts but clicking them does nothing. Each card should navigate to the lead worklist filtered by that status. Use the same pattern as the billing dashboard alert cards.
+Fix 4 — Column sorting on claims list and lead worklist (S)
+Neither the claims list nor the lead worklist supports column sorting. Add sortable columns:
+For claims list: sortable by Status, Amount (descending default), Created Date, Patient Name, Payer
+For lead worklist: sortable by Status, Name, Last Contacted, VOB Score, Attempt Count
+Use the existing table component's built-in sort mechanism if available. Client-side sorting is acceptable given current data volumes.
+Fix 5 — Login rate limiting (S)
+There is no rate limiting on failed login attempts. Add a simple in-memory rate limiter (or use the express-rate-limit package which is likely already in the dependency tree) on POST /api/auth/login. Limit to 10 attempts per IP per 15-minute window. Return a 429 status with the message "Too many login attempts. Please try again later." after the limit is exceeded. Log the IP when the limit is triggered.
+Fix 6 — Fix-password flow (M)
+There is no forgot-password flow. Users who are locked out have no self-service option. Implement a simple admin-assisted reset:
+For now (pre-email integration): Add a "Reset Password" button on the User Management page (/billing/settings/users) that admins can use to set a temporary password for any user. The admin enters a new temporary password, the system hashes it and updates the user. The admin then tells the user their temporary password out of band.
+Also add a visible note on the login page: "Forgot your password? Contact your administrator." This sets the expectation correctly without implying a self-service flow that doesn't exist.
+Fix 7 — Hide non-functional placeholder buttons (S)
+Two buttons are visible to users but do nothing:
+
+"Run Eligibility Check" on the patient detail page (Eligibility tab) — shows "Coming in next update" tooltip
+"Clone Claim" on the patient detail page — shows "Coming soon"
+
+These should be hidden entirely, not disabled with a tooltip. A button that does nothing erodes trust. Remove them from the UI. They can be re-added when the feature is actually built.
+Fix 8 — Fix HCPCS and ICD-10 description search to use full-text search (S)
+The current search queries use ILIKE '%term%' which does not use the GIN indexes that were just created. Rewrite the description search portion of these queries to use PostgreSQL full-text search:
+sql-- Replace ILIKE description search with:
+WHERE code ILIKE $1
+   OR to_tsvector('english', description_official) @@ plainto_tsquery('english', $2)
+   OR to_tsvector('english', COALESCE(description_plain, '')) @@ plainto_tsquery('english', $2)
+Use $1 for the code prefix match (still ILIKE for exact prefix) and $2 for the description keyword search (FTS). This will use the GIN indexes and improve keyword search performance, particularly for the ICD-10 table with 97,584 records.
+Fix 9 — Fix N+1 query in call analytics (S)
+The call analytics endpoint iterates over all leads and fetches calls for each one individually. Rewrite this as a single SQL join query. Find the GET /api/calls-analytics/stats endpoint and replace the loop with:
+sqlSELECT 
+  l.id,
+  l.status,
+  l.created_at,
+  COUNT(c.id) as call_count,
+  MAX(c.created_at) as last_call_at
+FROM leads l
+LEFT JOIN calls c ON c.lead_id = l.id
+GROUP BY l.id, l.status, l.created_at
+Adjust the aggregation to match whatever stats the endpoint currently returns. The goal is one query, not one query per lead.
+
+After completing all 9 fixes, run a quick verification test on each:
+
+Try advancing Step 2 without service lines — confirm the inline error appears and Next is blocked
+Create a new claim, advance to Step 2, navigate away — confirm the "unfinished claims" banner appears on next visit to /billing/claims/new
+Click each pipeline card on intake dashboard — confirm they navigate to filtered worklist
+Sort claims list by Amount descending — confirm it works
+Hit the login endpoint 11 times with wrong credentials — confirm 429 on the 11th
+Confirm "Run Eligibility Check" and "Clone Claim" buttons are gone from patient detail
+Search "skilled nursing" in code lookup — confirm results appear correctly
+Confirm call analytics endpoint no longer has a loop over leads in the code
+
+Report back each as pass/fail with one line of evidence before moving to Phase 2.
+
+What this means for Phase 2 planning
+The three critical items (claim editing, appeal workflow, Availity submission) are all connected. Once the Availity API integration is live, the full claim lifecycle becomes:
+
+Create → wizard (exists)
+Submit → Availity 837P (Phase 2)
+Track → 276/277 status polling (Phase 2)
+Edit/Correct → corrected claim with CLM05-3 correction indicator (Phase 2)
+Appeal → secondary submission with appeal documentation (Phase 2)
+Pay → ERA 835 auto-posting (Phase 2)
+
+Don't build claim editing or the appeal workflow until the Availity integration is in place — they're designed around the electronic submission model, not the PDF bridge model.
+The onboarding gap (5/10 first-time experience score) is real and should be addressed in Phase 2 as a standalone feature: a setup wizard that walks new practices through provider → practice info → VA billing location → first patient → first claim. This is what converts a free trial into a retained paying customer.

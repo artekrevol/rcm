@@ -714,6 +714,7 @@ export default function ClaimWizard() {
   const searchStr = useSearch();
   const params = new URLSearchParams(searchStr);
   const preselectedPatientId = params.get("patientId");
+  const resumeClaimId = params.get("claimId");
   const { toast } = useToast();
 
   const [step, setStep] = useState(0);
@@ -742,6 +743,7 @@ export default function ClaimWizard() {
   const [pdfGenerating, setPdfGenerating] = useState(false);
   const [cms1500Loading, setCms1500Loading] = useState(false);
   const [cms1500Done, setCms1500Done] = useState(false);
+  const [step2Errors, setStep2Errors] = useState<Record<string, string>>({});
 
   const { data: wizardData } = useQuery<any>({
     queryKey: ["/api/billing/claims/wizard-data"],
@@ -758,8 +760,54 @@ export default function ClaimWizard() {
   }, [providers, providerId]);
 
   useEffect(() => {
-    if (preselectedPatientId && !patient) {
-      fetch(`/api/billing/patients/${preselectedPatientId}`)
+    if (resumeClaimId && preselectedPatientId && !patient) {
+      fetch(`/api/billing/patients/${preselectedPatientId}`, { credentials: "include" })
+        .then((r) => r.json())
+        .then((p) => {
+          if (p && p.id) {
+            setPatient(p);
+            if (p.authorization_number) setAuthNumber(p.authorization_number);
+            setClaimId(resumeClaimId);
+            fetch(`/api/claims/${resumeClaimId}`, { credentials: "include" })
+              .then((r) => r.json())
+              .then((claim) => {
+                if (claim && claim.id) {
+                  if (claim.encounterId) setEncounterId(claim.encounterId);
+                  if (claim.providerId) setProviderId(claim.providerId);
+                  if (claim.serviceDate) setServiceDate(claim.serviceDate);
+                  if (claim.placeOfService) setPlaceOfService(claim.placeOfService);
+                  if (claim.authorizationNumber) setAuthNumber(claim.authorizationNumber);
+                  if (claim.icd10Primary) setIcd10Primary({ code: claim.icd10Primary, desc: "" });
+                  if (claim.icd10Secondary && Array.isArray(claim.icd10Secondary)) {
+                    const sec = claim.icd10Secondary.map((c: string) => ({ code: c, desc: "" }));
+                    while (sec.length < 3) sec.push({ code: "", desc: "" });
+                    setIcd10Secondary(sec.slice(0, 3));
+                  }
+                  if (claim.serviceLines && Array.isArray(claim.serviceLines) && claim.serviceLines.length > 0) {
+                    setServiceLines(claim.serviceLines.map((sl: any) => ({
+                      id: crypto.randomUUID(),
+                      code: sl.code || "",
+                      description: sl.description || "",
+                      modifier: sl.modifier || "",
+                      units: sl.units || "1",
+                      ratePerUnit: sl.ratePerUnit ? String(sl.ratePerUnit) : "",
+                      total: sl.total ? String(sl.total) : "",
+                      unitType: sl.unitType || "per_visit",
+                      unitIntervalMinutes: sl.unitIntervalMinutes || null,
+                      manualEntry: true,
+                      hours: "",
+                      minutes: "",
+                    })));
+                  }
+                  setStep(1);
+                }
+              })
+              .catch(() => setStep(1));
+          }
+        })
+        .catch(() => {});
+    } else if (preselectedPatientId && !patient && !resumeClaimId) {
+      fetch(`/api/billing/patients/${preselectedPatientId}`, { credentials: "include" })
         .then((r) => r.json())
         .then((p) => {
           if (p && p.id) {
@@ -770,7 +818,7 @@ export default function ClaimWizard() {
         })
         .catch(() => {});
     }
-  }, [preselectedPatientId]);
+  }, [preselectedPatientId, resumeClaimId]);
 
   useEffect(() => {
     const pending = sessionStorage.getItem("pendingHcpcsCode");
@@ -910,7 +958,25 @@ export default function ClaimWizard() {
     };
   }
 
+  function validateStep2(): boolean {
+    const errors: Record<string, string> = {};
+    if (!providerId) errors.provider = "Rendering provider is required";
+    if (!serviceDate) errors.serviceDate = "Service date is required";
+    const filledLines = serviceLines.filter(l => l.code);
+    if (filledLines.length === 0) errors.serviceLines = "At least one service line with a code is required";
+    filledLines.forEach((l, i) => {
+      if ((parseInt(l.units) || 0) <= 0) errors[`line_${i}_units`] = `Line ${i + 1}: units must be greater than zero`;
+    });
+    if (!icd10Primary.code) errors.icd10 = "At least one ICD-10 diagnosis code is required";
+    setStep2Errors(errors);
+    return Object.keys(errors).length === 0;
+  }
+
   async function handleStep2Next() {
+    if (!validateStep2()) {
+      toast({ title: "Please fix the highlighted errors before continuing", variant: "destructive" });
+      return;
+    }
     const payload = buildClaimPayload();
     try {
       await saveMutation.mutateAsync(payload);
@@ -977,6 +1043,18 @@ export default function ClaimWizard() {
     }
   }
 
+  const { data: draftClaims } = useQuery<any[]>({
+    queryKey: ["/api/billing/claims/drafts"],
+    queryFn: async () => {
+      const res = await fetch("/api/claims", { credentials: "include" });
+      if (!res.ok) return [];
+      const claims = await res.json();
+      return (claims || []).filter((c: any) => c.status === "draft" && new Date(c.createdAt) > new Date(Date.now() - 7 * 86400000));
+    },
+    enabled: step === 0 && !claimId,
+  });
+  const [draftBannerDismissed, setDraftBannerDismissed] = useState(false);
+
   const totalAmount = serviceLines.reduce((sum, l) => sum + (parseFloat(l.totalCharge) || 0), 0);
   const selectedProvider = providers.find((p: any) => p.id === providerId);
 
@@ -986,6 +1064,25 @@ export default function ClaimWizard() {
         <h1 className="text-2xl font-semibold" data-testid="text-page-title">New Claim</h1>
         <p className="text-muted-foreground">Create a new claim for billing</p>
       </div>
+
+      {step === 0 && !draftBannerDismissed && draftClaims && draftClaims.length > 0 && (
+        <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="banner-drafts">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <p className="text-sm text-amber-700 dark:text-amber-300">
+              You have {draftClaims.length} unfinished claim{draftClaims.length > 1 ? "s" : ""} from the past 7 days.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button variant="outline" size="sm" onClick={() => navigate("/billing/claims?status=draft")} data-testid="link-view-drafts">
+              View drafts
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setDraftBannerDismissed(true)} data-testid="button-dismiss-drafts">
+              <XCircle className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       <StepIndicator current={step} />
 
@@ -1014,8 +1111,8 @@ export default function ClaimWizard() {
           <Card>
             <CardHeader><CardTitle>Rendering Provider</CardTitle></CardHeader>
             <CardContent>
-              <Select value={providerId} onValueChange={setProviderId}>
-                <SelectTrigger data-testid="select-provider">
+              <Select value={providerId} onValueChange={(v) => { setProviderId(v); setStep2Errors(prev => { const n = {...prev}; delete n.provider; return n; }); }}>
+                <SelectTrigger data-testid="select-provider" className={step2Errors.provider ? "border-red-500" : ""}>
                   <SelectValue placeholder="Select provider..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -1027,6 +1124,7 @@ export default function ClaimWizard() {
                   ))}
                 </SelectContent>
               </Select>
+              {step2Errors.provider && <p className="text-sm text-red-500 mt-1" data-testid="error-provider">{step2Errors.provider}</p>}
             </CardContent>
           </Card>
 
@@ -1076,6 +1174,7 @@ export default function ClaimWizard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              {step2Errors.serviceLines && <p className="text-sm text-red-500" data-testid="error-service-lines">{step2Errors.serviceLines}</p>}
               {serviceLines.map((line, i) => (
                 <ServiceLineRow
                   key={i}
@@ -1093,10 +1192,11 @@ export default function ClaimWizard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className={step2Errors.icd10 ? "border-red-500" : ""}>
             <CardHeader><CardTitle>ICD-10 Diagnosis</CardTitle></CardHeader>
             <CardContent className="space-y-3">
-              <ICD10Search label="Primary Diagnosis (required)" value={icd10Primary} onChange={setIcd10Primary} testId="icd10-primary" />
+              {step2Errors.icd10 && <p className="text-sm text-red-500" data-testid="error-icd10">{step2Errors.icd10}</p>}
+              <ICD10Search label="Primary Diagnosis (required)" value={icd10Primary} onChange={(val) => { setIcd10Primary(val); setStep2Errors(prev => { const n = {...prev}; delete n.icd10; return n; }); }} testId="icd10-primary" />
               {icd10Secondary.map((d, i) => (
                 <ICD10Search
                   key={i}

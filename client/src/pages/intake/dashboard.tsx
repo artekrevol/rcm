@@ -86,7 +86,12 @@ export default function IntakeDashboard() {
                 const breaches = item?.sla_breach_count || 0;
                 const showBreach = (status === "attempting_contact" || status === "contacted") && breaches > 0;
                 return (
-                  <Card key={status} data-testid={`card-pipeline-${status}`}>
+                  <Card
+                    key={status}
+                    data-testid={`card-pipeline-${status}`}
+                    className="cursor-pointer hover:border-primary transition-colors"
+                    onClick={() => navigate(`/intake/deals?status=${status}`)}
+                  >
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between mb-2">
                         <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${PIPELINE_COLORS[status] || ""}`}>

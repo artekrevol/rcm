@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { StatusBadge, ClaimStatusBadge } from "@/components/status-badge";
 import { RiskScore } from "@/components/risk-score";
-import { Search, Filter, FileText, AlertTriangle, X, Download, ArrowRight } from "lucide-react";
+import { Search, Filter, FileText, AlertTriangle, X, Download, ArrowRight, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import { format } from "date-fns";
 import type { Claim } from "@shared/schema";
 
@@ -33,18 +33,40 @@ const claimStatuses = [
 ];
 
 
+type SortKey = "status" | "amount" | "createdAt" | "payer" | null;
+type SortDir = "asc" | "desc";
+
 export default function ClaimsPage() {
   const [, setLocation] = useLocation();
+  const searchStr = useSearch();
+  const urlParams = new URLSearchParams(searchStr);
+  const urlStatus = urlParams.get("status");
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>(urlStatus || "all");
   const [payerFilter, setPayerFilter] = useState<string>("all");
   const [riskFilter, setRiskFilter] = useState<string>("all");
+  const [sortKey, setSortKey] = useState<SortKey>("createdAt");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const { data: claims, isLoading } = useQuery<Claim[]>({
     queryKey: ["/api/claims"],
   });
 
   const uniquePayers = Array.from(new Set(claims?.map(c => c.payer) || [])).sort();
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir(key === "amount" ? "desc" : "asc");
+    }
+  }
+
+  function SortIcon({ col }: { col: SortKey }) {
+    if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-40" />;
+    return sortDir === "asc" ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />;
+  }
 
   const filteredClaims = claims?.filter((claim) => {
     const matchesSearch =
@@ -57,6 +79,20 @@ export default function ClaimsPage() {
       riskFilter === "all" || claim.readinessStatus === riskFilter;
     return matchesSearch && matchesStatus && matchesPayer && matchesRisk;
   });
+
+  const sortedClaims = useMemo(() => {
+    if (!filteredClaims || !sortKey) return filteredClaims;
+    return [...filteredClaims].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "status": cmp = a.status.localeCompare(b.status); break;
+        case "amount": cmp = (a.amount || 0) - (b.amount || 0); break;
+        case "createdAt": cmp = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(); break;
+        case "payer": cmp = (a.payer || "").localeCompare(b.payer || ""); break;
+      }
+      return sortDir === "desc" ? -cmp : cmp;
+    });
+  }, [filteredClaims, sortKey, sortDir]);
 
   const atRiskCount = claims?.filter(
     (c) => c.readinessStatus === "YELLOW" || c.readinessStatus === "RED"
@@ -73,6 +109,7 @@ export default function ClaimsPage() {
     {
       key: "payer",
       header: "Payer",
+      sortable: true,
       render: (claim: Claim) => (
         <span className="text-sm font-medium">{claim.payer}</span>
       ),
@@ -89,6 +126,7 @@ export default function ClaimsPage() {
     {
       key: "amount",
       header: "Amount",
+      sortable: true,
       render: (claim: Claim) => (
         <span className="font-medium">${claim.amount.toLocaleString()}</span>
       ),
@@ -109,6 +147,7 @@ export default function ClaimsPage() {
     {
       key: "status",
       header: "Status",
+      sortable: true,
       render: (claim: Claim) => <ClaimStatusBadge status={claim.status} />,
     },
     {
@@ -132,6 +171,7 @@ export default function ClaimsPage() {
     {
       key: "createdAt",
       header: "Created",
+      sortable: true,
       render: (claim: Claim) => (
         <span className="text-sm text-muted-foreground">
           {format(new Date(claim.createdAt), "MMM d, yyyy")}
@@ -265,12 +305,21 @@ export default function ClaimsPage() {
       <Card>
         <CardContent className="p-0">
           <DataTable
-            data={filteredClaims || []}
+            data={sortedClaims || []}
             columns={columns}
             keyExtractor={(claim) => claim.id}
-            onRowClick={(claim) => setLocation(`/claims/${claim.id}`)}
+            onRowClick={(claim) => {
+              if (claim.status === "draft") {
+                setLocation(`/billing/claims/new?claimId=${claim.id}&patientId=${claim.patientId}`);
+              } else {
+                setLocation(`/claims/${claim.id}`);
+              }
+            }}
             emptyMessage="No claims found"
             isLoading={isLoading}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            onSort={(key) => toggleSort(key as SortKey)}
           />
         </CardContent>
       </Card>
