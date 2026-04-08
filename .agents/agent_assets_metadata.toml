@@ -6,3 +6,9 @@ id = "PbSNDqP136dNUa6YK-JAC"
 uri = "file://ClaimShield_Platform_Scope.md"
 type = "text"
 title = "Claim Shield Health — Platform Scope & User Flows"
+
+[[outputs]]
+id = "T7g_iKBmvYFEHU0MD6tfr"
+uri = "file://AUDIT_REPORT.md"
+type = "text"
+title = "Claim Shield Health — Full QA Audit Report"

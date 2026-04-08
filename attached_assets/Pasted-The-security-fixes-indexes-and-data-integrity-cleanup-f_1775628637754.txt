@@ -1,0 +1,62 @@
+The security fixes, indexes, and data integrity cleanup from the audit are confirmed. Thank you.
+However the audit prompt requested a full structured report and flow optimization analysis that was not delivered. The fixes addressed the technical critical issues but the UX audit, flow optimization, and detailed findings report were not produced.
+Do not make any further code changes. Produce the audit report that was requested, covering these sections that were skipped:
+Section A — UX Scorecard
+For each screen listed in Part 2 of the audit prompt, provide the 5-dimension rating (Clarity / Efficiency / Feedback / Error Recovery / Consistency, each scored 1–5) with specific observations for any dimension scoring 3 or below. Screens to cover:
+
+Login page
+Module selector
+Intake dashboard
+Lead worklist (table and board view)
+Lead detail page
+Billing dashboard
+Claim wizard (all 3 steps)
+Patient detail page
+Claims list
+Claim detail page
+Practice settings
+Intelligence / denial prevention pages
+Compliance reports
+
+Section B — Claim Wizard Technical Findings
+Report on every checkbox item from section 1.4 of the audit prompt. I need to know specifically:
+
+Does the unit calculator use the VA location rate from va_location_rates or a hardcoded value?
+Does the ICD-10 search query the full 97,584-code database?
+Is there a warning when no billing location is configured?
+Does draft auto-save work if the browser is closed mid-wizard?
+Can the wizard be advanced without required fields?
+
+Section C — Flow Optimization
+For each of the 5 workflows in Part 3, produce:
+
+Current flow — numbered steps, exact as implemented
+Friction points identified
+Proposed ideal flow — numbered steps
+Compliance-critical steps marked ⚖️
+Step count reduction (X → Y steps)
+
+The 5 workflows:
+
+New Patient Intake → First Claim (full end-to-end)
+Claim Creation Wizard
+Denial → Resubmission
+Lead Follow-Up Outreach
+Compliance Reporting
+
+Section D — First-Time User Experience
+Simulate a brand-new office manager logging in for the first time and setting up the practice through their first exported claim. Rate the experience 1–10 and list every point of confusion, missing instruction, or required prior knowledge.
+Section E — Performance Findings
+Report the results of the index queries from section 4.3. Confirm which tables now have indexes and whether any search queries are still running without index support.
+Section F — Priority Fix List
+Top 20 items ranked by severity × frequency of user impact. Format each as:
+
+Issue description
+Screen/location
+Severity (Critical/Major/Minor)
+Effort estimate (S/M/L)
+Phase recommendation
+
+Deliver this as a structured report. No code changes while producing the report.
+
+Once you receive that report, bring it back here and we'll go through it together to prioritize what gets built into Phase 2 vs what gets fixed immediately.
