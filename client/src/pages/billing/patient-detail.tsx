@@ -67,9 +67,16 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
 
   useEffect(() => {
     if (patient && patient.id !== loadedId) {
+      let firstName = patient.first_name || "";
+      let lastName = patient.last_name || "";
+      if (!firstName && !lastName && patient.lead_name) {
+        const parts = patient.lead_name.trim().split(/\s+/);
+        firstName = parts[0] || "";
+        lastName = parts.slice(1).join(" ") || "";
+      }
       setForm({
-        firstName: patient.first_name || "",
-        lastName: patient.last_name || "",
+        firstName,
+        lastName,
         dob: patient.dob || "",
         sex: patient.sex || "",
         phone: patient.phone || "",

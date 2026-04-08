@@ -1079,11 +1079,19 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const db = await import("./db").then(m => m.pool);
       const { rows } = await db.query(
-        `SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
+        `SELECT p.*, l.name as lead_name, l.phone as lead_phone, l.email as lead_email FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
         [req.params.id]
       );
       if (rows.length === 0) return res.status(404).json({ error: "Patient not found" });
-      res.json(rows[0]);
+      const patient = rows[0];
+      if (!patient.first_name && !patient.last_name && patient.lead_name) {
+        const parts = patient.lead_name.trim().split(/\s+/);
+        patient.first_name = parts[0] || null;
+        patient.last_name = parts.slice(1).join(" ") || null;
+      }
+      if (!patient.phone && patient.lead_phone) patient.phone = patient.lead_phone;
+      if (!patient.email && patient.lead_email) patient.email = patient.lead_email;
+      res.json(patient);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
