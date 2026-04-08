@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "PbSNDqP136dNUa6YK-JAC"
+uri = "file://ClaimShield_Platform_Scope.md"
+type = "text"
+title = "Claim Shield Health — Platform Scope & User Flows"
