@@ -141,7 +141,27 @@ async function syncPatientToLead(patient: Patient, extractedData?: any): Promise
 }
 
 export async function registerRoutes(server: Server, app: Express): Promise<void> {
-  
+
+  try {
+    const { pool } = await import("./db");
+    await pool.query(`
+      UPDATE claims SET
+        reason = d.denial_reason_text,
+        next_step = CASE 
+          WHEN d.denial_category = 'Coverage' THEN 'Verify coverage and resubmit with correct plan info'
+          WHEN d.denial_category = 'Authorization' THEN 'Obtain prior authorization and submit appeal'
+          WHEN d.denial_category = 'Coding' THEN 'Review coding, correct errors, and resubmit'
+          WHEN d.denial_category = 'Medical Necessity' THEN 'Gather clinical documentation and file appeal'
+          WHEN d.denial_category = 'Timely Filing' THEN 'File appeal with proof of timely submission'
+          ELSE 'Review denial reason and determine appeal strategy'
+        END
+      FROM denials d
+      WHERE claims.id = d.claim_id
+        AND claims.status IN ('denied', 'appealed')
+        AND claims.reason IS NULL
+    `);
+  } catch {}
+
   app.get("/api/payers", requireAuth, async (req, res) => {
     res.json(allPayers);
   });
@@ -1213,7 +1233,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { text, author } = req.body;
       if (!text?.trim()) return res.status(400).json({ error: "Note text is required" });
       const db = await import("./db").then(m => m.pool);
-      const newNote = { text: text.trim(), timestamp: new Date().toISOString(), author: author || "Current User" };
+      const user = req.user as any;
+      const authorName = author || user?.name || user?.email || "Unknown";
+      const newNote = { text: text.trim(), timestamp: new Date().toISOString(), author: authorName };
       const existing = await db.query("SELECT notes FROM patients WHERE id = $1", [req.params.id]);
       if (existing.rows.length === 0) return res.status(404).json({ error: "Patient not found" });
       let notes: any[] = [];

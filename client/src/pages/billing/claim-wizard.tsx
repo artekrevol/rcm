@@ -151,7 +151,8 @@ function PatientSearch({ onSelect, selectedPatient }: {
     queryFn: async () => {
       if (!debouncedSearch) return [];
       const res = await fetch(`/api/billing/patients?search=${encodeURIComponent(debouncedSearch)}`);
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     },
     enabled: debouncedSearch.length > 0,
   });
@@ -223,7 +224,7 @@ function PatientSearch({ onSelect, selectedPatient }: {
                 <button
                   key={p.id}
                   className="w-full text-left px-3 py-2 hover:bg-accent rounded text-sm flex justify-between items-center"
-                  onClick={() => { onSelect(p); setShowDropdown(false); }}
+                  onMouseDown={(e) => { e.preventDefault(); onSelect(p); setShowDropdown(false); }}
                   data-testid={`option-patient-${p.id}`}
                 >
                   <span className="font-medium">
@@ -315,12 +316,14 @@ function InlineCodeSearch({ onSelect }: { onSelect: (result: any) => void }) {
     queryFn: async () => {
       if (!dq) return [];
       const res = await fetch(`/api/billing/hcpcs/search?q=${encodeURIComponent(dq)}`);
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : data?.results || data?.data || [];
     },
     enabled: dq.length > 0,
   });
 
-  const noResults = dq.length > 0 && !isFetching && results.length === 0;
+  const safeResults = Array.isArray(results) ? results : [];
+  const noResults = dq.length > 0 && !isFetching && safeResults.length === 0;
 
   return (
     <div className="space-y-2 border rounded-md p-3 bg-muted/30">
@@ -334,7 +337,7 @@ function InlineCodeSearch({ onSelect }: { onSelect: (result: any) => void }) {
           data-testid="input-code-search"
         />
       </div>
-      {results.map((r: any) => (
+      {safeResults.map((r: any) => (
         <button
           key={r.code}
           className="w-full text-left p-2 hover:bg-accent rounded text-sm border bg-background"
@@ -632,7 +635,8 @@ function ICD10Search({ label, value, onChange, testId }: {
         const res = await fetch(`/api/billing/icd10/search?q=${encodeURIComponent(q.trim())}`, { credentials: "include" });
         if (res.ok) {
           const data = await res.json();
-          setApiResults(data.map((r: any) => ({ code: r.code, desc: r.description })));
+          const items = Array.isArray(data) ? data : [];
+          setApiResults(items.map((r: any) => ({ code: r.code, desc: r.description })));
         } else {
           setApiResults(ICD10_COMMON.filter(
             (d) => d.code.toLowerCase().includes(q.toLowerCase()) || d.desc.toLowerCase().includes(q.toLowerCase())

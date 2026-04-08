@@ -1,0 +1,113 @@
+The live audit found two critical bugs that make the claim wizard completely non-functional in production. Fix these in this exact order. Do not touch anything else until both are confirmed working.
+
+CRITICAL FIX 1 — Code search crashes the app [C-2]
+In the claim wizard Step 2, any keystroke in the "Search code or description..." field throws TypeError: v.map is not a function and causes a full React white-screen crash.
+Find the component handling the HCPCS/CPT code search in Step 2 of the claim wizard. The error v.map is not a function means the search results response is being treated as an array when it isn't one — the API is likely returning an object like { results: [...] } or an error object, and the component is calling .map() directly on it instead of on the array inside.
+Steps to fix:
+
+Find the search handler — it will be something like useQuery or fetch call on the code search endpoint
+Check what the API actually returns when called — run GET /api/billing/hcpcs/search?q=G02 and inspect the response shape
+Find where .map() is called on the results and add a guard:
+
+typescript// Before:
+results.map(item => ...)
+
+// After:
+const items = Array.isArray(results) ? results : results?.data || results?.results || [];
+items.map(item => ...)
+
+Also add a top-level error boundary around the Step 2 component so that if any error occurs, it shows an error message instead of a white screen. The white screen is never acceptable.
+
+After fixing, verify:
+
+Type "G02" in the code search — results appear, no crash
+Type "skilled nursing" — results appear, no crash
+Type a CPT code "97110" — CPT fallback appears, no crash
+Type gibberish "ZZZZZ" — "No results found" message, no crash
+
+
+CRITICAL FIX 2 — Patient dropdown selection broken in wizard Step 1 [C-1]
+In claim wizard Step 1, clicking a patient from the search dropdown closes the dropdown but does not register the selection. The "Next: Service Details" button remains permanently disabled.
+Find the patient search component in Step 1. The issue is almost certainly one of these:
+Most likely cause A — State update not triggering re-render:
+The onSelect handler is setting state but the state update isn't connected to the button's disabled condition.
+typescript// Check that the selected patient state is what the button checks:
+const [selectedPatient, setSelectedPatient] = useState(null);
+
+// The button should check this:
+<Button disabled={!selectedPatient} onClick={handleNext}>
+  Next: Service Details
+</Button>
+
+// The dropdown item should set this:
+<DropdownItem onSelect={(patient) => setSelectedPatient(patient)}>
+Most likely cause B — Event propagation issue:
+The click on the dropdown item is being caught by a parent element's blur handler which dismisses the dropdown before the selection registers.
+typescript// Fix by using onMouseDown instead of onClick on dropdown items:
+<DropdownItem onMouseDown={(e) => {
+  e.preventDefault(); // prevents blur from firing
+  setSelectedPatient(patient);
+}}>
+Most likely cause C — The search component uses a third-party combobox:
+If using shadcn/ui's Command component or Combobox, check that the onValueChange or onSelect prop is correctly wired to local state.
+After fixing, verify:
+
+Type partial patient name, results appear
+Click a result — patient name appears in the selection area
+"Next: Service Details" button becomes enabled
+Click Next — Step 2 loads with the correct patient shown
+
+
+MAJOR FIX 3 — Denial reason not showing on denied claims [M-2]
+The "Reason" and "Next Step" columns show "—" for all denied claims. This data exists in the claims table (reason and next_step columns) but isn't being surfaced in the UI.
+Find the claims list query — it almost certainly selects the standard claim fields but omits reason and next_step. Add them to the SELECT:
+sqlSELECT id, patient_id, status, amount, payer, cpt_codes, 
+       reason, next_step, readiness_status, risk_score, 
+       created_at, service_date
+FROM claims
+Then in the claims list component, find the table column definitions for "Reason" and "Next Step" and verify they're reading from claim.reason and claim.next_step (not claim.denial_reason or some other field name).
+On the claim detail page, also ensure the denial reason is prominently displayed — not buried in the timeline but visible in the claim header or a dedicated "Denial Information" section for denied claims.
+Verify by navigating to a denied claim — the denial reason should now show in the list and on the detail page.
+
+MAJOR FIX 4 — Note author shows "Current User" instead of actual name [M-8]
+Patient notes display "Current User" as the author instead of the actual user's name. Find where notes are created and where they are displayed.
+On creation — the note INSERT likely uses a placeholder instead of the actual session user:
+typescript// Wrong:
+performed_by: "Current User"
+
+// Correct:
+performed_by: req.user.id  // then join to users table when displaying
+On display — the notes query likely doesn't join to the users table to get the display name:
+sql-- Add this join to the notes query:
+SELECT al.*, u.email as user_email, 
+  COALESCE(u.first_name || ' ' || u.last_name, u.email) as user_display_name
+FROM activity_logs al
+LEFT JOIN users u ON al.performed_by = u.id
+WHERE al.patient_id = $1 AND al.activity_type = 'note'
+Then in the UI, display note.user_display_name instead of the hardcoded string.
+
+MINOR FIX 5 — "CPT Codes" label should be "HCPCS Codes" [m-4]
+Search the codebase for every instance of the string "CPT Codes" used as a UI label (not in comments or variable names). Replace with "HCPCS Codes" in:
+
+Claims list table column header
+Claim detail page section label
+Any other place where service codes are labeled as "CPT"
+
+Note: Keep "CPT" in places where it specifically refers to CPT codes (e.g., the code lookup page tabs, the CPT fallback message in the wizard). Only change labels where the general term for all service codes is being used.
+
+MINOR FIX 6 — Billing dashboard pipeline cards not clickable [M-1]
+The four pipeline cards (Paid, In Process, Drafts, Denied) are not clickable and don't navigate anywhere. Add click navigation to each:
+
+Paid card → /billing/claims?status=paid
+In Process card → /billing/claims?status=in_process (which should match claims with status: submitted, acknowledged, pending)
+Drafts card → /billing/claims?status=draft
+Denied card → /billing/claims?status=denied
+
+Use the same navigation pattern as the alert cards which are already working correctly.
+
+DO NOT FIX based on this audit:
+
+Any responsive/mobile layout issues (m-9) — the audit was run in a constrained viewport via the Chrome extension, not a real browser. Test at full desktop width in a real browser before treating these as real bugs.
+[M-5] Submit to Availity — this is intentionally deferred to Phase 2, not a bug
+[M-4] No edit claim capability — also Phase 2, not a bug
+[M-3] File Appeal non-functional — Phase 2

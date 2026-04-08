@@ -33,6 +33,7 @@ import {
   Loader2,
   Download,
   ChevronDown,
+  XCircle,
 } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
@@ -269,6 +270,31 @@ export default function ClaimDetailPage() {
             </CardContent>
           </Card>
 
+          {(claim.status === "denied" || claim.status === "appealed") && (claim.reason || claim.nextStep) && (
+            <Card className="border-red-200 dark:border-red-900" data-testid="card-denial-info">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base font-medium text-red-700 dark:text-red-400 flex items-center gap-2">
+                  <XCircle className="h-4 w-4" />
+                  Denial Information
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {claim.reason && (
+                  <div>
+                    <p className="text-xs text-muted-foreground font-medium">Denial Reason</p>
+                    <p className="text-sm mt-0.5" data-testid="text-denial-reason">{claim.reason}</p>
+                  </div>
+                )}
+                {claim.nextStep && (
+                  <div>
+                    <p className="text-xs text-muted-foreground font-medium">Recommended Next Step</p>
+                    <p className="text-sm mt-0.5" data-testid="text-denial-next-step">{claim.nextStep}</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base font-medium">Claim Details</CardTitle>
@@ -284,7 +310,7 @@ export default function ClaimDetailPage() {
               <div className="flex items-center gap-3">
                 <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">CPT Codes</p>
+                  <p className="text-xs text-muted-foreground">HCPCS Codes</p>
                   <p className="text-sm font-mono truncate">
                     {claim.cptCodes?.join(", ")}
                   </p>

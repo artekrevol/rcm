@@ -73,7 +73,9 @@ export default function ClaimsPage() {
       claim.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       claim.payer.toLowerCase().includes(searchQuery.toLowerCase()) ||
       claim.cptCodes?.some((code) => code.includes(searchQuery));
-    const matchesStatus = statusFilter === "all" || claim.status === statusFilter;
+    const IN_PROCESS_STATUSES = ["submitted", "acknowledged", "pending", "verified"];
+    const matchesStatus = statusFilter === "all" || 
+      (statusFilter === "in_process" ? IN_PROCESS_STATUSES.includes(claim.status) : claim.status === statusFilter);
     const matchesPayer = payerFilter === "all" || claim.payer === payerFilter;
     const matchesRisk =
       riskFilter === "all" || claim.readinessStatus === riskFilter;
@@ -116,7 +118,7 @@ export default function ClaimsPage() {
     },
     {
       key: "cptCodes",
-      header: "CPT Codes",
+      header: "HCPCS Codes",
       render: (claim: Claim) => (
         <span className="font-mono text-xs text-muted-foreground">
           {claim.cptCodes?.join(", ")}

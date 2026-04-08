@@ -79,34 +79,46 @@ export default function BillingDashboard() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-pipeline">
-        <MetricCard
-          title="Paid"
-          value={pipeline.paid.count}
-          subtitle={formatCurrency(pipeline.paid.amount)}
-          icon={<CheckCircle className="h-5 w-5" />}
-          variant="green"
-        />
-        <MetricCard
-          title="In Process"
-          value={pipeline.inProcess.count}
-          subtitle={formatCurrency(pipeline.inProcess.amount)}
-          icon={<Clock className="h-5 w-5" />}
-          variant="blue"
-        />
-        <MetricCard
-          title="Drafts"
-          value={pipeline.draft.count}
-          subtitle={formatCurrency(pipeline.draft.amount)}
-          icon={<FileText className="h-5 w-5" />}
-          variant="default"
-        />
-        <MetricCard
-          title="Denied"
-          value={pipeline.denied.count}
-          subtitle={formatCurrency(pipeline.denied.amount)}
-          icon={<XCircle className="h-5 w-5" />}
-          variant="amber"
-        />
+        <Link href="/billing/claims?status=paid">
+          <MetricCard
+            title="Paid"
+            value={pipeline.paid.count}
+            subtitle={formatCurrency(pipeline.paid.amount)}
+            icon={<CheckCircle className="h-5 w-5" />}
+            variant="green"
+            className="cursor-pointer hover:border-green-300 transition-colors"
+          />
+        </Link>
+        <Link href="/billing/claims?status=in_process">
+          <MetricCard
+            title="In Process"
+            value={pipeline.inProcess.count}
+            subtitle={formatCurrency(pipeline.inProcess.amount)}
+            icon={<Clock className="h-5 w-5" />}
+            variant="blue"
+            className="cursor-pointer hover:border-blue-300 transition-colors"
+          />
+        </Link>
+        <Link href="/billing/claims?status=draft">
+          <MetricCard
+            title="Drafts"
+            value={pipeline.draft.count}
+            subtitle={formatCurrency(pipeline.draft.amount)}
+            icon={<FileText className="h-5 w-5" />}
+            variant="default"
+            className="cursor-pointer hover:border-muted-foreground/30 transition-colors"
+          />
+        </Link>
+        <Link href="/billing/claims?status=denied">
+          <MetricCard
+            title="Denied"
+            value={pipeline.denied.count}
+            subtitle={formatCurrency(pipeline.denied.amount)}
+            icon={<XCircle className="h-5 w-5" />}
+            variant="amber"
+            className="cursor-pointer hover:border-amber-300 transition-colors"
+          />
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-alerts">
