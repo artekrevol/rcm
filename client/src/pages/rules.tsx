@@ -322,6 +322,7 @@ export default function RulesPage() {
                 <TableRow>
                   <TableHead className="w-12">Active</TableHead>
                   <TableHead>Rule</TableHead>
+                  <TableHead>Action</TableHead>
                   <TableHead>Payer</TableHead>
                   <TableHead>CPT</TableHead>
                   <TableHead className="text-center">Triggered</TableHead>
@@ -350,6 +351,11 @@ export default function RulesPage() {
                           {rule.description}
                         </p>
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={rule.preventionAction === "block" ? "destructive" : "secondary"} className="text-xs" data-testid={`badge-action-${rule.id}`}>
+                        {rule.preventionAction === "block" ? "Block" : rule.preventionAction === "warn" ? "Warn" : rule.preventionAction}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       {rule.payer ? (
