@@ -47,6 +47,11 @@ export default function ClaimDetailPage() {
   const [pdfGenerating, setPdfGenerating] = useState(false);
   const [cms1500Loading, setCms1500Loading] = useState(false);
   const [cms1500Done, setCms1500Done] = useState(false);
+  const [submittingOA, setSubmittingOA] = useState(false);
+
+  const { data: practiceSettings } = useQuery<any>({
+    queryKey: ["/api/billing/practice-settings"],
+  });
 
   const { data: claim, isLoading: claimLoading } = useQuery<Claim>({
     queryKey: ["/api/claims", id],
@@ -478,6 +483,58 @@ export default function ClaimDetailPage() {
                 <HelpCircle className="h-4 w-4 mr-2" />
                 View Risk Analysis
               </Button>
+              {practiceSettings?.oa_connected &&
+                ["exported", "draft", "created"].includes(claim.status) && (
+                  <Button
+                    className="w-full justify-start"
+                    onClick={async () => {
+                      setSubmittingOA(true);
+                      try {
+                        const res = await fetch(`/api/billing/claims/${claim.id}/submit-oa`, {
+                          method: "POST",
+                          credentials: "include",
+                        });
+                        const result = await res.json();
+                        if (result.success) {
+                          toast({ title: "Claim submitted successfully", description: `File: ${result.filename}` });
+                          queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+                        } else {
+                          toast({ title: "Submission failed", description: result.error || result.message, variant: "destructive" });
+                        }
+                      } catch (err: any) {
+                        toast({ title: "Submission failed", description: err.message, variant: "destructive" });
+                      } finally {
+                        setSubmittingOA(false);
+                      }
+                    }}
+                    disabled={submittingOA}
+                    data-testid="button-submit-oa"
+                  >
+                    {submittingOA ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Submitting...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4 mr-2" />
+                        Submit via Office Ally
+                      </>
+                    )}
+                  </Button>
+                )}
+              {!practiceSettings?.oa_connected &&
+                ["exported", "created", "draft"].includes(claim.status) && (
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start text-muted-foreground"
+                    onClick={() => setLocation("/billing/settings?tab=clearinghouse")}
+                    data-testid="button-connect-oa"
+                  >
+                    <Send className="h-4 w-4 mr-2" />
+                    Connect Office Ally to submit electronically
+                  </Button>
+                )}
               {claim.status === "denied" && (
                 <Button variant="outline" className="w-full justify-start">
                   <AlertTriangle className="h-4 w-4 mr-2" />

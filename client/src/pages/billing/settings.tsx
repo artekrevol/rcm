@@ -50,6 +50,8 @@ import {
   Clock,
 } from "lucide-react";
 
+import { CheckCircle, Send, Wifi } from "lucide-react";
+
 const CREDENTIAL_OPTIONS = ["RN", "LPN", "PT", "OT", "SLP", "HHA", "PCA", "Other"];
 
 function ProvidersTab() {
@@ -963,7 +965,228 @@ function RateTablesTab() {
   );
 }
 
+function ClearinghouseTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data: practiceSettings } = useQuery<any>({
+    queryKey: ["/api/billing/practice-settings"],
+  });
+
+  const [oaForm, setOaForm] = useState({
+    submitterId: "",
+    username: "",
+    password: "",
+  });
+  const [initialized, setInitialized] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [savingCredentials, setSavingCredentials] = useState(false);
+  const [connectionTestResult, setConnectionTestResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (practiceSettings && !initialized) {
+      setOaForm({
+        submitterId: practiceSettings.oa_submitter_id || "",
+        username: practiceSettings.oa_sftp_username || "",
+        password: "",
+      });
+      setInitialized(true);
+    }
+  }, [practiceSettings, initialized]);
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    setConnectionTestResult(null);
+    try {
+      const res = await fetch("/api/billing/test-oa-connection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          username: oaForm.username,
+          password: oaForm.password,
+        }),
+      });
+      const result = await res.json();
+      setConnectionTestResult(result);
+      if (result.success) {
+        queryClient.invalidateQueries({ queryKey: ["/api/billing/practice-settings"] });
+      }
+    } catch {
+      setConnectionTestResult({
+        success: false,
+        message: "Network error — could not reach the server",
+      });
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
+  const handleSaveOASettings = async () => {
+    setSavingCredentials(true);
+    try {
+      await apiRequest("PUT", "/api/billing/practice-settings", {
+        practiceName: practiceSettings?.practice_name,
+        primaryNpi: practiceSettings?.primary_npi,
+        taxId: practiceSettings?.tax_id,
+        taxonomyCode: practiceSettings?.taxonomy_code,
+        phone: practiceSettings?.phone,
+        defaultPos: practiceSettings?.default_pos,
+        address: practiceSettings?.address,
+        billingLocation: practiceSettings?.billing_location,
+        oa_submitter_id: oaForm.submitterId,
+        oa_sftp_username: oaForm.username,
+        oa_sftp_password: oaForm.password || undefined,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/practice-settings"] });
+      toast({ title: "Office Ally credentials saved" });
+    } catch (err: any) {
+      toast({ title: "Error saving credentials", description: err.message, variant: "destructive" });
+    } finally {
+      setSavingCredentials(false);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <div>
+        <h3 className="text-base font-semibold" data-testid="text-clearinghouse-title">Office Ally Integration</h3>
+        <p className="text-sm text-muted-foreground mt-1">
+          Connect your Office Ally account to enable automatic claim submission
+          and real-time denial tracking. Office Ally is free for VA Community Care
+          and Medicare claims.{" "}
+          <a
+            href="https://cms.officeally.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-500 hover:underline"
+            data-testid="link-office-ally"
+          >
+            Create a free Office Ally account
+          </a>
+        </p>
+      </div>
+
+      {practiceSettings?.oa_connected && (
+        <div className="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg" data-testid="banner-oa-connected">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <span className="text-sm text-green-700 dark:text-green-300 font-medium">
+            Connected to Office Ally
+          </span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 max-w-lg">
+        <div className="space-y-1">
+          <Label htmlFor="oa_submitter_id">Submitter ID</Label>
+          <Input
+            id="oa_submitter_id"
+            value={oaForm.submitterId}
+            onChange={(e) => setOaForm((f) => ({ ...f, submitterId: e.target.value }))}
+            placeholder="e.g. CLAIMSHIELD01"
+            className="mt-1"
+            data-testid="input-oa-submitter-id"
+          />
+          <p className="text-xs text-muted-foreground">
+            Found in Office Ally under Account Settings
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="oa_username">Office Ally Username</Label>
+          <Input
+            id="oa_username"
+            value={oaForm.username}
+            onChange={(e) => setOaForm((f) => ({ ...f, username: e.target.value }))}
+            placeholder="Your Office Ally login username"
+            className="mt-1"
+            data-testid="input-oa-username"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="oa_password">Office Ally Password</Label>
+          <Input
+            id="oa_password"
+            type="password"
+            value={oaForm.password}
+            onChange={(e) => setOaForm((f) => ({ ...f, password: e.target.value }))}
+            placeholder={practiceSettings?.oa_sftp_username ? "••••••••  (saved)" : "Enter password"}
+            className="mt-1"
+            data-testid="input-oa-password"
+          />
+        </div>
+
+        <div className="flex gap-3 pt-2">
+          <Button
+            variant="outline"
+            onClick={handleTestConnection}
+            disabled={!oaForm.username || !oaForm.password || testingConnection}
+            data-testid="button-test-connection"
+          >
+            {testingConnection ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Testing...
+              </>
+            ) : (
+              <>
+                <Wifi className="h-4 w-4 mr-2" />
+                Test Connection
+              </>
+            )}
+          </Button>
+
+          <Button
+            onClick={handleSaveOASettings}
+            disabled={!oaForm.username || savingCredentials}
+            data-testid="button-save-oa"
+          >
+            {savingCredentials ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              "Save Credentials"
+            )}
+          </Button>
+        </div>
+
+        {connectionTestResult && (
+          <div
+            className={`p-3 rounded-lg text-sm ${
+              connectionTestResult.success
+                ? "bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300"
+                : "bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300"
+            }`}
+            data-testid="text-connection-result"
+          >
+            {connectionTestResult.message}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t pt-4">
+        <h4 className="text-sm font-medium mb-2">How it works</h4>
+        <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
+          <li>Create a free account at officeally.com</li>
+          <li>Enter your username and password above and click Test Connection</li>
+          <li>Once connected, a "Submit via Office Ally" button appears on every claim</li>
+          <li>Claims are submitted automatically and denial reasons are tracked in real time</li>
+        </ol>
+      </div>
+    </div>
+  );
+}
+
 export default function BillingSettings() {
+  const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const tabFromUrl = searchParams.get("tab");
+  const defaultTab = tabFromUrl && ["providers", "practice", "payers", "rates", "clearinghouse"].includes(tabFromUrl) ? tabFromUrl : "providers";
+
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -971,7 +1194,7 @@ export default function BillingSettings() {
         <p className="text-muted-foreground">Practice info, providers, payers, and rate configuration</p>
       </div>
 
-      <Tabs defaultValue="providers" className="space-y-4">
+      <Tabs defaultValue={defaultTab} className="space-y-4">
         <TabsList data-testid="tabs-settings">
           <TabsTrigger value="providers" data-testid="tab-providers">
             <Users className="h-4 w-4 mr-2" />
@@ -989,6 +1212,10 @@ export default function BillingSettings() {
             <DollarSign className="h-4 w-4 mr-2" />
             Rate Tables
           </TabsTrigger>
+          <TabsTrigger value="clearinghouse" data-testid="tab-clearinghouse">
+            <Wifi className="h-4 w-4 mr-2" />
+            Clearinghouse
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="providers">
@@ -1002,6 +1229,9 @@ export default function BillingSettings() {
         </TabsContent>
         <TabsContent value="rates">
           <RateTablesTab />
+        </TabsContent>
+        <TabsContent value="clearinghouse">
+          <ClearinghouseTab />
         </TabsContent>
       </Tabs>
     </div>

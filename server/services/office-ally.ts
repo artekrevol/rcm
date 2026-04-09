@@ -11,6 +11,34 @@ function isSFTPConfigured(): boolean {
   return !!(OA_CONFIG.username && OA_CONFIG.password);
 }
 
+export async function testOAConnection(
+  username: string,
+  password: string
+): Promise<{ success: boolean; message: string }> {
+  let sftp: any;
+  try {
+    const Client = (await import("ssh2-sftp-client")).default;
+    sftp = new Client();
+    await sftp.connect({
+      host: "sftp.officeally.com",
+      port: 22,
+      username,
+      password,
+    });
+    await sftp.end();
+    return {
+      success: true,
+      message: "Connected to Office Ally SFTP successfully",
+    };
+  } catch (err: any) {
+    if (sftp) await sftp.end().catch(() => {});
+    return {
+      success: false,
+      message: `Connection failed: ${err.message}. Check your Office Ally username and password.`,
+    };
+  }
+}
+
 export async function submitClaim837P(
   claimData: EDI837PInput
 ): Promise<{

@@ -148,6 +148,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const { pool } = await import("./db");
 
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS billing_location VARCHAR`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_submitter_id VARCHAR`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_username VARCHAR`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_password VARCHAR`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_connected BOOLEAN DEFAULT false`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS denial_patterns (
@@ -414,14 +418,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation } = req.body;
+      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation, oa_submitter_id, oa_sftp_username, oa_sftp_password } = req.body;
       const db = await import("./db").then(m => m.pool);
       const existing = await db.query("SELECT id FROM practice_settings LIMIT 1");
       if (existing.rows.length > 0) {
-        const { rows } = await db.query(
-          `UPDATE practice_settings SET practice_name=$1, primary_npi=$2, tax_id=$3, taxonomy_code=$4, address=$5, phone=$6, default_pos=$7, billing_location=$9, updated_at=NOW() WHERE id=$8 RETURNING *`,
-          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', existing.rows[0].id, billingLocation || null]
-        );
+        let query = `UPDATE practice_settings SET practice_name=$1, primary_npi=$2, tax_id=$3, taxonomy_code=$4, address=$5, phone=$6, default_pos=$7, billing_location=$9, updated_at=NOW()`;
+        const params: any[] = [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', existing.rows[0].id, billingLocation || null];
+        if (oa_submitter_id !== undefined) { query += `, oa_submitter_id=$${params.length + 1}`; params.push(oa_submitter_id); }
+        if (oa_sftp_username !== undefined) { query += `, oa_sftp_username=$${params.length + 1}`; params.push(oa_sftp_username); }
+        if (oa_sftp_password !== undefined) { query += `, oa_sftp_password=$${params.length + 1}`; params.push(oa_sftp_password); }
+        query += ` WHERE id=$8 RETURNING *`;
+        const { rows } = await db.query(query, params);
         res.json(rows[0]);
       } else {
         const { rows } = await db.query(
@@ -1083,6 +1090,131 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     } catch (err: any) {
       console.error("EDI generation error:", err);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/test-oa-connection", requireRole("admin", "rcm_manager"), async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: "Username and password required" });
+    }
+    try {
+      const { testOAConnection } = await import("./services/office-ally");
+      const result = await testOAConnection(username, password);
+      if (result.success) {
+        const db = await import("./db").then(m => m.pool);
+        await db.query(
+          `UPDATE practice_settings SET oa_sftp_username = $1, oa_sftp_password = $2, oa_connected = true, updated_at = NOW()`,
+          [username, password]
+        );
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.json({ success: false, message: err.message });
+    }
+  });
+
+  app.post("/api/billing/claims/:id/submit-oa", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (!claimResult.rows.length) return res.status(404).json({ success: false, error: "Claim not found" });
+      const c = claimResult.rows[0];
+
+      const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
+      const settingsResult = await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const ps = settingsResult.rows[0];
+      if (!ps) return res.status(400).json({ success: false, error: "Practice settings not configured" });
+      if (!ps.oa_connected) return res.status(400).json({ success: false, error: "Office Ally not connected. Go to Settings → Clearinghouse to connect." });
+
+      let prov = { first_name: "Provider", last_name: "Unknown", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
+      if (c.provider_id) {
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code FROM providers WHERE id = $1", [c.provider_id]);
+        if (provResult.rows.length) prov = provResult.rows[0];
+      }
+
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      if (c.payer_id) {
+        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      } else if (c.payer) {
+        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      }
+
+      const pat = patientResult.rows[0] || {};
+      const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
+      const serviceLines = rawLines.map((sl: any) => ({
+        hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
+        units: Number(sl.units) || 1,
+        charge: Number(sl.charge) || Number(sl.amount) || 0,
+        modifier: sl.modifier || null,
+        diagnosis_pointer: sl.diagnosisPointer || sl.diagnosis_pointer || "1",
+      }));
+      const icd10Codes: string[] = [];
+      if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
+      if (Array.isArray(c.icd10_secondary)) {
+        for (const code of c.icd10_secondary) {
+          if (code && !icd10Codes.includes(code)) icd10Codes.push(code);
+        }
+      }
+      const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
+
+      const { submitClaim837P } = await import("./services/office-ally");
+      const result = await submitClaim837P({
+        claim: {
+          id: c.id,
+          patient_id: c.patient_id,
+          service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+          place_of_service: c.place_of_service || "12",
+          auth_number: c.authorization_number || null,
+          payer: c.payer || payerInfo.name,
+          amount: Number(c.amount) || 0,
+          service_lines: serviceLines,
+          icd10_codes: icd10Codes.length ? icd10Codes : ["Z00.00"],
+        },
+        patient: {
+          first_name: pat.first_name || "",
+          last_name: pat.last_name || "",
+          dob: pat.dob || "1900-01-01",
+          member_id: pat.member_id || pat.insurance_id || "",
+          insurance_carrier: pat.insurance_carrier || c.payer || "",
+        },
+        practice: {
+          name: ps.practice_name || "Practice",
+          npi: ps.primary_npi || "0000000000",
+          tax_id: ps.tax_id || "000000000",
+          taxonomy_code: ps.taxonomy_code || "163W00000X",
+          address: (addr as any).street1 || (addr as any).address || "",
+          city: (addr as any).city || "",
+          state: (addr as any).state || "",
+          zip: (addr as any).zip || "",
+        },
+        provider: {
+          first_name: prov.first_name || "",
+          last_name: prov.last_name || "",
+          npi: prov.npi || ps.primary_npi || "0000000000",
+          taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
+        },
+        payer: payerInfo,
+      });
+
+      if (result.success) {
+        await db.query("UPDATE claims SET status = 'submitted', submission_method = 'office_ally', updated_at = NOW() WHERE id = $1", [c.id]);
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
+          [crypto.randomUUID(), c.id, "Submitted via Office Ally", `837P submitted: ${result.filename}`]
+        );
+        await db.query(
+          `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [crypto.randomUUID(), c.id, c.patient_id, "edi_submitted", `837P submitted via Office Ally: ${result.filename}`, (req.user as any)?.id || null]
+        );
+      }
+
+      res.json(result);
+    } catch (err: any) {
+      console.error("OA submit error:", err);
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
