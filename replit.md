@@ -62,3 +62,11 @@ The system uses Passport.js with a local strategy, bcrypt for password hashing, 
 -   **Vite**: Frontend build tool and dev server.
 -   **esbuild**: Server bundler.
 -   **TypeScript**: Programming language.
+
+## Production Notes
+
+- **Server startup migrations**: `registerRoutes()` runs idempotent migrations at startup: creates `va_location_rates` table if missing, imports VA fee schedule data from SQL file if table is empty, backfills denied claim reasons, seeds default practice settings, updates provider credentials, and cleans up duplicate rules.
+- **VA Location Rates**: 2160 rows from CY26 Fee Schedule. SQL source at `server/va_location_rates.sql`. Table created at startup if missing.
+- **Session**: Requires `SESSION_SECRET` env var in production. Session table created inline (no SQL file dependency).
+- **Passwords**: Test users use `demo123`. Bcrypt-hashed. Plaintext passwords auto-rehashed on login.
+- **NEVER add connect-pg-simple back** — reads `table.sql` from disk, fails in bundled builds.

@@ -1112,6 +1112,18 @@ export default function ClaimWizard() {
 
       {step === 1 && (
         <div className="space-y-4">
+          {patient && (
+            <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-100 dark:border-blue-900" data-testid="banner-step2-patient">
+              <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">
+                Creating claim for: {patient.first_name} {patient.last_name}
+              </span>
+              {patient.insurance_carrier && (
+                <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">
+                  {patient.insurance_carrier}
+                </span>
+              )}
+            </div>
+          )}
           <Card>
             <CardHeader><CardTitle>Rendering Provider</CardTitle></CardHeader>
             <CardContent>

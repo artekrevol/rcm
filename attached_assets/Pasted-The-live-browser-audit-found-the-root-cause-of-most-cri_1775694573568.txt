@@ -1,0 +1,155 @@
+The live browser audit found the root cause of most critical failures. The va_location_rates table does not exist in the production database. Every HCPCS code search returns {"error":"relation \"va_location_rates\" does not exist"} which causes the React white screen crash. This single missing table breaks the claim wizard code search, the Code Lookup page, the VA location dropdown in Settings, and the unit calculator rate lookup.
+Fix everything in this exact order. Do not skip to later fixes until each one is verified.
+
+FIX 1 — Create the va_location_rates table and import the data (Critical — do this first)
+The SQL file va_location_rates_2026.sql was previously generated and should exist in the project. Find it and run it against the production database:
+bash# First check if the file exists
+find . -name "va_location_rates_2026.sql" 2>/dev/null
+
+# If found, run it
+psql $DATABASE_URL < va_location_rates_2026.sql
+If the file is not found in the project, create the table manually and re-import from the source data. The table schema is:
+sqlCREATE TABLE IF NOT EXISTS va_location_rates (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  hcpcs_code VARCHAR(6) NOT NULL,
+  location_name VARCHAR NOT NULL,
+  carrier VARCHAR(10),
+  locality_code VARCHAR(5),
+  facility_rate DECIMAL(10,4),
+  non_facility_rate DECIMAL(10,4),
+  effective_date DATE DEFAULT '2026-01-01',
+  is_non_reimbursable BOOLEAN DEFAULT false,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(hcpcs_code, location_name, carrier, locality_code)
+);
+After running the migration, verify immediately:
+sqlSELECT COUNT(*) FROM va_location_rates;
+-- Expected: 2160
+
+SELECT hcpcs_code, location_name, facility_rate 
+FROM va_location_rates 
+WHERE hcpcs_code = 'G0299' 
+AND location_name IN ('AUSTIN','DALLAS','HOUSTON')
+ORDER BY location_name;
+-- Expected: Austin=$32.19, Dallas=$34.00, Houston=$34.00
+Show me both query results before doing anything else. If the count is 0 or the queries fail, stop and report — do not proceed to Fix 2.
+After Fix 1 verify: Navigate to /billing/codes and search "G0299". It must return a result. Navigate to /billing/claims/new Step 2 and type "skilled nursing" — it must return results without crashing. If either still crashes, the table import failed and must be fixed before continuing.
+
+FIX 2 — Patient dropdown click-to-select (Critical)
+The patient search dropdown in claim wizard Step 1 closes without registering the selection when clicked. The root cause is the input's onBlur handler firing before the onClick on the dropdown item completes.
+Find the patient search dropdown component in the claim wizard Step 1. On every dropdown result item, change onClick to onMouseDown and add e.preventDefault():
+typescript// Find the dropdown item that selects a patient — change this:
+onClick={() => handleSelectPatient(patient)}
+
+// To this:
+onMouseDown={(e) => {
+  e.preventDefault(); // prevents blur from firing before selection
+  handleSelectPatient(patient);
+}}
+After fixing, verify: type a partial name, results appear, click a result — patient name shows in the selection area and Next button enables. Test with a normal click speed, not a slow deliberate click.
+
+FIX 3 — Show patient name on Step 2 (Major)
+After advancing from Step 1, the selected patient's name is not shown anywhere on Step 2. The biller has no confirmation of which patient they are creating a claim for.
+Find the Step 2 component. The selected patient object should already be in state from Step 1. Add a visible patient identifier at the top of Step 2:
+tsx// At the top of the Step 2 form, add:
+{selectedPatient && (
+  <div className="flex items-center gap-2 mb-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
+    <span className="text-sm text-blue-700 font-medium">
+      Creating claim for: {selectedPatient.first_name} {selectedPatient.last_name}
+    </span>
+    {selectedPatient.intake_completed && (
+      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+        From Intake ✓
+      </span>
+    )}
+  </div>
+)}
+Verify: select a patient in Step 1, advance to Step 2 — patient name is visible at the top of the step.
+
+FIX 4 — Make billing dashboard pipeline cards clickable (Major)
+The four pipeline cards (Paid, In Process, Drafts, Denied) are plain divs with no navigation. Wrap each in a Link:
+tsx// Paid card
+<Link to="/billing/claims?status=paid">
+  <MetricCard ... />
+</Link>
+
+// In Process card  
+<Link to="/billing/claims?status=in_process">
+  <MetricCard ... />
+</Link>
+
+// Drafts card
+<Link to="/billing/claims?status=draft">
+  <MetricCard ... />
+</Link>
+
+// Denied card
+<Link to="/billing/claims?status=denied">
+  <MetricCard ... />
+</Link>
+Add cursor-pointer hover:shadow-md transition-shadow classes to each card wrapper so they visually indicate they are clickable.
+Verify: click each pipeline card — confirm it navigates to the correct filtered claims view.
+
+FIX 5 — Delete duplicate prevention rules (Minor — but visible to a client)
+The audit created 3 duplicate "Prevent Invalid Coding for Sentara Health Plans" rules. Delete the duplicates, keeping only one:
+sql-- Check duplicates
+SELECT id, name, created_at FROM rules 
+WHERE name LIKE '%Invalid Coding%'
+ORDER BY created_at;
+
+-- Delete all but the first one
+DELETE FROM rules 
+WHERE name LIKE '%Invalid Coding%'
+AND id NOT IN (
+  SELECT id FROM rules 
+  WHERE name LIKE '%Invalid Coding%'
+  ORDER BY created_at ASC 
+  LIMIT 1
+);
+Verify: navigate to /billing/rules — only one "Prevent Invalid Coding" rule appears.
+
+FIX 6 — Seed practice settings with placeholder data (Minor — looks empty to a client)
+The Practice Info tab is completely blank because GET /api/billing/practice-settings returns null. The practice settings record either doesn't exist or was never seeded. Insert a default record:
+sqlINSERT INTO practice_settings (
+  id, practice_name, primary_npi, tax_id, 
+  taxonomy_code, phone, default_pos,
+  billing_location, created_at, updated_at
+)
+VALUES (
+  gen_random_uuid()::text,
+  'ClaimShield Demo Practice',
+  '1234567893',
+  '12-3456789',
+  '251B00000X',
+  '512-555-0100',
+  '12',
+  'AUSTIN',
+  NOW(),
+  NOW()
+)
+ON CONFLICT DO NOTHING;
+Then verify GET /api/billing/practice-settings returns data and the Practice Info tab shows the seeded values.
+
+FIX 7 — Seed the two existing providers with credentials and taxonomy (Minor)
+The providers table shows Alice Valid and Diana Valid with — for Credentials and Taxonomy — required fields for CMS-1500 Box 33:
+sqlUPDATE providers 
+SET credentials = 'RN', taxonomy_code = '163W00000X'
+WHERE credentials IS NULL OR credentials = '';
+Verify: Providers tab shows credentials and taxonomy for both providers.
+
+Verification sequence — run all of these after all fixes:
+Run these in order and report pass/fail with one line of evidence for each:
+
+/billing/codes → search "G0299" → result appears with description and rate ✅/❌
+/billing/codes → search "skilled nursing" → G0299 and related codes appear ✅/❌
+/billing/claims/new → Step 2 → type "skilled nursing" → results appear, no crash ✅/❌
+/billing/claims/new → Step 1 → click patient from dropdown → patient selected, Next enabled ✅/❌
+/billing/claims/new → Step 2 → patient name visible at top of step ✅/❌
+/billing/claims/new → Step 2 → select G0299 → unit calculator appears → enter 4 hours → shows 16 units ✅/❌
+Unit calculator rate for Austin TX practice → shows $32.19 (not $14.25) ✅/❌
+/billing/dashboard → click Denied pipeline card → navigates to filtered denied claims ✅/❌
+/billing/settings → Practice Info → shows practice name and NPI ✅/❌
+/billing/settings → Practice Info → VA Fee Schedule Location dropdown shows locations ✅/❌
+/billing/rules → only one "Invalid Coding" rule shown (duplicates deleted) ✅/❌
+
+Do not mark anything complete without running all 11 checks. Report each as pass or fail with the specific evidence — what appeared on screen or what the API returned.

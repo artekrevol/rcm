@@ -1,6 +1,8 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { storage } from "./storage";
 import { requireAuth, requireRole } from "./auth";
 import {
@@ -144,6 +146,48 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   try {
     const { pool } = await import("./db");
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS va_location_rates (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        hcpcs_code VARCHAR(6) NOT NULL,
+        location_name VARCHAR NOT NULL,
+        carrier VARCHAR(10),
+        locality_code VARCHAR(5),
+        facility_rate DECIMAL(10,4),
+        non_facility_rate DECIMAL(10,4),
+        effective_date DATE DEFAULT '2026-01-01',
+        is_non_reimbursable BOOLEAN DEFAULT false,
+        last_updated TIMESTAMP DEFAULT NOW(),
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(hcpcs_code, location_name, carrier, locality_code)
+      )
+    `);
+
+    const { rows: vaCount } = await pool.query("SELECT COUNT(*)::int as cnt FROM va_location_rates");
+    if (vaCount[0]?.cnt === 0) {
+      const sqlPaths = [
+        path.join(process.cwd(), "server", "va_location_rates.sql"),
+        path.join(process.cwd(), "attached_assets", "va_location_rates_2026_1775596189787.sql"),
+        path.join(__dirname, "va_location_rates.sql"),
+      ];
+      for (const sqlPath of sqlPaths) {
+        try {
+          if (fs.existsSync(sqlPath)) {
+            const sql = fs.readFileSync(sqlPath, "utf-8");
+            const insertMatch = sql.match(/INSERT INTO va_location_rates[\s\S]+/);
+            if (insertMatch) {
+              await pool.query(insertMatch[0]);
+              console.log(`Imported VA location rates from ${sqlPath}`);
+              break;
+            }
+          }
+        } catch (e: any) {
+          console.log(`VA rates import attempt failed for ${sqlPath}: ${e.message}`);
+        }
+      }
+    }
+
     await pool.query(`
       UPDATE claims SET
         reason = d.denial_reason_text,
@@ -159,6 +203,27 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       WHERE claims.id = d.claim_id
         AND claims.status IN ('denied', 'appealed')
         AND claims.reason IS NULL
+    `);
+
+    await pool.query(`
+      INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, phone, default_pos, billing_location, created_at, updated_at)
+      SELECT gen_random_uuid()::text, 'ClaimShield Demo Practice', '1234567893', '123456789', '251B00000X', '512-555-0100', '12', 'AUSTIN', NOW(), NOW()
+      WHERE NOT EXISTS (SELECT 1 FROM practice_settings LIMIT 1)
+    `);
+
+    await pool.query(`
+      UPDATE providers SET
+        credentials = CASE WHEN credentials IS NULL OR credentials = '' THEN 'RN' ELSE credentials END,
+        taxonomy_code = CASE WHEN taxonomy_code IS NULL OR taxonomy_code = '' THEN '163W00000X' ELSE taxonomy_code END
+      WHERE credentials IS NULL OR credentials = '' OR taxonomy_code IS NULL OR taxonomy_code = ''
+    `);
+
+    await pool.query(`
+      DELETE FROM rules
+      WHERE name LIKE '%Invalid Coding%'
+      AND id NOT IN (
+        SELECT id FROM rules WHERE name LIKE '%Invalid Coding%' ORDER BY created_at ASC LIMIT 1
+      )
     `);
   } catch {}
 
