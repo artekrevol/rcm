@@ -203,6 +203,16 @@ export default function ClaimDetailPage() {
               >
                 Claim summary — readable format
               </DropdownMenuItem>
+              <DropdownMenuItem
+                data-testid="menu-edi-837p"
+                onClick={() => {
+                  if (!id) return;
+                  window.open(`/api/billing/claims/${id}/edi`, "_blank");
+                  toast({ title: "837P EDI file downloaded", description: "Upload this file to your Office Ally or Availity portal for electronic submission." });
+                }}
+              >
+                837P EDI file — for Office Ally / electronic submission
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
           <Button

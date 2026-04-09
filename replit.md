@@ -63,9 +63,17 @@ The system uses Passport.js with a local strategy, bcrypt for password hashing, 
 -   **esbuild**: Server bundler.
 -   **TypeScript**: Programming language.
 
+### EDI / Office Ally Integration
+
+-   **ssh2-sftp-client**: SFTP client for Office Ally file exchange (Phase 2).
+
 ## Production Notes
 
-- **Server startup migrations**: `registerRoutes()` runs idempotent migrations at startup: creates `va_location_rates` table if missing, imports VA fee schedule data from SQL file if table is empty, backfills denied claim reasons, seeds default practice settings, updates provider credentials, and cleans up duplicate rules.
+- **Server startup migrations**: `registerRoutes()` runs idempotent migrations at startup: creates `denial_patterns` and `va_location_rates` tables if missing, imports VA fee schedule data from SQL file if table is empty, backfills denied claim reasons, seeds default practice settings, seeds 22 VA/CARC prevention rules, updates provider credentials, and cleans up duplicate rules.
+- **Office Ally / EDI Integration**: Three-phase integration:
+  - Phase 1: 837P EDI generator at `server/services/edi-generator.ts`. API endpoint `GET /api/billing/claims/:id/edi` generates HIPAA 5010 837P files. Download available from claim detail page dropdown.
+  - Phase 2: SFTP service at `server/services/office-ally.ts`. Submits 837P files and retrieves 277/835 responses. Requires `OA_SFTP_HOST`, `OA_SFTP_USERNAME`, `OA_SFTP_PASSWORD` env vars.
+  - Phase 3: `denial_patterns` table stores real denial data from 835 ERA files. EDI parsers at `server/services/edi-parser.ts` handle 277 acknowledgments and 835 remittances.
 - **VA Location Rates**: 2160 rows from CY26 Fee Schedule. SQL source at `server/va_location_rates.sql`. Table created at startup if missing.
 - **Session**: Requires `SESSION_SECRET` env var in production. Session table created inline (no SQL file dependency).
 - **Passwords**: Test users use `demo123`. Bcrypt-hashed. Plaintext passwords auto-rehashed on login.

@@ -150,6 +150,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS billing_location VARCHAR`);
 
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS denial_patterns (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        claim_id VARCHAR,
+        carc_code VARCHAR(10) NOT NULL,
+        carc_description TEXT,
+        rarc_code VARCHAR(10),
+        amount DECIMAL(10,2),
+        service_date DATE,
+        hcpcs_code VARCHAR(10),
+        payer VARCHAR,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_denial_patterns_carc ON denial_patterns(carc_code)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_denial_patterns_created_at ON denial_patterns(created_at)`);
+
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS va_location_rates (
         id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
         hcpcs_code VARCHAR(6) NOT NULL,
@@ -960,6 +977,111 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json({ success: true, pdfUrl: `generated:${timestamp}` });
     } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/claims/:id/edi", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { generate837P } = await import("./services/edi-generator");
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (!claimResult.rows.length) return res.status(404).json({ error: "Claim not found" });
+      const c = claimResult.rows[0];
+
+      const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
+      if (!patientResult.rows.length) return res.status(404).json({ error: "Patient not found" });
+      const pat = patientResult.rows[0];
+
+      const settingsResult = await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const ps = settingsResult.rows[0];
+      if (!ps) return res.status(400).json({ error: "Practice settings not configured" });
+
+      let prov = { first_name: "Provider", last_name: "Unknown", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
+      if (c.provider_id) {
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code FROM providers WHERE id = $1", [c.provider_id]);
+        if (provResult.rows.length) prov = provResult.rows[0];
+      }
+
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      if (c.payer_id) {
+        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      } else if (c.payer) {
+        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      }
+
+      const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
+      const serviceLines = rawLines.map((sl: any) => ({
+        hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
+        units: Number(sl.units) || 1,
+        charge: Number(sl.charge) || Number(sl.amount) || 0,
+        modifier: sl.modifier || null,
+        diagnosis_pointer: sl.diagnosisPointer || sl.diagnosis_pointer || "1",
+      }));
+
+      const icd10Codes: string[] = [];
+      if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
+      if (Array.isArray(c.icd10_secondary)) {
+        for (const code of c.icd10_secondary) {
+          if (code && !icd10Codes.includes(code)) icd10Codes.push(code);
+        }
+      }
+
+      const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
+      const edi = generate837P({
+        claim: {
+          id: c.id,
+          patient_id: c.patient_id,
+          service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+          place_of_service: c.place_of_service || "12",
+          auth_number: c.authorization_number || null,
+          payer: c.payer || payerInfo.name,
+          amount: Number(c.amount) || 0,
+          service_lines: serviceLines,
+          icd10_codes: icd10Codes.length ? icd10Codes : ["Z00.00"],
+        },
+        patient: {
+          first_name: pat.first_name || "",
+          last_name: pat.last_name || "",
+          dob: pat.dob || "1900-01-01",
+          member_id: pat.member_id || pat.insurance_id || "",
+          insurance_carrier: pat.insurance_carrier || c.payer || "",
+        },
+        practice: {
+          name: ps.practice_name || "Practice",
+          npi: ps.primary_npi || "0000000000",
+          tax_id: ps.tax_id || "000000000",
+          taxonomy_code: ps.taxonomy_code || "163W00000X",
+          address: (addr as any).street1 || (addr as any).address || "",
+          city: (addr as any).city || "",
+          state: (addr as any).state || "",
+          zip: (addr as any).zip || "",
+        },
+        provider: {
+          first_name: prov.first_name || "",
+          last_name: prov.last_name || "",
+          npi: prov.npi || ps.primary_npi || "0000000000",
+          taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
+        },
+        payer: payerInfo,
+      });
+
+      await db.query(
+        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
+        [crypto.randomUUID(), req.params.id, "EDI Exported", "837P EDI file generated"]
+      );
+      await db.query(
+        `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [crypto.randomUUID(), req.params.id, c.patient_id, "edi_export", "837P EDI file generated", (req.user as any)?.id || null]
+      );
+
+      res.setHeader("Content-Type", "application/edi-x12");
+      res.setHeader("Content-Disposition", `attachment; filename="claim_${req.params.id}_837P.edi"`);
+      res.send(edi);
+    } catch (err: any) {
+      console.error("EDI generation error:", err);
       res.status(500).json({ error: err.message });
     }
   });
