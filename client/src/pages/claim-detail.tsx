@@ -210,10 +210,24 @@ export default function ClaimDetailPage() {
               </DropdownMenuItem>
               <DropdownMenuItem
                 data-testid="menu-edi-837p"
-                onClick={() => {
+                onClick={async () => {
                   if (!id) return;
-                  window.open(`/api/billing/claims/${id}/edi`, "_blank");
-                  toast({ title: "837P EDI file downloaded", description: "Upload this file to your Office Ally or Availity portal for electronic submission." });
+                  try {
+                    const res = await fetch(`/api/billing/claims/${id}/edi`, { credentials: "include" });
+                    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || "Failed to generate EDI"); }
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `claim_${id}_837P.edi`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    toast({ title: "837P EDI file downloaded", description: "Upload this file to your Office Ally or Availity portal for electronic submission." });
+                  } catch (err: any) {
+                    toast({ title: "EDI download failed", description: err.message, variant: "destructive" });
+                  }
                 }}
               >
                 837P EDI file — for Office Ally / electronic submission
