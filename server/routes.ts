@@ -1004,9 +1004,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const ps = settingsResult.rows[0];
       if (!ps) return res.status(400).json({ error: "Practice settings not configured" });
 
-      let prov = { first_name: "Provider", last_name: "Unknown", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
-      if (c.provider_id) {
-        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code FROM providers WHERE id = $1", [c.provider_id]);
+      let provId = c.provider_id;
+      if (!provId) {
+        const defaultProv = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        if (defaultProv.rows.length) provId = defaultProv.rows[0].id;
+      }
+      let prov = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
+      if (provId) {
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code FROM providers WHERE id = $1", [provId]);
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
@@ -1061,7 +1066,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           npi: ps.primary_npi || "0000000000",
           tax_id: ps.tax_id || "000000000",
           taxonomy_code: ps.taxonomy_code || "163W00000X",
-          address: (addr as any).street1 || (addr as any).address || "",
+          address: (addr as any).street || (addr as any).street1 || (addr as any).address || "",
           city: (addr as any).city || "",
           state: (addr as any).state || "",
           zip: (addr as any).zip || "",
@@ -1127,9 +1132,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!ps) return res.status(400).json({ success: false, error: "Practice settings not configured" });
       if (!ps.oa_connected) return res.status(400).json({ success: false, error: "Office Ally not connected. Go to Settings → Clearinghouse to connect." });
 
-      let prov = { first_name: "Provider", last_name: "Unknown", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
-      if (c.provider_id) {
-        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code FROM providers WHERE id = $1", [c.provider_id]);
+      let provId2 = c.provider_id;
+      if (!provId2) {
+        const defaultProv = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        if (defaultProv.rows.length) provId2 = defaultProv.rows[0].id;
+      }
+      let prov = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
+      if (provId2) {
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code FROM providers WHERE id = $1", [provId2]);
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
@@ -1185,7 +1195,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           npi: ps.primary_npi || "0000000000",
           tax_id: ps.tax_id || "000000000",
           taxonomy_code: ps.taxonomy_code || "163W00000X",
-          address: (addr as any).street1 || (addr as any).address || "",
+          address: (addr as any).street || (addr as any).street1 || (addr as any).address || "",
           city: (addr as any).city || "",
           state: (addr as any).state || "",
           zip: (addr as any).zip || "",

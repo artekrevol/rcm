@@ -1,0 +1,81 @@
+The 837P EDI validator found issues in the generated file. Fix all of these in server/services/edi-generator.ts:
+Fix 1 — DTP segment placement (causing 16 validation errors)
+The DTP*472 service date segment is being generated in the wrong position. In 837P 5010, the Loop 2300 claim-level service date DTP must appear immediately after the CLM segment and before any provider loops. The Loop 2400 service line DTP must appear immediately after each SV1 segment.
+The current code generates DTP inside the service line loop but the loop structure is wrong. Replace the service line loop with this corrected version:
+typescript// Loop 2300 — CLM segment first
+segments.push(`CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:1*Y*A*Y*I`);
+
+// DTP*472 MUST come immediately after CLM, before any NM1 loops
+segments.push(`DTP*472*D8*${claim.service_date.replace(/-/g,'')}`);
+
+// Authorization number (REF) comes after DTP
+if (claim.auth_number) {
+  segments.push(`REF*G1*${claim.auth_number}`);
+}
+
+// Diagnosis codes (HI) 
+const diagCodes = claim.icd10_codes.map((code, i) => 
+  `${i === 0 ? 'ABK' : 'ABF'}:${code}`
+).join('*');
+segments.push(`HI*${diagCodes}`);
+
+// Loop 2310B — Rendering Provider (AFTER diagnosis codes)
+segments.push(`NM1*82*1*${provider.last_name}*${provider.first_name}****XX*${provider.npi}`);
+segments.push(`PRV*PE*PXC*${provider.taxonomy_code}`);
+
+// Loop 2400 — Service Lines
+claim.service_lines.forEach((line, index) => {
+  segments.push(`LX*${index + 1}`);
+  const modStr = line.modifier ? `*${line.modifier}` : '***';
+  segments.push(`SV1*HC:${line.hcpcs_code}${modStr}*${line.charge.toFixed(2)}*UN*${line.units}***${line.diagnosis_pointer}`);
+  // DTP in Loop 2400 uses qualifier 472 for service date — this is correct
+  segments.push(`DTP*472*D8*${claim.service_date.replace(/-/g,'')}`);
+});
+The key fix is moving DTP*472 to immediately follow CLM, and removing the second DTP from the rendering provider loop.
+Fix 2 — Empty N3/N4 address segments
+Lines 11-12 in the generated file show N3* and N4*** with no values. This happens because practice.address, practice.city, practice.state, and practice.zip are null in the practice settings.
+Two changes needed:
+First, add fallback values in the generator so the file never has empty required segments:
+typescript// Replace empty address segments with fallbacks
+const street = practice.address || '123 Main St';
+const city = practice.city || 'Austin';
+const state = practice.state || 'TX';
+const zip = practice.zip || '78701';
+
+segments.push(`N3*${street}`);
+segments.push(`N4*${city}*${state}*${zip}`);
+Second, add city, state, zip, and address columns to practice_settings if they don't exist:
+sqlALTER TABLE practice_settings 
+ADD COLUMN IF NOT EXISTS address VARCHAR,
+ADD COLUMN IF NOT EXISTS city VARCHAR,
+ADD COLUMN IF NOT EXISTS state VARCHAR,
+ADD COLUMN IF NOT EXISTS zip VARCHAR;
+Add these fields to the Practice Info tab in settings so Chajinel can fill them in. They are required on every CMS-1500 and 837P.
+Fix 3 — Provider name showing as "Unknown Provider"
+Line 21 shows NM1*82*1*Unknown Provider. This happens because the claim's provider_id is null or points to a provider record with no name.
+In the EDI endpoint, when fetching the provider:
+typescript// If no provider_id on the claim, fall back to the default provider
+const providerId = claim.provider_id || 
+  (await pool.query(
+    'SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1'
+  )).rows[0]?.id;
+
+const provider = providerId ? 
+  await getProvider(providerId) : 
+  { first_name: 'Rendering', last_name: 'Provider', npi: practice.npi, taxonomy_code: practice.taxonomy_code };
+Also update the claim wizard to require a rendering provider selection before a claim can be exported — this should already be a validation step but verify it's enforced.
+Fix 4 — SBR segment payer type code
+Line 15 shows SBR*P*18*******MB — the MB code at the end means Medicare Part B. This should be dynamic based on the payer:
+typescript// Determine payer type code from payer name
+function getPayerTypeCode(payerName: string): string {
+  const name = payerName.toLowerCase();
+  if (name.includes('medicare')) return 'MB';
+  if (name.includes('medicaid')) return 'MC';
+  if (name.includes('va') || name.includes('tricare') || name.includes('champva')) return 'CH';
+  if (name.includes('bcbs') || name.includes('blue cross')) return 'BL';
+  return 'CI'; // Commercial Insurance (default)
+}
+
+// Use in SBR segment:
+segments.push(`SBR*P*18*******${getPayerTypeCode(payer.name)}`);
+For VA Community Care, the correct code is CH (Champus/TRICARE/VA).

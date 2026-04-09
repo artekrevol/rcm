@@ -45,6 +45,15 @@ export interface EDI837PInput {
   };
 }
 
+function getPayerTypeCode(payerName: string): string {
+  const name = payerName.toLowerCase();
+  if (name.includes("medicare")) return "MB";
+  if (name.includes("medicaid")) return "MC";
+  if (name.includes("va") || name.includes("tricare") || name.includes("champva")) return "CH";
+  if (name.includes("bcbs") || name.includes("blue cross")) return "BL";
+  return "CI";
+}
+
 export function generate837P(input: EDI837PInput): string {
   const { claim, patient, practice, provider, payer } = input;
   const now = new Date();
@@ -52,6 +61,11 @@ export function generate837P(input: EDI837PInput): string {
   const time = now.toTimeString().slice(0, 5).replace(":", "");
   const controlNumber = String(Date.now()).slice(-9).padStart(9, "0");
   const claimControlNumber = claim.id.replace(/-/g, "").slice(0, 20);
+
+  const street = practice.address || "123 Main St";
+  const city = practice.city || "Austin";
+  const state = practice.state || "TX";
+  const zip = practice.zip || "78701";
 
   const segments: string[] = [];
 
@@ -81,22 +95,13 @@ export function generate837P(input: EDI837PInput): string {
   segments.push(
     `NM1*85*2*${practice.name}*****XX*${practice.npi}`
   );
-  segments.push(`N3*${practice.address}`);
-  segments.push(
-    `N4*${practice.city}*${practice.state}*${practice.zip}`
-  );
+  segments.push(`N3*${street}`);
+  segments.push(`N4*${city}*${state}*${zip}`);
   segments.push(`REF*EI*${practice.tax_id.replace("-", "")}`);
 
   segments.push(`HL*2*1*22*0`);
 
-  const isVA =
-    claim.payer?.toLowerCase().includes("va") ||
-    payer.name?.toLowerCase().includes("va");
-  const isMedicare =
-    claim.payer?.toLowerCase().includes("medicare") ||
-    payer.name?.toLowerCase().includes("medicare");
-  const payerTypeCode = isMedicare ? "MB" : isVA ? "VA" : "CI";
-  segments.push(`SBR*P*18*******${payerTypeCode}`);
+  segments.push(`SBR*P*18*******${getPayerTypeCode(payer.name)}`);
 
   segments.push(
     `NM1*IL*1*${patient.last_name}*${patient.first_name}****MI*${patient.member_id}`
@@ -114,7 +119,7 @@ export function generate837P(input: EDI837PInput): string {
     0
   );
   segments.push(
-    `CLM*${claim.id.slice(0, 20)}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:1*Y*A*Y*I`
+    `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:1*Y*A*Y*I`
   );
 
   segments.push(
@@ -125,21 +130,21 @@ export function generate837P(input: EDI837PInput): string {
     segments.push(`REF*G1*${claim.auth_number}`);
   }
 
-  segments.push(
-    `NM1*82*1*${provider.last_name}*${provider.first_name}****XX*${provider.npi}`
-  );
-  segments.push(`PRV*PE*PXC*${provider.taxonomy_code}`);
-
   const diagCodes = claim.icd10_codes
     .map((code, i) => `${i === 0 ? "ABK" : "ABF"}:${code}`)
     .join("*");
   segments.push(`HI*${diagCodes}`);
 
+  segments.push(
+    `NM1*82*1*${provider.last_name}*${provider.first_name}****XX*${provider.npi}`
+  );
+  segments.push(`PRV*PE*PXC*${provider.taxonomy_code}`);
+
   claim.service_lines.forEach((line, index) => {
     segments.push(`LX*${index + 1}`);
-    const modifierStr = line.modifier ? `*${line.modifier}` : "***";
+    const modStr = line.modifier ? `*${line.modifier}` : "***";
     segments.push(
-      `SV1*HC:${line.hcpcs_code}${modifierStr}*${line.charge.toFixed(2)}*UN*${line.units}***${line.diagnosis_pointer}`
+      `SV1*HC:${line.hcpcs_code}${modStr}*${line.charge.toFixed(2)}*UN*${line.units}***${line.diagnosis_pointer}`
     );
     segments.push(
       `DTP*472*D8*${claim.service_date.replace(/-/g, "")}`
