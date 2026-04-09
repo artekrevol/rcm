@@ -795,8 +795,9 @@ function RateTablesTab() {
 
   const outdatedRates = rates.filter((r: any) => {
     if (!r.effective_date) return false;
-    const days = (Date.now() - new Date(r.effective_date).getTime()) / (1000 * 60 * 60 * 24);
-    return days > 90;
+    const effYear = new Date(r.effective_date).getFullYear();
+    const currentYear = new Date().getFullYear();
+    return effYear < currentYear;
   });
 
   const grouped = rates.reduce((acc: Record<string, any[]>, r: any) => {
@@ -824,7 +825,7 @@ function RateTablesTab() {
           <div className="text-sm">
             <p className="font-medium text-amber-800 dark:text-amber-200">Some rates may be outdated</p>
             <p className="text-amber-700 dark:text-amber-300">
-              {outdatedRates.length} rate(s) have an effective date more than 90 days ago. Check cms.gov for the current fee schedule.
+              {outdatedRates.length} rate(s) have an effective date from a prior year. Check cms.gov for the current fee schedule.
             </p>
           </div>
         </div>

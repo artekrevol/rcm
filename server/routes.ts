@@ -147,6 +147,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   try {
     const { pool } = await import("./db");
 
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS billing_location VARCHAR`);
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS va_location_rates (
         id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -219,13 +221,27 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     `);
 
     await pool.query(`
+      UPDATE hcpcs_rates SET rate_per_unit = 40.89, effective_date = '2026-01-01' WHERE hcpcs_code = 'G0299' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      UPDATE hcpcs_rates SET rate_per_unit = 30.67, effective_date = '2026-01-01' WHERE hcpcs_code = 'G0300' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      UPDATE hcpcs_rates SET rate_per_unit = 36.47, effective_date = '2026-01-01' WHERE hcpcs_code = 'G0151' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      UPDATE hcpcs_rates SET rate_per_unit = 36.72, effective_date = '2026-01-01' WHERE hcpcs_code = 'G0152' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      UPDATE hcpcs_rates SET rate_per_unit = 39.63, effective_date = '2026-01-01' WHERE hcpcs_code = 'G0153' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      UPDATE hcpcs_rates SET rate_per_unit = 9.67, effective_date = '2026-01-01' WHERE hcpcs_code = 'G0156' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      UPDATE hcpcs_rates SET rate_per_unit = 60.00, effective_date = '2026-01-01' WHERE hcpcs_code = 'S9123' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      UPDATE hcpcs_rates SET rate_per_unit = 45.00, effective_date = '2026-01-01' WHERE hcpcs_code = 'S9124' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      UPDATE hcpcs_rates SET rate_per_unit = 4.73, effective_date = '2026-01-01' WHERE hcpcs_code = 'T1019' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+    `);
+
+    await pool.query(`
       DELETE FROM rules
       WHERE name LIKE '%Invalid Coding%'
       AND id NOT IN (
         SELECT id FROM rules WHERE name LIKE '%Invalid Coding%' ORDER BY created_at ASC LIMIT 1
       )
     `);
-  } catch {}
+  } catch (migrationErr: any) {
+    console.error("Startup migration error:", migrationErr?.message || migrationErr);
+  }
 
   app.get("/api/payers", requireAuth, async (req, res) => {
     res.json(allPayers);

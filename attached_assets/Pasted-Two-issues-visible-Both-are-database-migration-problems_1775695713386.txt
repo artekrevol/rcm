@@ -1,0 +1,87 @@
+Two issues visible. Both are database migration problems in production — columns and tables that exist in dev but were never added to prod.
+
+Image 1: Saving Practice Settings fails with column "billing_location" of relation "practice_settings" does not exist. The billing_location column was added in a migration that ran in dev but never ran in production.
+
+Image 2: Rate table still showing 2025-01-01 rates ($14.25 for G0299) — the old hardcoded hcpcs_rates table, not the new va_location_rates table. The staleness warning is correctly triggering but pointing at the wrong data source.
+
+Send this to Replit:
+
+Two production database issues found from live screenshots. Both are missing columns/tables in the production database that exist in dev.
+
+Issue 1 — billing_location column missing from practice_settings table
+
+Saving practice settings fails with: column "billing_location" of relation "practice_settings" does not exist
+
+The billing_location column was added to the dev database but the migration never ran in production. Add it now:
+sql
+
+ALTER TABLE practice_settings 
+ADD COLUMN IF NOT EXISTS billing_location VARCHAR;
+
+Run this against the production database. After running, verify:
+sql
+
+SELECT column_name FROM information_schema.columns 
+WHERE table_name = 'practice_settings' 
+AND column_name = 'billing_location';
+
+Expected: returns one row. Then go to /billing/settings → Practice Info → set VA Fee Schedule Location to AUSTIN and click Save — must save without error.
+
+Also add this ALTER statement to the server startup migration block so it runs automatically on every deploy and never gets out of sync between dev and prod again:
+typescript
+
+// Add to the startup migration block alongside other ALTER TABLE statements
+await pool.query(`
+  ALTER TABLE practice_settings 
+  ADD COLUMN IF NOT EXISTS billing_location VARCHAR;
+`);
+
+Issue 2 — Rate table tab shows old hardcoded 2025 rates instead of VA 2026 location rates
+
+The Rate Tables tab in Settings shows G0299 at $14.25 (effective 2025-01-01) from the old hcpcs_rates table. It should either:
+
+A) Show rates from the new va_location_rates table filtered by the practice's configured billing location, or
+B) Keep showing the hcpcs_rates table but update those rates to match the 2026 VA schedule
+
+The simplest immediate fix: update the 9 existing rows in hcpcs_rates to reflect 2026 national average rates so the staleness warning goes away and the numbers are defensible:
+sql
+
+-- Update hcpcs_rates to 2026 VA national average rates
+UPDATE hcpcs_rates SET rate_per_unit = 40.89, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'G0299' AND payer_name = 'VA Community Care';
+
+UPDATE hcpcs_rates SET rate_per_unit = 30.67, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'G0300' AND payer_name = 'VA Community Care';
+
+UPDATE hcpcs_rates SET rate_per_unit = 36.47, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'G0151' AND payer_name = 'VA Community Care';
+
+UPDATE hcpcs_rates SET rate_per_unit = 36.72, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'G0152' AND payer_name = 'VA Community Care';
+
+UPDATE hcpcs_rates SET rate_per_unit = 39.63, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'G0153' AND payer_name = 'VA Community Care';
+
+UPDATE hcpcs_rates SET rate_per_unit = 9.67, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'G0156' AND payer_name = 'VA Community Care';
+
+UPDATE hcpcs_rates SET rate_per_unit = 60.00, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'S9123' AND payer_name = 'VA Community Care';
+
+UPDATE hcpcs_rates SET rate_per_unit = 45.00, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'S9124' AND payer_name = 'VA Community Care';
+
+UPDATE hcpcs_rates SET rate_per_unit = 4.73, effective_date = '2026-01-01' 
+WHERE hcpcs_code = 'T1019' AND payer_name = 'VA Community Care';
+
+After running, verify the staleness warning is gone from the Rate Tables tab and G0299 now shows a 2026 rate.
+
+Longer term fix for Rate Tables tab: Update the Rate Tables UI to pull from va_location_rates filtered by the practice's billing_location setting, so Chajinel sees her Austin-specific rates rather than national averages. But do the SQL update above first so the demo doesn't show the staleness warning.
+
+Verification after both fixes:
+
+    Go to /billing/settings → Practice Info → set VA Fee Schedule Location to AUSTIN → click Save → no error ✅/❌
+    Go to /billing/settings → Rate Tables tab → staleness warning is gone → G0299 shows 2026 rate ✅/❌
+    Go to /billing/claims/new → Step 2 → select G0299 → unit calculator shows Austin rate ($32.19) ✅/❌
+
+Report each as pass or fail with one line of evidence.
