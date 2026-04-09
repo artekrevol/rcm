@@ -368,6 +368,11 @@ function InlineCodeSearch({ onSelect }: { onSelect: (result: any) => void }) {
   );
 }
 
+function isVACode(code: string) {
+  const upper = code.toUpperCase();
+  return /^(G02|G01|T10|S91)/.test(upper);
+}
+
 function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billingLocation }: {
   line: ServiceLine; index: number;
   onChange: (index: number, updates: Partial<ServiceLine>) => void;
@@ -376,6 +381,37 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
   billingLocation: string | null;
 }) {
   const [showCodeSearch, setShowCodeSearch] = useState(false);
+  const { data: vaLocations = [] } = useQuery<string[]>({
+    queryKey: ["/api/billing/va-locations"],
+    queryFn: () => fetch("/api/billing/va-locations", { credentials: "include" }).then(r => r.json()),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  async function lookupRate(code: string, location: string | null) {
+    try {
+      const params = new URLSearchParams({ code });
+      if (location) params.set("location", location);
+      const res = await fetch(`/api/billing/va-rate?${params}`, { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.rate_per_unit) {
+          const rate = String(data.rate_per_unit);
+          const units = parseInt(line.units) || 0;
+          const total = units * parseFloat(rate);
+          onChange(index, {
+            ratePerUnit: rate,
+            vaRate: rate,
+            locationName: data.location_name || null,
+            isAverageRate: !!data.is_average,
+            totalCharge: total > 0 ? total.toFixed(2) : "",
+            chargeOverridden: false,
+          });
+          return;
+        }
+      }
+    } catch {}
+    onChange(index, { locationName: location, isAverageRate: false });
+  }
 
   async function handleCodeSelect(result: any) {
     const isVA = patientPayer?.toLowerCase().includes("va");
@@ -385,14 +421,15 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
 
     if (isVA && result.code) {
       try {
+        const loc = billingLocation;
         const params = new URLSearchParams({ code: result.code });
-        if (billingLocation) params.set("location", billingLocation);
+        if (loc) params.set("location", loc);
         const res = await fetch(`/api/billing/va-rate?${params}`, { credentials: "include" });
         if (res.ok) {
           const data = await res.json();
           if (data.rate_per_unit) {
             rate = String(data.rate_per_unit);
-            locationName = data.location_name || null;
+            locationName = data.location_name || loc || null;
             isAverageRate = !!data.is_average;
           }
         }
@@ -493,15 +530,34 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
           This code commonly requires a modifier — verify with your payer.
         </div>
       )}
-      {line.code && line.locationName && (
-        <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1" data-testid={`text-location-rate-${index}`}>
-          {line.code} — {line.locationName} — ${parseFloat(line.ratePerUnit || "0").toFixed(2)}/unit
+      {line.code && isVACode(line.code) && patientPayer?.toLowerCase().includes("va") && (
+        <div className="flex items-center gap-3 bg-muted/50 rounded px-3 py-2" data-testid={`section-va-locality-${index}`}>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">VA locality:</span>
+          <Select
+            value={line.locationName || billingLocation || ""}
+            onValueChange={(loc) => lookupRate(line.code, loc)}
+          >
+            <SelectTrigger className="h-7 text-xs w-56" data-testid={`select-va-location-${index}`}>
+              <SelectValue placeholder="Select location" />
+            </SelectTrigger>
+            <SelectContent>
+              {vaLocations.map((loc: string) => (
+                <SelectItem key={loc} value={loc}>{loc}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {line.ratePerUnit && (
+            <span className="text-xs font-medium" data-testid={`text-location-rate-${index}`}>
+              ${parseFloat(line.ratePerUnit).toFixed(2)}/unit
+              {line.isAverageRate && " (avg)"}
+            </span>
+          )}
         </div>
       )}
-      {line.code && line.isAverageRate && (
+      {line.code && line.isAverageRate && !isVACode(line.code) && (
         <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 dark:bg-amber-950/20 p-2 rounded" data-testid={`banner-avg-rate-${index}`}>
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          VA billing location not configured. Using national average rate. Set your location in Practice Settings for accurate rates.
+          Using national average rate. Set your location in Practice Settings for accurate rates.
         </div>
       )}
 

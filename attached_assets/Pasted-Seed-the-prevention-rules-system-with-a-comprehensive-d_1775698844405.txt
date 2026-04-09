@@ -1,0 +1,249 @@
+Seed the prevention rules system with a comprehensive database of real claim denial rules. This replaces the 13 generic seeded rules currently in the system with a structured library of rules that are specific to VA Community Care home health billing.
+The rules should be inserted into the rules table. Each rule has: name, description, trigger_pattern, condition, action (warn/block), category, payer (or "All"), and is_active.
+Insert this complete rules dataset:
+sql-- First clear the generic seeded rules
+DELETE FROM rules WHERE name LIKE 'Prevent%' OR name LIKE 'Check%';
+
+-- VA COMMUNITY CARE SPECIFIC RULES (from VA.gov official rejection list)
+
+INSERT INTO rules (id, name, description, trigger_pattern, condition, action, category, payer, is_active, created_at) VALUES
+
+-- VA Rejection Code 016 — #1 most common VA rejection
+(gen_random_uuid()::text,
+'VA: Missing or Invalid Member ICN/SSN',
+'VA requires the 17-character Internal Control Number (10 digits + V + 6 digits) or 9-digit SSN with no special characters in the Member ID field. This is the #1 VA rejection reason.',
+'member_id_format',
+'member_id IS NULL OR (NOT member_id ~ ''^[0-9]{10}V[0-9]{6}$'' AND NOT member_id ~ ''^[0-9]{9}$'')',
+'block',
+'Patient Information',
+'VA Community Care',
+true, NOW()),
+
+-- VA Rejection Code 081 — Invalid Rendering NPI
+(gen_random_uuid()::text,
+'VA: Invalid or Missing Rendering Provider NPI',
+'The rendering provider NPI must be a valid 10-digit NPI that passes Luhn checksum validation and is enrolled with the VA Community Care Network.',
+'rendering_npi',
+'provider_npi IS NULL OR LENGTH(provider_npi) != 10',
+'block',
+'Provider Information',
+'VA Community Care',
+true, NOW()),
+
+-- VA Rejection Code 002 — Invalid Place of Service
+(gen_random_uuid()::text,
+'VA: Invalid Place of Service Code',
+'VA home health claims must use Place of Service 12 (Home). Using an incorrect POS code is a top-10 VA rejection reason.',
+'place_of_service',
+'place_of_service NOT IN (''12'',''11'',''13'',''14'',''33'')',
+'warn',
+'Claim Formatting',
+'VA Community Care',
+true, NOW()),
+
+-- VA Rejection Code 004 — Invalid HCPCS codes
+(gen_random_uuid()::text,
+'VA: Unrecognized HCPCS/CPT Code',
+'All procedure codes must be valid HCPCS Level II or CPT codes. VA will reject claims with invalid or discontinued codes.',
+'procedure_code_validity',
+'hcpcs_code IS NULL OR LENGTH(hcpcs_code) < 5',
+'block',
+'Coding',
+'VA Community Care',
+true, NOW()),
+
+-- VA Rejection Code 105 — Invalid Taxonomy
+(gen_random_uuid()::text,
+'VA: Missing Provider Taxonomy Code',
+'VA requires a valid taxonomy code on the service line provider. Home health RN taxonomy is 163W00000X.',
+'provider_taxonomy',
+'taxonomy_code IS NULL OR taxonomy_code = ''''',
+'warn',
+'Provider Information',
+'VA Community Care',
+true, NOW()),
+
+-- VA Rejection Code 034 — ICD-9 codes still used
+(gen_random_uuid()::text,
+'VA: ICD-9 Diagnosis Code Used Instead of ICD-10',
+'VA requires ICD-10-CM codes for all dates of service after 09/30/2015. ICD-9 codes will be rejected immediately.',
+'diagnosis_code_version',
+'diagnosis_code ~ ''^[0-9]{3}'' AND diagnosis_code !~ ''^[A-Z]''',
+'block',
+'Coding',
+'VA Community Care',
+true, NOW()),
+
+-- Timely Filing — VA CCN specific (180 days)
+(gen_random_uuid()::text,
+'VA: Timely Filing Limit Approaching (180 Days)',
+'VA Community Care Network requires claims within 180 days of service date. After 180 days, claims cannot be paid or appealed. This is extremely difficult to overturn.',
+'timely_filing',
+'CURRENT_DATE - service_date > 150',
+'warn',
+'Timely Filing',
+'VA Community Care',
+true, NOW()),
+
+(gen_random_uuid()::text,
+'VA: Timely Filing Limit Exceeded (180 Days)',
+'Claim is past the 180-day VA timely filing deadline. VA will reject this claim and it is nearly impossible to appeal successfully.',
+'timely_filing_exceeded',
+'CURRENT_DATE - service_date > 180',
+'block',
+'Timely Filing',
+'VA Community Care',
+true, NOW()),
+
+-- Authorization rules — VA specific
+(gen_random_uuid()::text,
+'VA: Missing Authorization Number',
+'All VA Community Care claims require a pre-authorization/referral number issued by the VA or Optum/TriWest. Claims without auth numbers will be denied as unauthorized care.',
+'authorization_required',
+'payer = ''VA Community Care'' AND auth_number IS NULL',
+'block',
+'Authorization',
+'VA Community Care',
+true, NOW()),
+
+(gen_random_uuid()::text,
+'VA: Authorization Number Format Invalid',
+'VA authorization numbers follow a specific format. Invalid auth numbers result in denial even if care was authorized.',
+'authorization_format',
+'payer = ''VA Community Care'' AND auth_number IS NOT NULL AND LENGTH(auth_number) < 6',
+'warn',
+'Authorization',
+'VA Community Care',
+true, NOW()),
+
+-- CARC CO-29 — Timely Filing (all payers)
+(gen_random_uuid()::text,
+'CARC CO-29: Timely Filing — Medicare (365 Days)',
+'Medicare requires claims within 365 days of service date. Missing this window results in CO-29 denial with no appeal path.',
+'medicare_timely_filing',
+'payer ILIKE ''%medicare%'' AND CURRENT_DATE - service_date > 335',
+'warn',
+'Timely Filing',
+'Medicare',
+true, NOW()),
+
+-- CARC CO-97 — Bundled/Included service
+(gen_random_uuid()::text,
+'CARC CO-97: Service Already Included in Another Code (NCCI Bundling)',
+'Billing two codes where one is included in the other per CCI edits. Common home health example: billing G0299 and a separate E&M visit on same date without modifier.',
+'ncci_bundling',
+'service_line_count > 1',
+'warn',
+'Coding',
+'All',
+true, NOW()),
+
+-- CARC CO-16 — Missing information (most common CARC overall)
+(gen_random_uuid()::text,
+'CARC CO-16: Claim Missing Required Information',
+'CO-16 is the most frequently issued CARC. Triggered by missing NPI, missing auth number, missing diagnosis pointer, or invalid dates. Always paired with a RARC specifying what is missing.',
+'missing_required_fields',
+'provider_npi IS NULL OR diagnosis_code IS NULL OR service_date IS NULL',
+'block',
+'Claim Formatting',
+'All',
+true, NOW()),
+
+-- CARC CO-4 — Modifier issue
+(gen_random_uuid()::text,
+'CARC CO-4: Modifier Required or Inconsistent with Procedure',
+'Certain timed home health codes require modifiers (e.g., modifier GT for telehealth, modifier 59 for distinct service). Missing or wrong modifier causes CO-4 denial.',
+'modifier_required',
+'hcpcs_code IN (''G0299'',''G0300'',''G0151'',''G0152'',''G0153'') AND modifier IS NULL',
+'warn',
+'Coding',
+'All',
+true, NOW()),
+
+-- CARC CO-50 — Not medically necessary
+(gen_random_uuid()::text,
+'CARC CO-50: Service Not Medically Necessary',
+'Payer determined the service does not meet medical necessity criteria for the diagnosis billed. Ensure ICD-10 diagnosis supports the home health service provided.',
+'medical_necessity',
+'diagnosis_code IS NOT NULL',
+'warn',
+'Medical Necessity',
+'All',
+false, NOW()),
+
+-- Duplicate claim detection
+(gen_random_uuid()::text,
+'Duplicate Claim: Same Patient, Service Date, and Code',
+'A claim with the same patient, service date, and procedure code was already submitted. Duplicate claims result in CO-18 or VA rejection code 65 denial.',
+'duplicate_claim',
+'EXISTS (SELECT 1 FROM claims c2 WHERE c2.patient_id = patient_id AND c2.service_date = service_date AND c2.status NOT IN (''draft'',''denied'') AND c2.id != id)',
+'block',
+'Claim Integrity',
+'All',
+true, NOW()),
+
+-- Unit limit rules for home health
+(gen_random_uuid()::text,
+'VA: G0299 Units May Exceed Authorized Hours',
+'G0299 billed in 15-minute units. Verify that total units billed do not exceed the hours authorized on the VA referral. Overbilling authorized units is a common VA denial.',
+'va_unit_authorization_check',
+'hcpcs_code = ''G0299'' AND units > 32',
+'warn',
+'Authorization',
+'VA Community Care',
+true, NOW()),
+
+-- Missing diagnosis pointer
+(gen_random_uuid()::text,
+'Missing ICD-10 Diagnosis Pointer on Service Line',
+'Each service line must have a diagnosis pointer linking it to one of the listed ICD-10 codes (A, B, C, or D). Missing pointer causes CO-16 with RARC N286.',
+'diagnosis_pointer',
+'diagnosis_pointer IS NULL AND diagnosis_code IS NOT NULL',
+'warn',
+'Coding',
+'All',
+true, NOW()),
+
+-- High-risk code combination
+(gen_random_uuid()::text,
+'VA: Home Health Code Requires Place of Service 12',
+'G0299, G0300, G0151, G0152, G0153, G0156, T1019 must be billed with Place of Service 12 (Home). Using any other POS for these codes will result in denial.',
+'home_health_pos_mismatch',
+'hcpcs_code IN (''G0299'',''G0300'',''G0151'',''G0152'',''G0153'',''G0156'',''T1019'') AND place_of_service != ''12''',
+'block',
+'Coding',
+'All',
+true, NOW()),
+
+-- Provider credentialing
+(gen_random_uuid()::text,
+'Provider Not Credentialed with Payer',
+'Rendering provider must be credentialed and contracted with the payer. Uncredentialed providers result in immediate denial regardless of claim accuracy.',
+'provider_credentialing',
+'provider_npi IS NOT NULL',
+'warn',
+'Provider Information',
+'All',
+false, NOW()),
+
+-- Medicare timely filing hard stop
+(gen_random_uuid()::text,
+'CARC CO-29: Medicare Timely Filing Exceeded (365 Days)',
+'Claim is past the 365-day Medicare timely filing limit. CO-29 denial cannot be appealed except in cases of administrative error by a Medicare agent.',
+'medicare_timely_exceeded',
+'payer ILIKE ''%medicare%'' AND CURRENT_DATE - service_date > 365',
+'block',
+'Timely Filing',
+'Medicare',
+true, NOW()),
+
+-- Coordination of benefits
+(gen_random_uuid()::text,
+'COB: VA Secondary Payer Requires Primary EOB',
+'When VA is secondary payer, the primary insurance EOB must be attached. VA will reject as code 78 without the primary payer EOB.',
+'cob_primary_eob_required',
+'payer = ''VA Community Care'' AND primary_insurance IS NOT NULL',
+'warn',
+'Coordination of Benefits',
+'VA Community Care',
+true, NOW());

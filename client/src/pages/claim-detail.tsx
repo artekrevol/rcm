@@ -314,6 +314,11 @@ export default function ClaimDetailPage() {
                   <p className="text-sm font-mono truncate">
                     {claim.cptCodes?.join(", ")}
                   </p>
+                  {claim.serviceLines?.some((sl: any) => sl.locationName) && (
+                    <p className="text-xs text-muted-foreground mt-0.5" data-testid="text-va-locality">
+                      VA locality: {claim.serviceLines.find((sl: any) => sl.locationName)?.locationName}
+                    </p>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-3">
