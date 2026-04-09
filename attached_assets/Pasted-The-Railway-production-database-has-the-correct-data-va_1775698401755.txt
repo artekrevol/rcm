@@ -1,0 +1,56 @@
+The Railway production database has the correct data — va_location_rates has 2,160 rows and G0299/AUSTIN returns $32.19. The problem is in the application code. The wizard shows "Rate not on file — enter manually" which means the rate lookup API call is either failing, not being made, or the location value is not being passed correctly.
+Find and fix the rate lookup flow. Here is exactly what to check:
+Step 1 — Check what the API endpoint actually returns in production
+In the Railway shell or via curl, test the endpoint directly:
+bashcurl "https://claimshield.health/api/billing/va-rate?code=G0299&location=AUSTIN"
+Report the exact response. Expected: {"rate": 32.19, "is_average": false} or similar. If it returns an error, that is the problem.
+Step 2 — Find the va-rate endpoint and check the SQL query
+Find GET /api/billing/va-rate in routes.ts. Show me the exact SQL query it runs. The most likely issue is a case mismatch — the database stores 'AUSTIN' uppercase but the query may be passing 'Austin' or 'austin'.
+Make the query case-insensitive regardless:
+sqlSELECT facility_rate, non_facility_rate, location_name
+FROM va_location_rates
+WHERE hcpcs_code = UPPER($1)
+AND UPPER(location_name) = UPPER($2)
+AND is_non_reimbursable = false
+ORDER BY effective_date DESC
+LIMIT 1
+Step 3 — Check where the wizard gets the billing location
+Find the claim wizard Step 2 component. When a HCPCS code is selected, it should:
+
+Already have the billing location loaded from practice settings
+Call the va-rate endpoint with that location
+
+Show me the exact code that fires when a code is selected. Specifically:
+
+Where does billingLocation come from?
+Is practiceSettings fetched before the code is selected or after?
+What value is actually being passed as location to the rate endpoint?
+
+Add a temporary console.log to confirm what value is being sent:
+typescriptconsole.log('[Rate Lookup] code:', code, 'location:', billingLocation, 'practiceSettings:', practiceSettings);
+Step 4 — Check the practice_settings billing_location in Railway
+Run this in Railway:
+sqlSELECT id, practice_name, billing_location FROM practice_settings LIMIT 5;
+Report the exact value in the billing_location column. If it is null, empty, or 'Austin' (mixed case) instead of 'AUSTIN', that is why the lookup fails. The wizard fetches this value and passes it to the rate endpoint — if it's null, no rate lookup fires.
+Step 5 — Fix based on findings
+Most likely fix A — billing_location is null in practice_settings:
+sqlUPDATE practice_settings 
+SET billing_location = 'AUSTIN' 
+WHERE billing_location IS NULL OR billing_location = '';
+Most likely fix B — case mismatch in the rate lookup query:
+Make the WHERE clause case-insensitive as shown in Step 2.
+Most likely fix C — practice settings not loaded before code selection:
+Ensure the wizard fetches practice settings on mount with staleTime: 0 so it always has fresh data:
+typescriptconst { data: practiceSettings } = useQuery({
+  queryKey: ['practice-settings'],
+  queryFn: () => fetch('/api/billing/practice-settings')
+    .then(r => r.json()),
+  staleTime: 0  // always fresh
+});
+Verification — must pass before closing this ticket:
+
+Run in Railway: SELECT billing_location FROM practice_settings LIMIT 1; → must return AUSTIN
+Test endpoint: curl "https://claimshield.health/api/billing/va-rate?code=G0299&location=AUSTIN" → must return rate 32.19
+Open /billing/claims/new in production browser → Step 2 → enter G0299 → enter 4 hours → Rate/unit must show $32.19 → Total must show $514.40 → amber "Rate not on file" warning must NOT appear
+
+All three must pass. Report each with one line of evidence.

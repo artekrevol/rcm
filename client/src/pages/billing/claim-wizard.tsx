@@ -150,7 +150,7 @@ function PatientSearch({ onSelect, selectedPatient }: {
     queryKey: ["/api/billing/patients", "search", debouncedSearch],
     queryFn: async () => {
       if (!debouncedSearch) return [];
-      const res = await fetch(`/api/billing/patients?search=${encodeURIComponent(debouncedSearch)}`);
+      const res = await fetch(`/api/billing/patients?search=${encodeURIComponent(debouncedSearch)}`, { credentials: "include" });
       const data = await res.json();
       return Array.isArray(data) ? data : [];
     },
@@ -315,7 +315,7 @@ function InlineCodeSearch({ onSelect }: { onSelect: (result: any) => void }) {
     queryKey: ["/api/billing/hcpcs/search", dq],
     queryFn: async () => {
       if (!dq) return [];
-      const res = await fetch(`/api/billing/hcpcs/search?q=${encodeURIComponent(dq)}`);
+      const res = await fetch(`/api/billing/hcpcs/search?q=${encodeURIComponent(dq)}`, { credentials: "include" });
       const data = await res.json();
       return Array.isArray(data) ? data : data?.results || data?.data || [];
     },
@@ -387,7 +387,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
       try {
         const params = new URLSearchParams({ code: result.code });
         if (billingLocation) params.set("location", billingLocation);
-        const res = await fetch(`/api/billing/va-rate?${params}`);
+        const res = await fetch(`/api/billing/va-rate?${params}`, { credentials: "include" });
         if (res.ok) {
           const data = await res.json();
           if (data.rate_per_unit) {
@@ -1199,6 +1199,7 @@ export default function ClaimWizard() {
                   onChange={updateServiceLine}
                   onRemove={removeServiceLine}
                   patientPayer={patient?.insurance_carrier || null}
+                  billingLocation={wizardData?.practiceSettings?.billing_location || null}
                 />
               ))}
               <Separator />

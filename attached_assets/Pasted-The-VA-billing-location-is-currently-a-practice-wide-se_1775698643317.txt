@@ -1,0 +1,46 @@
+The VA billing location is currently a practice-wide setting that drives all rate lookups. This works for single-location agencies but breaks for multi-location agencies. Fix the wizard to use the practice setting as the default but allow per-claim override.
+In the claim wizard Step 2, when a VA rate code is selected (G0299, G0300, G0151, G0152, G0153, G0156, T1019, S9123, S9124), show a small location selector directly on the service line:
+tsx{isVACode(selectedCode) && (
+  <div className="flex items-center gap-2 mt-2">
+    <span className="text-xs text-muted-foreground">VA locality:</span>
+    <Select
+      value={serviceLineLocation || practiceSettings?.billing_location}
+      onValueChange={(loc) => {
+        setServiceLineLocation(loc);
+        lookupRate(selectedCode, loc);
+      }}
+    >
+      <SelectTrigger className="h-7 text-xs w-48">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {vaLocations.map(loc => (
+          <SelectItem key={loc} value={loc}>{loc}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  </div>
+)}
+Where isVACode checks if the code starts with G02, G01, T10, or S91 (the home health VA code prefixes).
+The vaLocations list comes from GET /api/billing/va-locations which already exists and returns the distinct location names from the va_location_rates table.
+The rate lookup fires whenever either the code or the location changes:
+typescriptuseEffect(() => {
+  if (selectedCode && billingLocation) {
+    fetch(`/api/billing/va-rate?code=${selectedCode}&location=${billingLocation}`)
+      .then(r => r.json())
+      .then(data => {
+        setRatePerUnit(data.rate);
+        setIsAverage(data.is_average);
+      });
+  }
+}, [selectedCode, billingLocation]);
+The location selector defaults to the practice's billing_location setting. If the user changes it, the rate updates immediately. Store the selected location on the claim record so it's preserved when the claim is reviewed.
+Also add this to the claim detail page — show the VA locality used for the rate on the service line summary so it's visible in the claim record.
+After implementing, verify:
+
+Select G0299 with AUSTIN location → rate shows $32.19, total $514.40 ✅
+Change location to DALLAS → rate updates to $34.00, total $544.00 ✅
+Change location to MISSISSIPPI → rate updates to $28.50, total $456.00 ✅
+Select a non-VA code (e.g. 99213) → location selector does not appear ✅
+Practice default location pre-fills automatically → user doesn't have to select it ✅
+
