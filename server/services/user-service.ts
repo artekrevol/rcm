@@ -7,6 +7,7 @@ export interface UserRecord {
   name: string;
   role: string;
   password: string;
+  organization_id: string | null;
   created_at: string | null;
 }
 
@@ -15,6 +16,7 @@ export interface SafeUser {
   email: string;
   name: string;
   role: string;
+  organization_id: string | null;
   created_at: string | null;
 }
 
@@ -54,6 +56,7 @@ export async function createUser(data: {
   name: string;
   role: string;
   password: string;
+  organizationId?: string;
 }): Promise<SafeUser> {
   if (!data.email?.trim()) throw new Error("Email is required");
   if (!data.name?.trim()) throw new Error("Name is required");
@@ -70,10 +73,10 @@ export async function createUser(data: {
 
   const hashed = await hashPassword(data.password);
   const { rows } = await pool.query(
-    `INSERT INTO users (id, email, name, role, password, created_at)
-     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, NOW())
-     RETURNING id, email, name, role, created_at`,
-    [email, data.name.trim(), data.role, hashed]
+    `INSERT INTO users (id, email, name, role, password, organization_id, created_at)
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, NOW())
+     RETURNING id, email, name, role, organization_id, created_at`,
+    [email, data.name.trim(), data.role, hashed, data.organizationId || null]
   );
   return rows[0];
 }
@@ -121,7 +124,7 @@ export async function updateUser(
 export async function getUserForAuth(email: string): Promise<UserRecord | null> {
   await ensureCreatedAtColumn();
   const { rows } = await pool.query(
-    "SELECT id, email, name, role, password, created_at FROM users WHERE email = $1",
+    "SELECT id, email, name, role, password, organization_id, created_at FROM users WHERE email = $1",
     [email]
   );
   return rows[0] || null;
@@ -129,7 +132,7 @@ export async function getUserForAuth(email: string): Promise<UserRecord | null> 
 
 export async function getUserByEmail(email: string): Promise<SafeUser | null> {
   const { rows } = await pool.query(
-    "SELECT id, email, name, role, created_at FROM users WHERE email = $1",
+    "SELECT id, email, name, role, organization_id, created_at FROM users WHERE email = $1",
     [email]
   );
   return rows[0] || null;
@@ -138,16 +141,23 @@ export async function getUserByEmail(email: string): Promise<SafeUser | null> {
 export async function getUserById(id: string): Promise<SafeUser | null> {
   await ensureCreatedAtColumn();
   const { rows } = await pool.query(
-    "SELECT id, email, name, role, created_at FROM users WHERE id = $1",
+    "SELECT id, email, name, role, organization_id, created_at FROM users WHERE id = $1",
     [id]
   );
   return rows[0] || null;
 }
 
-export async function listUsers(): Promise<SafeUser[]> {
+export async function listUsers(organizationId?: string): Promise<SafeUser[]> {
   await ensureCreatedAtColumn();
+  if (organizationId) {
+    const { rows } = await pool.query(
+      "SELECT id, email, name, role, organization_id, created_at FROM users WHERE organization_id = $1 ORDER BY email",
+      [organizationId]
+    );
+    return rows;
+  }
   const { rows } = await pool.query(
-    "SELECT id, email, name, role, created_at FROM users ORDER BY email"
+    "SELECT id, email, name, role, organization_id, created_at FROM users ORDER BY email"
   );
   return rows;
 }

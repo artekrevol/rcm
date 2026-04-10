@@ -142,6 +142,18 @@ async function syncPatientToLead(patient: Patient, extractedData?: any): Promise
   }
 }
 
+function getOrgId(req: any): string | undefined {
+  return (req.user as any)?.organization_id || undefined;
+}
+
+function verifyOrg(entity: any, req: any): boolean {
+  if (!entity) return true;
+  const orgId = getOrgId(req);
+  if (!orgId) return true;
+  const entityOrgId = entity.organizationId || entity.organization_id;
+  return !entityOrgId || entityOrgId === orgId;
+}
+
 export async function registerRoutes(server: Server, app: Express): Promise<void> {
 
   try {
@@ -296,6 +308,31 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       `);
       console.log("Seeded 22 VA/CARC prevention rules");
     }
+
+    const DEMO_ORG_ID = "demo-org-001";
+    const { rows: orgCheck } = await pool.query("SELECT id FROM organizations WHERE id = $1", [DEMO_ORG_ID]);
+    if (orgCheck.length === 0) {
+      await pool.query(
+        "INSERT INTO organizations (id, name, created_at) VALUES ($1, 'ClaimShield Demo Practice', NOW())",
+        [DEMO_ORG_ID]
+      );
+      console.log("Created Demo Organization");
+    }
+
+    const orgTables = [
+      "users", "leads", "patients", "encounters", "claims", "claim_events",
+      "denials", "rules", "calls", "prior_authorizations", "email_templates",
+      "nurture_sequences", "email_logs", "availability_slots", "appointments",
+      "chat_sessions", "chat_messages", "chat_analytics", "vob_verifications",
+      "activity_logs", "providers", "practice_settings", "claim_templates"
+    ];
+    for (const t of orgTables) {
+      try {
+        await pool.query(`UPDATE ${t} SET organization_id = $1 WHERE organization_id IS NULL`, [DEMO_ORG_ID]);
+      } catch (e: any) {}
+    }
+    console.log("Assigned existing data to demo organization");
+
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
   }
@@ -362,6 +399,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.patch("/api/billing/providers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { id } = req.params;
+      const db = await import("./db").then(m => m.pool);
+      const ownerCheck = await db.query("SELECT organization_id FROM providers WHERE id = $1", [id]);
+      if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Provider not found" });
       const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, isDefault, isActive } = req.body;
       if (npi !== undefined) {
         const { validateNPI } = await import("../shared/npi-validation");
@@ -369,7 +409,6 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           return res.status(400).json({ error: "Invalid NPI — must be 10 digits and pass the NPI checksum" });
         }
       }
-      const db = await import("./db").then(m => m.pool);
       const client = await db.connect();
       try {
         await client.query("BEGIN");
@@ -409,7 +448,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM practice_settings LIMIT 1"));
+      const orgId = getOrgId(req);
+      const { rows } = orgId 
+        ? await import("./db").then(m => m.pool.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]))
+        : await import("./db").then(m => m.pool.query("SELECT * FROM practice_settings LIMIT 1"));
       res.json(rows[0] || null);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -419,8 +461,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation, oa_submitter_id, oa_sftp_username, oa_sftp_password } = req.body;
+      const orgId = getOrgId(req);
       const db = await import("./db").then(m => m.pool);
-      const existing = await db.query("SELECT id FROM practice_settings LIMIT 1");
+      const existing = orgId
+        ? await db.query("SELECT id FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])
+        : await db.query("SELECT id FROM practice_settings LIMIT 1");
       if (existing.rows.length > 0) {
         let query = `UPDATE practice_settings SET practice_name=$1, primary_npi=$2, tax_id=$3, taxonomy_code=$4, address=$5, phone=$6, default_pos=$7, billing_location=$9, updated_at=NOW()`;
         const params: any[] = [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', existing.rows[0].id, billingLocation || null];
@@ -432,9 +477,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         res.json(rows[0]);
       } else {
         const { rows } = await db.query(
-          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', billingLocation || null]
+          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location, organization_id)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', billingLocation || null, orgId || null]
         );
         res.json(rows[0]);
       }
@@ -688,7 +733,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/admin/users", requireRole("admin"), async (req, res) => {
     try {
       const { listUsers } = await import("./services/user-service");
-      const users = await listUsers();
+      const users = await listUsers(getOrgId(req));
       res.json(users);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -698,7 +743,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/admin/users", requireRole("admin"), async (req, res) => {
     try {
       const { createUser } = await import("./services/user-service");
-      const user = await createUser(req.body);
+      const user = await createUser({ ...req.body, organizationId: getOrgId(req) });
       res.json(user);
     } catch (err: any) {
       const status = err.message.includes("already exists") ? 409 : 400;
@@ -708,6 +753,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.patch("/api/admin/users/:id", requireRole("admin"), async (req, res) => {
     try {
+      const targetUser = await storage.getUserById(req.params.id);
+      if (!targetUser || !verifyOrg(targetUser, req)) return res.status(404).json({ error: "User not found" });
       const { updateUser } = await import("./services/user-service");
       const { name, role } = req.body;
       const user = await updateUser(req.params.id, { name, role });
@@ -720,6 +767,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.patch("/api/admin/users/:id/password", requireRole("admin"), async (req, res) => {
     try {
+      const targetUser = await storage.getUserById(req.params.id);
+      if (!targetUser || !verifyOrg(targetUser, req)) return res.status(404).json({ error: "User not found" });
       const { updatePassword } = await import("./services/user-service");
       await updatePassword(req.params.id, req.body.password);
       res.json({ success: true });
@@ -731,6 +780,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.delete("/api/admin/users/:id", requireRole("admin"), async (req, res) => {
     try {
+      const targetUser = await storage.getUserById(req.params.id);
+      if (!targetUser || !verifyOrg(targetUser, req)) return res.status(404).json({ error: "User not found" });
       const { deleteUser } = await import("./services/user-service");
       const currentUser = (req as any).user;
       await deleteUser(req.params.id, currentUser.id);
@@ -747,7 +798,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const [providers, payers, settings] = await Promise.all([
         db.query("SELECT id, first_name, last_name, credentials, npi, is_default FROM providers WHERE is_active = true ORDER BY last_name"),
         db.query("SELECT id, name, payer_id, timely_filing_days, auth_required, is_active FROM payers ORDER BY name"),
-        db.query("SELECT * FROM practice_settings LIMIT 1"),
+        getOrgId(req) 
+          ? db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [getOrgId(req)])
+          : db.query("SELECT * FROM practice_settings LIMIT 1"),
       ]);
       res.json({
         providers: providers.rows,
@@ -804,8 +857,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.patch("/api/billing/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const existing = await db.query("SELECT id, status FROM claims WHERE id = $1", [req.params.id]);
+      const existing = await db.query("SELECT id, status, organization_id FROM claims WHERE id = $1", [req.params.id]);
       if (existing.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
+      if (!verifyOrg(existing.rows[0], req)) return res.status(404).json({ error: "Claim not found" });
 
       const allowedFields: Record<string, string> = {
         payer: "payer", payerId: "payer_id", cptCodes: "cpt_codes", serviceLines: "service_lines",
@@ -885,6 +939,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
       if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
       const claim = claimResult.rows[0];
+      if (!verifyOrg(claim, req)) return res.status(404).json({ error: "Claim not found" });
 
       const patientResult = await db.query(
         `SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
@@ -937,6 +992,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
       if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
       const claim = claimResult.rows[0];
+      if (!verifyOrg(claim, req)) return res.status(404).json({ error: "Claim not found" });
 
       const patientResult = await db.query(
         `SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
@@ -950,7 +1006,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         provider = provResult.rows[0] || null;
       }
 
-      const practiceResult = await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const orgId = getOrgId(req);
+      const practiceResult = orgId
+        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])
+        : await db.query("SELECT * FROM practice_settings LIMIT 1");
       const practice = practiceResult.rows[0] || null;
 
       let payerName = claim.payer || "";
@@ -968,6 +1027,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.patch("/api/billing/claims/:id/pdf-generated", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
+      const ownerCheck = await db.query("SELECT organization_id FROM claims WHERE id = $1", [req.params.id]);
+      if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Claim not found" });
       const timestamp = new Date().toISOString();
       await db.query(
         `UPDATE claims SET pdf_url = $1, status = CASE WHEN status IN ('draft', 'created') THEN 'exported' ELSE status END, updated_at = NOW() WHERE id = $2`,
@@ -995,12 +1056,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
       if (!claimResult.rows.length) return res.status(404).json({ error: "Claim not found" });
       const c = claimResult.rows[0];
+      if (!verifyOrg(c, req)) return res.status(404).json({ error: "Claim not found" });
 
       const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
       if (!patientResult.rows.length) return res.status(404).json({ error: "Patient not found" });
       const pat = patientResult.rows[0];
 
-      const settingsResult = await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const ediOrgId = getOrgId(req);
+      const settingsResult = ediOrgId
+        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [ediOrgId])
+        : await db.query("SELECT * FROM practice_settings LIMIT 1");
       const ps = settingsResult.rows[0];
       if (!ps) return res.status(400).json({ error: "Practice settings not configured" });
 
@@ -1125,9 +1190,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
       if (!claimResult.rows.length) return res.status(404).json({ success: false, error: "Claim not found" });
       const c = claimResult.rows[0];
+      if (!verifyOrg(c, req)) return res.status(404).json({ success: false, error: "Claim not found" });
 
       const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
-      const settingsResult = await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const oaOrgId = getOrgId(req);
+      const settingsResult = oaOrgId
+        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [oaOrgId])
+        : await db.query("SELECT * FROM practice_settings LIMIT 1");
       const ps = settingsResult.rows[0];
       if (!ps) return res.status(400).json({ success: false, error: "Practice settings not configured" });
       if (!ps.oa_connected) return res.status(400).json({ success: false, error: "Office Ally not connected. Go to Settings → Clearinghouse to connect." });
@@ -1488,7 +1557,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         `SELECT p.*, l.name as lead_name, l.phone as lead_phone, l.email as lead_email FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
         [req.params.id]
       );
-      if (rows.length === 0) return res.status(404).json({ error: "Patient not found" });
+      if (rows.length === 0 || !verifyOrg(rows[0], req)) return res.status(404).json({ error: "Patient not found" });
       const patient = rows[0];
       if (!patient.first_name && !patient.last_name && patient.lead_name) {
         const parts = patient.lead_name.trim().split(/\s+/);
@@ -1551,6 +1620,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.patch("/api/billing/patients/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { id } = req.params;
+      const dbCheck = await import("./db").then(m => m.pool);
+      const ownerCheck = await dbCheck.query("SELECT organization_id FROM patients WHERE id = $1", [id]);
+      if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Patient not found" });
       const fields: string[] = [];
       const values: any[] = [];
       let idx = 1;
@@ -1599,6 +1671,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/patients/:id/claims", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
+      const ownerCheck = await db.query("SELECT organization_id FROM patients WHERE id = $1", [req.params.id]);
+      if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Patient not found" });
       const { rows } = await db.query(
         `SELECT * FROM claims WHERE patient_id = $1 ORDER BY created_at DESC`,
         [req.params.id]
@@ -1617,8 +1691,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const user = req.user as any;
       const authorName = author || user?.name || user?.email || "Unknown";
       const newNote = { text: text.trim(), timestamp: new Date().toISOString(), author: authorName };
-      const existing = await db.query("SELECT notes FROM patients WHERE id = $1", [req.params.id]);
-      if (existing.rows.length === 0) return res.status(404).json({ error: "Patient not found" });
+      const existing = await db.query("SELECT notes, organization_id FROM patients WHERE id = $1", [req.params.id]);
+      if (existing.rows.length === 0 || !verifyOrg(existing.rows[0], req)) return res.status(404).json({ error: "Patient not found" });
       let notes: any[] = [];
       try {
         const raw = existing.rows[0].notes;
@@ -1639,6 +1713,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/patients/:id/vob", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
+      const ownerCheck = await db.query("SELECT organization_id FROM patients WHERE id = $1", [req.params.id]);
+      if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Patient not found" });
       const { rows } = await db.query(
         `SELECT * FROM vob_verifications
          WHERE patient_id = $1
@@ -1653,12 +1729,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   app.get("/api/dashboard/metrics", async (req, res) => {
-    const metrics = await storage.getDashboardMetrics();
+    const metrics = await storage.getDashboardMetrics(getOrgId(req));
     res.json(metrics);
   });
 
   app.get("/api/dashboard/alerts", async (req, res) => {
-    const claims = await storage.getClaims();
+    const claims = await storage.getClaims(getOrgId(req));
     const alerts = [];
     
     for (const claim of claims.filter(c => c.readinessStatus === "RED").slice(0, 3)) {
@@ -1697,13 +1773,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   app.get("/api/leads", requireRole("admin", "intake"), async (req, res) => {
-    const leads = await storage.getLeads();
+    const leads = await storage.getLeads(getOrgId(req));
     res.json(leads);
   });
 
   // Worklist API with queue filtering
   app.get("/api/leads/worklist", requireRole("admin", "intake"), async (req, res) => {
-    const allLeads = await storage.getLeads();
+    const allLeads = await storage.getLeads(getOrgId(req));
     const queue = req.query.queue as string || "all";
     const now = new Date();
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -1778,7 +1854,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/leads/:id", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
-    if (!lead) {
+    if (!lead || !verifyOrg(lead, req)) {
       return res.status(404).json({ error: "Lead not found" });
     }
     res.json(lead);
@@ -1820,6 +1896,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       vobMissingFields,
       vobScore,
       nextActionType: parsed.data.nextActionType || "call",
+      organizationId: getOrgId(req),
     };
     
     const lead = await storage.createLead(leadData as any);
@@ -1829,7 +1906,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // PATCH endpoint for quick actions and lead updates
   app.patch("/api/leads/:id", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
-    if (!lead) {
+    if (!lead || !verifyOrg(lead, req)) {
       return res.status(404).json({ error: "Lead not found" });
     }
 
@@ -2042,6 +2119,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           newValue: newStr,
           description: `${label} changed from "${oldStr}" to "${newStr}"`,
           performedBy: "user",
+          organizationId: getOrgId(req),
         });
       }
     }
@@ -2320,6 +2398,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       duration: req.body.duration || null,
       notes: req.body.notes || null,
       vobData: req.body.vobData || null,
+      organizationId: getOrgId(req),
     };
 
     const call = await storage.createCall(callData);
@@ -2360,6 +2439,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           insuranceCarrier: extracted.insuranceCarrier || extracted.insurance_carrier || "Blue Cross",
           memberId: extracted.memberId || extracted.member_id || "MEM" + Math.random().toString(36).slice(2, 10).toUpperCase(),
           planType: "PPO",
+          organizationId: getOrgId(req),
         });
         // Sync patient data to lead to update VOB score (pass extractedData for serviceNeeded)
         await syncPatientToLead(newPatient, extracted);
@@ -2405,6 +2485,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       facilityType: "Hospital",
       admissionType: "Elective",
       expectedStartDate: new Date().toISOString().split("T")[0],
+      organizationId: getOrgId(req),
     });
 
     const payers = ["Payor A", "Payor B", "Payor C", "Payor D", "Payor E"];
@@ -2422,12 +2503,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       status: "created",
       riskScore,
       readinessStatus,
+      organizationId: getOrgId(req),
     });
 
     await storage.createClaimEvent({
       claimId: claim.id,
       type: "Created",
       notes: "Claim packet created from lead intake",
+      organizationId: getOrgId(req),
     });
 
     await storage.updateLead(req.params.id, { status: "converted" });
@@ -2436,41 +2519,53 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   app.get("/api/claims/recent", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const claims = await storage.getClaims();
+    const claims = await storage.getClaims(getOrgId(req));
     res.json(claims.slice(0, 10));
   });
 
   app.get("/api/claims", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const claims = await storage.getClaims();
+    const claims = await storage.getClaims(getOrgId(req));
     res.json(claims);
   });
 
   app.get("/api/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     const claim = await storage.getClaim(req.params.id);
-    if (!claim) {
+    if (!claim || !verifyOrg(claim, req)) {
       return res.status(404).json({ error: "Claim not found" });
     }
     res.json(claim);
   });
 
   app.get("/api/claims/:id/events", requireRole("admin", "rcm_manager"), async (req, res) => {
+    const claim = await storage.getClaim(req.params.id);
+    if (!claim || !verifyOrg(claim, req)) {
+      return res.status(404).json({ error: "Claim not found" });
+    }
     const events = await storage.getClaimEvents(req.params.id);
     res.json(events);
   });
 
   app.get("/api/claims/:id/explanation", requireRole("admin", "rcm_manager"), async (req, res) => {
+    const claim = await storage.getClaim(req.params.id);
+    if (!claim || !verifyOrg(claim, req)) {
+      return res.status(404).json({ error: "Claim not found" });
+    }
     const explanation = await storage.getRiskExplanation(req.params.id);
     res.json(explanation || null);
   });
 
   app.get("/api/claims/:id/patient", requireRole("admin", "rcm_manager"), async (req, res) => {
+    const claim = await storage.getClaim(req.params.id);
+    if (!claim || !verifyOrg(claim, req)) {
+      return res.status(404).json({ error: "Claim not found" });
+    }
     const patient = await storage.getClaimPatient(req.params.id);
     res.json(patient || null);
   });
 
   app.post("/api/claims/:id/submit", requireRole("admin", "rcm_manager"), async (req, res) => {
     const claim = await storage.getClaim(req.params.id);
-    if (!claim) {
+    if (!claim || !verifyOrg(claim, req)) {
       return res.status(404).json({ error: "Claim not found" });
     }
 
@@ -2483,23 +2578,24 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       claimId: req.params.id,
       type: "Submitted",
       notes: "Claim submitted to payer",
+      organizationId: getOrgId(req),
     });
 
     res.json({ success: true });
   });
 
   app.get("/api/intelligence/clusters", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const clusters = await storage.getDenialClusters();
+    const clusters = await storage.getDenialClusters(getOrgId(req));
     res.json(clusters);
   });
 
   app.get("/api/intelligence/top-patterns", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const patterns = await storage.getTopPatterns();
+    const patterns = await storage.getTopPatterns(getOrgId(req));
     res.json(patterns);
   });
 
   app.get("/api/rules", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const rules = await storage.getRules();
+    const rules = await storage.getRules(getOrgId(req));
     res.json(rules);
   });
 
@@ -2508,7 +2604,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.message });
     }
-    const rule = await storage.createRule(parsed.data);
+    const rule = await storage.createRule({ ...parsed.data, organizationId: getOrgId(req) });
     res.status(201).json(rule);
   });
 
@@ -2523,20 +2619,26 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       triggerPattern: suggestedRule?.triggerPattern || `payer=${payer} AND cptCode=${cptCode}`,
       preventionAction: suggestedRule?.preventionAction || "Block submission pending review",
       enabled: true,
+      organizationId: getOrgId(req),
     });
 
     res.status(201).json(rule);
   });
 
   app.patch("/api/rules/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const rule = await storage.updateRule(req.params.id, req.body);
-    if (!rule) {
+    const existing = await storage.getRule(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
       return res.status(404).json({ error: "Rule not found" });
     }
+    const rule = await storage.updateRule(req.params.id, req.body);
     res.json(rule);
   });
 
   app.delete("/api/rules/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    const existing = await storage.getRule(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
+      return res.status(404).json({ error: "Rule not found" });
+    }
     await storage.deleteRule(req.params.id);
     res.json({ success: true });
   });
@@ -2699,6 +2801,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         summary: "Call initiated",
         disposition: "in_progress",
         extractedData: {},
+        organizationId: getOrgId(req),
       });
       
       res.status(201).json({ 
@@ -2832,7 +2935,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // Manually refresh call data from Vapi API
   app.post("/api/calls/:id/refresh", requireRole("admin", "intake"), async (req, res) => {
     const call = await storage.getCall(req.params.id);
-    if (!call) {
+    if (!call || !verifyOrg(call, req)) {
       return res.status(404).json({ error: "Call not found" });
     }
     
@@ -2919,17 +3022,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // Call history and notes
   app.get("/api/calls/:id", requireRole("admin", "intake"), async (req, res) => {
     const call = await storage.getCall(req.params.id);
-    if (!call) {
+    if (!call || !verifyOrg(call, req)) {
       return res.status(404).json({ error: "Call not found" });
     }
     res.json(call);
   });
 
   app.patch("/api/calls/:id", requireRole("admin", "intake"), async (req, res) => {
-    const call = await storage.updateCall(req.params.id, req.body);
-    if (!call) {
+    const existing = await storage.getCall(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
       return res.status(404).json({ error: "Call not found" });
     }
+    const call = await storage.updateCall(req.params.id, req.body);
     res.json(call);
   });
 
@@ -2946,22 +3050,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/prior-auth/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     const auth = await storage.getPriorAuth(req.params.id);
-    if (!auth) {
+    if (!auth || !verifyOrg(auth, req)) {
       return res.status(404).json({ error: "Prior authorization not found" });
     }
     res.json(auth);
   });
 
   app.post("/api/prior-auth", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const auth = await storage.createPriorAuth(req.body);
+    const auth = await storage.createPriorAuth({ ...req.body, organizationId: getOrgId(req) });
     res.status(201).json(auth);
   });
 
   app.patch("/api/prior-auth/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const auth = await storage.updatePriorAuth(req.params.id, req.body);
-    if (!auth) {
+    const existing = await storage.getPriorAuth(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
       return res.status(404).json({ error: "Prior authorization not found" });
     }
+    const auth = await storage.updatePriorAuth(req.params.id, req.body);
     res.json(auth);
   });
 
@@ -3028,6 +3133,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         duration: 0,
         recordingUrl: null,
         extractedData: null,
+        organizationId: getOrgId(req),
         vobData: null,
         notes: null,
       });
@@ -3037,6 +3143,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         leadId: req.params.id,
         activityType: "sms_sent",
         description: `SMS sent: "${template || "custom message"}"`,
+        organizationId: getOrgId(req),
         metadata: { 
           messageSid: twilioMessage.sid,
           template: template || null,
@@ -3076,7 +3183,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     console.log(`Incoming SMS from ${From}: ${Body}`);
 
     // Find lead by phone number
-    const leads = await storage.getLeads();
+    const leads = await storage.getLeads(getOrgId(req));
     const normalizedFrom = From.replace(/\D/g, "").slice(-10);
     const matchingLead = leads.find(l => {
       if (!l.phone) return false;
@@ -3085,7 +3192,6 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     });
 
     if (matchingLead) {
-      // Log incoming SMS as a call record
       await storage.createCall({
         leadId: matchingLead.id,
         vapiCallId: `sms_in_${MessageSid}`,
@@ -3097,6 +3203,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         extractedData: { notes: Body } as any,
         vobData: null,
         notes: null,
+        organizationId: matchingLead.organizationId || undefined,
       });
 
       // Check for keywords and auto-respond
@@ -3146,7 +3253,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   // Get all email templates
   app.get("/api/email-templates", requireRole("admin", "intake"), async (req, res) => {
-    const templates = await storage.getEmailTemplates();
+    const templates = await storage.getEmailTemplates(getOrgId(req));
     res.json(templates);
   });
 
@@ -3156,28 +3263,32 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!result.success) {
       return res.status(400).json({ error: result.error.flatten() });
     }
-    const template = await storage.createEmailTemplate(result.data);
+    const template = await storage.createEmailTemplate({ ...result.data, organizationId: getOrgId(req) });
     res.json(template);
   });
 
   // Update email template
   app.patch("/api/email-templates/:id", requireRole("admin", "intake"), async (req, res) => {
-    const template = await storage.updateEmailTemplate(req.params.id, req.body);
-    if (!template) {
+    const existing = await storage.getEmailTemplate(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
       return res.status(404).json({ error: "Template not found" });
     }
+    const template = await storage.updateEmailTemplate(req.params.id, req.body);
     res.json(template);
   });
 
-  // Delete email template
   app.delete("/api/email-templates/:id", requireRole("admin", "intake"), async (req, res) => {
+    const existing = await storage.getEmailTemplate(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
+      return res.status(404).json({ error: "Template not found" });
+    }
     await storage.deleteEmailTemplate(req.params.id);
     res.status(204).send();
   });
 
   // Get all nurture sequences
   app.get("/api/nurture-sequences", requireRole("admin", "intake"), async (req, res) => {
-    const sequences = await storage.getNurtureSequences();
+    const sequences = await storage.getNurtureSequences(getOrgId(req));
     res.json(sequences);
   });
 
@@ -3187,21 +3298,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!result.success) {
       return res.status(400).json({ error: result.error.flatten() });
     }
-    const sequence = await storage.createNurtureSequence(result.data);
+    const sequence = await storage.createNurtureSequence({ ...result.data, organizationId: getOrgId(req) });
     res.json(sequence);
   });
 
   // Update nurture sequence
   app.patch("/api/nurture-sequences/:id", requireRole("admin", "intake"), async (req, res) => {
-    const sequence = await storage.updateNurtureSequence(req.params.id, req.body);
-    if (!sequence) {
+    const existing = await storage.getNurtureSequence(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
       return res.status(404).json({ error: "Sequence not found" });
     }
+    const sequence = await storage.updateNurtureSequence(req.params.id, req.body);
     res.json(sequence);
   });
 
-  // Delete nurture sequence
   app.delete("/api/nurture-sequences/:id", requireRole("admin", "intake"), async (req, res) => {
+    const existing = await storage.getNurtureSequence(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
+      return res.status(404).json({ error: "Sequence not found" });
+    }
     await storage.deleteNurtureSequence(req.params.id);
     res.status(204).send();
   });
@@ -3347,6 +3462,7 @@ Warmly,
       body: emailBody,
       toEmail: lead.email,
       status: "pending",
+      organizationId: getOrgId(req),
     });
 
     // Send via Gmail SMTP if configured
@@ -3389,6 +3505,7 @@ Warmly,
       leadId: lead.id,
       activityType: "email_sent",
       description: `Email sent: "${emailSubject}"`,
+      organizationId: getOrgId(req),
       metadata: { 
         emailLogId: emailLog.id, 
         subject: emailSubject,
@@ -3524,6 +3641,7 @@ Warmly,
         toEmail: lead.email,
         status: emailTransporter ? "sent" : "simulated",
         sentAt: new Date(),
+        organizationId: getOrgId(req),
       });
 
       await storage.updateLead(lead.id, {
@@ -3552,7 +3670,7 @@ Warmly,
 
   // Get all availability slots
   app.get("/api/availability", requireRole("admin", "intake"), async (req, res) => {
-    const slots = await storage.getAvailabilitySlots();
+    const slots = await storage.getAvailabilitySlots(getOrgId(req));
     res.json(slots);
   });
 
@@ -3562,28 +3680,32 @@ Warmly,
     if (!result.success) {
       return res.status(400).json({ error: result.error.flatten() });
     }
-    const slot = await storage.createAvailabilitySlot(result.data);
+    const slot = await storage.createAvailabilitySlot({ ...result.data, organizationId: getOrgId(req) });
     res.json(slot);
   });
 
   // Update availability slot
   app.patch("/api/availability/:id", requireRole("admin", "intake"), async (req, res) => {
-    const slot = await storage.updateAvailabilitySlot(req.params.id, req.body);
-    if (!slot) {
+    const existing = await storage.getAvailabilitySlot(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
       return res.status(404).json({ error: "Slot not found" });
     }
+    const slot = await storage.updateAvailabilitySlot(req.params.id, req.body);
     res.json(slot);
   });
 
-  // Delete availability slot
   app.delete("/api/availability/:id", requireRole("admin", "intake"), async (req, res) => {
+    const existing = await storage.getAvailabilitySlot(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
+      return res.status(404).json({ error: "Slot not found" });
+    }
     await storage.deleteAvailabilitySlot(req.params.id);
     res.status(204).send();
   });
 
   // Get all appointments
   app.get("/api/appointments", requireRole("admin", "intake"), async (req, res) => {
-    const appointments = await storage.getAppointments();
+    const appointments = await storage.getAppointments(getOrgId(req));
     res.json(appointments);
   });
 
@@ -3612,7 +3734,7 @@ Warmly,
       return res.status(400).json({ error: result.error.flatten() });
     }
 
-    const appointment = await storage.createAppointment(result.data);
+    const appointment = await storage.createAppointment({ ...result.data, organizationId: getOrgId(req) });
 
     // Update lead with next action
     await storage.updateLead(lead.id, {
@@ -3626,15 +3748,19 @@ Warmly,
 
   // Update appointment
   app.patch("/api/appointments/:id", requireRole("admin", "intake"), async (req, res) => {
-    const appointment = await storage.updateAppointment(req.params.id, req.body);
-    if (!appointment) {
+    const existing = await storage.getAppointment(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
       return res.status(404).json({ error: "Appointment not found" });
     }
+    const appointment = await storage.updateAppointment(req.params.id, req.body);
     res.json(appointment);
   });
 
-  // Cancel appointment
   app.post("/api/appointments/:id/cancel", requireRole("admin", "intake"), async (req, res) => {
+    const existing = await storage.getAppointment(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
+      return res.status(404).json({ error: "Appointment not found" });
+    }
     const { reason } = req.body;
     const appointment = await storage.updateAppointment(req.params.id, {
       status: "cancelled",
@@ -3656,13 +3782,14 @@ Warmly,
 
   // Confirm appointment
   app.post("/api/appointments/:id/confirm", requireRole("admin", "intake"), async (req, res) => {
+    const existing = await storage.getAppointment(req.params.id);
+    if (!existing || !verifyOrg(existing, req)) {
+      return res.status(404).json({ error: "Appointment not found" });
+    }
     const appointment = await storage.updateAppointment(req.params.id, {
       status: "confirmed",
       confirmedAt: new Date(),
     });
-    if (!appointment) {
-      return res.status(404).json({ error: "Appointment not found" });
-    }
     res.json(appointment);
   });
 
@@ -3677,7 +3804,7 @@ Warmly,
     const dayOfWeek = requestedDate.getDay();
     
     // Get availability for this day
-    const allSlots = await storage.getAvailabilitySlots();
+    const allSlots = await storage.getAvailabilitySlots(getOrgId(req));
     const daySlots = allSlots.filter(s => s.dayOfWeek === dayOfWeek && s.enabled);
 
     if (daySlots.length === 0) {
@@ -3685,7 +3812,7 @@ Warmly,
     }
 
     // Get existing appointments for this date
-    const allAppointments = await storage.getAppointments();
+    const allAppointments = await storage.getAppointments(getOrgId(req));
     const dayStart = new Date(requestedDate);
     dayStart.setHours(0, 0, 0, 0);
     const dayEnd = new Date(requestedDate);
@@ -3732,7 +3859,7 @@ Warmly,
 
   // Seed default availability if none exists
   app.post("/api/availability/seed", requireRole("admin", "intake"), async (req, res) => {
-    const existing = await storage.getAvailabilitySlots();
+    const existing = await storage.getAvailabilitySlots(getOrgId(req));
     if (existing.length > 0) {
       return res.json({ message: "Availability already configured", slots: existing });
     }
@@ -3746,6 +3873,7 @@ Warmly,
         endTime: "17:00",
         timezone: "America/Chicago",
         enabled: true,
+        organizationId: getOrgId(req),
       });
       defaultSlots.push(slot);
     }
@@ -4003,7 +4131,7 @@ Warmly,
 
   // Get chat analytics stats
   app.get("/api/chat-analytics/stats", requireRole("admin", "intake"), async (req, res) => {
-    const stats = await storage.getChatSessionStats();
+    const stats = await storage.getChatSessionStats(getOrgId(req));
     res.json(stats);
   });
 
@@ -4048,8 +4176,8 @@ Warmly,
     const { days = "30" } = req.query;
     const numDays = parseInt(days as string) || 30;
     
-    const sessions = await storage.getChatSessions();
-    const leads = await storage.getLeads();
+    const sessions = await storage.getChatSessions(getOrgId(req));
+    const leads = await storage.getLeads(getOrgId(req));
     
     // Group data by date
     const dateMap = new Map<string, { sessions: number; leads: number; appointments: number }>();
@@ -4092,14 +4220,14 @@ Warmly,
 
   // Get all chat sessions (for admin view)
   app.get("/api/chat-sessions", requireRole("admin", "intake"), async (req, res) => {
-    const sessions = await storage.getChatSessions();
+    const sessions = await storage.getChatSessions(getOrgId(req));
     res.json(sessions);
   });
 
   // Get session with messages
   app.get("/api/chat-sessions/:id", requireRole("admin", "intake"), async (req, res) => {
     const session = await storage.getChatSession(req.params.id);
-    if (!session) {
+    if (!session || !verifyOrg(session, req)) {
       return res.status(404).json({ error: "Session not found" });
     }
     const messages = await storage.getChatMessagesBySessionId(session.id);
@@ -4110,7 +4238,8 @@ Warmly,
     const { startDate, endDate } = req.query;
     const analytics = await storage.getChatAnalytics(
       startDate as string | undefined,
-      endDate as string | undefined
+      endDate as string | undefined,
+      getOrgId(req)
     );
     res.json(analytics);
   });
@@ -4217,6 +4346,7 @@ Warmly,
         payerName,
         memberId,
         status: "pending",
+        organizationId: getOrgId(req),
       });
 
       // Update lead VOB status
@@ -4228,6 +4358,7 @@ Warmly,
         activityType: "vob_started",
         description: `VOB verification started with ${payerName}`,
         performedBy: "system",
+        organizationId: getOrgId(req),
         metadata: { payerId, payerName, memberId },
       });
 
@@ -4268,6 +4399,7 @@ Warmly,
         activityType: "vob_completed",
         description: `VOB verification ${mappedData.status === "verified" ? "completed successfully" : "failed"}`,
         performedBy: "system",
+        organizationId: getOrgId(req),
         metadata: { 
           payerId, 
           payerName, 
@@ -4290,6 +4422,7 @@ Warmly,
         activityType: "vob_failed",
         description: `VOB verification failed: ${error.message}`,
         performedBy: "system",
+        organizationId: getOrgId(req),
         metadata: { error: error.message },
       });
       
@@ -4311,7 +4444,7 @@ Warmly,
 
     const verification = await storage.getVobVerification(req.params.id);
     
-    if (!verification) {
+    if (!verification || !verifyOrg(verification, req)) {
       return res.status(404).json({ error: "VOB verification not found" });
     }
 
@@ -4350,7 +4483,7 @@ Warmly,
 
     const verification = await storage.getVobVerification(req.params.id);
     
-    if (!verification) {
+    if (!verification || !verifyOrg(verification, req)) {
       return res.status(404).json({ error: "VOB verification not found" });
     }
 

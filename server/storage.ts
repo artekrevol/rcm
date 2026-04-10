@@ -34,7 +34,7 @@ export interface IStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   
-  getLeads(): Promise<Lead[]>;
+  getLeads(orgId?: string): Promise<Lead[]>;
   getLead(id: string): Promise<Lead | undefined>;
   createLead(lead: InsertLead): Promise<Lead>;
   updateLead(id: string, updates: Partial<Lead>): Promise<Lead | undefined>;
@@ -47,7 +47,7 @@ export interface IStorage {
   getEncounter(id: string): Promise<Encounter | undefined>;
   createEncounter(encounter: InsertEncounter): Promise<Encounter>;
   
-  getClaims(): Promise<Claim[]>;
+  getClaims(orgId?: string): Promise<Claim[]>;
   getClaim(id: string): Promise<Claim | undefined>;
   createClaim(claim: InsertClaim): Promise<Claim>;
   updateClaim(id: string, updates: Partial<Claim>): Promise<Claim | undefined>;
@@ -56,11 +56,11 @@ export interface IStorage {
   getClaimEvents(claimId: string): Promise<ClaimEvent[]>;
   createClaimEvent(event: InsertClaimEvent): Promise<ClaimEvent>;
   
-  getDenials(): Promise<Denial[]>;
+  getDenials(orgId?: string): Promise<Denial[]>;
   getDenialsByClaimId(claimId: string): Promise<Denial[]>;
   createDenial(denial: InsertDenial): Promise<Denial>;
   
-  getRules(): Promise<Rule[]>;
+  getRules(orgId?: string): Promise<Rule[]>;
   getRule(id: string): Promise<Rule | undefined>;
   createRule(rule: InsertRule): Promise<Rule>;
   updateRule(id: string, updates: Partial<Rule>): Promise<Rule | undefined>;
@@ -78,64 +78,56 @@ export interface IStorage {
   createPriorAuth(auth: InsertPriorAuth): Promise<PriorAuth>;
   updatePriorAuth(id: string, updates: Partial<PriorAuth>): Promise<PriorAuth | undefined>;
   
-  getDashboardMetrics(): Promise<DashboardMetrics>;
-  getDenialClusters(): Promise<DenialCluster[]>;
-  getTopPatterns(): Promise<Array<{ rootCause: string; count: number; change: number }>>;
+  getDashboardMetrics(orgId?: string): Promise<DashboardMetrics>;
+  getDenialClusters(orgId?: string): Promise<DenialCluster[]>;
+  getTopPatterns(orgId?: string): Promise<Array<{ rootCause: string; count: number; change: number }>>;
   getRiskExplanation(claimId: string): Promise<RiskExplanation | undefined>;
   
-  // Email templates
-  getEmailTemplates(): Promise<EmailTemplate[]>;
+  getEmailTemplates(orgId?: string): Promise<EmailTemplate[]>;
   getEmailTemplate(id: string): Promise<EmailTemplate | undefined>;
   createEmailTemplate(template: InsertEmailTemplate): Promise<EmailTemplate>;
   updateEmailTemplate(id: string, updates: Partial<EmailTemplate>): Promise<EmailTemplate | undefined>;
   deleteEmailTemplate(id: string): Promise<void>;
   
-  // Nurture sequences
-  getNurtureSequences(): Promise<NurtureSequence[]>;
+  getNurtureSequences(orgId?: string): Promise<NurtureSequence[]>;
   getNurtureSequence(id: string): Promise<NurtureSequence | undefined>;
   createNurtureSequence(sequence: InsertNurtureSequence): Promise<NurtureSequence>;
   updateNurtureSequence(id: string, updates: Partial<NurtureSequence>): Promise<NurtureSequence | undefined>;
   deleteNurtureSequence(id: string): Promise<void>;
   
-  // Email logs
   getEmailLogsByLeadId(leadId: string): Promise<EmailLog[]>;
   createEmailLog(log: InsertEmailLog): Promise<EmailLog>;
   updateEmailLog(id: string, updates: Partial<EmailLog>): Promise<EmailLog | undefined>;
   
-  // Activity logs
   getActivityLogsByLeadId(leadId: string): Promise<ActivityLog[]>;
   createActivityLog(log: InsertActivityLog): Promise<ActivityLog>;
   
-  // Availability slots
-  getAvailabilitySlots(): Promise<AvailabilitySlot[]>;
+  getAvailabilitySlots(orgId?: string): Promise<AvailabilitySlot[]>;
+  getAvailabilitySlot(id: string): Promise<AvailabilitySlot | undefined>;
   createAvailabilitySlot(slot: InsertAvailabilitySlot): Promise<AvailabilitySlot>;
   updateAvailabilitySlot(id: string, updates: Partial<AvailabilitySlot>): Promise<AvailabilitySlot | undefined>;
   deleteAvailabilitySlot(id: string): Promise<void>;
   
-  // Appointments
-  getAppointments(): Promise<Appointment[]>;
+  getAppointments(orgId?: string): Promise<Appointment[]>;
   getAppointmentsByLeadId(leadId: string): Promise<Appointment[]>;
   getAppointment(id: string): Promise<Appointment | undefined>;
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
   updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment | undefined>;
   
-  // Chat sessions
-  getChatSessions(): Promise<ChatSession[]>;
+  getChatSessions(orgId?: string): Promise<ChatSession[]>;
   getChatSessionByVisitorToken(visitorToken: string): Promise<ChatSession | undefined>;
   getChatSession(id: string): Promise<ChatSession | undefined>;
   createChatSession(session: InsertChatSession): Promise<ChatSession>;
   updateChatSession(id: string, updates: Partial<ChatSession>): Promise<ChatSession | undefined>;
   
-  // Chat messages
   getChatMessagesBySessionId(sessionId: string): Promise<ChatMessage[]>;
   createChatMessage(message: InsertChatMessage): Promise<ChatMessage>;
   
-  // Chat analytics
-  getChatAnalytics(startDate?: string, endDate?: string): Promise<ChatAnalytics[]>;
+  getChatAnalytics(startDate?: string, endDate?: string, orgId?: string): Promise<ChatAnalytics[]>;
   getChatAnalyticsByDate(date: string): Promise<ChatAnalytics | undefined>;
   createChatAnalytics(analytics: InsertChatAnalytics): Promise<ChatAnalytics>;
   updateChatAnalytics(id: string, updates: Partial<ChatAnalytics>): Promise<ChatAnalytics | undefined>;
-  getChatSessionStats(): Promise<{
+  getChatSessionStats(orgId?: string): Promise<{
     totalSessions: number;
     completedSessions: number;
     abandonedSessions: number;
@@ -147,7 +139,6 @@ export interface IStorage {
     dropoffByStep: Record<string, number>;
   }>;
   
-  // VOB Verifications
   getVobVerificationsByLeadId(leadId: string): Promise<VobVerification[]>;
   getVobVerification(id: string): Promise<VobVerification | undefined>;
   getLatestVobVerificationByLeadId(leadId: string): Promise<VobVerification | undefined>;
@@ -171,7 +162,10 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  async getLeads(): Promise<Lead[]> {
+  async getLeads(orgId?: string): Promise<Lead[]> {
+    if (orgId) {
+      return db.select().from(leads).where(eq(leads.organizationId, orgId)).orderBy(desc(leads.createdAt));
+    }
     return db.select().from(leads).orderBy(desc(leads.createdAt));
   }
 
@@ -220,7 +214,10 @@ export class DatabaseStorage implements IStorage {
     return newEncounter;
   }
 
-  async getClaims(): Promise<Claim[]> {
+  async getClaims(orgId?: string): Promise<Claim[]> {
+    if (orgId) {
+      return db.select().from(claims).where(eq(claims.organizationId, orgId)).orderBy(desc(claims.createdAt));
+    }
     return db.select().from(claims).orderBy(desc(claims.createdAt));
   }
 
@@ -254,7 +251,10 @@ export class DatabaseStorage implements IStorage {
     return newEvent;
   }
 
-  async getDenials(): Promise<Denial[]> {
+  async getDenials(orgId?: string): Promise<Denial[]> {
+    if (orgId) {
+      return db.select().from(denials).where(eq(denials.organizationId, orgId)).orderBy(desc(denials.createdAt));
+    }
     return db.select().from(denials).orderBy(desc(denials.createdAt));
   }
 
@@ -267,7 +267,10 @@ export class DatabaseStorage implements IStorage {
     return newDenial;
   }
 
-  async getRules(): Promise<Rule[]> {
+  async getRules(orgId?: string): Promise<Rule[]> {
+    if (orgId) {
+      return db.select().from(rules).where(eq(rules.organizationId, orgId)).orderBy(desc(rules.createdAt));
+    }
     return db.select().from(rules).orderBy(desc(rules.createdAt));
   }
 
@@ -336,10 +339,10 @@ export class DatabaseStorage implements IStorage {
     return updated || undefined;
   }
 
-  async getDashboardMetrics(): Promise<DashboardMetrics> {
-    const allClaims = await this.getClaims();
-    const allRules = await this.getRules();
-    const allDenials = await this.getDenials();
+  async getDashboardMetrics(orgId?: string): Promise<DashboardMetrics> {
+    const allClaims = await this.getClaims(orgId);
+    const allRules = await this.getRules(orgId);
+    const allDenials = await this.getDenials(orgId);
     
     const denialsPrevented = allRules.reduce((sum, r) => sum + r.impactCount, 0);
     const claimsAtRisk = allClaims.filter(c => c.readinessStatus === "YELLOW" || c.readinessStatus === "RED").length;
@@ -364,8 +367,8 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  async getDenialClusters(): Promise<DenialCluster[]> {
-    const allDenials = await this.getDenials();
+  async getDenialClusters(orgId?: string): Promise<DenialCluster[]> {
+    const allDenials = await this.getDenials(orgId);
     
     const clusters: Record<string, DenialCluster> = {};
     allDenials.forEach(d => {
@@ -391,8 +394,8 @@ export class DatabaseStorage implements IStorage {
     return Object.values(clusters).sort((a, b) => b.count - a.count);
   }
 
-  async getTopPatterns(): Promise<Array<{ rootCause: string; count: number; change: number }>> {
-    const allDenials = await this.getDenials();
+  async getTopPatterns(orgId?: string): Promise<Array<{ rootCause: string; count: number; change: number }>> {
+    const allDenials = await this.getDenials(orgId);
     
     const patterns: Record<string, number> = {};
     allDenials.forEach(d => {
@@ -412,10 +415,11 @@ export class DatabaseStorage implements IStorage {
     const claim = await this.getClaim(claimId);
     if (!claim) return undefined;
 
+    const orgId = claim.organizationId || undefined;
     const patient = await this.getClaimPatient(claimId);
-    const allRules = await this.getRules();
+    const allRules = await this.getRules(orgId);
     const claimDenials = await this.getDenialsByClaimId(claimId);
-    const allDenials = await this.getDenials();
+    const allDenials = await this.getDenials(orgId);
 
     const priorAuths = await this.getPriorAuthsByEncounterId(claim.encounterId);
     const activePriorAuth = priorAuths.find(pa => pa.status === "approved");
@@ -630,8 +634,10 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  // Email templates
-  async getEmailTemplates(): Promise<EmailTemplate[]> {
+  async getEmailTemplates(orgId?: string): Promise<EmailTemplate[]> {
+    if (orgId) {
+      return db.select().from(emailTemplates).where(eq(emailTemplates.organizationId, orgId)).orderBy(desc(emailTemplates.createdAt));
+    }
     return db.select().from(emailTemplates).orderBy(desc(emailTemplates.createdAt));
   }
 
@@ -654,8 +660,10 @@ export class DatabaseStorage implements IStorage {
     await db.delete(emailTemplates).where(eq(emailTemplates.id, id));
   }
 
-  // Nurture sequences
-  async getNurtureSequences(): Promise<NurtureSequence[]> {
+  async getNurtureSequences(orgId?: string): Promise<NurtureSequence[]> {
+    if (orgId) {
+      return db.select().from(nurtureSections).where(eq(nurtureSections.organizationId, orgId)).orderBy(desc(nurtureSections.createdAt));
+    }
     return db.select().from(nurtureSections).orderBy(desc(nurtureSections.createdAt));
   }
 
@@ -678,7 +686,6 @@ export class DatabaseStorage implements IStorage {
     await db.delete(nurtureSections).where(eq(nurtureSections.id, id));
   }
 
-  // Email logs
   async getEmailLogsByLeadId(leadId: string): Promise<EmailLog[]> {
     return db.select().from(emailLogs).where(eq(emailLogs.leadId, leadId)).orderBy(desc(emailLogs.createdAt));
   }
@@ -693,7 +700,6 @@ export class DatabaseStorage implements IStorage {
     return updated || undefined;
   }
 
-  // Activity logs
   async getActivityLogsByLeadId(leadId: string): Promise<ActivityLog[]> {
     return db.select().from(activityLogs).where(eq(activityLogs.leadId, leadId)).orderBy(desc(activityLogs.createdAt));
   }
@@ -703,8 +709,15 @@ export class DatabaseStorage implements IStorage {
     return newLog;
   }
 
-  // Availability slots
-  async getAvailabilitySlots(): Promise<AvailabilitySlot[]> {
+  async getAvailabilitySlot(id: string): Promise<AvailabilitySlot | undefined> {
+    const [slot] = await db.select().from(availabilitySlots).where(eq(availabilitySlots.id, id));
+    return slot;
+  }
+
+  async getAvailabilitySlots(orgId?: string): Promise<AvailabilitySlot[]> {
+    if (orgId) {
+      return db.select().from(availabilitySlots).where(eq(availabilitySlots.organizationId, orgId)).orderBy(availabilitySlots.dayOfWeek, availabilitySlots.startTime);
+    }
     return db.select().from(availabilitySlots).orderBy(availabilitySlots.dayOfWeek, availabilitySlots.startTime);
   }
 
@@ -722,8 +735,10 @@ export class DatabaseStorage implements IStorage {
     await db.delete(availabilitySlots).where(eq(availabilitySlots.id, id));
   }
 
-  // Appointments
-  async getAppointments(): Promise<Appointment[]> {
+  async getAppointments(orgId?: string): Promise<Appointment[]> {
+    if (orgId) {
+      return db.select().from(appointments).where(eq(appointments.organizationId, orgId)).orderBy(desc(appointments.scheduledAt));
+    }
     return db.select().from(appointments).orderBy(desc(appointments.scheduledAt));
   }
 
@@ -746,8 +761,10 @@ export class DatabaseStorage implements IStorage {
     return updated || undefined;
   }
 
-  // Chat sessions
-  async getChatSessions(): Promise<ChatSession[]> {
+  async getChatSessions(orgId?: string): Promise<ChatSession[]> {
+    if (orgId) {
+      return db.select().from(chatSessions).where(eq(chatSessions.organizationId, orgId)).orderBy(desc(chatSessions.startedAt));
+    }
     return db.select().from(chatSessions).orderBy(desc(chatSessions.startedAt));
   }
 
@@ -777,7 +794,6 @@ export class DatabaseStorage implements IStorage {
     return updated || undefined;
   }
 
-  // Chat messages
   async getChatMessagesBySessionId(sessionId: string): Promise<ChatMessage[]> {
     return db.select().from(chatMessages)
       .where(eq(chatMessages.sessionId, sessionId))
@@ -789,14 +805,15 @@ export class DatabaseStorage implements IStorage {
     return newMessage;
   }
 
-  // Chat analytics
-  async getChatAnalytics(startDate?: string, endDate?: string): Promise<ChatAnalytics[]> {
-    if (startDate && endDate) {
+  async getChatAnalytics(startDate?: string, endDate?: string, orgId?: string): Promise<ChatAnalytics[]> {
+    const conditions = [];
+    if (orgId) conditions.push(eq(chatAnalytics.organizationId, orgId));
+    if (startDate) conditions.push(sql`${chatAnalytics.date} >= ${startDate}`);
+    if (endDate) conditions.push(sql`${chatAnalytics.date} <= ${endDate}`);
+
+    if (conditions.length > 0) {
       return db.select().from(chatAnalytics)
-        .where(and(
-          sql`${chatAnalytics.date} >= ${startDate}`,
-          sql`${chatAnalytics.date} <= ${endDate}`
-        ))
+        .where(and(...conditions))
         .orderBy(desc(chatAnalytics.date));
     }
     return db.select().from(chatAnalytics).orderBy(desc(chatAnalytics.date)).limit(30);
@@ -817,7 +834,7 @@ export class DatabaseStorage implements IStorage {
     return updated || undefined;
   }
 
-  async getChatSessionStats(): Promise<{
+  async getChatSessionStats(orgId?: string): Promise<{
     totalSessions: number;
     completedSessions: number;
     abandonedSessions: number;
@@ -828,7 +845,12 @@ export class DatabaseStorage implements IStorage {
     conversionRate: number;
     dropoffByStep: Record<string, number>;
   }> {
-    const allSessions = await db.select().from(chatSessions);
+    let allSessions;
+    if (orgId) {
+      allSessions = await db.select().from(chatSessions).where(eq(chatSessions.organizationId, orgId));
+    } else {
+      allSessions = await db.select().from(chatSessions);
+    }
     
     const totalSessions = allSessions.length;
     const completedSessions = allSessions.filter(s => s.status === "completed").length;
@@ -873,7 +895,6 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  // VOB Verifications
   async getVobVerificationsByLeadId(leadId: string): Promise<VobVerification[]> {
     return db.select().from(vobVerifications).where(eq(vobVerifications.leadId, leadId)).orderBy(desc(vobVerifications.createdAt));
   }

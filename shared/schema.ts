@@ -9,6 +9,7 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   role: text("role").notNull().default("intake"),
   name: text("name").notNull(),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -48,6 +49,7 @@ export const leads = pgTable("leads", {
   notes: text("notes"),
   consentToCall: boolean("consent_to_call").notNull().default(true),
   ownerUserId: varchar("owner_user_id"),
+  organizationId: varchar("organization_id"),
   handoffStatus: text("handoff_status").notNull().default("not_sent"),
   referralPartnerName: varchar("referral_partner_name"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -86,6 +88,7 @@ export const patients = pgTable("patients", {
   intakeCompleted: boolean("intake_completed").default(false),
   vobVerified: boolean("vob_verified").default(false),
   notes: text("notes"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
 });
@@ -106,6 +109,7 @@ export const encounters = pgTable("encounters", {
   serviceDate: date("service_date"),
   authorizationNumber: varchar("authorization_number"),
   createdBy: varchar("created_by"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -138,6 +142,7 @@ export const claims = pgTable("claims", {
   availityIcn: varchar("availity_icn"),
   chargeOverridden: boolean("charge_overridden").default(false),
   createdBy: varchar("created_by"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at"),
 });
@@ -152,6 +157,7 @@ export const claimEvents = pgTable("claim_events", {
   type: text("type").notNull(),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
   notes: text("notes"),
+  organizationId: varchar("organization_id"),
 });
 
 export const insertClaimEventSchema = createInsertSchema(claimEvents).omit({ id: true, timestamp: true });
@@ -167,6 +173,7 @@ export const denials = pgTable("denials", {
   cptCode: text("cpt_code").notNull(),
   rootCauseTag: text("root_cause_tag").notNull(),
   resolved: boolean("resolved").notNull().default(false),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -187,6 +194,7 @@ export const rules = pgTable("rules", {
   triggeredCount: integer("triggered_count").notNull().default(0),
   preventedCount: integer("prevented_count").notNull().default(0),
   protectedAmount: real("protected_amount").notNull().default(0),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -227,6 +235,7 @@ export const calls = pgTable("calls", {
     priorAuthRequired?: boolean;
     networkStatus?: "in_network" | "out_of_network" | "unknown";
   }>(),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -249,6 +258,7 @@ export const priorAuthorizations = pgTable("prior_authorizations", {
   usedUnits: integer("used_units").default(0),
   notes: text("notes"),
   denialReason: text("denial_reason"),
+  organizationId: varchar("organization_id"),
 });
 
 export const insertPriorAuthSchema = createInsertSchema(priorAuthorizations).omit({ id: true, requestedDate: true });
@@ -294,6 +304,7 @@ export const emailTemplates = pgTable("email_templates", {
   body: text("body").notNull(),
   category: text("category").notNull().default("general"),
   variables: jsonb("variables").$type<string[]>().default([]),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -312,6 +323,7 @@ export const nurtureSections = pgTable("nurture_sequences", {
     templateName?: string;
   }[]>().default([]),
   enabled: boolean("enabled").notNull().default(true),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -332,6 +344,7 @@ export const emailLogs = pgTable("email_logs", {
   openedAt: timestamp("opened_at"),
   clickedAt: timestamp("clicked_at"),
   errorMessage: text("error_message"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -346,6 +359,7 @@ export const availabilitySlots = pgTable("availability_slots", {
   endTime: text("end_time").notNull(),
   timezone: text("timezone").notNull().default("America/Chicago"),
   enabled: boolean("enabled").notNull().default(true),
+  organizationId: varchar("organization_id"),
 });
 
 export const insertAvailabilitySlotSchema = createInsertSchema(availabilitySlots).omit({ id: true });
@@ -366,6 +380,7 @@ export const appointments = pgTable("appointments", {
   cancelledAt: timestamp("cancelled_at"),
   cancelReason: text("cancel_reason"),
   notes: text("notes"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -389,6 +404,7 @@ export const chatSessions = pgTable("chat_sessions", {
   completedAt: timestamp("completed_at"),
   abandonedAt: timestamp("abandoned_at"),
   lastActivityAt: timestamp("last_activity_at").defaultNow().notNull(),
+  organizationId: varchar("organization_id"),
 });
 
 export const insertChatSessionSchema = createInsertSchema(chatSessions).omit({ id: true, startedAt: true, lastActivityAt: true });
@@ -402,6 +418,7 @@ export const chatMessages = pgTable("chat_messages", {
   stepId: text("step_id"),
   content: text("content").notNull(),
   metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -420,6 +437,7 @@ export const chatAnalytics = pgTable("chat_analytics", {
   avgSessionDuration: integer("avg_session_duration"),
   dropoffByStep: jsonb("dropoff_by_step").$type<Record<string, number>>().default({}),
   conversionRate: real("conversion_rate"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -457,6 +475,7 @@ export const vobVerifications = pgTable("vob_verifications", {
   errorMessage: text("error_message"),
   context: varchar("context").default("intake"),
   verifiedAt: timestamp("verified_at"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -476,6 +495,7 @@ export const activityLogs = pgTable("activity_logs", {
   description: text("description"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   performedBy: text("performed_by"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -519,6 +539,7 @@ export const providers = pgTable("providers", {
   individualTaxId: varchar("individual_tax_id"),
   isDefault: boolean("is_default").default(false),
   isActive: boolean("is_active").default(true),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -587,6 +608,7 @@ export const claimTemplates = pgTable("claim_templates", {
   placeOfService: varchar("place_of_service").default("12"),
   serviceLines: jsonb("service_lines").$type<any[]>(),
   createdBy: varchar("created_by"),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
