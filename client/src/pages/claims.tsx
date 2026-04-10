@@ -311,11 +311,7 @@ export default function ClaimsPage() {
             columns={columns}
             keyExtractor={(claim) => claim.id}
             onRowClick={(claim) => {
-              if (claim.status === "draft") {
-                setLocation(`/billing/claims/new?claimId=${claim.id}&patientId=${claim.patientId}`);
-              } else {
-                setLocation(`/claims/${claim.id}`);
-              }
+              setLocation(`/billing/claims/${claim.id}`);
             }}
             emptyMessage="No claims found"
             isLoading={isLoading}
