@@ -411,66 +411,222 @@ export class DatabaseStorage implements IStorage {
   async getRiskExplanation(claimId: string): Promise<RiskExplanation | undefined> {
     const claim = await this.getClaim(claimId);
     if (!claim) return undefined;
-    
+
     const patient = await this.getClaimPatient(claimId);
     const allRules = await this.getRules();
-    
-    const appliedRules = allRules
-      .filter(r => r.enabled && (!r.payer || r.payer === claim.payer))
-      .slice(0, 3)
-      .map(r => ({
-        name: r.name,
-        description: r.description,
-        impact: r.impactCount > 0 ? `Prevented ${r.impactCount} denials` : "Active",
-      }));
+    const claimDenials = await this.getDenialsByClaimId(claimId);
+    const allDenials = await this.getDenials();
 
-    const isHighRisk = claim.readinessStatus === "RED";
-    const isMediumRisk = claim.readinessStatus === "YELLOW";
+    const priorAuths = await this.getPriorAuthsByEncounterId(claim.encounterId);
+    const activePriorAuth = priorAuths.find(pa => pa.status === "approved");
+    const pendingPriorAuth = priorAuths.find(pa => pa.status === "pending");
+    const deniedPriorAuth = priorAuths.find(pa => pa.status === "denied");
+    const hasAuth = !!claim.authorizationNumber || !!activePriorAuth;
+
+    const claimCpts = claim.cptCodes || [];
+    const payerDenials = allDenials.filter(d => d.payer === claim.payer);
+    const cptDenials = allDenials.filter(d => claimCpts.includes(d.cptCode));
+    const payerCptDenials = payerDenials.filter(d => claimCpts.includes(d.cptCode));
+
+    const payerDenialRate = payerDenials.length > 0
+      ? Math.min(payerDenials.length * 5, 40)
+      : 0;
+    const cptDenialRate = cptDenials.length > 0
+      ? Math.min(cptDenials.length * 4, 35)
+      : 0;
+
+    const matchedRules = allRules.filter(r => {
+      if (!r.enabled) return false;
+      const payerMatch = !r.payer || r.payer === claim.payer ||
+        claim.payer.toLowerCase().includes((r.payer || "").toLowerCase());
+      const cptMatch = !r.cptCode || claimCpts.includes(r.cptCode);
+      return payerMatch && cptMatch;
+    });
+
+    const appliedRules = matchedRules.map(r => ({
+      name: r.name,
+      description: r.description,
+      impact: r.preventedCount > 0
+        ? `Prevented ${r.preventedCount} denials ($${(r.protectedAmount || 0).toLocaleString()} protected)`
+        : r.triggeredCount > 0
+        ? `Triggered ${r.triggeredCount} times`
+        : "Active",
+    }));
+
+    let authContribution = 5;
+    let authDescription = "Authorization verified";
+    if (deniedPriorAuth) {
+      authContribution = 50;
+      authDescription = `Prior auth DENIED: ${deniedPriorAuth.denialReason || "No reason provided"}`;
+    } else if (!hasAuth && claim.readinessStatus === "RED") {
+      authContribution = 45;
+      authDescription = "Authorization required but not obtained";
+    } else if (pendingPriorAuth) {
+      authContribution = 25;
+      authDescription = `Prior auth pending since ${pendingPriorAuth.requestedDate?.toLocaleDateString() || "unknown date"}`;
+    } else if (activePriorAuth) {
+      if (activePriorAuth.expirationDate && activePriorAuth.expirationDate < new Date()) {
+        authContribution = 35;
+        authDescription = `Prior auth expired on ${activePriorAuth.expirationDate.toLocaleDateString()}`;
+      } else if (activePriorAuth.approvedUnits && activePriorAuth.usedUnits &&
+                 activePriorAuth.usedUnits >= activePriorAuth.approvedUnits) {
+        authContribution = 30;
+        authDescription = `Units exhausted: ${activePriorAuth.usedUnits}/${activePriorAuth.approvedUnits} used`;
+      } else {
+        authContribution = 5;
+        const remaining = activePriorAuth.approvedUnits
+          ? `${(activePriorAuth.approvedUnits - (activePriorAuth.usedUnits || 0))} units remaining`
+          : "Approved";
+        authDescription = `Auth #${activePriorAuth.authNumber || claim.authorizationNumber || "N/A"} — ${remaining}`;
+      }
+    } else if (hasAuth) {
+      authContribution = 5;
+      authDescription = `Auth #${claim.authorizationNumber} on file`;
+    }
+
+    const hasPrimary = !!claim.icd10Primary;
+    const hasSecondary = (claim.icd10Secondary || []).length > 0;
+    const hasServiceLines = (claim.serviceLines || []).length > 0;
+    const hasProvider = !!claim.providerId;
+    const hasServiceDate = !!claim.serviceDate;
+
+    let docScore = 0;
+    const docIssues: string[] = [];
+    if (!hasPrimary) { docScore += 15; docIssues.push("missing primary diagnosis"); }
+    if (!hasProvider) { docScore += 10; docIssues.push("no rendering provider"); }
+    if (!hasServiceDate) { docScore += 10; docIssues.push("no service date"); }
+    if (!hasServiceLines || (claim.serviceLines || []).length === 0) {
+      docScore += 10; docIssues.push("no service lines");
+    }
+    if (claim.amount <= 0) { docScore += 5; docIssues.push("zero charge amount"); }
+
+    const docDescription = docIssues.length > 0
+      ? `Issues: ${docIssues.join(", ")}`
+      : `Complete — ${hasPrimary ? 1 : 0} diagnosis, ${(claim.serviceLines || []).length} service line(s)`;
+
+    const denialHistoryContribution = Math.max(payerDenialRate, cptDenialRate);
+    let denialDescription: string;
+    if (payerCptDenials.length > 0) {
+      const topReason = payerCptDenials[0].rootCauseTag || payerCptDenials[0].denialCategory;
+      denialDescription = `${payerCptDenials.length} prior denial(s) for ${claim.payer} + ${claimCpts.join("/")} — top cause: ${topReason}`;
+    } else if (payerDenials.length > 0) {
+      denialDescription = `${payerDenials.length} denial(s) on record for ${claim.payer}`;
+    } else if (cptDenials.length > 0) {
+      denialDescription = `${cptDenials.length} denial(s) across payers for CPT ${claimCpts.join(", ")}`;
+    } else {
+      denialDescription = `No prior denials for ${claim.payer} / ${claimCpts.join(", ")}`;
+    }
+
+    let ruleContribution = 0;
+    if (matchedRules.length >= 3) ruleContribution = 15;
+    else if (matchedRules.length === 2) ruleContribution = 10;
+    else if (matchedRules.length === 1) ruleContribution = 5;
+
+    const totalRisk = authContribution + denialHistoryContribution + docScore + ruleContribution;
+    const confidenceRaw = Math.max(0.40, Math.min(0.99, 1 - (totalRisk / 150)));
+    const confidenceDisplay = Math.round(confidenceRaw * 100);
+
+    const inputWeights = {
+      payer: payerDenials.length > 0 ? 0.35 : 0.2,
+      cpt: cptDenials.length > 0 ? 0.3 : 0.2,
+      amount: claim.amount > 500 ? 0.2 : 0.1,
+      insurance: patient?.insuranceCarrier ? 0.1 : 0.05,
+      plan: patient?.planType ? 0.1 : 0.05,
+    };
+
+    const recommendations: RiskExplanation["recommendations"] = [];
+
+    if (authContribution > 20) {
+      recommendations.push({
+        action: deniedPriorAuth
+          ? "Resubmit prior authorization with additional clinical documentation"
+          : pendingPriorAuth
+          ? "Follow up on pending prior authorization before claim submission"
+          : "Obtain prior authorization before submission",
+        priority: "high",
+        completed: false,
+      });
+    }
+
+    if (docScore > 0) {
+      recommendations.push({
+        action: `Fix documentation: ${docIssues.join(", ")}`,
+        priority: docScore >= 15 ? "high" : "medium",
+        completed: false,
+      });
+    }
+
+    if (payerCptDenials.length > 0) {
+      const topCause = payerCptDenials[0].rootCauseTag || payerCptDenials[0].denialCategory;
+      recommendations.push({
+        action: `Review prior ${topCause} denials for ${claim.payer} — consider preemptive documentation`,
+        priority: "medium",
+        completed: false,
+      });
+    }
+
+    if (claimDenials.length > 0) {
+      recommendations.push({
+        action: `Address ${claimDenials.length} existing denial(s) on this claim`,
+        priority: "high",
+        completed: claimDenials.every(d => d.resolved),
+      });
+    }
+
+    if (!hasServiceLines || (claim.serviceLines || []).length === 0) {
+      recommendations.push({
+        action: "Add service line details with units and charges",
+        priority: "high",
+        completed: false,
+      });
+    }
+
+    if (recommendations.length === 0) {
+      recommendations.push({
+        action: "Claim looks clean — verify patient eligibility before submission",
+        priority: "low",
+        completed: hasAuth,
+      });
+      recommendations.push({
+        action: "Confirm CPT/ICD-10 coding accuracy",
+        priority: "low",
+        completed: hasPrimary && hasServiceLines,
+      });
+    }
 
     return {
       inputs: [
-        { name: "Payer", value: claim.payer, weight: 0.3 },
-        { name: "CPT Codes", value: claim.cptCodes?.join(", ") || "", weight: 0.25 },
-        { name: "Amount", value: `$${claim.amount.toLocaleString()}`, weight: 0.15 },
-        { name: "Insurance", value: patient?.insuranceCarrier || "Unknown", weight: 0.2 },
-        { name: "Plan Type", value: patient?.planType || "Unknown", weight: 0.1 },
+        { name: "Payer", value: claim.payer, weight: inputWeights.payer },
+        { name: "CPT Codes", value: claimCpts.join(", ") || "None", weight: inputWeights.cpt },
+        { name: "Amount", value: `$${claim.amount.toLocaleString()}`, weight: inputWeights.amount },
+        { name: "Insurance", value: patient?.insuranceCarrier || "Unknown", weight: inputWeights.insurance },
+        { name: "Plan Type", value: patient?.planType || "Unknown", weight: inputWeights.plan },
       ],
       factors: [
         {
           name: "Prior Authorization Status",
-          contribution: isHighRisk ? 45 : isMediumRisk ? 25 : 5,
-          description: isHighRisk ? "Authorization required but not obtained" : "Authorization verified",
+          contribution: authContribution,
+          description: authDescription,
         },
         {
           name: "Historical Denial Rate",
-          contribution: isHighRisk ? 30 : isMediumRisk ? 15 : 3,
-          description: `${claim.payer} has ${isHighRisk ? "high" : "low"} denial rate for this CPT`,
+          contribution: denialHistoryContribution,
+          description: denialDescription,
         },
         {
           name: "Documentation Completeness",
-          contribution: isMediumRisk ? 20 : 2,
-          description: isMediumRisk ? "Missing supporting documentation" : "Complete documentation",
+          contribution: docScore,
+          description: docDescription,
         },
+        ...(matchedRules.length > 0 ? [{
+          name: "Prevention Rules Triggered",
+          contribution: ruleContribution,
+          description: `${matchedRules.length} rule(s) matched for this payer/CPT combination`,
+        }] : []),
       ],
       appliedRules,
-      confidence: isHighRisk ? 0.92 : isMediumRisk ? 0.78 : 0.95,
-      recommendations: [
-        {
-          action: isHighRisk ? "Obtain prior authorization before submission" : "Verify patient eligibility",
-          priority: isHighRisk ? "high" : "low",
-          completed: !isHighRisk,
-        },
-        {
-          action: "Attach supporting clinical documentation",
-          priority: isMediumRisk ? "high" : "medium",
-          completed: !isMediumRisk,
-        },
-        {
-          action: "Verify CPT code accuracy",
-          priority: "low",
-          completed: true,
-        },
-      ],
+      confidence: confidenceDisplay,
+      recommendations,
     };
   }
 

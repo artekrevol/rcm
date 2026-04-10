@@ -63,7 +63,7 @@ export function ExplainabilityDrawer({
                       {input.value}
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      ({input.weight}pts)
+                      ({Math.round(input.weight * 100)}pts)
                     </span>
                   </div>
                 </div>
