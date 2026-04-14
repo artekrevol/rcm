@@ -163,14 +163,14 @@ export function generate837P(input: EDI837PInput): string {
   claim.service_lines.forEach((line, index) => {
     const lineServiceDate = line.service_date || claim.service_date;
     segments.push(`LX*${index + 1}`);
-    const modParts: string[] = [];
-    if (line.modifier) {
-      line.modifier.split(",").map(m => m.trim()).filter(Boolean).forEach(m => modParts.push(m));
-    }
-    while (modParts.length < 4) modParts.push("");
-    const modStr = modParts.map(m => m).join("*");
+    // Build composite procedure identifier - components are ALWAYS colon-separated
+    // per X12 spec. Never use * (element separator) inside a composite.
+    const modifiers = line.modifier
+      ? line.modifier.split(",").map(m => m.trim()).filter(Boolean)
+      : [];
+    const composite = ["HC", line.hcpcs_code, ...modifiers].join(":");
     segments.push(
-      `SV1*HC:${line.hcpcs_code}:${modStr}*${line.charge.toFixed(2)}*UN*${line.units}***${line.diagnosis_pointer}`
+      `SV1*${composite}*${line.charge.toFixed(2)}*UN*${line.units}***${line.diagnosis_pointer}`
     );
     segments.push(
       `DTP*472*D8*${formatDate8(lineServiceDate)}`
