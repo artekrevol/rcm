@@ -13,6 +13,7 @@ export interface EDI837PInput {
       charge: number;
       modifier: string | null;
       diagnosis_pointer: string;
+      service_date?: string;
     }>;
     icd10_codes: string[];
   };
@@ -22,6 +23,11 @@ export interface EDI837PInput {
     dob: string;
     member_id: string;
     insurance_carrier: string;
+    sex?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
   };
   practice: {
     name: string;
@@ -52,6 +58,18 @@ function getPayerTypeCode(payerName: string): string {
   if (name.includes("va") || name.includes("tricare") || name.includes("champva")) return "CH";
   if (name.includes("bcbs") || name.includes("blue cross")) return "BL";
   return "CI";
+}
+
+function formatDate8(dateStr: string): string {
+  return dateStr.replace(/-/g, "").slice(0, 8);
+}
+
+function mapSex(sex?: string): string {
+  if (!sex) return "U";
+  const s = sex.toUpperCase().charAt(0);
+  if (s === "M") return "M";
+  if (s === "F") return "F";
+  return "U";
 }
 
 export function generate837P(input: EDI837PInput): string {
@@ -106,8 +124,14 @@ export function generate837P(input: EDI837PInput): string {
   segments.push(
     `NM1*IL*1*${patient.last_name}*${patient.first_name}****MI*${patient.member_id}`
   );
+  const patientAddr = patient.address || street;
+  const patientCity = patient.city || city;
+  const patientState = patient.state || state;
+  const patientZip = patient.zip || zip;
+  segments.push(`N3*${patientAddr}`);
+  segments.push(`N4*${patientCity}*${patientState}*${patientZip}`);
   segments.push(
-    `DMG*D8*${patient.dob.replace(/-/g, "")}*U`
+    `DMG*D8*${formatDate8(patient.dob)}*${mapSex(patient.sex)}`
   );
 
   segments.push(
@@ -120,10 +144,6 @@ export function generate837P(input: EDI837PInput): string {
   );
   segments.push(
     `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:1*Y*A*Y*I`
-  );
-
-  segments.push(
-    `DTP*472*D8*${claim.service_date.replace(/-/g, "")}`
   );
 
   if (claim.auth_number) {
@@ -141,21 +161,28 @@ export function generate837P(input: EDI837PInput): string {
   segments.push(`PRV*PE*PXC*${provider.taxonomy_code}`);
 
   claim.service_lines.forEach((line, index) => {
+    const lineServiceDate = line.service_date || claim.service_date;
     segments.push(`LX*${index + 1}`);
-    const modStr = line.modifier ? `*${line.modifier}` : "***";
+    const modParts: string[] = [];
+    if (line.modifier) {
+      line.modifier.split(",").map(m => m.trim()).filter(Boolean).forEach(m => modParts.push(m));
+    }
+    while (modParts.length < 4) modParts.push("");
+    const modStr = modParts.map(m => m).join("*");
     segments.push(
-      `SV1*HC:${line.hcpcs_code}${modStr}*${line.charge.toFixed(2)}*UN*${line.units}***${line.diagnosis_pointer}`
+      `SV1*HC:${line.hcpcs_code}:${modStr}*${line.charge.toFixed(2)}*UN*${line.units}***${line.diagnosis_pointer}`
     );
     segments.push(
-      `DTP*472*D8*${claim.service_date.replace(/-/g, "")}`
+      `DTP*472*D8*${formatDate8(lineServiceDate)}`
     );
   });
 
-  segments.push(`SE*${segments.length - 2}*0001`);
+  const segCount = segments.length - 2 + 1;
+  segments.push(`SE*${segCount}*0001`);
 
   segments.push(`GE*1*1`);
 
   segments.push(`IEA*1*${controlNumber}`);
 
-  return segments.join("\n");
+  return segments.join("~\n") + "~";
 }
