@@ -38,6 +38,7 @@ export interface EDI837PInput {
     city: string;
     state: string;
     zip: string;
+    phone?: string;
   };
   provider: {
     first_name: string;
@@ -61,6 +62,18 @@ function getPayerTypeCode(payerName: string): string {
 }
 
 function formatDate8(dateStr: string): string {
+  if (!dateStr) return "19000101";
+  // Handle MM/DD/YYYY → YYYYMMDD
+  const mdy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) return `${mdy[3]}${mdy[1].padStart(2, "0")}${mdy[2].padStart(2, "0")}`;
+  // Handle MM/DD/YY → YYYYMMDD (century cutoff: 00-30 → 2000s, 31-99 → 1900s)
+  const mdyShort = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (mdyShort) {
+    const yy = parseInt(mdyShort[3], 10);
+    const century = yy <= 30 ? "20" : "19";
+    return `${century}${mdyShort[3]}${mdyShort[1].padStart(2, "0")}${mdyShort[2].padStart(2, "0")}`;
+  }
+  // Handle YYYY-MM-DD or YYYYMMDD
   return dateStr.replace(/-/g, "").slice(0, 8);
 }
 
@@ -102,7 +115,8 @@ export function generate837P(input: EDI837PInput): string {
   segments.push(
     `NM1*41*2*${practice.name}*****46*${practice.npi}`
   );
-  segments.push(`PER*IC*Billing Contact*TE*5125550100`);
+  const billingPhone = (practice.phone || "0000000000").replace(/\D/g, "");
+  segments.push(`PER*IC*Billing Contact*TE*${billingPhone}`);
 
   segments.push(
     `NM1*40*2*${payer.name}*****46*${payer.payer_id}`

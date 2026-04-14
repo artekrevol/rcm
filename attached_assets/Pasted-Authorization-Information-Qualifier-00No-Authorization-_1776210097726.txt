@@ -1,0 +1,354 @@
+Authorization Information Qualifier
+00No Authorization Information Present (No Meaningful Information in I02)
+01
+Authorization Information
+02
+Security Information Qualifier
+00No Security Information Present (No Meaningful Information in I04)
+03
+Security Information
+04
+Interchange ID Qualifier
+ZZMutually Defined
+05
+Interchange Sender ID
+1234567893
+06
+Interchange ID Qualifier
+ZZMutually Defined
+07
+Interchange Receiver ID
+VACCN
+08
+Interchange Date
+2026-04-14
+09
+Interchange Time
+23:39
+10
+Repetition Separator
+^
+11
+Interchange Control Version Number
+00501Standards Approved for Publication by ASC X12 Procedures Review Board through October 2003
+12
+Interchange Control Number
+209950946
+13
+Acknowledgment Requested
+0No Interchange Acknowledgment Requested
+14
+Interchange Usage Indicator
+PProduction Data
+15
+Component Element Separator
+:
+16
+Functional Identifier Code
+HCHealth Care Claim (837)
+01
+Application Sender's Code
+1234567893
+02
+Application Receiver's Code
+VACCN
+03
+Date
+2026-04-14
+04
+Time
+23:39
+05
+Group Control Number
+1
+06
+Responsible Agency Code
+XAccredited Standards Committee X12
+07
+Version / Release / Industry Identifier Code
+005010X222A1HIPAA release 005010X222A1
+08
+heading
+Transaction Set Identifier Code
+837Health Care Claim
+01
+Transaction Set Control Number
+1
+02
+Implementation Guide Version Name
+005010X222A1
+03
+Hierarchical Structure Code
+0019Information Source, Subscriber, Dependent
+01
+Transaction Set Purpose Code
+00Original
+02
+Originator Application Transaction Identifier
+4051718636ab40ddaca2
+03
+Transaction Set Creation Date
+2026-04-14
+04
+Transaction Set Creation Time
+23:39
+05
+Claim or Encounter Identifier
+CHChargeable
+06
+Entity Identifier Code
+41Submitter
+01
+Entity Type Qualifier
+2Non-Person Entity
+02
+Submitter Last or Organization Name
+ClaimShield Demo Practice
+03
+Identification Code Qualifier
+46Electronic Transmitter Identification Number (ETIN)
+08
+Submitter Identifier
+1234567893
+09
+Contact Function Code
+ICInformation Contact
+01
+Submitter Contact Name
+Billing Contact
+02
+Communication Number Qualifier
+TETelephone
+03
+Communication Number
+5125550100
+04
+Entity Identifier Code
+40Receiver
+01
+Entity Type Qualifier
+2Non-Person Entity
+02
+Receiver Name
+VA Community Care
+03
+Identification Code Qualifier
+46Electronic Transmitter Identification Number (ETIN)
+08
+Receiver Primary Identifier
+VACCN
+09
+detail
+Provider Code
+BIBilling
+01
+Reference Identification Qualifier
+PXCHealth Care Provider Taxonomy Code
+02
+Provider Taxonomy Code
+251B00000X
+03
+Entity Identifier Code
+85Billing Provider
+01
+Entity Type Qualifier
+2Non-Person Entity
+02
+Billing Provider Last or Organizational Name
+ClaimShield Demo Practice
+03
+Identification Code Qualifier
+XXCenters for Medicare and Medicaid Services National Provider Identifier
+08
+Billing Provider Identifier
+1234567893
+09
+Billing Provider Address Line
+123 Main St
+01
+Billing Provider City Name
+Austin
+01
+Billing Provider State or Province Code
+TX
+02
+Billing Provider Postal Zone or ZIP Code
+78701
+03
+Reference Identification Qualifier
+EIEmployer's Identification Number
+01
+Billing Provider Tax Identification Number
+123456789
+02
+Payer Responsibility Sequence Number Code
+PPrimary
+01
+Individual Relationship Code
+18Self
+02
+Claim Filing Indicator Code
+CHChampus
+09
+Entity Identifier Code
+ILInsured or Subscriber
+01
+Entity Type Qualifier
+1Person
+02
+Subscriber Last Name
+Doe
+03
+Subscriber First Name
+Jane
+04
+Identification Code Qualifier
+MIMember Identification Number
+08
+Subscriber Primary Identifier
+VA12345
+09
+Subscriber Address Line
+123 Main St
+01
+Subscriber City Name
+Austin
+01
+Subscriber State Code
+TX
+02
+Subscriber Postal Zone or ZIP Code
+78701
+03
+Date Time Period Format Qualifier
+D8Date Expressed in Format CCYYMMDD
+01
+Subscriber Birth Date
+03/15/19
+02
+Subscriber Gender Code
+UUnknown
+03
+Entity Identifier Code
+PRPayer
+01
+Entity Type Qualifier
+2Non-Person Entity
+02
+Payer Name
+VA Community Care
+03
+Identification Code Qualifier
+PIPayor Identification
+08
+Payer Identifier
+VACCN
+09
+Patient Control Number
+4051718636ab40ddaca2
+01
+Total Claim Charge Amount
+0
+02
+Place of Service Code
+12
+01
+Facility Code Qualifier
+BPlace of Service Codes for Professional or Dental Services
+02
+Claim Frequency Code
+1
+03
+Provider or Supplier Signature Indicator
+YYes
+06
+Assignment or Plan Participation Code
+AAssigned
+07
+Benefits Assignment Certification Indicator
+YYes
+08
+Release of Information Code
+IInformed Consent to Release Medical Information for Conditions or Diagnoses Regulated by Federal Statutes
+09
+Diagnosis Type Code
+ABKInternational Classification of Diseases Clinical Modification (ICD-10-CM) Principal Diagnosis
+01
+Diagnosis Code
+I10
+02
+Entity Identifier Code
+82Rendering Provider
+01
+Entity Type Qualifier
+1Person
+02
+Rendering Provider Last or Organization Name
+Valid
+03
+Rendering Provider First Name
+Diana
+04
+Identification Code Qualifier
+XXCenters for Medicare and Medicaid Services National Provider Identifier
+08
+Rendering Provider Identifier
+1245319599
+09
+Provider Code
+PEPerforming
+01
+Reference Identification Qualifier
+PXCHealth Care Provider Taxonomy Code
+02
+Provider Taxonomy Code
+163W00000X
+03
+Assigned Number
+1
+01
+Product or Service ID Qualifier
+HCHealth Care Financing Administration Common Procedural Coding System (HCPCS) Codes
+01
+Procedure Code
+G0299
+02
+Line Item Charge Amount
+0
+02
+Unit or Basis for Measurement Code
+UNUnit
+03
+Service Unit Count
+16
+04
+Diagnosis Code Pointer
+1
+01
+Date Time Qualifier
+472Service
+01
+Date Time Period Format Qualifier
+D8Date Expressed in Format CCYYMMDD
+02
+Service Date
+20260403
+03
+Transaction Segment Count
+26
+01
+Transaction Set Control Number
+1
+02
+Number of Transaction Sets Included
+1
+01
+Group Control Number
+1
+02
+Number of Included Functional Groups
+1
+01
+Interchange Control Number
+209950946
+02

@@ -20,6 +20,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft,
   HelpCircle,
   Building2,
@@ -34,10 +42,17 @@ import {
   Download,
   ChevronDown,
   XCircle,
+  Info,
 } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
 import { generateAndDownloadClaimPdf } from "@/lib/generate-claim-pdf";
+
+interface EdiValidation {
+  ready: boolean;
+  summary: string;
+  warnings: { field: string; message: string; severity: "error" | "warning" }[];
+}
 
 export default function ClaimDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -48,6 +63,9 @@ export default function ClaimDetailPage() {
   const [cms1500Loading, setCms1500Loading] = useState(false);
   const [cms1500Done, setCms1500Done] = useState(false);
   const [submittingOA, setSubmittingOA] = useState(false);
+  const [ediValidating, setEdiValidating] = useState(false);
+  const [ediValidation, setEdiValidation] = useState<EdiValidation | null>(null);
+  const [ediDownloading, setEdiDownloading] = useState(false);
 
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
@@ -210,27 +228,22 @@ export default function ClaimDetailPage() {
               </DropdownMenuItem>
               <DropdownMenuItem
                 data-testid="menu-edi-837p"
+                disabled={ediValidating}
                 onClick={async () => {
                   if (!id) return;
+                  setEdiValidating(true);
                   try {
-                    const res = await fetch(`/api/billing/claims/${id}/edi`, { credentials: "include" });
-                    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || "Failed to generate EDI"); }
-                    const blob = await res.blob();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `claim_${id}_837P.edi`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    toast({ title: "837P EDI file downloaded", description: "Upload this file to your Office Ally or Availity portal for electronic submission." });
-                  } catch (err: any) {
-                    toast({ title: "EDI download failed", description: err.message, variant: "destructive" });
+                    const res = await fetch(`/api/billing/claims/${id}/edi-validate`, { credentials: "include" });
+                    const data: EdiValidation = await res.json();
+                    setEdiValidation(data);
+                  } catch {
+                    setEdiValidation({ ready: false, summary: "Validation check failed", warnings: [] });
+                  } finally {
+                    setEdiValidating(false);
                   }
                 }}
               >
-                837P EDI file — for Office Ally / electronic submission
+                {ediValidating ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Checking…</> : "837P EDI file — for Office Ally / electronic submission"}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -566,6 +579,98 @@ export default function ClaimDetailPage() {
         explanation={explanation || null}
         claimId={claim.id.slice(0, 8)}
       />
+
+      <Dialog open={!!ediValidation} onOpenChange={(o) => { if (!o) setEdiValidation(null); }}>
+        <DialogContent className="max-w-lg" data-testid="dialog-edi-validate">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {ediValidation?.ready
+                ? <CheckCircle2 className="h-5 w-5 text-green-500" />
+                : <AlertTriangle className="h-5 w-5 text-amber-500" />}
+              EDI Pre-Submission Check
+            </DialogTitle>
+            <DialogDescription>{ediValidation?.summary}</DialogDescription>
+          </DialogHeader>
+
+          {ediValidation && ediValidation.warnings.length > 0 && (
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+              {ediValidation.warnings.map((w, i) => (
+                <div
+                  key={i}
+                  className={`flex items-start gap-2 rounded-md px-3 py-2 text-sm ${
+                    w.severity === "error"
+                      ? "bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300"
+                      : "bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300"
+                  }`}
+                  data-testid={`validation-item-${i}`}
+                >
+                  {w.severity === "error"
+                    ? <XCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                    : <Info className="h-4 w-4 mt-0.5 shrink-0" />}
+                  <span>{w.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {ediValidation?.ready && ediValidation.warnings.length === 0 && (
+            <p className="text-sm text-green-700 dark:text-green-400">
+              All required fields are complete. This claim is ready to submit.
+            </p>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setEdiValidation(null)} data-testid="button-edi-cancel">
+              Cancel
+            </Button>
+            {!ediValidation?.ready && (
+              <Button
+                variant="outline"
+                disabled={ediDownloading}
+                data-testid="button-edi-download-anyway"
+                onClick={async () => {
+                  setEdiDownloading(true);
+                  try {
+                    const res = await fetch(`/api/billing/claims/${id}/edi`, { credentials: "include" });
+                    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || "Failed"); }
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a"); a.href = url; a.download = `claim_${id}_837P.edi`;
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+                    setEdiValidation(null);
+                    toast({ title: "837P EDI downloaded (with warnings)", description: "Review the issues above before submitting." });
+                  } catch (err: any) {
+                    toast({ title: "EDI download failed", description: err.message, variant: "destructive" });
+                  } finally { setEdiDownloading(false); }
+                }}
+              >
+                {ediDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Download anyway"}
+              </Button>
+            )}
+            <Button
+              disabled={ediDownloading}
+              data-testid="button-edi-download-confirm"
+              onClick={async () => {
+                setEdiDownloading(true);
+                try {
+                  const res = await fetch(`/api/billing/claims/${id}/edi`, { credentials: "include" });
+                  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || "Failed"); }
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a"); a.href = url; a.download = `claim_${id}_837P.edi`;
+                  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+                  setEdiValidation(null);
+                  toast({ title: "837P EDI file downloaded", description: "Upload to your Office Ally or Availity portal for electronic submission." });
+                } catch (err: any) {
+                  toast({ title: "EDI download failed", description: err.message, variant: "destructive" });
+                } finally { setEdiDownloading(false); }
+              }}
+            >
+              {ediDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Download className="h-4 w-4 mr-1" /> Download EDI</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

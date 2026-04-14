@@ -1049,6 +1049,113 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  app.get("/api/billing/claims/:id/edi-validate", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (!claimResult.rows.length) return res.status(404).json({ error: "Claim not found" });
+      const c = claimResult.rows[0];
+      if (!verifyOrg(c, req)) return res.status(404).json({ error: "Claim not found" });
+
+      const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
+      const pat = patientResult.rows[0] || {};
+
+      const ediOrgId = getOrgId(req);
+      const settingsResult = ediOrgId
+        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [ediOrgId])
+        : await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const ps = settingsResult.rows[0];
+
+      const warnings: { field: string; message: string; severity: "error" | "warning" }[] = [];
+
+      // Practice settings checks
+      if (!ps) {
+        warnings.push({ field: "practice", message: "Practice settings not configured", severity: "error" });
+      } else {
+        if (!ps.primary_npi || ps.primary_npi.replace(/\D/g, "").length !== 10)
+          warnings.push({ field: "practice.npi", message: "Practice NPI must be exactly 10 digits", severity: "error" });
+        if (!ps.tax_id || ps.tax_id.replace(/\D/g, "").length !== 9)
+          warnings.push({ field: "practice.tax_id", message: "Practice Tax ID (EIN) must be 9 digits", severity: "error" });
+        const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
+        if (!(addr as any).street)
+          warnings.push({ field: "practice.address", message: "Practice street address is missing", severity: "warning" });
+        if (!(addr as any).city)
+          warnings.push({ field: "practice.city", message: "Practice city is missing", severity: "warning" });
+        if (!(addr as any).state)
+          warnings.push({ field: "practice.state", message: "Practice state is missing", severity: "warning" });
+        if (!(addr as any).zip)
+          warnings.push({ field: "practice.zip", message: "Practice ZIP code is missing", severity: "warning" });
+      }
+
+      // Patient checks
+      if (!pat.first_name || !pat.last_name)
+        warnings.push({ field: "patient.name", message: "Patient name is incomplete", severity: "error" });
+      if (!pat.dob)
+        warnings.push({ field: "patient.dob", message: "Patient date of birth is missing", severity: "error" });
+      if (!pat.member_id)
+        warnings.push({ field: "patient.member_id", message: "Patient insurance member ID is missing — will appear blank in EDI", severity: "warning" });
+      if (!pat.sex)
+        warnings.push({ field: "patient.sex", message: "Patient sex is unknown — will default to 'U' in EDI", severity: "warning" });
+
+      // Claim checks
+      const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
+      if (rawLines.length === 0)
+        warnings.push({ field: "claim.service_lines", message: "No service lines — claim cannot be billed", severity: "error" });
+      else {
+        const totalCharge = rawLines.reduce((sum: number, sl: any) =>
+          sum + (Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0), 0);
+        if (totalCharge === 0)
+          warnings.push({ field: "claim.charges", message: "All service line charges are $0.00", severity: "error" });
+        rawLines.forEach((sl: any, i: number) => {
+          const code = sl.hcpcsCode || sl.hcpcs_code || sl.code || "";
+          if (!code)
+            warnings.push({ field: `service_line[${i}].hcpcs_code`, message: `Service line ${i + 1} is missing a HCPCS/CPT code`, severity: "error" });
+        });
+      }
+      if (!c.icd10_primary)
+        warnings.push({ field: "claim.icd10", message: "No primary ICD-10 diagnosis code", severity: "error" });
+      if (!c.place_of_service)
+        warnings.push({ field: "claim.pos", message: "Place of service code is missing", severity: "warning" });
+
+      // Payer checks
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      if (c.payer_id) {
+        const pr = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        if (pr.rows.length) payerInfo = pr.rows[0];
+      } else if (c.payer) {
+        const pr = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        if (pr.rows.length) payerInfo = pr.rows[0];
+      }
+      if (!payerInfo.payer_id || payerInfo.payer_id === "UNKNOWN")
+        warnings.push({ field: "payer.payer_id", message: `Payer "${payerInfo.name}" has no EDI Payer ID configured`, severity: "error" });
+
+      // Rendering provider checks
+      let provId = c.provider_id;
+      if (!provId) {
+        const dp = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        if (dp.rows.length) provId = dp.rows[0].id;
+      }
+      if (!provId)
+        warnings.push({ field: "claim.provider", message: "No rendering provider assigned to this claim", severity: "error" });
+      else {
+        const pr = await db.query("SELECT npi FROM providers WHERE id = $1", [provId]);
+        if (!pr.rows.length || !pr.rows[0].npi || pr.rows[0].npi.replace(/\D/g, "").length !== 10)
+          warnings.push({ field: "provider.npi", message: "Rendering provider NPI is missing or not 10 digits", severity: "error" });
+      }
+
+      const errors = warnings.filter(w => w.severity === "error");
+      res.json({
+        ready: errors.length === 0,
+        warnings,
+        summary: errors.length === 0
+          ? `${warnings.length} warning(s) — claim appears ready to submit`
+          : `${errors.length} error(s) must be resolved before submission`,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/billing/claims/:id/edi", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
@@ -1093,9 +1200,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const serviceLines = rawLines.map((sl: any) => ({
         hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
         units: Number(sl.units) || 1,
-        charge: Number(sl.charge) || Number(sl.amount) || 0,
+        charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
         modifier: sl.modifier || null,
         diagnosis_pointer: sl.diagnosisPointer || sl.diagnosis_pointer || "1",
+        service_date: sl.service_date || sl.serviceDate || null,
       }));
 
       const icd10Codes: string[] = [];
@@ -1107,6 +1215,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
 
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
+      const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
       const edi = generate837P({
         claim: {
           id: c.id,
@@ -1125,6 +1234,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           dob: pat.dob || "1900-01-01",
           member_id: pat.member_id || pat.insurance_id || "",
           insurance_carrier: pat.insurance_carrier || c.payer || "",
+          sex: pat.sex || null,
+          address: (patAddr as any).street || (patAddr as any).street1 || null,
+          city: (patAddr as any).city || null,
+          state: (patAddr as any).state || pat.state || null,
+          zip: (patAddr as any).zip || null,
         },
         practice: {
           name: ps.practice_name || "Practice",
@@ -1135,6 +1249,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           city: (addr as any).city || "",
           state: (addr as any).state || "",
           zip: (addr as any).zip || "",
+          phone: ps.phone || "",
         },
         provider: {
           first_name: prov.first_name || "",
@@ -1226,9 +1341,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const serviceLines = rawLines.map((sl: any) => ({
         hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
         units: Number(sl.units) || 1,
-        charge: Number(sl.charge) || Number(sl.amount) || 0,
+        charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
         modifier: sl.modifier || null,
         diagnosis_pointer: sl.diagnosisPointer || sl.diagnosis_pointer || "1",
+        service_date: sl.service_date || sl.serviceDate || null,
       }));
       const icd10Codes: string[] = [];
       if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
@@ -1238,6 +1354,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         }
       }
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
+      const patAddr2 = typeof pat.address === "object" && pat.address ? pat.address : {};
 
       const { submitClaim837P } = await import("./services/office-ally");
       const result = await submitClaim837P({
@@ -1258,6 +1375,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           dob: pat.dob || "1900-01-01",
           member_id: pat.member_id || pat.insurance_id || "",
           insurance_carrier: pat.insurance_carrier || c.payer || "",
+          sex: pat.sex || null,
+          address: (patAddr2 as any).street || (patAddr2 as any).street1 || null,
+          city: (patAddr2 as any).city || null,
+          state: (patAddr2 as any).state || pat.state || null,
+          zip: (patAddr2 as any).zip || null,
         },
         practice: {
           name: ps.practice_name || "Practice",
@@ -1268,6 +1390,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           city: (addr as any).city || "",
           state: (addr as any).state || "",
           zip: (addr as any).zip || "",
+          phone: ps.phone || "",
         },
         provider: {
           first_name: prov.first_name || "",
