@@ -333,9 +333,209 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
     console.log("Assigned existing data to demo organization");
 
+    // ── Payer database expansion ───────────────────────────────────────────
+    // Idempotent: only inserts payers that don't already exist by name.
+    await pool.query(`
+      WITH new_payers (name, payer_id, timely_filing_days, auth_required) AS (VALUES
+        -- BCBS State Plans
+        ('Blue Cross Blue Shield of Alabama',                   '00310', 365, true),
+        ('Blue Cross Blue Shield of Arizona',                   '00360', 365, true),
+        ('Anthem Blue Cross (California)',                       'SX109',  365, true),
+        ('Anthem Blue Cross Blue Shield (Colorado)',             '00040', 365, true),
+        ('Anthem Blue Cross Blue Shield (Connecticut)',          '00009', 365, true),
+        ('Florida Blue (Blue Cross Blue Shield of Florida)',     '00590', 365, true),
+        ('Anthem Blue Cross Blue Shield (Georgia)',              '00001', 365, true),
+        ('Blue Cross Blue Shield of Hawaii (HMSA)',              'HMSA0', 365, true),
+        ('Blue Cross Blue Shield of Illinois (HCSC)',            '00621', 365, true),
+        ('Anthem Blue Cross Blue Shield (Indiana)',              '00020', 365, true),
+        ('Blue Cross Blue Shield of Kansas',                    '00250', 365, true),
+        ('Anthem Blue Cross Blue Shield (Kentucky)',             '00028', 365, true),
+        ('Blue Cross Blue Shield of Louisiana',                 '00045', 365, true),
+        ('Anthem Blue Cross Blue Shield (Maine)',                '00140', 365, true),
+        ('Blue Cross Blue Shield of Massachusetts',             '00870', 365, true),
+        ('Blue Cross Blue Shield of Michigan',                  '00950', 365, true),
+        ('Blue Cross Blue Shield of Minnesota',                 '00110', 365, true),
+        ('Blue Cross Blue Shield of Mississippi',               '00560', 365, true),
+        ('Blue Cross Blue Shield of Montana',                   '00560', 365, true),
+        ('Blue Cross Blue Shield of Nebraska',                  '00760', 365, true),
+        ('Blue Cross Blue Shield of North Carolina',            '00580', 365, true),
+        ('Blue Cross Blue Shield of North Dakota',              '00090', 365, true),
+        ('Anthem Blue Cross Blue Shield (Ohio)',                 '00060', 365, true),
+        ('Blue Cross Blue Shield of Oklahoma',                  '00780', 365, true),
+        ('Highmark Blue Cross Blue Shield (Pennsylvania)',      '00115', 365, true),
+        ('Blue Cross Blue Shield of Rhode Island',              '00510', 365, true),
+        ('Blue Cross Blue Shield of South Carolina',            '00640', 365, true),
+        ('Blue Cross Blue Shield of Tennessee',                 '00180', 365, true),
+        ('Blue Cross Blue Shield of Texas (HCSC)',              '00621', 365, true),
+        ('Blue Cross Blue Shield of Vermont',                   '00581', 365, true),
+        ('Anthem Blue Cross Blue Shield (Virginia)',             '00030', 365, true),
+        ('Regence BlueCross BlueShield (WA/OR)',                '00601', 365, true),
+        ('Blue Cross Blue Shield of Wyoming',                   '00820', 365, true),
+        -- Medicare & Government
+        ('Medicare B — Railroad Retirement Board',              '00019', 365, false),
+        ('CHAMPVA',                                             '84146', 365, false),
+        ('Indian Health Service',                               'IHS01', 365, false),
+        ('Workers Compensation (General)',                      'WCOMP', 365, false),
+        ('TriWest Healthcare Alliance',                         'TRWST', 365, true),
+        -- Medicare Advantage
+        ('Medicare Advantage — Cigna',                          '62308', 365, true),
+        ('Medicare Advantage — Aetna',                          '60054', 365, true),
+        ('Medicare Advantage — Anthem',                         '00044', 365, true),
+        ('Medicare Advantage — Kaiser',                         'SX109', 365, true),
+        ('Medicare Advantage — Wellpoint',                      '00044', 365, true),
+        -- Commercial Plans
+        ('Humana (Commercial)',                                 'HUM01', 365, true),
+        ('Anthem (Commercial)',                                 '00044', 365, true),
+        ('Oscar Health',                                        'OSCAR', 365, false),
+        ('Bright Health',                                       'BRGHT', 365, false),
+        ('Molina Healthcare',                                   '59322', 365, true),
+        ('WellCare Health Plans',                               'WEL01', 365, true),
+        ('Health Net',                                          '66170', 365, true),
+        ('Centene Corporation',                                 'CEN01', 365, true),
+        ('Multiplan / PHCS',                                    '25133', 365, false),
+        ('Highmark (Pennsylvania)',                             '00115', 365, true),
+        ('Independence Blue Cross',                             '23281', 365, true),
+        ('Capital BlueCross',                                   '52149', 365, true),
+        -- Medicaid State Plans
+        ('Medicaid — New York',                                 'NY_MDCD', 365, true),
+        ('Medicaid — Ohio',                                     'OH_MDCD', 365, true),
+        ('Medicaid — Georgia',                                  'GA_MDCD', 365, true),
+        ('Medicaid — North Carolina',                           'NC_MDCD', 365, true),
+        ('Medicaid — Michigan',                                 'MI_MDCD', 365, true),
+        ('Medicaid — Alabama',                                  'AL_MDCD', 365, true),
+        ('Medicaid — Illinois',                                 'IL_MDCD', 365, true),
+        ('Medicaid — Pennsylvania',                             'PA_MDCD', 365, true),
+        ('Medicaid — Virginia',                                 'VA_MDCD', 365, true),
+        ('Medicaid — Tennessee',                                'TN_MDCD', 365, true),
+        ('Medicaid — Arizona',                                  'AZ_MDCD', 365, true),
+        ('Medicaid — Louisiana',                                'LA_MDCD', 365, true),
+        ('Medicaid — Mississippi',                              'MS_MDCD', 365, true),
+        ('Medicaid — Indiana',                                  'IN_MDCD', 365, true),
+        ('Medicaid — Minnesota',                                'MN_MDCD', 365, true),
+        ('Medicaid — Missouri',                                 'MO_MDCD', 365, true),
+        ('Medicaid — Washington',                               'WA_MDCD', 365, true),
+        ('Medicaid — Colorado',                                 'CO_MDCD', 365, true),
+        ('Medicaid — South Carolina',                           'SC_MDCD', 365, true),
+        ('Medicaid — New Jersey',                               'NJ_MDCD', 365, true)
+      )
+      INSERT INTO payers (id, name, payer_id, timely_filing_days, auth_required, billing_type, is_active, is_custom)
+      SELECT gen_random_uuid()::text, np.name, np.payer_id, np.timely_filing_days::integer, np.auth_required::boolean, 'professional', true, false
+      FROM new_payers np
+      WHERE NOT EXISTS (SELECT 1 FROM payers p WHERE p.name = np.name)
+    `);
+
+    // ── HCPCS plain-English descriptions for home health codes ─────────────
+    const hcpcsPlainUpdates: [string, string][] = [
+      ['G0299', 'Skilled nursing care by an RN in the home, billed per 15 minutes'],
+      ['G0300', 'Skilled nursing care by an LPN in the home, billed per 15 minutes'],
+      ['G0151', 'Physical therapy services in the home or hospice, per 15 minutes'],
+      ['G0152', 'Occupational therapy services in the home or hospice, per 15 minutes'],
+      ['G0153', 'Speech-language pathology services in the home or hospice, per 15 minutes'],
+      ['G0154', 'Skilled nursing (LPN or RN) in the home or hospice, per 15 minutes'],
+      ['G0155', 'Clinical social work services in the home or hospice, per 15 minutes'],
+      ['G0156', 'Home health aide or hospice aide services, per 15 minutes'],
+      ['G0157', 'Physical therapy assistant services in the home or hospice, per 15 minutes'],
+      ['G0158', 'Occupational therapy assistant services in the home or hospice, per 15 minutes'],
+      ['G0159', 'Physical therapy services (home/hospice) — add-on per 15 minutes'],
+      ['G0160', 'Occupational therapy services (home/hospice) — add-on per 15 minutes'],
+      ['G0161', 'Speech-language pathology services (home/hospice) — add-on per 15 minutes'],
+      ['G0162', 'Skilled nursing (RN) for care plan management in the home, per 15 minutes'],
+      ['G0493', 'RN observation and assessment visit in the home, per 15 minutes'],
+      ['G0494', 'LPN observation and assessment visit in the home, per 15 minutes'],
+      ['G0495', 'RN patient/family education visit in the home, per 15 minutes'],
+      ['G0496', 'LPN patient/family education visit in the home, per 15 minutes'],
+    ];
+    for (const [code, plain] of hcpcsPlainUpdates) {
+      await pool.query(
+        `UPDATE hcpcs_codes SET description_plain = $1 WHERE code = $2 AND (description_plain IS NULL OR description_plain = '')`,
+        [plain, code]
+      );
+    }
+    console.log("Payer database and HCPCS descriptions updated");
+
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
   }
+
+  // ── NPI Registry lookup (NPPES public API) ───────────────────────────────
+  app.get("/api/npi-lookup", requireAuth, async (req, res) => {
+    const { npi } = req.query;
+    if (!npi || typeof npi !== "string" || !/^\d{10}$/.test(npi))
+      return res.status(400).json({ error: "Valid 10-digit NPI required" });
+    try {
+      const r = await fetch(`https://npiregistry.cms.hhs.gov/api/?number=${encodeURIComponent(npi)}&version=2.1`);
+      if (!r.ok) return res.status(502).json({ error: "NPI registry unavailable" });
+      const data = await r.json();
+      if (!data.results || data.results.length === 0) return res.json({ found: false });
+      const result = data.results[0];
+      const basic = result.basic || {};
+      const addr = (result.addresses || []).find((a: any) => a.address_purpose === "LOCATION") || result.addresses?.[0] || {};
+      const taxonomy = (result.taxonomies || []).find((t: any) => t.primary) || result.taxonomies?.[0] || {};
+      res.json({
+        found: true,
+        entityType: result.enumeration_type === "NPI-1" ? "individual" : "organization",
+        firstName: basic.first_name || "",
+        lastName: basic.last_name || basic.organization_name || "",
+        credential: basic.credential || "",
+        taxonomyCode: taxonomy.code || "",
+        taxonomyDesc: taxonomy.desc || "",
+        address: addr.address_1 || "",
+        city: addr.city || "",
+        state: addr.state || "",
+        zip: (addr.postal_code || "").slice(0, 5),
+        phone: addr.telephone_number || "",
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "NPI registry lookup failed: " + err.message });
+    }
+  });
+
+  // ── NUCC Taxonomy codes reference ─────────────────────────────────────────
+  app.get("/api/taxonomy-codes", requireAuth, (_req, res) => {
+    res.json([
+      { code: "163W00000X", display: "Registered Nurse (RN)", category: "Nursing" },
+      { code: "163WP2201X", display: "Registered Nurse — Pediatrics", category: "Nursing" },
+      { code: "163WH0500X", display: "Registered Nurse — Home Health", category: "Nursing" },
+      { code: "163WG0000X", display: "Registered Nurse — Gerontology", category: "Nursing" },
+      { code: "164W00000X", display: "Licensed Practical Nurse (LPN)", category: "Nursing" },
+      { code: "164X00000X", display: "Licensed Vocational Nurse (LVN)", category: "Nursing" },
+      { code: "225100000X", display: "Physical Therapist (PT)", category: "Therapy" },
+      { code: "2251P0200X", display: "Physical Therapist — Pediatrics", category: "Therapy" },
+      { code: "225200000X", display: "Physical Therapy Assistant (PTA)", category: "Therapy" },
+      { code: "225600000X", display: "Occupational Therapist (OT)", category: "Therapy" },
+      { code: "225800000X", display: "Occupational Therapy Assistant (OTA)", category: "Therapy" },
+      { code: "235Z00000X", display: "Speech-Language Pathologist (SLP)", category: "Therapy" },
+      { code: "251B00000X", display: "Case Management — Home Health Agency", category: "Agency" },
+      { code: "251E00000X", display: "Home Health Agency", category: "Agency" },
+      { code: "251F00000X", display: "Hospice Care, Community-Based", category: "Agency" },
+      { code: "251G00000X", display: "Nursing Care, Supportive (Non-Medical)", category: "Agency" },
+      { code: "101Y00000X", display: "Counselor", category: "Behavioral Health" },
+      { code: "101YM0800X", display: "Mental Health Counselor", category: "Behavioral Health" },
+      { code: "106H00000X", display: "Addiction (Substance Use Disorder) Counselor", category: "Behavioral Health" },
+      { code: "207Q00000X", display: "Family Medicine Physician", category: "Physician" },
+      { code: "207R00000X", display: "Internal Medicine Physician", category: "Physician" },
+      { code: "208D00000X", display: "General Practice Physician", category: "Physician" },
+      { code: "208600000X", display: "Surgery — General", category: "Physician" },
+      { code: "2086S0129X", display: "Surgery — Vascular", category: "Physician" },
+      { code: "213E00000X", display: "Podiatrist", category: "Physician" },
+      { code: "207T00000X", display: "Neurological Surgery", category: "Physician" },
+      { code: "207Y00000X", display: "Otolaryngology (ENT)", category: "Physician" },
+      { code: "207X00000X", display: "Orthopedic Surgery", category: "Physician" },
+      { code: "208100000X", display: "Physical Medicine & Rehabilitation", category: "Physician" },
+      { code: "363L00000X", display: "Nurse Practitioner (NP)", category: "Advanced Practice" },
+      { code: "363LF0000X", display: "Nurse Practitioner — Family", category: "Advanced Practice" },
+      { code: "363LG0600X", display: "Nurse Practitioner — Gerontology", category: "Advanced Practice" },
+      { code: "363LP2300X", display: "Nurse Practitioner — Pediatrics", category: "Advanced Practice" },
+      { code: "363A00000X", display: "Physician Assistant (PA)", category: "Advanced Practice" },
+      { code: "261QH0100X", display: "Clinic — Home Health", category: "Facility" },
+      { code: "275N00000X", display: "Medicare Defined Swing Bed Unit", category: "Facility" },
+      { code: "311500000X", display: "Alzheimer Center / Dementia Unit", category: "Facility" },
+      { code: "314000000X", display: "Skilled Nursing Facility (SNF)", category: "Facility" },
+      { code: "315D00000X", display: "Inpatient Hospice", category: "Facility" },
+      { code: "193200000X", display: "Multi-Specialty Group Practice", category: "Organization" },
+      { code: "193400000X", display: "Single Specialty Group Practice", category: "Organization" },
+    ]);
+  });
 
   app.get("/api/payers", requireAuth, async (req, res) => {
     res.json(allPayers);

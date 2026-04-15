@@ -48,9 +48,17 @@ import {
   Pencil,
   MapPin,
   Clock,
+  Search,
+  CheckCircle2,
+  ExternalLink,
 } from "lucide-react";
 
 import { CheckCircle, Send, Wifi } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 const CREDENTIAL_OPTIONS = ["RN", "LPN", "PT", "OT", "SLP", "HHA", "PCA", "Other"];
 
@@ -71,6 +79,53 @@ function ProvidersTab() {
     isDefault: false,
   });
   const [npiError, setNpiError] = useState("");
+  const [npiLookup, setNpiLookup] = useState<{ loading: boolean; result: any | null }>({ loading: false, result: null });
+  const [taxonomySearch, setTaxonomySearch] = useState("");
+  const [showTaxonomyPicker, setShowTaxonomyPicker] = useState(false);
+
+  const { data: taxonomyCodes = [] } = useQuery<any[]>({
+    queryKey: ["/api/taxonomy-codes"],
+    queryFn: async () => {
+      const r = await fetch("/api/taxonomy-codes", { credentials: "include" });
+      return r.json();
+    },
+  });
+
+  async function verifyNPI() {
+    if (!validateNPI(form.npi)) {
+      setNpiError("Invalid NPI — must be 10 digits and pass the NPI checksum");
+      return;
+    }
+    setNpiLookup({ loading: true, result: null });
+    try {
+      const r = await fetch(`/api/npi-lookup?npi=${form.npi}`, { credentials: "include" });
+      const data = await r.json();
+      if (!data.found) {
+        setNpiLookup({ loading: false, result: { found: false } });
+        toast({ title: "NPI not found in registry", description: "Verify the number is correct.", variant: "destructive" });
+        return;
+      }
+      setNpiLookup({ loading: false, result: data });
+      setNpiError("");
+    } catch {
+      setNpiLookup({ loading: false, result: null });
+      toast({ title: "Registry lookup failed", description: "Check your internet connection.", variant: "destructive" });
+    }
+  }
+
+  function applyNpiLookup() {
+    if (!npiLookup.result) return;
+    const r = npiLookup.result;
+    setForm((f) => ({
+      ...f,
+      firstName: r.firstName || f.firstName,
+      lastName: r.lastName || f.lastName,
+      taxonomyCode: r.taxonomyCode || f.taxonomyCode,
+      credentials: r.credential && CREDENTIAL_OPTIONS.includes(r.credential) ? r.credential : f.credentials,
+    }));
+    setNpiLookup({ loading: false, result: null });
+    toast({ title: "Provider details filled from NPI Registry" });
+  }
 
   const { data: providers = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/billing/providers", showDeactivated ? "all" : "active"],
@@ -117,6 +172,8 @@ function ProvidersTab() {
   function resetForm() {
     setForm({ firstName: "", lastName: "", credentials: "", customCredentials: "", npi: "", taxonomyCode: "", individualTaxId: "", isDefault: false });
     setNpiError("");
+    setNpiLookup({ loading: false, result: null });
+    setTaxonomySearch("");
   }
 
   function openAdd() {
@@ -303,24 +360,117 @@ function ProvidersTab() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="prov-npi">NPI * (10 digits)</Label>
-              <Input
-                id="prov-npi"
-                value={form.npi}
-                maxLength={10}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/\D/g, "").slice(0, 10);
-                  setForm({ ...form, npi: v });
-                  if (npiError && v.length === 10 && validateNPI(v)) setNpiError("");
-                }}
-                className={npiError ? "border-destructive" : ""}
-                data-testid="input-provider-npi"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="prov-npi"
+                  value={form.npi}
+                  maxLength={10}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/\D/g, "").slice(0, 10);
+                    setForm({ ...form, npi: v });
+                    setNpiLookup({ loading: false, result: null });
+                    if (npiError && v.length === 10 && validateNPI(v)) setNpiError("");
+                  }}
+                  className={npiError ? "border-destructive" : ""}
+                  data-testid="input-provider-npi"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 gap-1 text-xs"
+                  disabled={npiLookup.loading || form.npi.length !== 10}
+                  onClick={verifyNPI}
+                  data-testid="button-verify-npi"
+                >
+                  {npiLookup.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
+                  Verify
+                </Button>
+              </div>
               {npiError && <p className="text-sm text-destructive flex items-center gap-1"><AlertTriangle className="h-3 w-3" />{npiError}</p>}
+              {npiLookup.result?.found && (
+                <div className="rounded-md border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 px-3 py-2 text-sm space-y-1">
+                  <p className="font-medium text-green-800 dark:text-green-300 flex items-center gap-1">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Found in NPI Registry
+                  </p>
+                  <p className="text-green-700 dark:text-green-400">
+                    {npiLookup.result.firstName} {npiLookup.result.lastName}
+                    {npiLookup.result.credential ? `, ${npiLookup.result.credential}` : ""}
+                  </p>
+                  {npiLookup.result.taxonomyDesc && (
+                    <p className="text-green-600 dark:text-green-500 text-xs">{npiLookup.result.taxonomyDesc} ({npiLookup.result.taxonomyCode})</p>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs mt-1 border-green-300 dark:border-green-700 text-green-800 dark:text-green-300"
+                    onClick={applyNpiLookup}
+                    data-testid="button-apply-npi-lookup"
+                  >
+                    Auto-fill name &amp; taxonomy
+                  </Button>
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="prov-taxonomy">Taxonomy Code</Label>
-                <Input id="prov-taxonomy" value={form.taxonomyCode} onChange={(e) => setForm({ ...form, taxonomyCode: e.target.value })} placeholder="e.g. 251E00000X" data-testid="input-provider-taxonomy" />
+                <div className="flex gap-2">
+                  <Input
+                    id="prov-taxonomy"
+                    value={form.taxonomyCode}
+                    onChange={(e) => setForm({ ...form, taxonomyCode: e.target.value })}
+                    placeholder="e.g. 163W00000X"
+                    data-testid="input-provider-taxonomy"
+                  />
+                  <Popover open={showTaxonomyPicker} onOpenChange={(o) => { setShowTaxonomyPicker(o); if (!o) setTaxonomySearch(""); }}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0"
+                        data-testid="button-taxonomy-picker"
+                      >
+                        <Search className="h-3 w-3" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-80 p-2" align="end" onOpenAutoFocus={(e) => e.preventDefault()}>
+                      <Input
+                        placeholder="Search specialty…"
+                        value={taxonomySearch}
+                        onChange={(e) => setTaxonomySearch(e.target.value)}
+                        className="mb-2 h-8 text-sm"
+                        data-testid="input-taxonomy-search"
+                      />
+                      <div className="max-h-52 overflow-y-auto space-y-0.5">
+                        {taxonomyCodes
+                          .filter((t) =>
+                            !taxonomySearch ||
+                            t.display.toLowerCase().includes(taxonomySearch.toLowerCase()) ||
+                            t.code.toLowerCase().includes(taxonomySearch.toLowerCase())
+                          )
+                          .map((t) => (
+                            <button
+                              key={t.code}
+                              type="button"
+                              className="w-full text-left px-2 py-1.5 rounded text-sm hover:bg-accent cursor-pointer"
+                              onClick={() => {
+                                setForm((f) => ({ ...f, taxonomyCode: t.code }));
+                                setShowTaxonomyPicker(false);
+                                setTaxonomySearch("");
+                              }}
+                            >
+                              <span className="font-mono text-xs text-muted-foreground">{t.code}</span>
+                              <span className="ml-2">{t.display}</span>
+                            </button>
+                          ))}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="prov-taxid">Individual Tax ID</Label>
@@ -574,7 +724,10 @@ function PayersTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
+  const [editingPayer, setEditingPayer] = useState<any>(null);
   const [form, setForm] = useState({ name: "", payerId: "", timelyFilingDays: "365", authRequired: false });
+  const [editForm, setEditForm] = useState({ payerId: "", timelyFilingDays: "365", authRequired: false });
+  const [payerSearch, setPayerSearch] = useState("");
 
   const { data: payers = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/billing/payers"],
@@ -599,6 +752,19 @@ function PayersTab() {
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, ...data }: any) => {
+      const res = await apiRequest("PATCH", `/api/billing/payers/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/payers"] });
+      setEditingPayer(null);
+      toast({ title: "Payer updated" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
   const toggleMutation = useMutation({
     mutationFn: async ({ id, isActive }: any) => {
       const res = await apiRequest("PATCH", `/api/billing/payers/${id}`, { isActive });
@@ -610,6 +776,12 @@ function PayersTab() {
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
+
+  const filteredPayers = payers.filter((p) =>
+    !payerSearch ||
+    p.name.toLowerCase().includes(payerSearch.toLowerCase()) ||
+    (p.payer_id || "").toLowerCase().includes(payerSearch.toLowerCase())
+  );
 
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
 
@@ -627,30 +799,45 @@ function PayersTab() {
         Facility billing (UB-04) is not supported in this release. Select Professional for all payers.
       </p>
 
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          className="pl-9"
+          placeholder="Search payers by name or ID…"
+          value={payerSearch}
+          onChange={(e) => setPayerSearch(e.target.value)}
+          data-testid="input-payer-search"
+        />
+      </div>
+
       <div className="border rounded-lg">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Payer Name</TableHead>
-              <TableHead>Payer ID</TableHead>
+              <TableHead>EDI Payer ID</TableHead>
               <TableHead>Timely Filing</TableHead>
               <TableHead>Auth Required</TableHead>
-              <TableHead>Type</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {payers.map((p: any) => (
+            {filteredPayers.map((p: any) => (
               <TableRow key={p.id} className={!p.is_active ? "opacity-50" : ""} data-testid={`row-payer-${p.id}`}>
                 <TableCell className="font-medium">
                   {p.name}
                   {p.is_custom && <Badge variant="outline" className="ml-2 text-xs">Custom</Badge>}
                 </TableCell>
-                <TableCell className="font-mono text-sm">{p.payer_id || "—"}</TableCell>
+                <TableCell>
+                  {p.payer_id ? (
+                    <span className="font-mono text-sm">{p.payer_id}</span>
+                  ) : (
+                    <span className="text-muted-foreground text-xs italic">No ID set</span>
+                  )}
+                </TableCell>
                 <TableCell>{p.timely_filing_days} days</TableCell>
                 <TableCell>{p.auth_required ? "Yes" : "No"}</TableCell>
-                <TableCell className="capitalize">{p.billing_type}</TableCell>
                 <TableCell>
                   {p.is_active ? (
                     <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50 dark:bg-green-950 dark:border-green-800">Active</Badge>
@@ -659,20 +846,87 @@ function PayersTab() {
                   )}
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => toggleMutation.mutate({ id: p.id, isActive: !p.is_active })}
-                    data-testid={`button-toggle-payer-${p.id}`}
-                  >
-                    {p.is_active ? <UserX className="h-4 w-4 text-destructive" /> : <UserCheck className="h-4 w-4 text-green-600" />}
-                  </Button>
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setEditingPayer(p);
+                        setEditForm({ payerId: p.payer_id || "", timelyFilingDays: String(p.timely_filing_days || 365), authRequired: !!p.auth_required });
+                      }}
+                      data-testid={`button-edit-payer-${p.id}`}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => toggleMutation.mutate({ id: p.id, isActive: !p.is_active })}
+                      data-testid={`button-toggle-payer-${p.id}`}
+                    >
+                      {p.is_active ? <UserX className="h-4 w-4 text-destructive" /> : <UserCheck className="h-4 w-4 text-green-600" />}
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
+            {filteredPayers.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No payers match your search.</TableCell>
+              </TableRow>
+            )}
           </TableBody>
         </Table>
       </div>
+
+      <Dialog open={!!editingPayer} onOpenChange={(o) => !o && setEditingPayer(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Payer — {editingPayer?.name}</DialogTitle>
+            <DialogDescription>Update the EDI payer ID and billing rules for this payer.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label>EDI Payer ID</Label>
+              <Input
+                value={editForm.payerId}
+                onChange={(e) => setEditForm({ ...editForm, payerId: e.target.value })}
+                placeholder="e.g. 00052 or BCBSMA"
+                data-testid="input-edit-payer-id"
+              />
+              <p className="text-xs text-muted-foreground">This ID is used in the ISA/GS segments of 837P EDI submissions.</p>
+            </div>
+            <div className="space-y-2">
+              <Label>Timely Filing (days)</Label>
+              <Input
+                type="number"
+                value={editForm.timelyFilingDays}
+                onChange={(e) => setEditForm({ ...editForm, timelyFilingDays: e.target.value })}
+                data-testid="input-edit-payer-filing-days"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={editForm.authRequired}
+                onCheckedChange={(v) => setEditForm({ ...editForm, authRequired: v })}
+                data-testid="toggle-edit-payer-auth-required"
+              />
+              <Label>Prior authorization required</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingPayer(null)}>Cancel</Button>
+            <Button
+              onClick={() => updateMutation.mutate({ id: editingPayer?.id, payerId: editForm.payerId, timelyFilingDays: parseInt(editForm.timelyFilingDays) || 365, authRequired: editForm.authRequired })}
+              disabled={updateMutation.isPending}
+              data-testid="button-save-edit-payer"
+            >
+              {updateMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={showDialog} onOpenChange={setShowDialog}>
         <DialogContent className="sm:max-w-md">
