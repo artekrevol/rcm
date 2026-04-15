@@ -453,6 +453,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
     console.log("Payer database and HCPCS descriptions updated");
 
+    // Seed CARC/RARC codes, POS codes, full taxonomy codes, and additional payers
+    const { seedReferenceTables } = await import("./seeds/reference-tables");
+    await seedReferenceTables(pool);
+
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
   }
@@ -491,50 +495,58 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // ── NUCC Taxonomy codes reference ─────────────────────────────────────────
-  app.get("/api/taxonomy-codes", requireAuth, (_req, res) => {
-    res.json([
-      { code: "163W00000X", display: "Registered Nurse (RN)", category: "Nursing" },
-      { code: "163WP2201X", display: "Registered Nurse — Pediatrics", category: "Nursing" },
-      { code: "163WH0500X", display: "Registered Nurse — Home Health", category: "Nursing" },
-      { code: "163WG0000X", display: "Registered Nurse — Gerontology", category: "Nursing" },
-      { code: "164W00000X", display: "Licensed Practical Nurse (LPN)", category: "Nursing" },
-      { code: "164X00000X", display: "Licensed Vocational Nurse (LVN)", category: "Nursing" },
-      { code: "225100000X", display: "Physical Therapist (PT)", category: "Therapy" },
-      { code: "2251P0200X", display: "Physical Therapist — Pediatrics", category: "Therapy" },
-      { code: "225200000X", display: "Physical Therapy Assistant (PTA)", category: "Therapy" },
-      { code: "225600000X", display: "Occupational Therapist (OT)", category: "Therapy" },
-      { code: "225800000X", display: "Occupational Therapy Assistant (OTA)", category: "Therapy" },
-      { code: "235Z00000X", display: "Speech-Language Pathologist (SLP)", category: "Therapy" },
-      { code: "251B00000X", display: "Case Management — Home Health Agency", category: "Agency" },
-      { code: "251E00000X", display: "Home Health Agency", category: "Agency" },
-      { code: "251F00000X", display: "Hospice Care, Community-Based", category: "Agency" },
-      { code: "251G00000X", display: "Nursing Care, Supportive (Non-Medical)", category: "Agency" },
-      { code: "101Y00000X", display: "Counselor", category: "Behavioral Health" },
-      { code: "101YM0800X", display: "Mental Health Counselor", category: "Behavioral Health" },
-      { code: "106H00000X", display: "Addiction (Substance Use Disorder) Counselor", category: "Behavioral Health" },
-      { code: "207Q00000X", display: "Family Medicine Physician", category: "Physician" },
-      { code: "207R00000X", display: "Internal Medicine Physician", category: "Physician" },
-      { code: "208D00000X", display: "General Practice Physician", category: "Physician" },
-      { code: "208600000X", display: "Surgery — General", category: "Physician" },
-      { code: "2086S0129X", display: "Surgery — Vascular", category: "Physician" },
-      { code: "213E00000X", display: "Podiatrist", category: "Physician" },
-      { code: "207T00000X", display: "Neurological Surgery", category: "Physician" },
-      { code: "207Y00000X", display: "Otolaryngology (ENT)", category: "Physician" },
-      { code: "207X00000X", display: "Orthopedic Surgery", category: "Physician" },
-      { code: "208100000X", display: "Physical Medicine & Rehabilitation", category: "Physician" },
-      { code: "363L00000X", display: "Nurse Practitioner (NP)", category: "Advanced Practice" },
-      { code: "363LF0000X", display: "Nurse Practitioner — Family", category: "Advanced Practice" },
-      { code: "363LG0600X", display: "Nurse Practitioner — Gerontology", category: "Advanced Practice" },
-      { code: "363LP2300X", display: "Nurse Practitioner — Pediatrics", category: "Advanced Practice" },
-      { code: "363A00000X", display: "Physician Assistant (PA)", category: "Advanced Practice" },
-      { code: "261QH0100X", display: "Clinic — Home Health", category: "Facility" },
-      { code: "275N00000X", display: "Medicare Defined Swing Bed Unit", category: "Facility" },
-      { code: "311500000X", display: "Alzheimer Center / Dementia Unit", category: "Facility" },
-      { code: "314000000X", display: "Skilled Nursing Facility (SNF)", category: "Facility" },
-      { code: "315D00000X", display: "Inpatient Hospice", category: "Facility" },
-      { code: "193200000X", display: "Multi-Specialty Group Practice", category: "Organization" },
-      { code: "193400000X", display: "Single Specialty Group Practice", category: "Organization" },
-    ]);
+  app.get("/api/taxonomy-codes", requireAuth, async (_req, res) => {
+    try {
+      const { pool } = await import("./db");
+      const { rows } = await pool.query("SELECT code, display, category FROM taxonomy_codes ORDER BY category, display");
+      res.json(rows);
+    } catch {
+      res.status(500).json({ error: "Failed to fetch taxonomy codes" });
+    }
+  });
+
+  app.get("/api/carc-codes", requireAuth, async (req, res) => {
+    try {
+      const { pool } = await import("./db");
+      const { q } = req.query;
+      let query = "SELECT code, description, group_codes FROM carc_codes ORDER BY CAST(code AS INTEGER) NULLS LAST";
+      const params: any[] = [];
+      if (q && typeof q === "string" && q.trim()) {
+        query = "SELECT code, description, group_codes FROM carc_codes WHERE code ILIKE $1 OR description ILIKE $1 ORDER BY code";
+        params.push(`%${q.trim()}%`);
+      }
+      const { rows } = await pool.query(query, params);
+      res.json(rows);
+    } catch {
+      res.status(500).json({ error: "Failed to fetch CARC codes" });
+    }
+  });
+
+  app.get("/api/rarc-codes", requireAuth, async (req, res) => {
+    try {
+      const { pool } = await import("./db");
+      const { q } = req.query;
+      let query = "SELECT code, description, type FROM rarc_codes ORDER BY code";
+      const params: any[] = [];
+      if (q && typeof q === "string" && q.trim()) {
+        query = "SELECT code, description, type FROM rarc_codes WHERE code ILIKE $1 OR description ILIKE $1 ORDER BY code";
+        params.push(`%${q.trim()}%`);
+      }
+      const { rows } = await pool.query(query, params);
+      res.json(rows);
+    } catch {
+      res.status(500).json({ error: "Failed to fetch RARC codes" });
+    }
+  });
+
+  app.get("/api/pos-codes", requireAuth, async (_req, res) => {
+    try {
+      const { pool } = await import("./db");
+      const { rows } = await pool.query("SELECT code, description, notes FROM pos_codes ORDER BY CAST(code AS INTEGER)");
+      res.json(rows);
+    } catch {
+      res.status(500).json({ error: "Failed to fetch POS codes" });
+    }
   });
 
   app.get("/api/payers", requireAuth, async (req, res) => {
