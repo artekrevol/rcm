@@ -1,0 +1,41 @@
+Highest value — already partially used, can expand:
+
+1. NPPES NPI Registry (CMS)
+The entire national provider database — every licensed provider in the US with their NPI, name, specialty, taxonomy code, address, and phone. Updated weekly. Currently your provider records are manually entered and can have wrong NPIs. This would let you validate and auto-fill provider info when a user types an NPI. Free download at cms.gov.
+
+2. NUCC Taxonomy Codes
+The complete list of ~900 provider specialty/taxonomy codes (like 163W00000X for Registered Nurse). Currently you have a handful hardcoded. This would populate a proper searchable dropdown when configuring providers. Published by the National Uniform Claim Committee.
+
+3. CMS HCPCS Annual Update
+CMS publishes the full HCPCS Level II code set (G-codes, V-codes, etc.) every year in January. You already have a hcpcs_codes table — this would keep it current and complete. Especially critical for home health (G0299, G0300, G0151–G0162, etc.).
+
+4. CMS Physician Fee Schedule (PFS)
+National payment rates for every HCPCS/CPT code, by geographic location (locality). You already have the VA fee schedule. Adding Medicare's would let you show expected reimbursement vs. billed amount for any code, flag underbilling, and pre-populate charge amounts in the claim wizard based on location + payer type.
+
+High value — not yet in the platform:
+
+5. CARC/RARC Code Tables (X12 / CMS)
+The complete Claim Adjustment Reason Code and Remittance Advice Remark Code tables. Currently your denial rules reference codes like CO-29, CO-97 as text. With the full table (~250 CARC + ~900 RARC codes), you could auto-categorize denials from 835 ERA files the moment they come in, without manual mapping.
+
+6. CMS Payer ID / Trading Partner Directory
+Multiple clearinghouses (Availity, Office Ally, Change Healthcare) publish their payer ID lists. Currently some payers in your system have UNKNOWN as the EDI payer ID (as the validation check just flagged). A comprehensive payer ID database would eliminate that gap for the 500+ most common payers.
+
+7. CMS Ordering & Referring Eligible Providers API
+A free CMS API that confirms whether a given NPI is enrolled in Medicare and eligible to order/refer services. Useful pre-submission to prevent the "provider not enrolled" denial (CO-31).
+
+8. CMS Place of Service Codes
+The official POS code table (31 codes — Home=12, Office=11, Inpatient=21, etc.). Currently your wizard has a hardcoded dropdown. The official table includes descriptions and eligibility rules per payer type.
+
+Medium value — for future phases:
+
+9. ICD-10-CM/PCS Annual Updates (CDC)
+ICD-10 codes update every October 1. Your table is likely from a snapshot. The CDC publishes the full tabular list as a free download. Keeping it current prevents submissions with deprecated codes.
+
+10. Revenue Codes (UB-04)
+If you ever expand to facility billing (hospitals, SNFs), NUBC publishes the complete revenue code list needed for UB-04/837I claims.
+
+11. FDA NDC Database
+National Drug Codes for pharmacy billing — if any of your patients receive home infusion or similar services billed with J-codes.
+
+12. CMS Medicare Utilization & Payment Data
+An annual public dataset showing what every provider billed Medicare, how many claims, and what was paid. Useful for benchmarking ("your allowed amount on G0299 is 18% below the national median for your region").
