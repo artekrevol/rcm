@@ -33,6 +33,9 @@ import ClaimsPage from "@/pages/claims";
 import ClaimDetailPage from "@/pages/claim-detail";
 import IntelligencePage from "@/pages/intelligence";
 import RulesPage from "@/pages/rules";
+import ClaimTrackerPage from "@/pages/billing/claim-tracker";
+import ERAPage from "@/pages/billing/era";
+import FollowUpPage from "@/pages/billing/follow-up";
 
 function Router() {
   return (
@@ -121,6 +124,21 @@ function Router() {
       <Route path="/billing/claims">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><ClaimsPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/claim-tracker">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ClaimTrackerPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/follow-up">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><FollowUpPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/era">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ERAPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/codes">

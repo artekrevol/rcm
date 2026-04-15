@@ -14,6 +14,9 @@ import {
   ClipboardList,
   ShieldCheck,
   UserCog,
+  Radar,
+  CreditCard,
+  ListChecks,
 } from "lucide-react";
 import {
   Sidebar,
@@ -34,7 +37,10 @@ const billingNavItems = [
   { title: "Dashboard", url: "/billing/dashboard", icon: LayoutDashboard },
   { title: "Patients", url: "/billing/patients", icon: Users },
   { title: "Claims", url: "/billing/claims", icon: FileText },
+  { title: "Claim Tracker", url: "/billing/claim-tracker", icon: Radar },
+  { title: "Follow-Up Queue", url: "/billing/follow-up", icon: ListChecks },
   { title: "Prior Auth", url: "/billing/claims/prior-auth", icon: ShieldCheck },
+  { title: "ERA Posting", url: "/billing/era", icon: CreditCard },
   { title: "Code Lookup", url: "/billing/codes", icon: BookOpen },
   { title: "Intelligence", url: "/billing/intelligence", icon: Brain },
   { title: "Activity Log", url: "/billing/intelligence/logs", icon: ScrollText, adminOnly: true },

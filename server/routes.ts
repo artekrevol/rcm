@@ -453,6 +453,67 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
     console.log("Payer database and HCPCS descriptions updated");
 
+    // Add new claim columns (idempotent)
+    await pool.query(`
+      ALTER TABLE claims
+        ADD COLUMN IF NOT EXISTS claim_frequency_code VARCHAR DEFAULT '1',
+        ADD COLUMN IF NOT EXISTS orig_claim_number VARCHAR,
+        ADD COLUMN IF NOT EXISTS homebound_indicator VARCHAR DEFAULT 'Y',
+        ADD COLUMN IF NOT EXISTS ordering_provider_id VARCHAR,
+        ADD COLUMN IF NOT EXISTS delay_reason_code VARCHAR,
+        ADD COLUMN IF NOT EXISTS follow_up_date DATE,
+        ADD COLUMN IF NOT EXISTS follow_up_status VARCHAR
+    `);
+
+    // Create claim_follow_up_notes table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS claim_follow_up_notes (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        claim_id VARCHAR NOT NULL,
+        org_id VARCHAR,
+        user_id VARCHAR,
+        user_name VARCHAR,
+        note_text TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_follow_up_notes_claim ON claim_follow_up_notes(claim_id)`);
+
+    // Create ERA (835) tables
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS era_batches (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        org_id VARCHAR,
+        payer_name VARCHAR NOT NULL,
+        check_number VARCHAR,
+        payment_date DATE,
+        total_amount REAL DEFAULT 0,
+        status VARCHAR DEFAULT 'unposted',
+        raw_edi TEXT,
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_era_batches_org ON era_batches(org_id)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS era_lines (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        era_id VARCHAR NOT NULL REFERENCES era_batches(id) ON DELETE CASCADE,
+        claim_id VARCHAR,
+        org_id VARCHAR,
+        patient_name VARCHAR,
+        dos DATE,
+        billed_amount REAL DEFAULT 0,
+        allowed_amount REAL DEFAULT 0,
+        paid_amount REAL DEFAULT 0,
+        service_lines JSONB DEFAULT '[]',
+        status VARCHAR DEFAULT 'unposted',
+        created_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_era_lines_era ON era_lines(era_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_era_lines_claim ON era_lines(claim_id)`);
+
     // Seed CARC/RARC codes, POS codes, full taxonomy codes, and additional payers
     const { seedReferenceTables } = await import("./seeds/reference-tables");
     await seedReferenceTables(pool);
@@ -757,6 +818,306 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // ── Claim Tracker ─────────────────────────────────────────────────────────
+  app.get("/api/billing/claim-tracker", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { status, payer_id, patient, q, date_from, date_to } = req.query;
+
+      let baseQuery = `
+        SELECT c.*,
+          COALESCE(p.first_name || ' ' || p.last_name, l.name, 'Unknown') as patient_name,
+          p.id as patient_record_id,
+          py.name as payer_name
+        FROM claims c
+        LEFT JOIN patients p ON c.patient_id = p.id
+        LEFT JOIN leads l ON p.lead_id = l.id
+        LEFT JOIN payers py ON c.payer_id = py.id
+        WHERE 1=1
+      `;
+      const params: any[] = [];
+      let idx = 1;
+
+      if (orgId) { baseQuery += ` AND (c.organization_id = $${idx} OR c.organization_id IS NULL)`; params.push(orgId); idx++; }
+      if (status && status !== "all") { baseQuery += ` AND c.status = $${idx}`; params.push(status); idx++; }
+      if (payer_id && payer_id !== "all") { baseQuery += ` AND (c.payer_id = $${idx} OR c.payer = (SELECT name FROM payers WHERE id = $${idx}))`; params.push(payer_id); idx++; }
+      if (patient) { baseQuery += ` AND (LOWER(COALESCE(p.first_name || ' ' || p.last_name, l.name,'')) LIKE LOWER($${idx}))`; params.push(`%${patient}%`); idx++; }
+      if (date_from) { baseQuery += ` AND c.created_at >= $${idx}`; params.push(date_from); idx++; }
+      if (date_to) { baseQuery += ` AND c.created_at <= $${idx}`; params.push(date_to); idx++; }
+      if (q) { baseQuery += ` AND (c.id ILIKE $${idx} OR c.payer ILIKE $${idx})`; params.push(`%${q}%`); idx++; }
+
+      baseQuery += ` ORDER BY c.created_at DESC LIMIT 200`;
+      const { rows: claims } = await db.query(baseQuery, params);
+
+      const claimIds = claims.map((c: any) => c.id);
+      let events: any[] = [];
+      if (claimIds.length > 0) {
+        const { rows } = await db.query(
+          `SELECT * FROM claim_events WHERE claim_id = ANY($1) ORDER BY timestamp DESC`,
+          [claimIds]
+        );
+        events = rows;
+      }
+
+      const eventsByClaimId: Record<string, any[]> = {};
+      for (const ev of events) {
+        if (!eventsByClaimId[ev.claim_id]) eventsByClaimId[ev.claim_id] = [];
+        eventsByClaimId[ev.claim_id].push(ev);
+      }
+
+      res.json(claims.map((c: any) => ({
+        ...c,
+        events: eventsByClaimId[c.id] || [],
+      })));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/claims/:id/mark-fixed", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { resubmit, eventId } = req.body;
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
+      if (!verifyOrg(claimResult.rows[0], req)) return res.status(404).json({ error: "Claim not found" });
+
+      if (resubmit) {
+        await db.query(`UPDATE claims SET status = 'submitted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1, $2, 'Resubmitted', 'Claim resubmitted after error was fixed', $3)`,
+          [crypto.randomUUID(), req.params.id, claimResult.rows[0].organization_id]
+        );
+      } else {
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1, $2, 'MarkedFixed', 'Error marked as fixed without resubmission', $3)`,
+          [crypto.randomUUID(), req.params.id, claimResult.rows[0].organization_id]
+        );
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── ERA Posting ────────────────────────────────────────────────────────────
+  app.get("/api/billing/eras", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const params: any[] = [];
+      let query = `SELECT eb.*, COUNT(el.id) as line_count FROM era_batches eb LEFT JOIN era_lines el ON el.era_id = eb.id WHERE 1=1`;
+      let idx = 1;
+      if (orgId) { query += ` AND (eb.org_id = $${idx} OR eb.org_id IS NULL)`; params.push(orgId); idx++; }
+      query += ` GROUP BY eb.id ORDER BY eb.created_at DESC`;
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/eras", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { payer_name, check_number, payment_date, total_amount, lines = [] } = req.body;
+      const eraId = crypto.randomUUID();
+      await db.query(
+        `INSERT INTO era_batches (id, org_id, payer_name, check_number, payment_date, total_amount, status) VALUES ($1,$2,$3,$4,$5,$6,'unposted')`,
+        [eraId, orgId, payer_name, check_number, payment_date, total_amount || 0]
+      );
+      for (const line of lines) {
+        await db.query(
+          `INSERT INTO era_lines (id, era_id, claim_id, org_id, patient_name, dos, billed_amount, allowed_amount, paid_amount, service_lines) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+          [crypto.randomUUID(), eraId, line.claim_id || null, orgId, line.patient_name, line.dos, line.billed_amount || 0, line.allowed_amount || 0, line.paid_amount || 0, JSON.stringify(line.service_lines || [])]
+        );
+      }
+      res.json({ id: eraId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/eras/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { rows: [era] } = await db.query(`SELECT * FROM era_batches WHERE id = $1 AND (org_id = $2 OR org_id IS NULL)`, [req.params.id, orgId]);
+      if (!era) return res.status(404).json({ error: "ERA not found" });
+      const { rows: lines } = await db.query(
+        `SELECT el.*, c.id as matched_claim_id FROM era_lines el LEFT JOIN claims c ON el.claim_id = c.id WHERE el.era_id = $1 ORDER BY el.created_at`,
+        [req.params.id]
+      );
+      res.json({ ...era, lines });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/billing/eras/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { action } = req.body;
+      const { rows: [era] } = await db.query(`SELECT * FROM era_batches WHERE id = $1 AND (org_id = $2 OR org_id IS NULL)`, [req.params.id, orgId]);
+      if (!era) return res.status(404).json({ error: "ERA not found" });
+
+      if (action === "post") {
+        const { rows: lines } = await db.query(`SELECT * FROM era_lines WHERE era_id = $1`, [req.params.id]);
+        for (const line of lines) {
+          if (line.claim_id && line.paid_amount > 0) {
+            await db.query(`UPDATE claims SET status = 'paid', updated_at = NOW() WHERE id = $1`, [line.claim_id]);
+            await db.query(
+              `INSERT INTO claim_events (id, claim_id, type, notes) VALUES ($1, $2, 'Payment', $3)`,
+              [crypto.randomUUID(), line.claim_id, `ERA payment posted: $${line.paid_amount}`]
+            );
+          }
+          await db.query(`UPDATE era_lines SET status = 'posted' WHERE id = $1`, [line.id]);
+        }
+        await db.query(`UPDATE era_batches SET status = 'posted' WHERE id = $1`, [req.params.id]);
+      } else if (action === "review") {
+        await db.query(`UPDATE era_batches SET status = 'needs_review' WHERE id = $1`, [req.params.id]);
+      } else if (action === "skip") {
+        await db.query(`UPDATE era_batches SET status = 'skipped' WHERE id = $1`, [req.params.id]);
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Follow-Up Work Queue ───────────────────────────────────────────────────
+  app.get("/api/billing/follow-up", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const params: any[] = [];
+      let idx = 1;
+      let query = `
+        SELECT c.*,
+          COALESCE(p.first_name || ' ' || p.last_name, l.name, 'Unknown') as patient_name,
+          p.id as patient_record_id,
+          py.name as payer_display,
+          EXTRACT(DAY FROM NOW() - c.service_date)::int as days_outstanding,
+          (SELECT note_text FROM claim_follow_up_notes WHERE claim_id = c.id ORDER BY created_at DESC LIMIT 1) as last_note,
+          (SELECT created_at FROM claim_follow_up_notes WHERE claim_id = c.id ORDER BY created_at DESC LIMIT 1) as last_note_at
+        FROM claims c
+        LEFT JOIN patients p ON c.patient_id = p.id
+        LEFT JOIN leads l ON p.lead_id = l.id
+        LEFT JOIN payers py ON c.payer_id = py.id
+        WHERE c.status NOT IN ('paid', 'draft', 'void')
+      `;
+      if (orgId) { query += ` AND (c.organization_id = $${idx} OR c.organization_id IS NULL)`; params.push(orgId); idx++; }
+      query += ` ORDER BY c.follow_up_date ASC NULLS LAST, days_outstanding DESC LIMIT 500`;
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/follow-up-notes", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { claim_id, note_text } = req.body;
+      if (!claim_id || !note_text) return res.status(400).json({ error: "claim_id and note_text required" });
+      const user = req.user as any;
+      const { rows: [note] } = await db.query(
+        `INSERT INTO claim_follow_up_notes (id, claim_id, org_id, user_id, user_name, note_text) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [crypto.randomUUID(), claim_id, orgId, user?.id || null, user?.name || null, note_text]
+      );
+      res.json(note);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/follow-up-notes/:claimId", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `SELECT * FROM claim_follow_up_notes WHERE claim_id = $1 ORDER BY created_at DESC`,
+        [req.params.claimId]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/follow-up-notes/copy-to-patient", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { source_claim_id, note_text } = req.body;
+      if (!source_claim_id || !note_text) return res.status(400).json({ error: "source_claim_id and note_text required" });
+      const user = req.user as any;
+      const { rows: sourceClaim } = await db.query(`SELECT patient_id FROM claims WHERE id = $1`, [source_claim_id]);
+      if (!sourceClaim[0]) return res.status(404).json({ error: "Source claim not found" });
+      const patientId = sourceClaim[0].patient_id;
+      const { rows: unpaidClaims } = await db.query(
+        `SELECT id FROM claims WHERE patient_id = $1 AND id != $2 AND status NOT IN ('paid','draft','void') AND (organization_id = $3 OR organization_id IS NULL)`,
+        [patientId, source_claim_id, orgId]
+      );
+      let count = 0;
+      for (const claim of unpaidClaims) {
+        await db.query(
+          `INSERT INTO claim_follow_up_notes (id, claim_id, org_id, user_id, user_name, note_text) VALUES ($1,$2,$3,$4,$5,$6)`,
+          [crypto.randomUUID(), claim.id, orgId, user?.id || null, user?.name || null, note_text]
+        );
+        count++;
+      }
+      res.json({ copied: count });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Letter Generators ──────────────────────────────────────────────────────
+  app.get("/api/billing/claims/:id/letter-data", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { rows: [claim] } = await db.query(`SELECT * FROM claims WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`, [req.params.id, orgId]);
+      if (!claim) return res.status(404).json({ error: "Claim not found" });
+
+      const [patientRes, settingsRes, payerRes, eventsRes, denialRes] = await Promise.all([
+        db.query(`SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`, [claim.patient_id]),
+        db.query(`SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId]),
+        db.query(`SELECT * FROM payers WHERE id = $1 OR LOWER(name) = LOWER($2) LIMIT 1`, [claim.payer_id, claim.payer]),
+        db.query(`SELECT * FROM claim_events WHERE claim_id = $1 ORDER BY timestamp DESC`, [req.params.id]),
+        db.query(`SELECT d.*, cc.description as carc_desc FROM denials d LEFT JOIN carc_codes cc ON d.denial_reason_text = cc.code WHERE d.claim_id = $1 ORDER BY d.created_at DESC LIMIT 1`, [req.params.id]),
+      ]);
+
+      const patient = patientRes.rows[0];
+      const settings = settingsRes.rows[0];
+      const payer = payerRes.rows[0];
+      const events = eventsRes.rows;
+      const denial = denialRes.rows[0];
+
+      const submissionEvent = events.find((e: any) => e.type === 'Submitted' || e.type === 'submission');
+      const denialEvent = events.find((e: any) => e.type === 'Denied' || e.type === 'StatusChange' && e.notes?.includes('denied'));
+      const tcn = claim.availity_icn || submissionEvent?.notes?.match(/TCN[:\s]+(\S+)/i)?.[1] || null;
+
+      res.json({
+        claim,
+        patient: { ...patient, name: patient ? `${patient.first_name || ''} ${patient.last_name || patient.lead_name || ''}`.trim() : 'Unknown' },
+        practice: settings,
+        payer,
+        tcn,
+        submissionDate: submissionEvent?.timestamp || claim.created_at,
+        denialDate: denialEvent?.timestamp || null,
+        denialCode: denial?.denial_reason_text || null,
+        denialDescription: denial?.carc_desc || denial?.denial_reason_text || null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/intake/dashboard/stats", requireRole("admin", "intake"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
@@ -795,7 +1156,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/dashboard/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const [pipelineResult, staleDraftsResult, highRiskResult, timelyResult, recentPatientsResult, recentClaimsResult] = await Promise.all([
+      const [pipelineResult, staleDraftsResult, highRiskResult, timelyResult, recentPatientsResult, recentClaimsResult, fprrResult, arDaysResult] = await Promise.all([
         db.query(`
           SELECT
             COUNT(*) FILTER (WHERE status = 'paid') as paid_count,
@@ -805,7 +1166,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             COUNT(*) FILTER (WHERE status = 'draft') as draft_count,
             COALESCE(SUM(amount) FILTER (WHERE status = 'draft'), 0) as draft_amount,
             COUNT(*) FILTER (WHERE status IN ('denied','suspended')) as denied_count,
-            COALESCE(SUM(amount) FILTER (WHERE status IN ('denied','suspended')), 0) as denied_amount
+            COALESCE(SUM(amount) FILTER (WHERE status IN ('denied','suspended')), 0) as denied_amount,
+            COUNT(*) FILTER (WHERE status NOT IN ('draft')) as total_submitted,
+            COUNT(*) FILTER (WHERE status IN ('denied','suspended')) as total_denied
           FROM claims
         `),
         db.query(`SELECT COUNT(*)::int as count FROM claims WHERE status = 'draft' AND created_at < NOW() - INTERVAL '7 days'`),
@@ -842,9 +1205,31 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           ORDER BY c.created_at DESC
           LIMIT 10
         `),
+        db.query(`
+          SELECT
+            COUNT(*) FILTER (WHERE status NOT IN ('draft')) as total_submitted,
+            COUNT(*) FILTER (WHERE status = 'paid') as total_paid,
+            COUNT(*) FILTER (WHERE status IN ('denied','suspended')) as total_denied
+          FROM claims
+        `),
+        db.query(`
+          SELECT
+            COALESCE(AVG(EXTRACT(DAY FROM NOW() - service_date)), 0)::numeric(5,1) as avg_ar_days
+          FROM claims
+          WHERE status NOT IN ('paid','draft','void')
+            AND service_date IS NOT NULL
+        `),
       ]);
 
       const p = pipelineResult.rows[0];
+      const fpr = fprrResult.rows[0];
+      const totalSubmitted = parseInt(fpr.total_submitted) || 0;
+      const totalPaid = parseInt(fpr.total_paid) || 0;
+      const totalDenied = parseInt(fpr.total_denied) || 0;
+      const fprrValue = totalSubmitted > 0 ? Math.round(((totalSubmitted - totalDenied) / totalSubmitted) * 100) : null;
+      const arDays = parseFloat(arDaysResult.rows[0]?.avg_ar_days) || 0;
+      const denialRate = totalSubmitted > 0 ? Math.round((totalDenied / totalSubmitted) * 100) : 0;
+
       res.json({
         pipeline: {
           paid: { count: parseInt(p.paid_count), amount: parseFloat(p.paid_amount) },
@@ -857,6 +1242,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           staleDrafts: staleDraftsResult.rows[0].count,
           timelyFilingRisk: timelyResult.rows[0].count,
           highRiskClaims: highRiskResult.rows[0].count,
+        },
+        benchmarks: {
+          arDays: Math.round(arDays),
+          denialRate,
+          fprrValue,
         },
         recentPatients: recentPatientsResult.rows,
         recentClaims: recentClaimsResult.rows,
@@ -1079,6 +1469,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         providerId: "provider_id", serviceDate: "service_date", placeOfService: "place_of_service",
         icd10Primary: "icd10_primary", icd10Secondary: "icd10_secondary", authorizationNumber: "authorization_number",
         chargeOverridden: "charge_overridden", reason: "reason", nextStep: "next_step",
+        claimFrequencyCode: "claim_frequency_code", origClaimNumber: "orig_claim_number",
+        homeboundIndicator: "homebound_indicator", orderingProviderId: "ordering_provider_id",
+        delayReasonCode: "delay_reason_code", followUpDate: "follow_up_date", followUpStatus: "follow_up_status",
       };
       const fields: string[] = [];
       const values: any[] = [];
@@ -1428,6 +1821,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
       const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
+      // Fetch ordering provider if specified
+      let orderingProv: { first_name: string; last_name: string; npi: string } | null = null;
+      if (c.ordering_provider_id) {
+        const opResult = await db.query("SELECT first_name, last_name, npi FROM providers WHERE id = $1", [c.ordering_provider_id]);
+        if (opResult.rows.length) orderingProv = opResult.rows[0];
+      }
+
       const edi = generate837P({
         claim: {
           id: c.id,
@@ -1437,6 +1837,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           auth_number: c.authorization_number || null,
           payer: c.payer || payerInfo.name,
           amount: Number(c.amount) || 0,
+          claim_frequency_code: c.claim_frequency_code || "1",
+          orig_claim_number: c.orig_claim_number || null,
+          homebound_indicator: !!c.homebound_indicator,
+          delay_reason_code: c.delay_reason_code || null,
           service_lines: serviceLines,
           icd10_codes: icd10Codes.length ? icd10Codes : ["Z00.00"],
         },
@@ -1469,6 +1873,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           npi: prov.npi || ps.primary_npi || "0000000000",
           taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
         },
+        ordering_provider: orderingProv,
         payer: payerInfo,
       });
 

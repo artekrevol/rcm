@@ -89,6 +89,7 @@ interface ServiceLine {
   code: string;
   description: string;
   modifier: string;
+  diagnosisPointers: string;
   unitType: string;
   unitIntervalMinutes: number | null;
   hours: string;
@@ -103,12 +104,35 @@ interface ServiceLine {
   isAverageRate: boolean;
 }
 
+const CLAIM_FREQUENCY_CODES = [
+  { value: "1", label: "1 – Original claim" },
+  { value: "7", label: "7 – Replacement of prior claim" },
+  { value: "8", label: "8 – Void/cancel of prior claim" },
+];
+
+const DELAY_REASON_CODES = [
+  { value: "none", label: "None" },
+  { value: "1", label: "1 – Proof of eligibility unknown" },
+  { value: "2", label: "2 – Litigation" },
+  { value: "3", label: "3 – Authorization delays" },
+  { value: "4", label: "4 – Delay in certifying provider" },
+  { value: "5", label: "5 – Delay in supplying billing forms" },
+  { value: "6", label: "6 – Delay in delivering dental models" },
+  { value: "7", label: "7 – Third party processing delay" },
+  { value: "8", label: "8 – Administrative delay in review" },
+  { value: "9", label: "9 – Original claim rejected or denied" },
+  { value: "10", label: "10 – Administration delay in prior auth" },
+  { value: "11", label: "11 – Other" },
+  { value: "15", label: "15 – Natural disaster" },
+];
+
 function emptyLine(): ServiceLine {
   return {
-    code: "", description: "", modifier: "", unitType: "per_visit",
-    unitIntervalMinutes: null, hours: "", units: "1", ratePerUnit: "",
-    totalCharge: "", chargeOverridden: false, requiresModifier: false,
-    manualEntry: false, vaRate: null, locationName: null, isAverageRate: false,
+    code: "", description: "", modifier: "", diagnosisPointers: "A",
+    unitType: "per_visit", unitIntervalMinutes: null, hours: "", units: "1",
+    ratePerUnit: "", totalCharge: "", chargeOverridden: false,
+    requiresModifier: false, manualEntry: false, vaRate: null,
+    locationName: null, isAverageRate: false,
   };
 }
 
@@ -561,15 +585,28 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
         </div>
       )}
 
-      <div className="space-y-1.5">
-        <Label>Modifier</Label>
-        <Input
-          value={line.modifier}
-          onChange={(e) => onChange(index, { modifier: e.target.value.toUpperCase() })}
-          placeholder="Optional (e.g. GT, 59)"
-          className="w-40 font-mono"
-          data-testid={`input-line-modifier-${index}`}
-        />
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Modifier</Label>
+          <Input
+            value={line.modifier}
+            onChange={(e) => onChange(index, { modifier: e.target.value.toUpperCase() })}
+            placeholder="Optional (e.g. GT, 59)"
+            className="font-mono"
+            data-testid={`input-line-modifier-${index}`}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd, D=3rd">DX Pointers <span className="text-xs text-muted-foreground">(A/AB/ABCD)</span></Label>
+          <Input
+            value={line.diagnosisPointers}
+            onChange={(e) => onChange(index, { diagnosisPointers: e.target.value.toUpperCase().replace(/[^ABCD]/g, "") })}
+            placeholder="A"
+            maxLength={4}
+            className="font-mono w-24"
+            data-testid={`input-line-dx-pointers-${index}`}
+          />
+        </div>
       </div>
 
       {line.code && (
@@ -793,6 +830,11 @@ export default function ClaimWizard() {
   const [authNumber, setAuthNumber] = useState("");
   const [saveAuthToPatient, setSaveAuthToPatient] = useState(false);
   const [serviceDateError, setServiceDateError] = useState("");
+  const [claimFrequencyCode, setClaimFrequencyCode] = useState("1");
+  const [origClaimNumber, setOrigClaimNumber] = useState("");
+  const [homeboundIndicator, setHomeboundIndicator] = useState(false);
+  const [orderingProviderId, setOrderingProviderId] = useState("");
+  const [delayReasonCode, setDelayReasonCode] = useState("none");
 
   const [riskResult, setRiskResult] = useState<{ riskScore: number; readinessStatus: string; factors: string[] } | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -994,6 +1036,7 @@ export default function ClaimWizard() {
       hcpcs_code: l.code,
       description: l.description,
       modifier: l.modifier || null,
+      diagnosis_pointer: l.diagnosisPointers || "A",
       unit_type: l.unitType,
       unit_interval_minutes: l.unitIntervalMinutes,
       units: parseInt(l.units) || 0,
@@ -1015,6 +1058,11 @@ export default function ClaimWizard() {
       icd10Secondary: icd10Secondary.filter((d) => d.code).map((d) => d.code),
       authorizationNumber: authNumber || null,
       chargeOverridden: serviceLines.some((l) => l.chargeOverridden),
+      claimFrequencyCode: claimFrequencyCode || "1",
+      origClaimNumber: origClaimNumber || null,
+      homeboundIndicator,
+      orderingProviderId: orderingProviderId || null,
+      delayReasonCode: (delayReasonCode && delayReasonCode !== "none") ? delayReasonCode : null,
     };
   }
 
@@ -1307,6 +1355,82 @@ export default function ClaimWizard() {
                   <label htmlFor="save-auth" className="text-sm">Save to patient profile</label>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader><CardTitle>Additional Billing Info</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Claim Frequency Code</Label>
+                  <Select value={claimFrequencyCode} onValueChange={setClaimFrequencyCode}>
+                    <SelectTrigger data-testid="select-frequency-code">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CLAIM_FREQUENCY_CODES.map((c) => (
+                        <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Delay Reason Code</Label>
+                  <Select value={delayReasonCode} onValueChange={setDelayReasonCode}>
+                    <SelectTrigger data-testid="select-delay-reason">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DELAY_REASON_CODES.map((c) => (
+                        <SelectItem key={c.value || "none"} value={c.value}>{c.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {(claimFrequencyCode === "7" || claimFrequencyCode === "8") && (
+                <div className="space-y-1.5">
+                  <Label>Original Claim Number (ICN/TCN) <span className="text-destructive">*</span></Label>
+                  <Input
+                    value={origClaimNumber}
+                    onChange={(e) => setOrigClaimNumber(e.target.value)}
+                    placeholder="Enter original claim number..."
+                    data-testid="input-orig-claim-number"
+                  />
+                  <p className="text-xs text-muted-foreground">Required for replacement or void claims (CLM05-3)</p>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label>Ordering Provider <span className="text-xs text-muted-foreground">(if different from rendering)</span></Label>
+                <Select value={orderingProviderId || "__none__"} onValueChange={(v) => setOrderingProviderId(v === "__none__" ? "" : v)}>
+                  <SelectTrigger data-testid="select-ordering-provider">
+                    <SelectValue placeholder="Same as rendering provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Same as rendering provider</SelectItem>
+                    {providers.map((p: any) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.first_name} {p.last_name}{p.credentials ? `, ${p.credentials}` : ""} — NPI: {p.npi}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/30">
+                <Checkbox
+                  checked={homeboundIndicator}
+                  onCheckedChange={(c) => setHomeboundIndicator(c as boolean)}
+                  id="homebound-indicator"
+                  data-testid="checkbox-homebound"
+                />
+                <div>
+                  <label htmlFor="homebound-indicator" className="text-sm font-medium cursor-pointer">
+                    Patient is homebound (CLM10)
+                  </label>
+                  <p className="text-xs text-muted-foreground">Required for VA home health and certain Medicare claims</p>
+                </div>
+              </div>
             </CardContent>
           </Card>
 

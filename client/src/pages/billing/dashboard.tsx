@@ -13,6 +13,9 @@ import {
   Plus,
   ChevronRight,
   User,
+  TrendingUp,
+  TrendingDown,
+  Activity,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { MetricCard } from "@/components/metric-card";
@@ -68,6 +71,7 @@ export default function BillingDashboard() {
 
   const pipeline = stats?.pipeline || { paid: { count: 0, amount: 0 }, inProcess: { count: 0, amount: 0 }, draft: { count: 0, amount: 0 }, denied: { count: 0, amount: 0 } };
   const alerts = stats?.alerts || { deniedClaims: { count: 0, amount: 0 }, staleDrafts: 0, timelyFilingRisk: 0, highRiskClaims: 0 };
+  const benchmarks = stats?.benchmarks || { arDays: 0, denialRate: 0, fprrValue: 0 };
   const recentPatients = stats?.recentPatients || [];
   const recentClaims = stats?.recentClaims || [];
 
@@ -174,6 +178,62 @@ export default function BillingDashboard() {
             </CardContent>
           </Card>
         </Link>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4" data-testid="section-benchmarks">
+        <Card>
+          <CardContent className="p-4 flex items-center gap-4">
+            <div className="h-12 w-12 rounded-xl bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
+              <Activity className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">A/R Days</p>
+              <p className="text-2xl font-bold" data-testid="text-ar-days">{benchmarks.arDays?.toFixed(1) ?? "—"}</p>
+              <p className="text-xs text-muted-foreground">Target: &lt;45 days</p>
+            </div>
+            {benchmarks.arDays > 0 && (
+              <div className={`ml-auto shrink-0 ${benchmarks.arDays <= 45 ? "text-green-600" : "text-red-600"}`}>
+                {benchmarks.arDays <= 45 ? <TrendingDown className="h-5 w-5" /> : <TrendingUp className="h-5 w-5" />}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-4 flex items-center gap-4">
+            <div className="h-12 w-12 rounded-xl bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
+              <XCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Denial Rate</p>
+              <p className="text-2xl font-bold" data-testid="text-denial-rate">{benchmarks.denialRate?.toFixed(1) ?? "—"}%</p>
+              <p className="text-xs text-muted-foreground">Target: &lt;5%</p>
+            </div>
+            {benchmarks.denialRate > 0 && (
+              <div className={`ml-auto shrink-0 ${benchmarks.denialRate <= 5 ? "text-green-600" : "text-red-600"}`}>
+                {benchmarks.denialRate <= 5 ? <TrendingDown className="h-5 w-5" /> : <TrendingUp className="h-5 w-5" />}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-4 flex items-center gap-4">
+            <div className="h-12 w-12 rounded-xl bg-green-100 dark:bg-green-900/30 flex items-center justify-center shrink-0">
+              <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">FPRR</p>
+              <p className="text-2xl font-bold" data-testid="text-fprr">{benchmarks.fprrValue?.toFixed(1) ?? "—"}%</p>
+              <p className="text-xs text-muted-foreground">First Pass Resolution Rate</p>
+            </div>
+            {benchmarks.fprrValue > 0 && (
+              <div className={`ml-auto shrink-0 ${benchmarks.fprrValue >= 90 ? "text-green-600" : "text-yellow-600"}`}>
+                {benchmarks.fprrValue >= 90 ? <TrendingUp className="h-5 w-5" /> : <TrendingDown className="h-5 w-5" />}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {recentPatients.length > 0 && (

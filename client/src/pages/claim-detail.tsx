@@ -66,6 +66,8 @@ export default function ClaimDetailPage() {
   const [ediValidating, setEdiValidating] = useState(false);
   const [ediValidation, setEdiValidation] = useState<EdiValidation | null>(null);
   const [ediDownloading, setEdiDownloading] = useState(false);
+  const [timelinessPdfLoading, setTimelinessPdfLoading] = useState(false);
+  const [appealPdfLoading, setAppealPdfLoading] = useState(false);
 
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
@@ -244,6 +246,68 @@ export default function ClaimDetailPage() {
                 }}
               >
                 {ediValidating ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Checking…</> : "837P EDI file — for Office Ally / electronic submission"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                data-testid="menu-timely-filing"
+                disabled={timelinessPdfLoading}
+                onClick={async () => {
+                  if (!id) return;
+                  setTimelinessPdfLoading(true);
+                  try {
+                    const res = await fetch(`/api/billing/claims/${id}/letter-data`, { credentials: "include" });
+                    if (!res.ok) throw new Error("Failed to fetch letter data");
+                    const letterData = await res.json();
+                    const { generateTimelinessPDF } = await import('@/lib/generate-letters');
+                    const pdfBytes = await generateTimelinessPDF(letterData);
+                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `ProofOfTimelyFiling-${letterData.patient?.full_name?.replace(/\s+/g, '_') || 'claim'}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    toast({ title: "Proof of timely filing downloaded." });
+                  } catch (err: any) {
+                    toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
+                  } finally {
+                    setTimelinessPdfLoading(false);
+                  }
+                }}
+              >
+                {timelinessPdfLoading ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Generating…</> : "Proof of timely filing letter"}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                data-testid="menu-appeal-letter"
+                disabled={appealPdfLoading}
+                onClick={async () => {
+                  if (!id) return;
+                  setAppealPdfLoading(true);
+                  try {
+                    const res = await fetch(`/api/billing/claims/${id}/letter-data`, { credentials: "include" });
+                    if (!res.ok) throw new Error("Failed to fetch letter data");
+                    const letterData = await res.json();
+                    const { generateAppealLetterPDF } = await import('@/lib/generate-letters');
+                    const pdfBytes = await generateAppealLetterPDF(letterData);
+                    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `AppealLetter-${letterData.patient?.full_name?.replace(/\s+/g, '_') || 'claim'}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    toast({ title: "Appeal letter downloaded." });
+                  } catch (err: any) {
+                    toast({ title: "PDF generation failed", description: err.message, variant: "destructive" });
+                  } finally {
+                    setAppealPdfLoading(false);
+                  }
+                }}
+              >
+                {appealPdfLoading ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Generating…</> : "Appeal letter — dispute denied claim"}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

@@ -7,6 +7,10 @@ export interface EDI837PInput {
     auth_number: string | null;
     payer: string;
     amount: number;
+    claim_frequency_code?: string | null;
+    orig_claim_number?: string | null;
+    homebound_indicator?: boolean | null;
+    delay_reason_code?: string | null;
     service_lines: Array<{
       hcpcs_code: string;
       units: number;
@@ -46,6 +50,11 @@ export interface EDI837PInput {
     npi: string;
     taxonomy_code: string;
   };
+  ordering_provider?: {
+    first_name: string;
+    last_name: string;
+    npi: string;
+  } | null;
   payer: {
     name: string;
     payer_id: string;
@@ -86,7 +95,8 @@ function mapSex(sex?: string): string {
 }
 
 export function generate837P(input: EDI837PInput): string {
-  const { claim, patient, practice, provider, payer } = input;
+  const { claim, patient, practice, provider, ordering_provider, payer } = input;
+  const freqCode = claim.claim_frequency_code || "1";
   const now = new Date();
   const date = now.toISOString().slice(0, 10).replace(/-/g, "");
   const time = now.toTimeString().slice(0, 5).replace(":", "");
@@ -156,12 +166,28 @@ export function generate837P(input: EDI837PInput): string {
     (sum, line) => sum + line.charge,
     0
   );
+  // CLM: CLM01=control#, CLM02=charge, CLM05=POS:B:freq, CLM06=provider sig, CLM07=assignment, CLM08=benefits, CLM09=release
   segments.push(
-    `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:1*Y*A*Y*I`
+    `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:${freqCode}*Y*A*Y*I`
   );
+
+  // REF*F8: Original claim ICN/TCN for replacement/void claims
+  if ((freqCode === "7" || freqCode === "8") && claim.orig_claim_number) {
+    segments.push(`REF*F8*${claim.orig_claim_number}`);
+  }
 
   if (claim.auth_number) {
     segments.push(`REF*G1*${claim.auth_number}`);
+  }
+
+  // REF*4N: Reason for late filing (delay reason code)
+  if (claim.delay_reason_code) {
+    segments.push(`REF*4N*${claim.delay_reason_code}`);
+  }
+
+  // NTE: Homebound indicator for VA home health / Medicare
+  if (claim.homebound_indicator) {
+    segments.push(`NTE*ADD*PATIENT IS HOMEBOUND`);
   }
 
   const diagCodes = claim.icd10_codes
@@ -169,10 +195,18 @@ export function generate837P(input: EDI837PInput): string {
     .join("*");
   segments.push(`HI*${diagCodes}`);
 
+  // Loop 2310B: Rendering Provider
   segments.push(
     `NM1*82*1*${provider.last_name}*${provider.first_name}****XX*${provider.npi}`
   );
   segments.push(`PRV*PE*PXC*${provider.taxonomy_code}`);
+
+  // Loop 2310D: Ordering Provider (NM1*DQ) — only if different from rendering
+  if (ordering_provider && ordering_provider.npi !== provider.npi) {
+    segments.push(
+      `NM1*DQ*1*${ordering_provider.last_name}*${ordering_provider.first_name}****XX*${ordering_provider.npi}`
+    );
+  }
 
   claim.service_lines.forEach((line, index) => {
     const lineServiceDate = line.service_date || claim.service_date;

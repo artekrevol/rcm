@@ -145,6 +145,13 @@ export const claims = pgTable("claims", {
   organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at"),
+  claimFrequencyCode: varchar("claim_frequency_code").default("1"),
+  origClaimNumber: varchar("orig_claim_number"),
+  homeboundIndicator: varchar("homebound_indicator").default("Y"),
+  orderingProviderId: varchar("ordering_provider_id"),
+  delayReasonCode: varchar("delay_reason_code"),
+  followUpDate: date("follow_up_date"),
+  followUpStatus: varchar("follow_up_status"),
 });
 
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });
