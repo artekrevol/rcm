@@ -43,12 +43,12 @@ function wrapText(text: string, maxChars = 90): string[] {
   const words = text.split(" ");
   const lines: string[] = [];
   let current = "";
-  for (const w of words) {
-    if ((current + " " + w).trim().length > maxChars) {
+  for (const word of words) {
+    if ((current + " " + word).trim().length > maxChars) {
       if (current) lines.push(current.trim());
-      current = w;
+      current = word;
     } else {
-      current = current ? current + " " + w : w;
+      current = current ? current + " " + word : word;
     }
   }
   if (current) lines.push(current.trim());
@@ -66,6 +66,25 @@ function drawHR(w: PageWriter) {
   w.y -= 8;
 }
 
+function formatPracticeAddress(address: any): string {
+  if (!address) return "";
+  if (typeof address === "string") {
+    try { address = JSON.parse(address); } catch { return address; }
+  }
+  const street = address.street || "";
+  const city = address.city || "";
+  const state = address.state || "";
+  const zip = address.zip || "";
+  if (!street && !city) return "";
+  if (city && state && zip) return `${street ? street + ", " : ""}${city}, ${state} ${zip}`.trim();
+  return [street, city, state, zip].filter(Boolean).join(", ");
+}
+
+function getPatientName(patient: any): string {
+  return patient?.name || patient?.full_name ||
+    (patient?.first_name || patient?.last_name ? `${patient.first_name || ""} ${patient.last_name || ""}`.trim() : "—");
+}
+
 export async function generateTimelinessPDF(letterData: any): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -74,18 +93,21 @@ export async function generateTimelinessPDF(letterData: any): Promise<Uint8Array
 
   const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   const { practice, payer, patient, claim, submissionDate, tcn } = letterData;
+  const practiceAddr = formatPracticeAddress(practice?.address);
 
-  // Header
+  // Header — practice letterhead
   writeLine(w, practice?.practice_name || "Billing Practice", { bold: true, size: 13 });
-  writeLine(w, practice?.phone || "", { size: 10 });
-  writeLine(w, practice?.email || "", { size: 10 });
+  if (practiceAddr) writeLine(w, practiceAddr, { size: 10 });
+  if (practice?.phone) writeLine(w, `Phone: ${practice.phone}`, { size: 10 });
+  if (practice?.email) writeLine(w, `Email: ${practice.email}`, { size: 10 });
   writeBlank(w);
+
   writeLine(w, today, { size: 11 });
   writeBlank(w);
 
-  // Addressee
+  // Addressee — payer
+  writeLine(w, "Claims Appeals Department", { bold: true });
   writeLine(w, payer?.name || "Insurance Payer", { bold: true });
-  if (payer?.address) writeLine(w, payer.address, { size: 10 });
   writeBlank(w);
 
   // Subject
@@ -94,13 +116,14 @@ export async function generateTimelinessPDF(letterData: any): Promise<Uint8Array
   writeBlank(w);
 
   // Claim info block
-  writeLine(w, `Patient Name:          ${patient?.full_name || "—"}`);
+  writeLine(w, `Patient Name:          ${getPatientName(patient)}`);
   writeLine(w, `Member ID:             ${patient?.member_id || "—"}`);
   writeLine(w, `Date of Birth:         ${patient?.dob || "—"}`);
-  writeLine(w, `Service Date:          ${claim?.service_date ? new Date(claim.service_date).toLocaleDateString() : "—"}`);
+  writeLine(w, `Service Date:          ${claim?.service_date ? new Date(claim.service_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "—"}`);
   writeLine(w, `Claim Amount:          $${(claim?.amount || 0).toFixed(2)}`);
   writeLine(w, `Original Submission:   ${submissionDate ? new Date(submissionDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "—"}`);
   if (tcn) writeLine(w, `Transaction Control #: ${tcn}`);
+  if (claim?.authorization_number) writeLine(w, `Authorization Number:  ${claim.authorization_number}`);
   writeBlank(w, 2);
 
   // Body
@@ -125,19 +148,21 @@ export async function generateAppealLetterPDF(letterData: any): Promise<Uint8Arr
 
   const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   const { practice, payer, patient, claim, denialDate, denialCode, denialDescription, submissionDate, tcn } = letterData;
+  const practiceAddr = formatPracticeAddress(practice?.address);
 
-  // Header
+  // Header — practice letterhead
   writeLine(w, practice?.practice_name || "Billing Practice", { bold: true, size: 13 });
-  writeLine(w, practice?.phone || "", { size: 10 });
-  writeLine(w, practice?.email || "", { size: 10 });
+  if (practiceAddr) writeLine(w, practiceAddr, { size: 10 });
+  if (practice?.phone) writeLine(w, `Phone: ${practice.phone}`, { size: 10 });
+  if (practice?.email) writeLine(w, `Email: ${practice.email}`, { size: 10 });
   writeBlank(w);
+
   writeLine(w, today, { size: 11 });
   writeBlank(w);
 
   // Addressee
   writeLine(w, "Appeals Department", { bold: true });
   writeLine(w, payer?.name || "Insurance Payer", { bold: true });
-  if (payer?.address) writeLine(w, payer.address, { size: 10 });
   writeBlank(w);
 
   // Subject
@@ -146,13 +171,14 @@ export async function generateAppealLetterPDF(letterData: any): Promise<Uint8Arr
   writeBlank(w);
 
   // Claim info block
-  writeLine(w, `Patient Name:          ${patient?.full_name || "—"}`);
+  writeLine(w, `Patient Name:          ${getPatientName(patient)}`);
   writeLine(w, `Member ID:             ${patient?.member_id || "—"}`);
   writeLine(w, `Date of Birth:         ${patient?.dob || "—"}`);
-  writeLine(w, `Service Date:          ${claim?.service_date ? new Date(claim.service_date).toLocaleDateString() : "—"}`);
+  writeLine(w, `Service Date:          ${claim?.service_date ? new Date(claim.service_date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "—"}`);
   writeLine(w, `Claim Amount:          $${(claim?.amount || 0).toFixed(2)}`);
   writeLine(w, `Original Submission:   ${submissionDate ? new Date(submissionDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }) : "—"}`);
   if (tcn) writeLine(w, `Transaction Control #: ${tcn}`);
+  if (claim?.authorization_number) writeLine(w, `Authorization Number:  ${claim.authorization_number}`);
   if (denialDate) writeLine(w, `Denial Date:           ${new Date(denialDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`);
   if (denialCode) writeLine(w, `Denial Code:           ${denialCode}`);
   if (denialDescription) writeLine(w, `Denial Reason:         ${denialDescription}`);
@@ -167,9 +193,7 @@ export async function generateAppealLetterPDF(letterData: any): Promise<Uint8Arr
   }
 
   writeParagraph(w, `The services rendered were medically necessary and appropriate for the patient's condition and diagnosis. The treating provider followed all applicable clinical guidelines and documentation requirements. We have attached all supporting documentation including: (1) the complete medical record, (2) the original claim, (3) the explanation of benefits, and (4) any relevant prior authorization documentation.`);
-
   writeParagraph(w, `We request that you overturn the denial and process this claim for payment in accordance with the member's plan benefits and our contractual agreement. If this appeal is not resolved in our favor at this level, we request information regarding the next level of appeal available.`);
-
   writeParagraph(w, `Please acknowledge receipt of this appeal and provide a decision within the timeframe required by your policy and applicable law. If you require additional information or documentation, please contact us promptly at the number above.`);
 
   writeLine(w, "Sincerely,");
@@ -177,7 +201,6 @@ export async function generateAppealLetterPDF(letterData: any): Promise<Uint8Arr
   writeLine(w, practice?.practice_name || "Billing Department", { bold: true });
   writeLine(w, "Medical Billing Department");
 
-  writeLine(w, "", { size: 10 });
   writeBlank(w, 2);
   drawHR(w);
   writeLine(w, "Enclosures: Medical Records, Original Claim, EOB, Prior Authorization (if applicable)", { size: 9 });

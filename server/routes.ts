@@ -518,6 +518,121 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const { seedReferenceTables } = await import("./seeds/reference-tables");
     await seedReferenceTables(pool);
 
+    // ── Fix practice settings address (required for EDI validation + letters) ──
+    await pool.query(`
+      UPDATE practice_settings
+      SET address = '{"street": "4200 Monterey Oaks Blvd Ste 200", "city": "Austin", "state": "TX", "zip": "78749"}'::jsonb
+      WHERE organization_id = 'demo-org-001'
+        AND (address IS NULL
+          OR address::text = '{}'
+          OR address::jsonb->>'street' IS NULL
+          OR address::jsonb->>'street' = ''
+          OR address::jsonb->>'city' = '')
+    `);
+    await pool.query(`
+      UPDATE patients SET sex = 'Female' WHERE member_id = 'VA651254344' AND (sex IS NULL OR sex = '')
+    `);
+
+    // ── Seed demo VA home health claims (Chajinel workflow) ───────────────────
+    const { rows: demoClaimsCheck } = await pool.query(`SELECT COUNT(*)::int as cnt FROM claims WHERE id LIKE 'demo-claim-va-%'`);
+    if (demoClaimsCheck[0].cnt === 0) {
+      const { rows: [vaPayerRow] } = await pool.query(`SELECT id FROM payers WHERE name = 'VA Community Care' LIMIT 1`);
+      const { rows: [vaPatientRow] } = await pool.query(`SELECT id FROM patients WHERE member_id = 'VA651254344' LIMIT 1`);
+      const { rows: providerRows } = await pool.query(`SELECT id FROM providers WHERE organization_id = 'demo-org-001' ORDER BY created_at LIMIT 2`);
+
+      if (vaPayerRow && vaPatientRow && providerRows.length > 0) {
+        const payerId = vaPayerRow.id;
+        const patientId = vaPatientRow.id;
+        const providerId = providerRows[0].id;
+        const orderingProviderId = providerRows.length > 1 ? providerRows[1].id : providerRows[0].id;
+        const g0299x4 = JSON.stringify([{ code: 'G0299', units: 4, charge: 163.56, modifier: '', description: 'Direct skilled nursing services of a registered nurse (RN) in the home, per 15 minutes', diagnosisPointers: 'A' }]);
+        const g0299x8 = JSON.stringify([{ code: 'G0299', units: 8, charge: 327.12, modifier: '', description: 'Direct skilled nursing services of a registered nurse (RN) in the home, per 15 minutes', diagnosisPointers: 'A' }]);
+        const g0162x8 = JSON.stringify([{ code: 'G0162', units: 8, charge: 240.00, modifier: '', description: 'Skilled nursing (RN) for care plan management in the home, per 15 minutes', diagnosisPointers: 'A' }]);
+
+        await pool.query(`
+          INSERT INTO claims (id, encounter_id, patient_id, payer, payer_id, provider_id, ordering_provider_id, service_date,
+            place_of_service, icd10_primary, icd10_secondary, authorization_number, amount, status,
+            risk_score, readiness_status, homebound_indicator, claim_frequency_code,
+            service_lines, cpt_codes, organization_id, availity_icn, submission_method,
+            follow_up_status, created_at, updated_at)
+          VALUES
+            ('demo-claim-va-001', 'demo-enc-001', $1, 'VA Community Care', $2, $3, $4, '2026-01-15', '12',
+              'M79.3', '["Z23"]'::jsonb, 'VA-2026-10001', 163.56, 'paid', 18, 'GREEN',
+              'Y', '1', $5::jsonb, '["G0299"]'::jsonb, 'demo-org-001', '20260116VACCN001',
+              'office_ally', NULL, '2026-01-15 08:00:00', '2026-02-01 10:00:00'),
+            ('demo-claim-va-002', 'demo-enc-002', $1, 'VA Community Care', $2, $3, $4, '2026-02-01', '12',
+              'M79.3', '["Z23"]'::jsonb, 'VA-2026-10002', 163.56, 'denied', 22, 'RED',
+              'Y', '1', $5::jsonb, '["G0299"]'::jsonb, 'demo-org-001', '20260203VACCN002',
+              'office_ally', 'open', '2026-02-01 08:00:00', '2026-03-05 16:00:00'),
+            ('demo-claim-va-003', 'demo-enc-003', $1, 'VA Community Care', $2, $3, $4, '2026-03-10', '12',
+              'M79.3', '["Z23"]'::jsonb, 'VA-2026-10003', 327.12, 'submitted', 15, 'GREEN',
+              'Y', '1', $6::jsonb, '["G0299"]'::jsonb, 'demo-org-001', NULL,
+              'office_ally', NULL, '2026-03-10 08:00:00', '2026-03-11 09:00:00'),
+            ('demo-claim-va-004', 'demo-enc-004', $1, 'VA Community Care', $2, $3, $4, '2026-03-28', '12',
+              'M79.3', '["Z23"]'::jsonb, 'VA-2026-10004', 240.00, 'submitted', 20, 'YELLOW',
+              'Y', '1', $7::jsonb, '["G0162"]'::jsonb, 'demo-org-001', NULL,
+              'office_ally', 'open', '2026-03-28 08:00:00', '2026-03-29 09:00:00')
+          ON CONFLICT (id) DO NOTHING
+        `, [patientId, payerId, providerId, orderingProviderId, g0299x4, g0299x8, g0162x8]);
+
+        await pool.query(`
+          INSERT INTO claim_events (id, claim_id, type, timestamp, notes, organization_id) VALUES
+            ('demo-evt-001', 'demo-claim-va-001', 'Submitted',    '2026-01-16 09:00:00', 'Submitted via Office Ally. ICN: 20260116VACCN001', 'demo-org-001'),
+            ('demo-evt-002', 'demo-claim-va-001', 'Acknowledged', '2026-01-17 14:30:00', '277CA received — Accepted for adjudication', 'demo-org-001'),
+            ('demo-evt-003', 'demo-claim-va-001', 'StatusChange', '2026-02-01 10:15:00', 'Payment posted. Check CHK-20260201-826 · $163.56', 'demo-org-001'),
+            ('demo-evt-004', 'demo-claim-va-002', 'Submitted',    '2026-02-03 08:45:00', 'Submitted via Office Ally. ICN: 20260203VACCN002', 'demo-org-001'),
+            ('demo-evt-005', 'demo-claim-va-002', 'Acknowledged', '2026-02-04 11:00:00', '277CA received — Accepted for adjudication', 'demo-org-001'),
+            ('demo-evt-006', 'demo-claim-va-002', 'Denied',       '2026-03-05 16:20:00', 'Denied — CARC CO-96: Non-covered charge. Service not covered under VA-2026-10002 referral scope.', 'demo-org-001'),
+            ('demo-evt-007', 'demo-claim-va-003', 'Submitted',    '2026-03-11 08:30:00', 'Submitted via Office Ally. ICN: 20260311VACCN003', 'demo-org-001'),
+            ('demo-evt-008', 'demo-claim-va-003', 'Acknowledged', '2026-03-12 13:00:00', '277CA received — Accepted for adjudication', 'demo-org-001'),
+            ('demo-evt-009', 'demo-claim-va-004', 'Submitted',    '2026-03-29 09:00:00', 'Submitted via Office Ally. ICN: 20260329VACCN004', 'demo-org-001')
+          ON CONFLICT (id) DO NOTHING
+        `);
+
+        await pool.query(`
+          INSERT INTO denials (id, claim_id, denial_category, denial_reason_text, payer, cpt_code, root_cause_tag, resolved, created_at, organization_id)
+          VALUES ('demo-denial-001', 'demo-claim-va-002', 'Coverage', 'CO-96', 'VA Community Care', 'G0299', 'non_covered', false, '2026-03-05 16:20:00', 'demo-org-001')
+          ON CONFLICT (id) DO NOTHING
+        `);
+        console.log("Seeded demo VA home health claims");
+      }
+    }
+
+    // ── Seed ERA demo batches (835 remittance data) ────────────────────────────
+    const { rows: eraCheck } = await pool.query(`SELECT COUNT(*)::int as cnt FROM era_batches WHERE id LIKE 'demo-era-%'`);
+    if (eraCheck[0].cnt === 0) {
+      const { rows: [ptRow] } = await pool.query(`SELECT first_name, last_name FROM patients WHERE member_id = 'VA651254344' LIMIT 1`);
+      const patName = ptRow ? `${ptRow.first_name} ${ptRow.last_name}` : 'Megan Perez';
+
+      await pool.query(`
+        INSERT INTO era_batches (id, org_id, payer_name, check_number, payment_date, total_amount, status, created_at)
+        VALUES
+          ('demo-era-001', 'demo-org-001', 'VA Community Care', 'CHK-20260201-826', '2026-02-01', 163.56, 'unposted', NOW()),
+          ('demo-era-002', 'demo-org-001', 'VA Community Care', 'CHK-20260412-827', '2026-04-12', 245.34, 'unposted', NOW()),
+          ('demo-era-003', 'demo-org-001', 'VA Community Care', 'CHK-20260412-828', '2026-04-12', 0.00,   'unposted', NOW())
+        ON CONFLICT (id) DO NOTHING
+      `);
+
+      await pool.query(`
+        INSERT INTO era_lines (id, era_id, claim_id, org_id, patient_name, dos, billed_amount, allowed_amount, paid_amount, service_lines, status, created_at)
+        VALUES
+          ('demo-era-ln-001', 'demo-era-001', 'demo-claim-va-001', 'demo-org-001', $1, '2026-01-15',
+            163.56, 163.56, 163.56,
+            '[{"code":"G0299","units":4,"billed":163.56,"allowed":163.56,"paid":163.56,"adjustments":[]}]'::jsonb,
+            'unposted', NOW()),
+          ('demo-era-ln-002', 'demo-era-002', 'demo-claim-va-003', 'demo-org-001', $1, '2026-03-10',
+            327.12, 245.34, 245.34,
+            '[{"code":"G0299","units":8,"billed":327.12,"allowed":245.34,"paid":245.34,"adjustments":[{"carc":"CO-45","rarc":"N519","amount":81.78,"description":"Charge exceeds fee schedule/maximum allowable or contracted/legislated fee arrangement."}]}]'::jsonb,
+            'unposted', NOW()),
+          ('demo-era-ln-003', 'demo-era-003', 'demo-claim-va-002', 'demo-org-001', $1, '2026-02-01',
+            163.56, 0.00, 0.00,
+            '[{"code":"G0299","units":4,"billed":163.56,"allowed":0.00,"paid":0.00,"adjustments":[{"carc":"CO-96","rarc":"N130","amount":163.56,"description":"Non-covered charge(s). At least one Remark Code must be provided (may include NCPDP Reject Reason Code)."}]}]'::jsonb,
+            'unposted', NOW())
+        ON CONFLICT (id) DO NOTHING
+      `, [patName]);
+      console.log("Seeded demo ERA batches");
+    }
+
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
   }
