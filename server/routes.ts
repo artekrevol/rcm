@@ -164,6 +164,19 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_username VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_password VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_connected BOOLEAN DEFAULT false`);
+    // Sprint-2 schema additions
+    await pool.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_dismissed_at TIMESTAMP`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS default_tos VARCHAR`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS default_ordering_provider_id VARCHAR`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS homebound_default BOOLEAN DEFAULT true`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS exclude_facility BOOLEAN DEFAULT true`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS auto_followup_days INTEGER DEFAULT 30`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_clean BOOLEAN DEFAULT false`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_contractual BOOLEAN DEFAULT false`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_secondary BOOLEAN DEFAULT true`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_refunds BOOLEAN DEFAULT true`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_hold_if_mismatch BOOLEAN DEFAULT true`);
+    await pool.query(`UPDATE payers SET era_auto_post_clean = true, era_auto_post_contractual = true WHERE payer_id = 'VACCN' AND (era_auto_post_clean = false OR era_auto_post_clean IS NULL)`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS denial_patterns (
@@ -848,7 +861,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation, oa_submitter_id, oa_sftp_username, oa_sftp_password } = req.body;
+      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation, oa_submitter_id, oa_sftp_username, oa_sftp_password, defaultTos, defaultOrderingProviderId, homeboundDefault, excludeFacility } = req.body;
       const orgId = getOrgId(req);
       const db = await import("./db").then(m => m.pool);
       const existing = orgId
@@ -860,14 +873,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (oa_submitter_id !== undefined) { query += `, oa_submitter_id=$${params.length + 1}`; params.push(oa_submitter_id); }
         if (oa_sftp_username !== undefined) { query += `, oa_sftp_username=$${params.length + 1}`; params.push(oa_sftp_username); }
         if (oa_sftp_password !== undefined) { query += `, oa_sftp_password=$${params.length + 1}`; params.push(oa_sftp_password); }
+        if (defaultTos !== undefined) { query += `, default_tos=$${params.length + 1}`; params.push(defaultTos || null); }
+        if (defaultOrderingProviderId !== undefined) { query += `, default_ordering_provider_id=$${params.length + 1}`; params.push(defaultOrderingProviderId || null); }
+        if (homeboundDefault !== undefined) { query += `, homebound_default=$${params.length + 1}`; params.push(homeboundDefault); }
+        if (excludeFacility !== undefined) { query += `, exclude_facility=$${params.length + 1}`; params.push(excludeFacility); }
         query += ` WHERE id=$8 RETURNING *`;
         const { rows } = await db.query(query, params);
         res.json(rows[0]);
       } else {
         const { rows } = await db.query(
-          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location, organization_id)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', billingLocation || null, orgId || null]
+          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location, organization_id, default_tos, default_ordering_provider_id, homebound_default, exclude_facility)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', billingLocation || null, orgId || null, defaultTos || null, defaultOrderingProviderId || null, homeboundDefault ?? true, excludeFacility ?? true]
         );
         res.json(rows[0]);
       }
@@ -1081,17 +1098,50 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       if (action === "post") {
         const { rows: lines } = await db.query(`SELECT * FROM era_lines WHERE era_id = $1`, [req.params.id]);
+        const today = new Date().toISOString().slice(0, 10);
         for (const line of lines) {
           if (line.claim_id && line.paid_amount > 0) {
             await db.query(`UPDATE claims SET status = 'paid', updated_at = NOW() WHERE id = $1`, [line.claim_id]);
             await db.query(
               `INSERT INTO claim_events (id, claim_id, type, notes) VALUES ($1, $2, 'Payment', $3)`,
-              [crypto.randomUUID(), line.claim_id, `ERA payment posted: $${line.paid_amount}`]
+              [crypto.randomUUID(), line.claim_id, `ERA payment posted: $${line.paid_amount} from ${era.check_number} on ${today}`]
             );
           }
           await db.query(`UPDATE era_lines SET status = 'posted' WHERE id = $1`, [line.id]);
         }
         await db.query(`UPDATE era_batches SET status = 'posted' WHERE id = $1`, [req.params.id]);
+      } else if (action === "auto-post") {
+        // Auto-posting logic: check payer ERA settings
+        const { rows: lines } = await db.query(`SELECT * FROM era_lines WHERE era_id = $1`, [req.params.id]);
+        // Look up payer by payer_name match
+        const { rows: payerRows } = await db.query(`SELECT * FROM payers WHERE LOWER(name) = LOWER($1) LIMIT 1`, [era.payer_name]);
+        const payer = payerRows[0];
+        if (!payer || !payer.era_auto_post_clean) {
+          await db.query(`UPDATE era_batches SET status = 'needs_review' WHERE id = $1`, [req.params.id]);
+          return res.json({ success: true, autoPosted: false, reason: "Auto-post not enabled for this payer" });
+        }
+        // Check conditions: no denials, no $0 paid lines (unless CO-45 contractual)
+        const hasDenials = lines.some((l: any) => l.paid_amount === 0 && !payer.era_auto_post_contractual);
+        const hasMismatch = payer.era_hold_if_mismatch && lines.some((l: any) => l.paid_amount > 0 && l.paid_amount < l.billed_amount && l.allowed_amount > 0 && Math.abs(l.paid_amount - l.allowed_amount) > 0.01);
+        if (hasDenials || hasMismatch) {
+          await db.query(`UPDATE era_batches SET status = 'needs_review' WHERE id = $1`, [req.params.id]);
+          return res.json({ success: true, autoPosted: false, reason: "ERA held for review: contains denials or payment mismatch" });
+        }
+        const today = new Date().toISOString().slice(0, 10);
+        for (const line of lines) {
+          if (line.claim_id) {
+            if (line.paid_amount > 0) {
+              await db.query(`UPDATE claims SET status = 'paid', updated_at = NOW() WHERE id = $1`, [line.claim_id]);
+            }
+            await db.query(
+              `INSERT INTO claim_events (id, claim_id, type, notes) VALUES ($1, $2, 'Payment', $3)`,
+              [crypto.randomUUID(), line.claim_id, `Payment auto-posted from ERA ${era.check_number} on ${today}`]
+            );
+          }
+          await db.query(`UPDATE era_lines SET status = 'posted' WHERE id = $1`, [line.id]);
+        }
+        await db.query(`UPDATE era_batches SET status = 'auto-posted' WHERE id = $1`, [req.params.id]);
+        return res.json({ success: true, autoPosted: true });
       } else if (action === "review") {
         await db.query(`UPDATE era_batches SET status = 'needs_review' WHERE id = $1`, [req.params.id]);
       } else if (action === "skip") {
@@ -1366,6 +1416,115 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         recentPatients: recentPatientsResult.rows,
         recentClaims: recentClaimsResult.rows,
       });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Onboarding Checklist ───────────────────────────────────────────────────
+  app.get("/api/billing/onboarding-checklist", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+
+      const [psResult, provResult, payerResult, claimResult] = await Promise.all([
+        orgId
+          ? db.query(`SELECT practice_name, address, primary_npi, default_pos FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+          : db.query(`SELECT practice_name, address, primary_npi, default_pos FROM practice_settings LIMIT 1`),
+        orgId
+          ? db.query(`SELECT COUNT(*)::int as cnt FROM providers WHERE is_active = true AND organization_id = $1`, [orgId])
+          : db.query(`SELECT COUNT(*)::int as cnt FROM providers WHERE is_active = true`),
+        // payers is a global reference table — no organization_id
+        db.query(`SELECT COUNT(*)::int as cnt FROM payers WHERE is_active = true`),
+        orgId
+          ? db.query(`SELECT COUNT(*)::int as cnt FROM claims WHERE status != 'draft' AND organization_id = $1`, [orgId])
+          : db.query(`SELECT COUNT(*)::int as cnt FROM claims WHERE status != 'draft'`),
+      ]);
+
+      const ps = psResult.rows[0];
+      const addr = ps?.address && typeof ps.address === 'object' ? ps.address : {};
+      const hasAddr = !!(addr.street && addr.city);
+      const hasPractice = !!(ps?.practice_name && hasAddr);
+      const hasProvider = (provResult.rows[0]?.cnt || 0) > 0;
+      const hasPayer = (payerResult.rows[0]?.cnt || 0) > 0;
+
+      let oaConnected = false;
+      try {
+        if (ps) {
+          const { rows: psRows } = orgId
+            ? await db.query(`SELECT oa_connected, oa_sftp_username FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+            : await db.query(`SELECT oa_connected, oa_sftp_username FROM practice_settings LIMIT 1`);
+          oaConnected = !!(psRows[0]?.oa_connected && psRows[0]?.oa_sftp_username);
+        }
+      } catch { oaConnected = false; }
+
+      const hasClaimDefaults = !!ps?.default_pos;
+      const hasFirstClaim = (claimResult.rows[0]?.cnt || 0) > 0;
+
+      // Check if dismissed
+      let dismissedAt: string | null = null;
+      if (orgId) {
+        const { rows: orgRows } = await db.query(`SELECT onboarding_dismissed_at FROM organizations WHERE id = $1`, [orgId]);
+        dismissedAt = orgRows[0]?.onboarding_dismissed_at || null;
+      }
+
+      const steps = [
+        { id: 1, label: "Add practice information", done: hasPractice, link: "/billing/settings?tab=practice" },
+        { id: 2, label: "Add at least one provider", done: hasProvider, link: "/billing/settings?tab=providers" },
+        { id: 3, label: "Add at least one payer", done: hasPayer, link: "/billing/settings?tab=payers" },
+        { id: 4, label: "Configure Office Ally SFTP credentials", done: oaConnected, link: "/billing/settings?tab=clearinghouse" },
+        { id: 5, label: "Set claim defaults", done: hasClaimDefaults, link: "/billing/settings?tab=claim-defaults" },
+        { id: 6, label: "Submit your first test claim", done: hasFirstClaim, link: "/billing/claims/new" },
+      ];
+
+      const completedCount = steps.filter(s => s.done).length;
+      const allDone = completedCount === steps.length;
+      const dismissed = allDone && dismissedAt
+        ? new Date(dismissedAt).getTime() > Date.now() - 24 * 3600 * 1000
+          ? true // dismissed within 24h: still show success state
+          : false // dismissed >24h ago: hide permanently
+        : false;
+
+      res.json({ steps, completedCount, total: steps.length, allDone, dismissed, dismissedAt });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/onboarding-checklist/dismiss", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      if (orgId) {
+        await db.query(`UPDATE organizations SET onboarding_dismissed_at = NOW() WHERE id = $1`, [orgId]);
+      }
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Denial Recovery Agent ──────────────────────────────────────────────────
+  app.get("/api/billing/claims/:id/denial-recovery", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { rows: [claim] } = await db.query(`SELECT * FROM claims WHERE id = $1`, [req.params.id]);
+      if (!claim || !verifyOrg(claim, req)) return res.status(404).json({ error: "Claim not found" });
+
+      // Fetch denials for this claim
+      const { rows: denials } = await db.query(
+        `SELECT * FROM denials WHERE claim_id = $1 ORDER BY created_at DESC`,
+        [req.params.id]
+      );
+
+      // Also check ERA lines for CARC codes
+      const { rows: eraLines } = await db.query(
+        `SELECT el.*, eb.check_number FROM era_lines el JOIN era_batches eb ON el.era_id = eb.id WHERE el.claim_id = $1 ORDER BY el.created_at DESC LIMIT 5`,
+        [req.params.id]
+      );
+
+      res.json({ claim, denials, eraLines });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2134,11 +2293,32 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       });
 
       if (result.success) {
-        await db.query("UPDATE claims SET status = 'submitted', submission_method = 'office_ally', updated_at = NOW() WHERE id = $1", [c.id]);
+        // Look up payer's auto follow-up days to set follow_up_date
+        let followUpDays = 30;
+        if (c.payer_id) {
+          const { rows: payerFU } = await db.query(`SELECT auto_followup_days FROM payers WHERE id = $1`, [c.payer_id]);
+          if (payerFU.length > 0 && payerFU[0].auto_followup_days != null) {
+            followUpDays = Number(payerFU[0].auto_followup_days);
+          }
+        }
+        const followUpDate = followUpDays > 0
+          ? new Date(Date.now() + followUpDays * 86400000).toISOString().slice(0, 10)
+          : null;
+        const fuSql = followUpDate
+          ? `UPDATE claims SET status = 'submitted', submission_method = 'office_ally', follow_up_date = $2, updated_at = NOW() WHERE id = $1`
+          : `UPDATE claims SET status = 'submitted', submission_method = 'office_ally', updated_at = NOW() WHERE id = $1`;
+        const fuParams = followUpDate ? [c.id, followUpDate] : [c.id];
+        await db.query(fuSql, fuParams);
         await db.query(
           `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
           [crypto.randomUUID(), c.id, "Submitted via Office Ally", `837P submitted: ${result.filename}`]
         );
+        if (followUpDate) {
+          await db.query(
+            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
+            [crypto.randomUUID(), c.id, "Follow-Up Scheduled", `Auto follow-up scheduled for ${followUpDate} (${followUpDays} days from submission)`]
+          );
+        }
         await db.query(
           `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
           [crypto.randomUUID(), c.id, c.patient_id, "edi_submitted", `837P submitted via Office Ally: ${result.filename}`, (req.user as any)?.id || null]
@@ -2286,7 +2466,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.patch("/api/billing/payers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { id } = req.params;
-      const { isActive, name, payerId, timelyFilingDays, authRequired } = req.body;
+      const { isActive, name, payerId, timelyFilingDays, authRequired, autoFollowupDays, eraAutoPostClean, eraAutoPostContractual, eraAutoPostSecondary, eraAutoPostRefunds, eraHoldIfMismatch } = req.body;
       const db = await import("./db").then(m => m.pool);
       const fields: string[] = [];
       const values: any[] = [];
@@ -2296,6 +2476,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (payerId !== undefined) { fields.push(`payer_id = $${idx++}`); values.push(payerId); }
       if (timelyFilingDays !== undefined) { fields.push(`timely_filing_days = $${idx++}`); values.push(timelyFilingDays); }
       if (authRequired !== undefined) { fields.push(`auth_required = $${idx++}`); values.push(authRequired); }
+      if (autoFollowupDays !== undefined) { fields.push(`auto_followup_days = $${idx++}`); values.push(autoFollowupDays); }
+      if (eraAutoPostClean !== undefined) { fields.push(`era_auto_post_clean = $${idx++}`); values.push(eraAutoPostClean); }
+      if (eraAutoPostContractual !== undefined) { fields.push(`era_auto_post_contractual = $${idx++}`); values.push(eraAutoPostContractual); }
+      if (eraAutoPostSecondary !== undefined) { fields.push(`era_auto_post_secondary = $${idx++}`); values.push(eraAutoPostSecondary); }
+      if (eraAutoPostRefunds !== undefined) { fields.push(`era_auto_post_refunds = $${idx++}`); values.push(eraAutoPostRefunds); }
+      if (eraHoldIfMismatch !== undefined) { fields.push(`era_hold_if_mismatch = $${idx++}`); values.push(eraHoldIfMismatch); }
       if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
       values.push(id);
       const { rows } = await db.query(

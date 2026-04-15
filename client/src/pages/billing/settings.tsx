@@ -53,7 +53,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-import { CheckCircle, Send, Wifi } from "lucide-react";
+import { CheckCircle, Send, Wifi, FileText } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -720,13 +720,188 @@ function PracticeInfoTab() {
   );
 }
 
+const TOS_OPTIONS = [
+  { value: "1", label: "1 – Medical Care" },
+  { value: "2", label: "2 – Surgery" },
+  { value: "3", label: "3 – Consultation" },
+  { value: "4", label: "4 – Diagnostic Radiology" },
+  { value: "5", label: "5 – Diagnostic Laboratory" },
+  { value: "6", label: "6 – Radiation Therapy" },
+  { value: "7", label: "7 – Anesthesia" },
+  { value: "8", label: "8 – Assistant at Surgery" },
+  { value: "9", label: "9 – Other Medical" },
+  { value: "0", label: "0 – Blood or Packed Red Cells" },
+];
+
+function ClaimDefaultsTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [initialized, setInitialized] = useState(false);
+  const [form, setForm] = useState({
+    defaultPos: "12",
+    defaultTos: "none",
+    defaultOrderingProviderId: "none",
+    homeboundDefault: true,
+    excludeFacility: true,
+  });
+
+  const { data: settings, isLoading } = useQuery<any>({
+    queryKey: ["/api/billing/practice-settings"],
+  });
+
+  const { data: wizardData } = useQuery<any>({
+    queryKey: ["/api/billing/claims/wizard-data"],
+  });
+  const providers: any[] = wizardData?.providers || [];
+
+  useEffect(() => {
+    if (settings && !initialized) {
+      setForm({
+        defaultPos: settings.default_pos || "12",
+        defaultTos: settings.default_tos || "none",
+        defaultOrderingProviderId: settings.default_ordering_provider_id || "none",
+        homeboundDefault: settings.homebound_default ?? true,
+        excludeFacility: settings.exclude_facility ?? true,
+      });
+      setInitialized(true);
+    }
+  }, [settings, initialized]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const existing = settings || {};
+      const addr = typeof existing.address === "string" ? JSON.parse(existing.address) : existing.address || {};
+      const res = await apiRequest("PUT", "/api/billing/practice-settings", {
+        practiceName: existing.practice_name || "",
+        primaryNpi: existing.primary_npi || null,
+        taxId: existing.tax_id || null,
+        taxonomyCode: existing.taxonomy_code || null,
+        phone: existing.phone || null,
+        defaultPos: existing.default_pos || "12",
+        address: addr,
+        billingLocation: existing.billing_location || null,
+        ...data,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/practice-settings"] });
+      toast({ title: "Claim defaults saved" });
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  function handleSave() {
+    saveMutation.mutate({
+      defaultTos: form.defaultTos === "none" ? null : form.defaultTos,
+      defaultOrderingProviderId: form.defaultOrderingProviderId === "none" ? null : form.defaultOrderingProviderId,
+      homeboundDefault: form.homeboundDefault,
+      excludeFacility: form.excludeFacility,
+    });
+  }
+
+  if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Claim Defaults</CardTitle>
+          <CardDescription>These values pre-populate new claims. Billers can override any field on a per-claim basis.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Default Place of Service</Label>
+              <Select value={form.defaultPos} onValueChange={(v) => setForm({ ...form, defaultPos: v })}>
+                <SelectTrigger data-testid="select-default-pos"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="12">12 — Home</SelectItem>
+                  <SelectItem value="11">11 — Office</SelectItem>
+                  <SelectItem value="13">13 — Assisted Living Facility</SelectItem>
+                  <SelectItem value="10">10 — Telehealth - Patient Home</SelectItem>
+                  <SelectItem value="22">22 — Outpatient Hospital</SelectItem>
+                  <SelectItem value="99">99 — Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Default Type of Service</Label>
+              <Select value={form.defaultTos} onValueChange={(v) => setForm({ ...form, defaultTos: v })}>
+                <SelectTrigger data-testid="select-default-tos"><SelectValue placeholder="No default" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No default</SelectItem>
+                  {TOS_OPTIONS.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Default Ordering Provider</Label>
+            <Select value={form.defaultOrderingProviderId} onValueChange={(v) => setForm({ ...form, defaultOrderingProviderId: v })}>
+              <SelectTrigger data-testid="select-default-ordering-provider"><SelectValue placeholder="No default" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">No default</SelectItem>
+                {providers.filter((p: any) => p.is_active !== false).map((p: any) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.first_name} {p.last_name}{p.credentials ? `, ${p.credentials}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Used as the ordering provider in Box 17/17b of CMS-1500 for home health claims.</p>
+          </div>
+
+          <div className="space-y-4 pt-2">
+            <div className="flex items-center justify-between p-3 rounded-lg border">
+              <div>
+                <p className="text-sm font-medium">Homebound Default</p>
+                <p className="text-xs text-muted-foreground">Pre-check Homebound Indicator = Y on all new claims</p>
+              </div>
+              <Switch
+                checked={form.homeboundDefault}
+                onCheckedChange={(v) => setForm({ ...form, homeboundDefault: v })}
+                data-testid="toggle-homebound-default"
+              />
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg border">
+              <div>
+                <p className="text-sm font-medium">Exclude Facility from Claims</p>
+                <p className="text-xs text-muted-foreground">Home health has no facility — leaves Box 32 blank by default</p>
+              </div>
+              <Switch
+                checked={form.excludeFacility}
+                onCheckedChange={(v) => setForm({ ...form, excludeFacility: v })}
+                data-testid="toggle-exclude-facility"
+              />
+            </div>
+          </div>
+
+          <Button onClick={handleSave} disabled={saveMutation.isPending} data-testid="button-save-claim-defaults">
+            {saveMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Save Claim Defaults
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function PayersTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showDialog, setShowDialog] = useState(false);
   const [editingPayer, setEditingPayer] = useState<any>(null);
   const [form, setForm] = useState({ name: "", payerId: "", timelyFilingDays: "365", authRequired: false });
-  const [editForm, setEditForm] = useState({ payerId: "", timelyFilingDays: "365", authRequired: false });
+  const [editForm, setEditForm] = useState({
+    payerId: "", timelyFilingDays: "365", authRequired: false,
+    autoFollowupDays: "30",
+    eraAutoPostClean: false, eraAutoPostContractual: false,
+    eraAutoPostSecondary: true, eraAutoPostRefunds: true, eraHoldIfMismatch: true,
+  });
   const [payerSearch, setPayerSearch] = useState("");
 
   const { data: payers = [], isLoading } = useQuery<any[]>({
@@ -852,7 +1027,17 @@ function PayersTab() {
                       size="sm"
                       onClick={() => {
                         setEditingPayer(p);
-                        setEditForm({ payerId: p.payer_id || "", timelyFilingDays: String(p.timely_filing_days || 365), authRequired: !!p.auth_required });
+                        setEditForm({
+                          payerId: p.payer_id || "",
+                          timelyFilingDays: String(p.timely_filing_days || 365),
+                          authRequired: !!p.auth_required,
+                          autoFollowupDays: String(p.auto_followup_days ?? 30),
+                          eraAutoPostClean: !!p.era_auto_post_clean,
+                          eraAutoPostContractual: !!p.era_auto_post_contractual,
+                          eraAutoPostSecondary: p.era_auto_post_secondary !== false,
+                          eraAutoPostRefunds: p.era_auto_post_refunds !== false,
+                          eraHoldIfMismatch: p.era_hold_if_mismatch !== false,
+                        });
                       }}
                       data-testid={`button-edit-payer-${p.id}`}
                     >
@@ -880,12 +1065,12 @@ function PayersTab() {
       </div>
 
       <Dialog open={!!editingPayer} onOpenChange={(o) => !o && setEditingPayer(null)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Payer — {editingPayer?.name}</DialogTitle>
             <DialogDescription>Update the EDI payer ID and billing rules for this payer.</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-2">
+          <div className="grid gap-5 py-2">
             <div className="space-y-2">
               <Label>EDI Payer ID</Label>
               <Input
@@ -896,14 +1081,27 @@ function PayersTab() {
               />
               <p className="text-xs text-muted-foreground">This ID is used in the ISA/GS segments of 837P EDI submissions.</p>
             </div>
-            <div className="space-y-2">
-              <Label>Timely Filing (days)</Label>
-              <Input
-                type="number"
-                value={editForm.timelyFilingDays}
-                onChange={(e) => setEditForm({ ...editForm, timelyFilingDays: e.target.value })}
-                data-testid="input-edit-payer-filing-days"
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Timely Filing (days)</Label>
+                <Input
+                  type="number"
+                  value={editForm.timelyFilingDays}
+                  onChange={(e) => setEditForm({ ...editForm, timelyFilingDays: e.target.value })}
+                  data-testid="input-edit-payer-filing-days"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Auto Follow-Up After (days)</Label>
+                <Input
+                  type="number"
+                  value={editForm.autoFollowupDays}
+                  onChange={(e) => setEditForm({ ...editForm, autoFollowupDays: e.target.value })}
+                  placeholder="30"
+                  data-testid="input-edit-payer-followup-days"
+                />
+                <p className="text-xs text-muted-foreground">Days after submission to schedule follow-up</p>
+              </div>
             </div>
             <div className="flex items-center gap-3">
               <Switch
@@ -913,11 +1111,53 @@ function PayersTab() {
               />
               <Label>Prior authorization required</Label>
             </div>
+
+            <div className="border-t pt-4 space-y-3">
+              <p className="text-sm font-semibold">ERA Auto-Posting Rules</p>
+              <p className="text-xs text-muted-foreground">Configure which ERA line types are automatically posted without manual review.</p>
+              {[
+                { key: "eraAutoPostClean", label: "Auto-post clean paid lines", testId: "toggle-era-clean" },
+                { key: "eraAutoPostContractual", label: "Auto-post contractual adjustments (CO-45)", testId: "toggle-era-contractual" },
+                { key: "eraAutoPostSecondary", label: "Auto-post secondary payer credits", testId: "toggle-era-secondary" },
+                { key: "eraAutoPostRefunds", label: "Auto-post refund / credit balance adjustments", testId: "toggle-era-refunds" },
+              ].map(({ key, label, testId }) => (
+                <div key={key} className="flex items-center justify-between px-1">
+                  <span className="text-sm">{label}</span>
+                  <Switch
+                    checked={(editForm as any)[key]}
+                    onCheckedChange={(v) => setEditForm({ ...editForm, [key]: v })}
+                    data-testid={testId}
+                  />
+                </div>
+              ))}
+              <div className="flex items-center justify-between px-1 pt-1 border-t">
+                <div>
+                  <span className="text-sm">Hold ERA if payment differs from allowable</span>
+                  <p className="text-xs text-muted-foreground">Flag for manual review when paid ≠ contracted rate</p>
+                </div>
+                <Switch
+                  checked={editForm.eraHoldIfMismatch}
+                  onCheckedChange={(v) => setEditForm({ ...editForm, eraHoldIfMismatch: v })}
+                  data-testid="toggle-era-hold-mismatch"
+                />
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditingPayer(null)}>Cancel</Button>
             <Button
-              onClick={() => updateMutation.mutate({ id: editingPayer?.id, payerId: editForm.payerId, timelyFilingDays: parseInt(editForm.timelyFilingDays) || 365, authRequired: editForm.authRequired })}
+              onClick={() => updateMutation.mutate({
+                id: editingPayer?.id,
+                payerId: editForm.payerId,
+                timelyFilingDays: parseInt(editForm.timelyFilingDays) || 365,
+                authRequired: editForm.authRequired,
+                autoFollowupDays: parseInt(editForm.autoFollowupDays) || 30,
+                eraAutoPostClean: editForm.eraAutoPostClean,
+                eraAutoPostContractual: editForm.eraAutoPostContractual,
+                eraAutoPostSecondary: editForm.eraAutoPostSecondary,
+                eraAutoPostRefunds: editForm.eraAutoPostRefunds,
+                eraHoldIfMismatch: editForm.eraHoldIfMismatch,
+              })}
               disabled={updateMutation.isPending}
               data-testid="button-save-edit-payer"
             >
@@ -1439,7 +1679,7 @@ function ClearinghouseTab() {
 export default function BillingSettings() {
   const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const tabFromUrl = searchParams.get("tab");
-  const defaultTab = tabFromUrl && ["providers", "practice", "payers", "rates", "clearinghouse"].includes(tabFromUrl) ? tabFromUrl : "providers";
+  const defaultTab = tabFromUrl && ["providers", "practice", "payers", "rates", "clearinghouse", "claim-defaults"].includes(tabFromUrl) ? tabFromUrl : "providers";
 
   return (
     <div className="p-6 space-y-6">
@@ -1449,7 +1689,7 @@ export default function BillingSettings() {
       </div>
 
       <Tabs defaultValue={defaultTab} className="space-y-4">
-        <TabsList data-testid="tabs-settings">
+        <TabsList data-testid="tabs-settings" className="flex-wrap h-auto gap-1">
           <TabsTrigger value="providers" data-testid="tab-providers">
             <Users className="h-4 w-4 mr-2" />
             Providers
@@ -1461,6 +1701,10 @@ export default function BillingSettings() {
           <TabsTrigger value="payers" data-testid="tab-payers">
             <CreditCard className="h-4 w-4 mr-2" />
             Payers
+          </TabsTrigger>
+          <TabsTrigger value="claim-defaults" data-testid="tab-claim-defaults">
+            <FileText className="h-4 w-4 mr-2" />
+            Claim Defaults
           </TabsTrigger>
           <TabsTrigger value="rates" data-testid="tab-rates">
             <DollarSign className="h-4 w-4 mr-2" />
@@ -1480,6 +1724,9 @@ export default function BillingSettings() {
         </TabsContent>
         <TabsContent value="payers">
           <PayersTab />
+        </TabsContent>
+        <TabsContent value="claim-defaults">
+          <ClaimDefaultsTab />
         </TabsContent>
         <TabsContent value="rates">
           <RateTablesTab />

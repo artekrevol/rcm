@@ -1,0 +1,207 @@
+```
+You are continuing development on ClaimShield 2.0. All six items from the previous sprint are confirmed built. Do not modify any existing functionality unless explicitly instructed below. Work through each item in order and confirm completion before moving to the next.
+
+---
+
+## ITEM 1 — Practice-Level Claim Defaults
+
+Add a "Claim Defaults" tab to the existing Practice Settings page (/billing/settings, Practice tab).
+
+**Fields to add:**
+
+- Default Place of Service — dropdown populated from the existing pos_codes table (same picker used in claim wizard)
+- Default Type of Service — dropdown with standard CMS type of service codes:
+  - 1 - Medical Care
+  - 2 - Surgery
+  - 3 - Consultation
+  - 4 - Diagnostic Radiology
+  - 5 - Diagnostic Laboratory
+  - 6 - Radiation Therapy
+  - 7 - Anesthesia
+  - 8 - Assistant at Surgery
+  - 9 - Other Medical
+  - 0 - Blood or Packed Red Cells
+- Default Ordering Provider — provider picker (same lookup used in claim wizard), selects from the org's provider list
+- Homebound Default — toggle, default ON for home health
+- Exclude Facility from Claims — toggle, default ON (home health has no facility)
+
+**Behavior:**
+When a new claim is created, these defaults auto-populate the corresponding fields in the claim wizard. The biller can override any field on a per-claim basis without affecting the saved defaults.
+
+**Database:**
+Add these columns to the existing practices table (or create a practice_claim_defaults table with org_id, practice_id, and one column per field above). Use NULL to indicate "no default set" so the claim wizard only pre-fills when a default exists.
+
+---
+
+## ITEM 2 — CMS-1500 PDF: Update to Include New Fields
+
+The CMS-1500 PDF generator was built before the 6 new billing fields were added in the last sprint. Update the existing PDF generator to include all new fields in their correct CMS-1500 box positions.
+
+**Fields to add to the PDF output:**
+
+- Box 22 (Resubmission Code): Populate with the Claim Frequency Code (1, 7, or 8)
+- Box 22 (Original Ref. No.): Populate with the Original Claim Number when Frequency = 7 or 8
+- Box 24E (Diagnosis Pointer): Per service line — populate with the DX pointer letters (A, B, C, D) selected for that line
+- Box 17 (Name of Referring Provider or Other Source): Populate with Ordering Provider name when claim type is home health (POS = 12)
+- Box 17a/17b: Populate with Ordering Provider NPI
+- Box 10 (Is patient's condition related to): If Homebound = Yes, ensure Box 10 fields are set correctly per CMS-1500 instructions
+
+Use the existing pdf-lib coordinate system already established in the CMS-1500 generator. Do not rebuild the PDF generator — only add the missing field mappings.
+
+After updating: generate a test PDF from the demo org's existing claim data and confirm all new fields appear in the correct boxes.
+
+---
+
+## ITEM 3 — Per-Payer Auto Follow-Up Date Scheduling
+
+Check whether the "Auto follow-up after X days" feature was implemented in the previous sprint. 
+
+If it was built: verify it fires correctly on claim submission. Specifically — when a claim is submitted via Office Ally SFTP, the follow-up date on that claim should automatically be set to (submission date + payer's configured days). If the payer has no days configured, default to 30 days.
+
+If it was NOT built: implement it now as follows:
+
+**In Payer Settings (existing payer edit dialog):**
+Add one field: "Auto follow-up after X days" — number input, default value 30, minimum 0. A value of 0 means no auto follow-up date is set.
+
+**Trigger:**
+When a claim is successfully submitted to Office Ally (SFTP upload confirmed), look up the claim's primary payer, read the auto follow-up days value, and set claim.follow_up_date = submission_date + X days in the database.
+
+**Edge cases:**
+- If a follow-up date already exists on the claim, overwrite it
+- If the claim is resubmitted to a secondary payer, reset the follow-up date based on the secondary payer's setting
+- If payer setting = 0, do not set a follow-up date
+
+---
+
+## ITEM 4 — ERA Auto-Posting Rules Per Payer
+
+Add ERA auto-posting configuration to the existing Payer Settings.
+
+**In the payer edit dialog, add a new "ERA Settings" section with these toggles:**
+
+All toggles are OFF by default except where noted.
+
+- Auto-post clean ERAs — OFF by default. When ON: ERAs with no errors, no denials, and no $0 allowed lines post automatically without biller review
+- Auto-post secondary payments — ON by default
+- Auto-post contractual adjustments (CO-45, CO-42, CO-97) — OFF by default. When ON: these adjustment codes are automatically written off without biller review
+- Auto-post refunds and reversals — ON by default
+- Hold for review if payment does not match expected amount — ON by default
+
+**Behavior when "Auto-post clean ERAs" is ON for a payer:**
+When an 835 ERA file is received from that payer and it meets all enabled auto-post conditions, the ERA is posted automatically:
+- Payment amounts are applied to the matching claims
+- CO- adjustments flagged for auto-post are written off
+- ERA status is set to "Auto-Posted"
+- A system note is added to each affected claim: "Payment auto-posted from ERA [check number] on [date]"
+
+When any condition is NOT met (e.g., a denial exists in the ERA), the ERA falls through to the manual review queue regardless of the auto-post setting.
+
+**For the demo org:**
+Pre-configure the VA Community Care payer with:
+- Auto-post clean ERAs: ON
+- Auto-post contractual adjustments (CO-45): ON
+- All others: default
+
+This reflects the real-world VA billing workflow where CO-45 (charges exceed fee schedule) is always a contractual write-off and requires no biller decision.
+
+---
+
+## ITEM 5 — Denial Recovery Agent
+
+This is the feature that differentiates ClaimShield from competitors. Competitors translate denial messages. ClaimShield should diagnose and guide the fix.
+
+**Where it lives:**
+On the claim detail page, when a claim has a denial or rejection status, show a new "Recovery" panel below the existing denial explanation card.
+
+**The Recovery panel contains:**
+
+**Step 1 — Root Cause (already partially done by AI explanation — extend it)**
+Below the existing AI explanation, add a "Root Cause" line that categorizes the denial into one of these buckets based on the CARC code:
+- Missing Information (CO-16, CO-4) → "Required field is missing or invalid"
+- Authorization (CO-15, CO-57) → "Prior authorization issue"
+- Timely Filing (CO-29) → "Claim filed outside the timely filing window"
+- Duplicate (CO-18) → "Duplicate claim submission"
+- Eligibility (CO-27, CO-26) → "Patient eligibility issue"
+- Coding (CO-4, CO-50, CO-97) → "Procedure or diagnosis code issue"
+- Contract / Fee Schedule (CO-45) → "Contractual adjustment — write off"
+
+**Step 2 — Recommended Action**
+Based on the root cause bucket, show a specific recommended action:
+- Missing Information → "Open claim and complete: [list the specific fields that map to this CARC code]"
+- Authorization → "Verify prior authorization number and resubmit"
+- Timely Filing → "Generate Proof of Timely Filing Letter" (button that triggers the existing letter generator)
+- Duplicate → "Check if claim was already paid under a different claim number"
+- Eligibility → "Run eligibility check for this patient" (button that triggers eligibility lookup if built, otherwise shows instructions)
+- Coding → "Review procedure and diagnosis code combination"
+- Contract → "Apply CO-45 write-off and close claim" (button that applies the adjustment)
+
+**Step 3 — Fix It Button**
+For denials where the fix is a form field correction (Missing Information, Authorization, Coding):
+Show a "Fix This Claim" button that:
+1. Opens the claim wizard in edit mode
+2. Scrolls directly to the section containing the field(s) that need to be corrected (use the CARC-to-field mapping below)
+3. Highlights the specific field(s) with a yellow border and a tooltip: "This field may have caused the denial"
+
+**CARC to field mapping for Fix It routing:**
+- CO-16 → Additional Info tab, Claim Note field
+- CO-4 → Service lines, CPT/modifier fields
+- CO-15 → Primary Insurance, Authorization # field
+- CO-57 → Primary Insurance, Authorization # field
+- CO-50 → Service lines, CPT code field
+- CO-97 → Service lines, CPT + modifier combination
+- CO-29 → Additional Info tab, Delay Reason Code field
+
+**Step 4 — One-Click Resubmit**
+After the biller makes corrections, show a "Validate & Resubmit" button at the bottom of the Recovery panel that:
+1. Runs the existing pre-submission validation (same as the validate-edi endpoint)
+2. If validation passes → triggers Office Ally SFTP submission
+3. If validation fails → shows the validation checklist with specific failures highlighted
+4. On successful resubmission → marks the original denial as "Fixed - Resubmitted" in the Claim Tracker
+
+---
+
+## ITEM 6 — Onboarding Checklist for New Organizations
+
+Add a setup checklist card to the billing dashboard. This card is only visible when the org has not completed all setup steps. Once all steps are complete, the card disappears permanently for that org.
+
+**Checklist steps (in order):**
+
+1. ☐ Add practice information — links to Settings → Practice tab
+2. ☐ Add at least one provider — links to Settings → Providers tab
+3. ☐ Add at least one payer — links to Settings → Payers tab
+4. ☐ Configure Office Ally SFTP credentials — links to Settings → Clearinghouse tab
+5. ☐ Set claim defaults — links to Settings → Claim Defaults tab (new from Item 1)
+6. ☐ Submit your first test claim — links to /billing/claims/new
+
+**Completion logic:**
+Each step checks the database to determine if it's done:
+1. Practice: practices table has at least one row for this org with a non-null name and billing address
+2. Provider: providers table has at least one active row for this org
+3. Payer: payers table has at least one row for this org
+4. Clearinghouse: org has SFTP host and username configured (not null/empty)
+5. Claim Defaults: at least default_pos is set in practice defaults
+6. First claim: claims table has at least one claim for this org with status != draft
+
+**Display:**
+- Show as a card at the top of the dashboard, above the KPI cards
+- Title: "Get ClaimShield Ready" with a progress indicator e.g. "3 of 6 complete"
+- Each completed step shows a green checkmark and strikethrough text
+- Each incomplete step shows as a clickable link
+- When all 6 are complete: show a success state "✅ ClaimShield is fully configured" for 24 hours, then hide the card permanently (store dismissed_at timestamp on the org record)
+
+**For the demo org:**
+Mark steps 1–5 as pre-completed so the demo org only shows step 6 (Submit your first test claim) as remaining. This keeps the demo clean while showing new orgs what the checklist looks like.
+
+---
+
+## TECHNICAL NOTES
+
+- Do not modify any existing functionality from the previous sprint
+- All new database columns/tables require org_id and must be scoped through verifyOrg middleware
+- All new API endpoints require requireAuth and requireRole('rcm_manager')
+- The Denial Recovery panel (Item 5) should gracefully degrade if no CARC code is present on a denial — show the AI explanation only, hide the Recovery steps
+- For Item 4 ERA auto-posting: if the 835 parsing already stores ERA data in a structured format, use that existing data model. Do not create a parallel ERA data store
+- For Item 3: if the follow-up date auto-scheduling was already built in the previous sprint, confirm it with a test and move on — do not rebuild it
+
+Work through items 1 through 6 in order. After completing each item, confirm what was built, note any assumptions made, and flag anything that needs input before proceeding to the next item.
+```

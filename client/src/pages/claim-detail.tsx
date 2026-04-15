@@ -54,6 +54,122 @@ interface EdiValidation {
   warnings: { field: string; message: string; severity: "error" | "warning" }[];
 }
 
+const CARC_MAP: Record<string, { rootCause: string; action: string; fixField?: string }> = {
+  "CO-96": { rootCause: "Non-covered service or not medically necessary per payer policy", action: "Obtain and attach medical necessity documentation, then resubmit with appeal letter", fixField: "homebound_indicator" },
+  "CO-97": { rootCause: "Bundled service — this procedure is included in another code already billed", action: "Review CCI edits, remove duplicate code or add modifier -59 to unbundle", fixField: "service_lines" },
+  "CO-4":  { rootCause: "Procedure code invalid, inconsistent, or modifier missing", action: "Review modifier requirements for this CPT code and resubmit with correct modifiers", fixField: "service_lines" },
+  "CO-18": { rootCause: "Duplicate claim submitted", action: "Verify no prior submission exists; if unique service, add frequency modifier and resubmit" },
+  "CO-22": { rootCause: "Patient covered by another payer as primary", action: "Submit to the primary payer first, then submit Coordination of Benefits (COB) to this payer" },
+  "CO-29": { rootCause: "Timely filing limit exceeded", action: "File an appeal with proof of original timely submission (e.g., clearinghouse acknowledgment)" },
+  "CO-45": { rootCause: "Charges exceed contractual allowed amount", action: "This is a contractual adjustment — post as adjustment, no appeal needed" },
+  "PR-1":  { rootCause: "Patient deductible not yet met", action: "Bill patient for deductible amount; no resubmission needed" },
+  "PR-2":  { rootCause: "Coinsurance applied", action: "Bill patient for coinsurance amount; no resubmission needed" },
+  "PR-3":  { rootCause: "Copay collected at time of service", action: "Collect copay from patient if not yet collected; no resubmission needed" },
+  "OA-23": { rootCause: "Payment adjusted based on prior payment or payment decision", action: "Review prior claim payments and apply credit balance if applicable" },
+  "N30":   { rootCause: "Missing or invalid ordering provider information", action: "Add ordering provider name and NPI in Box 17/17b and resubmit", fixField: "ordering_provider_id" },
+  "N286":  { rootCause: "Referring/ordering provider NPI is missing or invalid", action: "Verify provider NPI with NPPES registry and resubmit", fixField: "ordering_provider_id" },
+  "B15":   { rootCause: "Payment adjusted for no prior authorization", action: "Obtain retroactive authorization from payer or file appeal with authorization proof" },
+};
+
+function getDenialInfo(reasonCode: string) {
+  const normalized = reasonCode?.trim().toUpperCase();
+  for (const [key, val] of Object.entries(CARC_MAP)) {
+    if (normalized === key || normalized.includes(key.replace("-", ""))) return val;
+  }
+  return { rootCause: "Payer-specific denial reason", action: "Contact payer for clarification and review EOB for additional remark codes" };
+}
+
+function DenialRecoveryPanel({ claimId, claimStatus, onNavigate }: { claimId: string; claimStatus: string; onNavigate: (path: string) => void }) {
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["/api/billing/claims", claimId, "denial-recovery"],
+    queryFn: () => fetch(`/api/billing/claims/${claimId}/denial-recovery`, { credentials: "include" }).then(r => r.json()),
+  });
+
+  const resubmitMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/billing/claims/${claimId}/oa-submit`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/claims", claimId] });
+    },
+  });
+
+  if (isLoading) return null;
+
+  const denials: any[] = data?.denials || [];
+  const eraLines: any[] = data?.eraLines || [];
+
+  // Gather all reason codes
+  const codes: string[] = [];
+  denials.forEach((d: any) => { if (d.denial_reason_text) codes.push(d.denial_reason_text); });
+  eraLines.forEach((e: any) => { if (e.adjustment_reason) codes.push(e.adjustment_reason); });
+
+  const primaryCode = codes[0] || "Unknown";
+  const info = getDenialInfo(primaryCode);
+
+  return (
+    <Card className="border-orange-200 dark:border-orange-800 bg-orange-50/40 dark:bg-orange-950/10" data-testid="card-denial-recovery">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base font-medium text-orange-800 dark:text-orange-200 flex items-center gap-2">
+          <Info className="h-4 w-4" />
+          Denial Recovery Agent
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-3">
+          <div>
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Denial Code</p>
+            <p className="text-sm font-mono font-semibold mt-0.5" data-testid="text-recovery-code">{primaryCode}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Root Cause</p>
+            <p className="text-sm mt-0.5 text-foreground" data-testid="text-recovery-root-cause">{info.rootCause}</p>
+          </div>
+          <div className="p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <p className="text-xs text-blue-700 dark:text-blue-300 font-medium">Recommended Action</p>
+            <p className="text-sm text-blue-800 dark:text-blue-200 mt-0.5" data-testid="text-recovery-action">{info.action}</p>
+          </div>
+        </div>
+
+        {eraLines.length > 0 && (
+          <div>
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1">ERA Payment History</p>
+            {eraLines.slice(0, 3).map((line: any, i: number) => (
+              <div key={i} className="text-xs flex items-center justify-between py-1 border-b last:border-0">
+                <span className="text-muted-foreground">{line.check_number}</span>
+                <span className="font-mono">${parseFloat(line.paid_amount || 0).toFixed(2)} paid / ${parseFloat(line.billed_amount || 0).toFixed(2)} billed</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          {info.fixField && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onNavigate(`/billing/claims/${claimId}/edit`)}
+              data-testid="button-fix-claim"
+              className="flex-1"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 mr-1.5" />
+              Fix This Claim
+            </Button>
+          )}
+          <Button
+            size="sm"
+            onClick={() => resubmitMutation.mutate()}
+            disabled={resubmitMutation.isPending}
+            data-testid="button-validate-resubmit"
+            className="flex-1"
+          >
+            {resubmitMutation.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}
+            Validate &amp; Resubmit
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ClaimDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
@@ -399,6 +515,10 @@ export default function ClaimDetailPage() {
                 )}
               </CardContent>
             </Card>
+          )}
+
+          {(claim.status === "denied" || claim.status === "appealed") && (
+            <DenialRecoveryPanel claimId={claim.id} claimStatus={claim.status} onNavigate={setLocation} />
           )}
 
           <Card>

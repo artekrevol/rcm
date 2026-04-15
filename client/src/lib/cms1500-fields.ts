@@ -61,6 +61,13 @@ export const CMS1500_FIELDS: Record<string, [number, number]> = {
   diagnosisC:                [44,  364],
   diagnosisD:                [162, 364],
 
+  // Box 22 — Resubmission Code + Original Reference Number
+  box22FrequencyCode:        [44,  408],
+  box22OrigClaimNumber:      [116, 408],
+
+  // Box 10d — Homebound indicator (condition codes / claim notes)
+  box10dHomebound:           [190, 460],
+
   priorAuthNumber:           [378, 392],
 
   line1DateFrom:             [28,  330],

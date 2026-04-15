@@ -25,6 +25,10 @@ export interface CMS1500Data {
   referringProviderName: string;
   referringProviderNPI: string;
 
+  // Box 17/17b — Ordering provider (home health)
+  orderingProviderName?: string;
+  orderingProviderNPI?: string;
+
   practiceNPI: string;
   practiceTaxId: string;
   practiceName: string;
@@ -39,6 +43,13 @@ export interface CMS1500Data {
   authorizationNumber: string;
   icd10Primary: string;
   icd10Secondary: string[];
+
+  // Box 22 — Claim frequency / resubmission
+  claimFrequencyCode?: string;
+  originalClaimNumber?: string;
+
+  // Box 10d — Homebound indicator
+  homeboundIndicator?: boolean;
 
   serviceLines: Array<{
     code: string;
@@ -181,8 +192,20 @@ export async function generateCMS1500PDF(data: CMS1500Data): Promise<Uint8Array>
     }
   }
 
-  draw('referringProviderName', data.referringProviderName || '');
-  draw('referringProviderNPI', data.referringProviderNPI || '');
+  // Box 17/17b: prefer ordering provider, fall back to referring provider
+  const boxProviderName = data.orderingProviderName || data.referringProviderName || '';
+  const boxProviderNPI  = data.orderingProviderNPI  || data.referringProviderNPI  || '';
+  draw('referringProviderName', boxProviderName);
+  draw('referringProviderNPI',  boxProviderNPI);
+
+  // Box 22: Resubmission code + original claim number
+  if (data.claimFrequencyCode && data.claimFrequencyCode !== '1') {
+    draw('box22FrequencyCode', data.claimFrequencyCode);
+    if (data.originalClaimNumber) draw('box22OrigClaimNumber', data.originalClaimNumber);
+  }
+
+  // Box 10d: Homebound indicator
+  if (data.homeboundIndicator) draw('box10dHomebound', 'Y');
 
   if (data.icd10Primary) draw('diagnosisA', data.icd10Primary);
   if (data.icd10Secondary?.[0]) draw('diagnosisB', data.icd10Secondary[0]);
@@ -316,6 +339,19 @@ export async function buildCMS1500DataFromClaim(claimId: string): Promise<CMS150
     authorizationNumber:       claim.authorization_number || '',
     icd10Primary:              claim.icd10_primary   || '',
     icd10Secondary,
+
+    // Box 17/17b — Ordering provider
+    orderingProviderName:      claim.ordering_provider_id
+      ? [provider?.first_name, provider?.last_name].filter(Boolean).join(' ')
+      : undefined,
+    orderingProviderNPI:       claim.ordering_provider_id ? (provider?.npi || undefined) : undefined,
+
+    // Box 22 — Claim frequency / resubmission
+    claimFrequencyCode:        claim.claim_frequency_code || undefined,
+    originalClaimNumber:       claim.orig_claim_number || undefined,
+
+    // Box 10d — Homebound indicator
+    homeboundIndicator:        !!claim.homebound_indicator,
 
     serviceLines,
     totalCharge: Number(claim.amount) || 0,

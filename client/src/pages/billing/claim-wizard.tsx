@@ -861,6 +861,21 @@ export default function ClaimWizard() {
     }
   }, [providers, providerId]);
 
+  // Pre-populate from practice defaults (only on fresh wizard, not when resuming a claim)
+  const [defaultsApplied, setDefaultsApplied] = useState(false);
+  useEffect(() => {
+    if (!defaultsApplied && wizardData?.practiceSettings && !resumeClaimId) {
+      const ps = wizardData.practiceSettings;
+      if (ps.homebound_default !== null && ps.homebound_default !== undefined) {
+        setHomeboundIndicator(!!ps.homebound_default);
+      }
+      if (ps.default_ordering_provider_id) {
+        setOrderingProviderId(ps.default_ordering_provider_id);
+      }
+      setDefaultsApplied(true);
+    }
+  }, [wizardData, defaultsApplied, resumeClaimId]);
+
   useEffect(() => {
     if (resumeClaimId && preselectedPatientId && !patient) {
       fetch(`/api/billing/patients/${preselectedPatientId}`, { credentials: "include" })
