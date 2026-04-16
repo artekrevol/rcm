@@ -12,3 +12,9 @@ id = "T7g_iKBmvYFEHU0MD6tfr"
 uri = "file://AUDIT_REPORT.md"
 type = "text"
 title = "Claim Shield Health — Full QA Audit Report"
+
+[[outputs]]
+id = "aVt7bu-fNUd_SJd38ImT_"
+uri = "file://SCOPE.md"
+type = "text"
+title = "Claim Shield Health — Full Platform Scope"
