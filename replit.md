@@ -85,6 +85,16 @@ The system uses Passport.js with a local strategy, bcrypt for password hashing, 
 - **Dashboard** benchmark overlay: 3 KPI cards added — A/R Days, Denial Rate %, FPRR % (First Pass Resolution Rate).
 - **Claim detail** letter generators: "Proof of Timely Filing" and "Appeal Letter" PDFs generated client-side via pdf-lib from `/api/billing/claims/:id/letter-data`. Letter generator at `client/src/lib/generate-letters.ts`.
 - **DB tables**: `claim_follow_up_notes`, `era_batches`, `era_lines` created at startup. New columns on `claims`: `claim_frequency_code`, `orig_claim_number`, `homebound_indicator`, `ordering_provider_id`, `delay_reason_code`, `follow_up_date`, `follow_up_status`.
+- **Sprint 3 additions**:
+  - **Super Admin role** (`super_admin`): Bypasses all org scoping and role checks. User `abeer@tekrevol.com` seeded at startup (password from `SUPER_ADMIN_PASSWORD` env var, default `admin123`). `requireRole` middleware auto-passes super_admin. `getOrgId()` returns `null` for super_admin.
+  - **Admin module** at `/admin`: Separate `AdminLayout` with its own sidebar. Three pages: Platform Overview (clinic cards + vitals), All Clinics table, and Clinic Detail (profile, users, feature usage, friction feed). Routes protected with `requireSuperAdmin` middleware.
+  - **Clinic Home page** (`/billing/clinic`): Admin-only page in billing module. Shows practice profile (read-only), team table with last_active_at, Clinic Setup Health (permanent 6-step checklist), and Quick Stats (30-day claims/paid/followups/denials). `GET /api/billing/clinic/stats` endpoint added.
+  - **Chajinel Clinic org** seeded at startup (id: `chajinel-org-001`, Daniela admin user from `DANIELA_EMAIL`/`DANIELA_PASSWORD` env vars).
+  - **`last_active_at` column** on users table; updated on every successful login.
+  - **Module selector**: Platform Admin card added for `super_admin`. AuthGuard updated to pass super_admin through all role checks.
+  - **Billing sidebar**: "My Practice" link added (admin-only) between Dashboard and Patients.
+  - **Super Admin API routes**: `GET /api/super-admin/vitals`, `GET /api/super-admin/orgs`, `GET /api/super-admin/orgs/:orgId`.
+
 - **Sprint 2 additions**:
   - **Claim Defaults tab** in Practice Settings (`/billing/settings?tab=claim-defaults`): Default TOS, default ordering provider, homebound default toggle, exclude facility toggle. Saves via `PUT /api/billing/practice-settings`. Claim wizard pre-populates from these defaults.
   - **Payer edit dialog enhanced**: Added `auto_followup_days` field + ERA Auto-Posting Rules section (5 toggles). OA submit handler sets `follow_up_date` from payer's `auto_followup_days`. ERA PATCH supports `auto-post` action with per-payer rules.

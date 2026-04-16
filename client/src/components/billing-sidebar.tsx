@@ -17,6 +17,7 @@ import {
   Radar,
   CreditCard,
   ListChecks,
+  Building2,
 } from "lucide-react";
 import {
   Sidebar,
@@ -35,6 +36,7 @@ import { useAuth } from "@/hooks/use-auth";
 
 const billingNavItems = [
   { title: "Dashboard", url: "/billing/dashboard", icon: LayoutDashboard },
+  { title: "My Practice", url: "/billing/clinic", icon: Building2, adminOnly: true },
   { title: "Patients", url: "/billing/patients", icon: Users },
   { title: "Claims", url: "/billing/claims", icon: FileText },
   { title: "Claim Tracker", url: "/billing/claim-tracker", icon: Radar },
@@ -104,7 +106,7 @@ export function BillingSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {user?.role === "admin" && (
+        {(user?.role === "admin" || user?.role === "super_admin") && (
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
@@ -116,6 +118,16 @@ export function BillingSidebar() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {user?.role === "super_admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild>
+                      <Link href="/admin" data-testid="nav-platform-admin">
+                        <Shield className="h-5 w-5" />
+                        <span>Platform Admin</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

@@ -1,6 +1,6 @@
 import { useAuth } from "@/hooks/use-auth";
 import { Redirect } from "wouter";
-import { FileText, Users, Loader2 } from "lucide-react";
+import { FileText, Users, Loader2, Shield } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const modules = [
@@ -19,6 +19,14 @@ const modules = [
     icon: Users,
     href: "/intake/dashboard",
     roles: ["admin", "intake"],
+  },
+  {
+    id: "platform-admin",
+    title: "Platform Admin",
+    description: "Monitor all clinics, usage, and billing health across the platform",
+    icon: Shield,
+    href: "/admin",
+    roles: ["super_admin"],
   },
 ];
 

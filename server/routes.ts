@@ -4,7 +4,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { storage } from "./storage";
-import { requireAuth, requireRole } from "./auth";
+import { requireAuth, requireRole, requireSuperAdmin } from "./auth";
 import {
   insertLeadSchema,
   insertRuleSchema,
@@ -142,8 +142,11 @@ async function syncPatientToLead(patient: Patient, extractedData?: any): Promise
   }
 }
 
-function getOrgId(req: any): string | undefined {
-  return (req.user as any)?.organization_id || undefined;
+function getOrgId(req: any): string | null {
+  const user = req.user as any;
+  if (!user) return null;
+  if (user.role === "super_admin") return null;
+  return user.organization_id || null;
 }
 
 function verifyOrg(entity: any, req: any): boolean {
@@ -177,6 +180,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_refunds BOOLEAN DEFAULT true`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_hold_if_mismatch BOOLEAN DEFAULT true`);
     await pool.query(`UPDATE payers SET era_auto_post_clean = true, era_auto_post_contractual = true WHERE payer_id = 'VACCN' AND (era_auto_post_clean = false OR era_auto_post_clean IS NULL)`);
+
+    // Sprint-3 schema additions
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS denial_patterns (
@@ -345,6 +351,58 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       } catch (e: any) {}
     }
     console.log("Assigned existing data to demo organization");
+
+    // ── Super Admin user seed ─────────────────────────────────────────────
+    {
+      const { hashPassword } = await import("./auth");
+      const superPwd = process.env.SUPER_ADMIN_PASSWORD || 'admin123';
+      if (!process.env.SUPER_ADMIN_PASSWORD) {
+        console.warn("WARNING: SUPER_ADMIN_PASSWORD not set — using default 'admin123'. Set this env var in production!");
+      }
+      const { rows: saCheck } = await pool.query("SELECT id FROM users WHERE email = 'abeer@tekrevol.com'");
+      if (saCheck.length === 0) {
+        const hashed = await hashPassword(superPwd);
+        await pool.query(
+          "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, 'abeer@tekrevol.com', $1, 'super_admin', 'Abeer (Platform Admin)', NULL)",
+          [hashed]
+        );
+        console.log("Created super_admin user: abeer@tekrevol.com");
+      }
+    }
+
+    // ── Chajinel Clinic org seed ──────────────────────────────────────────
+    {
+      const CHAJINEL_ORG_ID = "chajinel-org-001";
+      const { rows: chCheck } = await pool.query("SELECT id FROM organizations WHERE id = $1", [CHAJINEL_ORG_ID]);
+      if (chCheck.length === 0) {
+        await pool.query(
+          "INSERT INTO organizations (id, name, created_at) VALUES ($1, 'Chajinel Clinic', NOW())",
+          [CHAJINEL_ORG_ID]
+        );
+        // Practice settings seed
+        await pool.query(
+          `INSERT INTO practice_settings (id, organization_id, practice_name, default_pos, homebound_default, exclude_facility, created_at, updated_at)
+           VALUES (gen_random_uuid()::text, $1, 'Chajinel Clinic', '12', true, true, NOW(), NOW())`,
+          [CHAJINEL_ORG_ID]
+        );
+        const { hashPassword } = await import("./auth");
+        const danielaPwd = process.env.DANIELA_PASSWORD || 'clinic123';
+        if (!process.env.DANIELA_PASSWORD) {
+          console.warn("WARNING: DANIELA_PASSWORD not set — using default 'clinic123'. Set this env var in production!");
+        }
+        const danielaEmail = process.env.DANIELA_EMAIL || 'daniela@chajinel.com';
+        const { rows: dCheck } = await pool.query("SELECT id FROM users WHERE email = $1", [danielaEmail]);
+        if (dCheck.length === 0) {
+          const hashed = await hashPassword(danielaPwd);
+          await pool.query(
+            "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, $1, $2, 'admin', 'Daniela', $3)",
+            [danielaEmail, hashed, CHAJINEL_ORG_ID]
+          );
+          console.log(`Created Chajinel admin user: ${danielaEmail}`);
+        }
+        console.log("Created Chajinel Clinic organization");
+      }
+    }
 
     // ── Payer database expansion ───────────────────────────────────────────
     // Idempotent: only inserts payers that don't already exist by name.
@@ -5560,6 +5618,176 @@ Warmly,
       configured: !!client,
       message: client ? "VerifyTX is configured and ready" : "VerifyTX credentials not set"
     });
+  });
+
+  // ── Super Admin Routes ─────────────────────────────────────────────────
+  app.get("/api/super-admin/vitals", requireSuperAdmin, async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const [orgs, claims, eras, users, recentClaims] = await Promise.all([
+        db.query("SELECT COUNT(*)::int as cnt FROM organizations"),
+        db.query("SELECT COUNT(*)::int as cnt FROM claims"),
+        db.query("SELECT COUNT(*)::int as cnt FROM era_batches"),
+        db.query("SELECT COUNT(*)::int as cnt FROM users WHERE role != 'super_admin'"),
+        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE created_at > NOW() - INTERVAL '7 days'"),
+      ]);
+      res.json({
+        totalOrgs: orgs.rows[0].cnt,
+        totalClaims: claims.rows[0].cnt,
+        totalEras: eras.rows[0].cnt,
+        totalUsers: users.rows[0].cnt,
+        claimsLast7Days: recentClaims.rows[0].cnt,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/super-admin/orgs", requireSuperAdmin, async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows: orgs } = await db.query(`
+        SELECT
+          o.id, o.name, o.created_at,
+          (SELECT COUNT(*)::int FROM users u WHERE u.organization_id = o.id) as user_count,
+          (SELECT COUNT(*)::int FROM claims c WHERE c.organization_id = o.id) as total_claims,
+          (SELECT COUNT(*)::int FROM claims c WHERE c.organization_id = o.id AND c.created_at > NOW() - INTERVAL '30 days') as claims_last_30d,
+          (SELECT COUNT(*)::int FROM leads l WHERE l.organization_id = o.id) as total_leads,
+          (SELECT o2.onboarding_dismissed_at FROM organizations o2 WHERE o2.id = o.id) as onboarding_dismissed_at
+        FROM organizations o
+        ORDER BY o.created_at DESC
+      `);
+
+      const orgIds = orgs.map((o: any) => o.id);
+      const onboardingSteps: Record<string, number> = {};
+      for (const orgId of orgIds) {
+        const [ps, prov, payer, claim] = await Promise.all([
+          db.query("SELECT practice_name, phone, default_pos FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]),
+          db.query("SELECT COUNT(*)::int as cnt FROM providers WHERE organization_id = $1", [orgId]),
+          db.query("SELECT COUNT(*)::int as cnt FROM payers LIMIT 1"),
+          db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1", [orgId]),
+        ]);
+        const psRow = ps.rows[0];
+        let steps = 0;
+        if (psRow?.practice_name && psRow?.phone) steps++;
+        if ((prov.rows[0]?.cnt || 0) > 0) steps++;
+        if ((payer.rows[0]?.cnt || 0) > 0) steps++;
+        steps++; // OA — simplify to always-true for now since OA is global
+        if (psRow?.default_pos) steps++;
+        if ((claim.rows[0]?.cnt || 0) > 0) steps++;
+        onboardingSteps[orgId] = steps;
+      }
+
+      const result = orgs.map((o: any) => ({
+        ...o,
+        onboarding_steps: onboardingSteps[o.id] || 0,
+        has_billing: (o.total_claims || 0) > 0,
+        has_intake: (o.total_leads || 0) > 0,
+      }));
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/super-admin/orgs/:orgId", requireSuperAdmin, async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { orgId } = req.params;
+
+      const [org, ps, users, providers, payers] = await Promise.all([
+        db.query("SELECT * FROM organizations WHERE id = $1", [orgId]),
+        db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]),
+        db.query("SELECT id, name, email, role, created_at, last_active_at FROM users WHERE organization_id = $1 ORDER BY name", [orgId]),
+        db.query("SELECT COUNT(*)::int as cnt FROM providers WHERE organization_id = $1", [orgId]),
+        db.query("SELECT COUNT(*)::int as cnt FROM payers"),
+      ]);
+
+      if (!org.rows[0]) return res.status(404).json({ error: "Organization not found" });
+
+      // Feature usage (last 30 days)
+      const [claimsCreated, claimsSubmitted, erasPosted, followupNotes, eligChecks] = await Promise.all([
+        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND created_at > NOW() - INTERVAL '30 days'", [orgId]).catch(() => ({ rows: [{ cnt: 0 }] })),
+        db.query("SELECT COUNT(*)::int as cnt FROM claim_events WHERE notes LIKE '%submitted%' AND timestamp > NOW() - INTERVAL '30 days'").catch(() => ({ rows: [{ cnt: 0 }] })),
+        db.query("SELECT COUNT(*)::int as cnt FROM era_batches WHERE created_at > NOW() - INTERVAL '30 days'").catch(() => ({ rows: [{ cnt: 0 }] })),
+        db.query("SELECT COUNT(*)::int as cnt FROM claim_follow_up_notes WHERE created_at > NOW() - INTERVAL '30 days'").catch(() => ({ rows: [{ cnt: 0 }] })),
+        db.query("SELECT COUNT(*)::int as cnt FROM vob_verifications WHERE organization_id = $1 AND created_at > NOW() - INTERVAL '30 days'", [orgId]).catch(() => ({ rows: [{ cnt: 0 }] })),
+      ]);
+
+      // Friction feed
+      const frictionItems: any[] = [];
+      const [stuckDrafts, unpostedEras, overdueFollowups] = await Promise.all([
+        db.query("SELECT id, created_at FROM claims WHERE organization_id = $1 AND status = 'draft' AND created_at < NOW() - INTERVAL '7 days'", [orgId]),
+        db.query("SELECT COUNT(*)::int as cnt FROM era_batches WHERE status = 'pending' AND created_at < NOW() - INTERVAL '5 days'").catch(() => ({ rows: [{ cnt: 0 }] })),
+        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND follow_up_date < NOW() - INTERVAL '14 days' AND status NOT IN ('paid', 'denied')", [orgId]).catch(() => ({ rows: [{ cnt: 0 }] })),
+      ]);
+
+      if ((stuckDrafts.rows || []).length > 0) {
+        frictionItems.push({
+          icon: "warning",
+          description: `${stuckDrafts.rows.length} claim(s) stuck in Draft for more than 7 days`,
+          ids: stuckDrafts.rows.map((r: any) => r.id),
+          timestamp: stuckDrafts.rows[0]?.created_at,
+        });
+      }
+      if ((unpostedEras.rows[0]?.cnt || 0) > 0) {
+        frictionItems.push({
+          icon: "error",
+          description: `${unpostedEras.rows[0].cnt} ERA batch(es) received but not posted after 5 days`,
+          timestamp: new Date().toISOString(),
+        });
+      }
+      if ((overdueFollowups.rows[0]?.cnt || 0) > 0) {
+        frictionItems.push({
+          icon: "warning",
+          description: `${overdueFollowups.rows[0].cnt} follow-up item(s) overdue by more than 14 days`,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        org: org.rows[0],
+        practiceSettings: ps.rows[0] || null,
+        users: users.rows,
+        providerCount: providers.rows[0]?.cnt || 0,
+        payerCount: payers.rows[0]?.cnt || 0,
+        featureUsage: {
+          claimsCreated: claimsCreated.rows[0]?.cnt || 0,
+          claimsSubmitted: claimsSubmitted.rows[0]?.cnt || 0,
+          erasPosted: erasPosted.rows[0]?.cnt || 0,
+          followupNotes: followupNotes.rows[0]?.cnt || 0,
+          eligibilityChecks: eligChecks.rows[0]?.cnt || 0,
+        },
+        frictionItems,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Clinic Home Stats Route ─────────────────────────────────────────────
+  app.get("/api/billing/clinic/stats", requireRole("admin"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(400).json({ error: "Organization required" });
+
+      const [submitted, paid, activeFollowups, openDenials] = await Promise.all([
+        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND status = 'submitted' AND created_at > NOW() - INTERVAL '30 days'", [orgId]),
+        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND status = 'paid' AND created_at > NOW() - INTERVAL '30 days'", [orgId]),
+        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND follow_up_date IS NOT NULL AND status != 'paid'", [orgId]).catch(() => ({ rows: [{ cnt: 0 }] })),
+        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND status = 'denied'", [orgId]),
+      ]);
+
+      res.json({
+        claimsSubmitted: submitted.rows[0]?.cnt || 0,
+        claimsPaid: paid.rows[0]?.cnt || 0,
+        activeFollowups: activeFollowups.rows[0]?.cnt || 0,
+        openDenials: openDenials.rows[0]?.cnt || 0,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
 }

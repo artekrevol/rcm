@@ -22,7 +22,7 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     return <Redirect to="/auth/login" />;
   }
 
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
+  if (allowedRoles && user.role !== "super_admin" && !allowedRoles.includes(user.role)) {
     return <Redirect to="/" />;
   }
 

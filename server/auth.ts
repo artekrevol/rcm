@@ -200,6 +200,7 @@ export function setupAuth(app: Express) {
       loginAttempts.delete(ip);
       req.logIn(user, (err) => {
         if (err) return next(err);
+        pool.query("UPDATE users SET last_active_at = NOW() WHERE id = $1", [user.id]).catch(() => {});
         const { password, ...safeUser } = user;
         return res.json(safeUser);
       });
@@ -237,9 +238,20 @@ export function requireRole(...roles: string[]) {
       return res.status(401).json({ error: "Not authenticated" });
     }
     const userRole = (req.user as any).role;
+    if (userRole === "super_admin") return next();
     if (!roles.includes(userRole)) {
       return res.status(403).json({ error: "Insufficient permissions" });
     }
     next();
   };
+}
+
+export function requireSuperAdmin(req: any, res: any, next: any) {
+  if (!req.user) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+  if ((req.user as any).role !== "super_admin") {
+    return res.status(403).json({ error: "Super admin access required" });
+  }
+  next();
 }

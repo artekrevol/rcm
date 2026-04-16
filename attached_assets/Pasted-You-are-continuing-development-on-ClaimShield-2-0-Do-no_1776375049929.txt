@@ -1,0 +1,208 @@
+You are continuing development on ClaimShield 2.0. Do not modify any existing functionality unless explicitly instructed. Work through each item in order and confirm completion before moving to the next.
+
+---
+
+## ITEM 1 — Super Admin Layer (Platform Owner View)
+
+Create a platform-level super admin role that sits above all organizations. This is for Abeer (the platform owner) to monitor all clinics, usage, and issues across the entire platform.
+
+**1a. New Role**
+
+Add `super_admin` to the roles enum in the database and all role-checking middleware. Super admin bypasses all org scoping — they can query across all organizations without a WHERE organization_id filter.
+
+Update the requireRole middleware so that super_admin passes all role checks automatically (a super_admin can access any route that any other role can access, plus super_admin-only routes).
+
+**1b. Seed Super Admin User**
+
+Create one super_admin user at startup (idempotent — only create if not exists):
+- Email: abeer@tekrevol.com
+- Password: read from environment variable SUPER_ADMIN_PASSWORD (default to 'admin123' if not set, with a console warning)
+- This user has no organization_id — they exist above all orgs
+- Update getOrgId(req) helper so that when the user is super_admin, it does not throw — it returns null and routes handle null org gracefully
+
+**1c. Super Admin Dashboard**
+
+Create a new layout and route group at /admin — accessible only to super_admin role. Add an AdminLayout with its own sidebar separate from BillingLayout and IntakeLayout.
+
+**Page: /admin — Platform Overview**
+
+Header: "Platform Overview" with today's date and a live refresh button.
+
+Section 1 — Clinic Cards (one card per organization):
+- Clinic name
+- Date created
+- Total users count
+- Total claims submitted (all time)
+- Claims submitted in last 30 days
+- Active module badges: "Billing" (blue) and/or "Intake" (teal) based on whether those modules have any activity
+- Onboarding checklist completion: "X/6 setup steps complete"
+- "View Clinic" button → navigates to /admin/clinics/:orgId
+
+Section 2 — Platform Vitals (aggregated across all orgs):
+- Total clinics onboarded
+- Total claims submitted (all time, across all orgs)
+- Total ERAs posted (all time, across all orgs)
+- Total users across all orgs
+- Claims submitted in last 7 days (sparkline or number)
+
+**Page: /admin/clinics/:orgId — Clinic Detail (Read-Only)**
+
+Show all data for that specific org as if you were an admin of that org, but read-only. Sections:
+
+1. Clinic Profile — practice name, NPI, Tax ID, billing address, clearinghouse connection status, payer count, provider count
+
+2. Users — table of all users in this org with name, email, role, last login date, status (active/inactive)
+
+3. Feature Usage (last 30 days) — pulled from activity_logs table:
+   - Claims created
+   - Claims submitted
+   - ERAs posted
+   - Follow-up notes added
+   - Letters generated (timely filing + appeal combined)
+   - Eligibility checks run
+   Show each as a number with a label. No chart needed — clean stat grid is sufficient.
+
+4. Friction Feed — surface issues from activity_logs and claims/era tables:
+   - Claims blocked at pre-submission validation (field name, frequency, last occurrence)
+   - Claims in draft status for more than 7 days (count + list of claim IDs)
+   - ERAs received but not posted after 5 days (count)
+   - Follow-up items with follow_up_date more than 14 days overdue (count)
+   - Display as a list of items: each item has an icon (⚠️ or 🔴), a description, and a timestamp
+   - If no issues: show "No friction detected in last 30 days" with a green checkmark
+
+**1d. Admin Sidebar Navigation**
+
+AdminLayout sidebar links:
+- Platform Overview (/admin)
+- All Clinics (/admin/clinics)
+- [list of org names as sub-items, each linking to /admin/clinics/:orgId]
+
+**Page: /admin/clinics — All Clinics List**
+
+Simple searchable table of all organizations with the same columns as the clinic cards above. Clicking a row navigates to /admin/clinics/:orgId.
+
+---
+
+## ITEM 2 — Clinic Home Page (Clinic Admin View)
+
+Add a "My Practice" page for org-level admins (Daniela and future clinic admins). This gives them a single command center for their clinic.
+
+**Route:** /billing/clinic
+**Access:** admin role only (within their own org)
+**Sidebar:** Add "My Practice" as a nav item between Dashboard and Claims in the billing sidebar
+
+**Section 1 — Practice Profile**
+
+Display (not a form — read-only with an Edit button that links to /billing/settings):
+- Practice name
+- Primary NPI
+- Tax ID
+- Billing address (street, city, state, zip)
+- Phone number
+- Default Place of Service
+
+Clearinghouse Status badge:
+- If Stedi API key is configured: green badge "✓ Connected to Stedi"
+- If Office Ally SFTP is configured: green badge "✓ Connected to Office Ally"  
+- If neither: red badge "⚠ Clearinghouse not configured" with a link to Settings → Clearinghouse
+
+**Section 2 — Team**
+
+Table of all users in this organization:
+- Columns: Name, Email, Role (color-coded badge), Last Active, Status
+- Role badge colors: admin = blue, rcm_manager = green, intake = teal
+- Last Active: pull from the most recent session or activity_log entry for that user. Show "Never" if no activity.
+- Status: Active (green) or Inactive (grey)
+- Actions per row: Edit Role (opens a simple dialog to change role), Deactivate/Reactivate toggle
+
+"Invite New User" button at top right of the section — opens the existing user invite dialog (same as /billing/settings/users). Do not rebuild the invite flow — reuse what exists.
+
+**Section 3 — Setup Health**
+
+Permanently visible version of the onboarding checklist (not dismissible). Same 6-step logic as the existing onboarding card:
+1. Practice information configured
+2. At least one provider added
+3. At least one payer added
+4. Clearinghouse connected
+5. Claim defaults saved
+6. First claim created
+
+Each step shows:
+- ✅ green check + step description if complete
+- 🔴 red gap + step description + a "Fix This" link to the relevant settings tab if incomplete
+
+Title: "Clinic Setup Health" — makes it clear this is an ongoing health check, not a one-time checklist.
+
+**Section 4 — Quick Stats (last 30 days)**
+
+Four stat cards in a row:
+- Claims submitted
+- Claims paid
+- Active follow-ups (claims with a follow_up_date set and status not paid)
+- Open denials (claims with status = denied and no mark-fixed event)
+
+Pull from existing data — no new tables needed.
+
+---
+
+## ITEM 3 — Chajinel Org Setup
+
+Create the Chajinel clinic as a real organization in the database (separate from demo-org-001). This should be done as an idempotent seed that runs at startup — only creates if org with this name does not already exist.
+
+**Organization record:**
+- name: "Chajinel Clinic"
+- id: "chajinel-org-001"
+
+**Users to create (idempotent — only if not exists):**
+- Daniela (clinic admin):
+  - email: read from env var DANIELA_EMAIL (default: daniela@chajinel.com)
+  - password: read from env var DANIELA_PASSWORD (default: 'clinic123', log a warning if using default)
+  - role: admin
+  - organizationId: chajinel-org-001
+
+- Abeer (already has super_admin account from Item 1 — no org-specific account needed for Chajinel since super_admin can view all orgs)
+
+**Practice settings for Chajinel (seed defaults):**
+- Practice name: "Chajinel Clinic"
+- Default Place of Service: 12 (Home)
+- Homebound default: true
+- Exclude facility: true
+- All other fields: null (Daniela will fill in via My Practice page)
+
+Do NOT seed any claims, patients, or ERA data for Chajinel — they start empty and fill through real use.
+
+---
+
+## ITEM 4 — Navigation and Access Updates
+
+**4a. Module Selector (Home Page)**
+
+Update the module selector at / so that super_admin sees a third card:
+- "Platform Admin" card with a description "Monitor all clinics, usage, and billing health across the platform" 
+- Clicking it navigates to /admin
+- Only visible to super_admin role
+
+**4b. Auth Guard Updates**
+
+Ensure the AuthGuard and requireRole middleware handle super_admin correctly:
+- super_admin can access /admin/* routes
+- super_admin can also access /billing/* and /intake/* routes (for support purposes)
+- No other role can access /admin/* routes — redirect to / if attempted
+
+**4c. Sidebar Active State**
+
+Add "My Practice" to the billing sidebar navigation between Dashboard and Claims. Only show this item to users with admin role (not rcm_manager or intake — they do not need the clinic management view).
+
+---
+
+## TECHNICAL NOTES
+
+- All new database queries for super_admin must explicitly bypass the org_id WHERE clause — do not rely on getOrgId(req) returning a valid org for these queries
+- The /admin routes must use a separate layout (AdminLayout) from BillingLayout — do not embed admin views inside the billing shell
+- The Clinic Home page (/billing/clinic) reuses existing API endpoints where possible — it is a UI composition page, not a new data layer
+- For "Last Active" on the team table: add a last_active_at column to the users table (nullable), update it on every successful login via the auth/login endpoint, and use it in the team display
+- All new pages must be mobile-aware (readable on tablet) even if not fully responsive
+- Seed operations (Item 3) must be idempotent — safe to run on every server restart without creating duplicates
+- Do not expose DANIELA_PASSWORD or SUPER_ADMIN_PASSWORD in any API response or client-side code
+
+Work through items 1 through 4 in order. After completing each item, confirm what was built, note any assumptions made, and flag anything that needs input before proceeding to the next item.

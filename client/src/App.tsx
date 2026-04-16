@@ -7,9 +7,14 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { AuthGuard } from "@/components/auth-guard";
 import { IntakeLayout } from "@/components/intake-layout";
 import { BillingLayout } from "@/components/billing-layout";
+import { AdminLayout } from "@/components/admin-layout";
 import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import ModuleSelector from "@/pages/module-selector";
+import AdminOverview from "@/pages/admin/overview";
+import AdminClinics from "@/pages/admin/clinics";
+import ClinicDetail from "@/pages/admin/clinic-detail";
+import ClinicHome from "@/pages/billing/clinic-home";
 
 import IntakeDashboard from "@/pages/intake/dashboard";
 import DashboardPage from "@/pages/dashboard";
@@ -85,7 +90,29 @@ function Router() {
         </AuthGuard>
       </Route>
 
+      {/* ===== ADMIN MODULE ===== */}
+      <Route path="/admin/clinics/:orgId">
+        <AuthGuard allowedRoles={["super_admin"]}>
+          <AdminLayout><ClinicDetail /></AdminLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/admin/clinics">
+        <AuthGuard allowedRoles={["super_admin"]}>
+          <AdminLayout><AdminClinics /></AdminLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/admin">
+        <AuthGuard allowedRoles={["super_admin"]}>
+          <AdminLayout><AdminOverview /></AdminLayout>
+        </AuthGuard>
+      </Route>
+
       {/* ===== BILLING MODULE ===== */}
+      <Route path="/billing/clinic">
+        <AuthGuard allowedRoles={["admin"]}>
+          <BillingLayout><ClinicHome /></BillingLayout>
+        </AuthGuard>
+      </Route>
       <Route path="/billing/dashboard">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><BillingDashboard /></BillingLayout>
