@@ -1,0 +1,81 @@
+Starting Container
+npm warn config production Use `--omit=dev` instead.
+> rest-express@1.0.0 db:push
+> drizzle-kit push
+No config path provided, using default 'drizzle.config.ts'
+Reading config file '/app/drizzle.config.ts'
+Using 'pg' driver for database querying
+[⣷] Pulling schema from database...
+[⣯] Pulling schema from database...
+[⣟] Pulling schema from database...
+[⡿] Pulling schema from database...
+[⢿] Pulling schema from database...
+[⣻] Pulling schema from database...
+[⣽] Pulling schema from database...
+[✓] Pulling schema from database...
+ Warning  Found data-loss statements:
+· You're about to delete va_location_rates table with 2160 items
+· You're about to delete icd10_codes table with 97584 items
+· You're about to delete cpt_codes table with 16645 items
+· You're about to delete billing_location column in practice_settings table with 1 items
+· You're about to delete oa_submitter_id column in practice_settings table with 1 items
+· You're about to delete oa_sftp_username column in practice_settings table with 1 items
+· You're about to delete oa_sftp_password column in practice_settings table with 1 items
+· You're about to delete oa_connected column in practice_settings table with 1 items
+THIS ACTION WILL CAUSE DATA LOSS AND CANNOT BE REVERTED
+Do you still want to push changes?
+❯ No, abort
+  Yes, I want to remove 3 tables, remove 5 columns, 
+npm warn config production Use `--omit=dev` instead.
+> rest-express@1.0.0 seed
+> NODE_ENV=production node dist/seed.cjs
+  internalPosition: undefined,
+Seeding database with realistic healthcare data...
+  internalQuery: undefined,
+error: column "organization_id" does not exist
+  where: undefined,
+    at /app/dist/seed.cjs:2:13326
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+  schema: undefined,
+    at async /app/dist/seed.cjs:8:37957
+  table: undefined,
+    at async Vx (/app/dist/seed.cjs:23:9603) {
+  column: undefined,
+  dataType: undefined,
+  length: 115,
+  constraint: undefined,
+  severity: 'ERROR',
+  file: 'parse_relation.c',
+  code: '42703',
+  line: '3716',
+  routine: 'errorMissingColumn'
+  detail: undefined,
+}
+  hint: undefined,
+  position: '51',
+npm warn config production Use `--omit=dev` instead.
+> rest-express@1.0.0 start
+> NODE_ENV=production node dist/index.cjs
+Created Demo Organization
+Assigned existing data to demo organization
+WARNING: SUPER_ADMIN_PASSWORD not set — using default 'admin123'. Set this env var in production!
+Startup migration error: column "organization_id" of relation "users" does not exist
+9:53:42 PM [express] serving on port 8080
+9:57:16 PM [express] POST /api/auth/login 500 in 40ms :: {"message":"column \"organization_id\" does not exist"}
+error: column "organization_id" does not exist
+    at /app/dist/index.cjs:70:13330
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async eU (/app/dist/index.cjs:78:836)
+    at async ay._verify (/app/dist/index.cjs:86:721)
+9:58:38 PM [express] POST /api/auth/login 500 in 36ms :: {"message":"column \"organization_id\" does not exist"}
+error: column "organization_id" does not exist
+    at /app/dist/index.cjs:70:13330
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async eU (/app/dist/index.cjs:78:836)
+    at async ay._verify (/app/dist/index.cjs:86:721)
+9:58:46 PM [express] POST /api/auth/login 500 in 40ms :: {"message":"column \"organization_id\" does not exist"}
+error: column "organization_id" does not exist
+    at /app/dist/index.cjs:70:13330
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async eU (/app/dist/index.cjs:78:836)
+    at async ay._verify (/app/dist/index.cjs:86:721)

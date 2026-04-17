@@ -164,6 +164,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   try {
     const { pool } = await import("./db");
 
+    // Core multi-tenancy columns — must run before any seed or login query
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS organization_id VARCHAR`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS organizations (
+      id VARCHAR PRIMARY KEY,
+      name TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      onboarding_dismissed_at TIMESTAMP
+    )`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS billing_location VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_submitter_id VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_username VARCHAR`);
