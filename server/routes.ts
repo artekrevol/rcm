@@ -367,6 +367,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           [hashed]
         );
         console.log("Created super_admin user: abeer@tekrevol.com");
+      } else if (process.env.SUPER_ADMIN_PASSWORD) {
+        const hashed = await hashPassword(superPwd);
+        await pool.query("UPDATE users SET password = $1 WHERE email = 'abeer@tekrevol.com'", [hashed]);
+        console.log("Updated super_admin password from environment variable");
       }
     }
 
@@ -385,6 +389,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
            VALUES (gen_random_uuid()::text, $1, 'Chajinel Clinic', '12', true, true, NOW(), NOW())`,
           [CHAJINEL_ORG_ID]
         );
+        console.log("Created Chajinel Clinic organization");
+      }
+      // Always ensure Daniela's user exists and password reflects env var
+      {
         const { hashPassword } = await import("./auth");
         const danielaPwd = process.env.DANIELA_PASSWORD || 'clinic123';
         if (!process.env.DANIELA_PASSWORD) {
@@ -399,8 +407,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             [danielaEmail, hashed, CHAJINEL_ORG_ID]
           );
           console.log(`Created Chajinel admin user: ${danielaEmail}`);
+        } else if (process.env.DANIELA_PASSWORD) {
+          const hashed = await hashPassword(danielaPwd);
+          await pool.query("UPDATE users SET password = $1 WHERE email = $2", [hashed, danielaEmail]);
+          console.log(`Updated Daniela password from environment variable`);
         }
-        console.log("Created Chajinel Clinic organization");
       }
     }
 
