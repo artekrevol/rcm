@@ -1,12 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
-import { useParams, Link } from "wouter";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useParams, Link, useLocation } from "wouter";
 import { format } from "date-fns";
 import {
-  ArrowLeft, Building2, Users, FileText, AlertTriangle, CheckCircle2, XCircle, CreditCard, ClipboardList, Shield
+  ArrowLeft, Building2, Users, FileText, AlertTriangle, CheckCircle2, XCircle, CreditCard, ClipboardList, Shield, UserCheck
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 function RoleBadge({ role }: { role: string }) {
   const map: Record<string, string> = {
@@ -23,10 +25,28 @@ function RoleBadge({ role }: { role: string }) {
 
 export default function ClinicDetail() {
   const { orgId } = useParams<{ orgId: string }>();
+  const [, setLocation] = useLocation();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ["/api/super-admin/orgs", orgId],
     queryFn: () => fetch(`/api/super-admin/orgs/${orgId}`, { credentials: "include" }).then(r => r.json()),
+  });
+
+  const impersonateMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/super-admin/impersonate/${orgId}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Impersonation started", description: `Now acting as ${data?.org?.name}` });
+      setLocation("/billing/dashboard");
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to impersonate", description: err.message, variant: "destructive" });
+    },
   });
 
   if (isLoading) {
@@ -51,7 +71,7 @@ export default function ClinicDetail() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
         <Link href="/admin/clinics">
           <Button variant="ghost" size="sm" className="gap-1">
             <ArrowLeft className="h-4 w-4" />
@@ -59,11 +79,21 @@ export default function ClinicDetail() {
           </Button>
         </Link>
         <div className="h-4 w-px bg-border" />
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-1">
           <Building2 className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-xl font-semibold" data-testid="text-clinic-name">{org.name}</h1>
         </div>
         <Badge variant="outline" className="text-xs">Read-Only</Badge>
+        <Button
+          size="sm"
+          className="gap-1.5"
+          data-testid="button-impersonate-clinic"
+          onClick={() => impersonateMutation.mutate()}
+          disabled={impersonateMutation.isPending}
+        >
+          <UserCheck className="h-4 w-4" />
+          {impersonateMutation.isPending ? "Starting..." : "Impersonate Clinic"}
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

@@ -145,7 +145,9 @@ async function syncPatientToLead(patient: Patient, extractedData?: any): Promise
 function getOrgId(req: any): string | null {
   const user = req.user as any;
   if (!user) return null;
-  if (user.role === "super_admin") return null;
+  if (user.role === "super_admin") {
+    return req.session?.impersonatingOrgId || null;
+  }
   return user.organization_id || null;
 }
 
@@ -5774,6 +5776,33 @@ Warmly,
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ── Impersonation Routes ─────────────────────────────────────────────────
+  app.post("/api/super-admin/impersonate/:orgId", requireSuperAdmin, async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { orgId } = req.params;
+      const org = await db.query("SELECT id, name FROM organizations WHERE id = $1", [orgId]);
+      if (!org.rows[0]) return res.status(404).json({ error: "Organization not found" });
+      (req.session as any).impersonatingOrgId = orgId;
+      (req.session as any).impersonatingOrgName = org.rows[0].name;
+      req.session.save((err) => {
+        if (err) return res.status(500).json({ error: "Failed to save session" });
+        res.json({ success: true, orgId, orgName: org.rows[0].name });
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/super-admin/stop-impersonate", requireSuperAdmin, (req, res) => {
+    delete (req.session as any).impersonatingOrgId;
+    delete (req.session as any).impersonatingOrgName;
+    req.session.save((err) => {
+      if (err) return res.status(500).json({ error: "Failed to save session" });
+      res.json({ success: true });
+    });
   });
 
   // ── Clinic Home Stats Route ─────────────────────────────────────────────

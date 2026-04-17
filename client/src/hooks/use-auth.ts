@@ -6,6 +6,8 @@ export type AuthUser = {
   email: string;
   role: string;
   name: string;
+  impersonatingOrgId: string | null;
+  impersonatingOrgName: string | null;
 };
 
 export function useAuth() {

@@ -221,7 +221,9 @@ export function setupAuth(app: Express) {
       return res.status(401).json({ error: "Not authenticated" });
     }
     const { password, ...safeUser } = req.user as any;
-    res.json(safeUser);
+    const impersonatingOrgId = (req.session as any).impersonatingOrgId || null;
+    const impersonatingOrgName = (req.session as any).impersonatingOrgName || null;
+    res.json({ ...safeUser, impersonatingOrgId, impersonatingOrgName });
   });
 }
 
