@@ -165,15 +165,26 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const { pool } = await import("./db");
 
     // Core multi-tenancy columns — must run before any seed or login query
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS organization_id VARCHAR`);
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT`);
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR`);
+    // Ensure organizations table exists first (other tables may FK or reference it)
     await pool.query(`CREATE TABLE IF NOT EXISTS organizations (
       id VARCHAR PRIMARY KEY,
       name TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT NOW(),
       onboarding_dismissed_at TIMESTAMP
     )`);
+    // Add organization_id to every org-scoped table (idempotent; safe on fresh and old DBs)
+    const orgScopedTables = [
+      "users", "leads", "patients", "encounters", "claims", "claim_events",
+      "denials", "rules", "calls", "prior_authorizations", "email_templates",
+      "nurture_sequences", "email_logs", "availability_slots", "appointments",
+      "chat_sessions", "chat_messages", "chat_analytics", "vob_verifications",
+      "activity_logs", "providers", "practice_settings", "claim_templates"
+    ];
+    for (const t of orgScopedTables) {
+      await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
+    }
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS billing_location VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_submitter_id VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_username VARCHAR`);

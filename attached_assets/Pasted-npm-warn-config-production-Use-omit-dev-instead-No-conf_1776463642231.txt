@@ -1,0 +1,61 @@
+npm warn config production Use `--omit=dev` instead.
+No config path provided, using default 'drizzle.config.ts'
+Reading config file '/app/drizzle.config.ts'
+> drizzle-kit push
+> rest-express@1.0.0 db:push
+Using 'pg' driver for database querying
+[⣷] Pulling schema from database...
+Starting Container
+[⣯] Pulling schema from database...
+[⣟] Pulling schema from database...
+[⡿] Pulling schema from database...
+[⢿] Pulling schema from database...
+[⣻] Pulling schema from database...
+Is organization_id column in users table created or renamed from another column?
+[✓] Pulling schema from database...
+❯ + organization_id                  create column
+  ~ last_active_at › organization_id rename column
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'parse_relation.c',
+  line: '3716',
+npm warn config production Use `--omit=dev` instead.
+  routine: 'errorMissingColumn'
+}
+> rest-express@1.0.0 seed
+> NODE_ENV=production node dist/seed.cjs
+Seeding database with realistic healthcare data...
+error: column "organization_id" does not exist
+    at /app/dist/seed.cjs:2:13326
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async /app/dist/seed.cjs:8:37957
+    at async Vx (/app/dist/seed.cjs:23:9603) {
+  length: 115,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '51',
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+Payer database and HCPCS descriptions updated
+Seeded 264 CARC codes
+Seeded 229 RARC codes
+Seeded 53 Place of Service codes
+npm warn config production Use `--omit=dev` instead.
+Seeded/updated 554 taxonomy codes
+Added 146 new payers to the payer database
+> rest-express@1.0.0 start
+Startup migration error: column "organization_id" does not exist
+> NODE_ENV=production node dist/index.cjs
+10:06:41 PM [express] serving on port 8080
+Assigned existing data to demo organization
+WARNING: SUPER_ADMIN_PASSWORD not set — using default 'admin123'. Set this env var in production!
+Created super_admin user: abeer@tekrevol.com
+Created Chajinel Clinic organization
+WARNING: DANIELA_PASSWORD not set — using default 'clinic123'. Set this env var in production!
+Created Chajinel admin user: daniela@chajinel.com
