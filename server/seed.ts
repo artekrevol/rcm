@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { db, pool } from "./db";
 import { users, leads, patients, encounters, claims, claimEvents, denials, rules } from "@shared/schema";
 import { allPayers as realPayers } from "./payers";
 import { createUser } from "./services/user-service";
@@ -136,6 +136,18 @@ function randomMemberId(payer: string): string {
 
 async function seed() {
   console.log("Seeding database with realistic healthcare data...");
+
+  // Ensure organization_id exists on all org-scoped tables before any Drizzle query
+  const orgScopedTables = [
+    "users", "leads", "patients", "encounters", "claims", "claim_events",
+    "denials", "rules", "calls", "prior_authorizations", "email_templates",
+    "nurture_sequences", "email_logs", "availability_slots", "appointments",
+    "chat_sessions", "chat_messages", "chat_analytics", "vob_verifications",
+    "activity_logs", "providers", "practice_settings", "claim_templates"
+  ];
+  for (const t of orgScopedTables) {
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
+  }
 
   // Check if data already exists
   const existingUsers = await db.select().from(users).limit(1);

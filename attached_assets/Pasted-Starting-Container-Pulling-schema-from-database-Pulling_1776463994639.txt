@@ -1,0 +1,81 @@
+Starting Container
+[⣟] Pulling schema from database...
+[⡿] Pulling schema from database...
+> rest-express@1.0.0 db:push
+> drizzle-kit push
+No config path provided, using default 'drizzle.config.ts'
+Reading config file '/app/drizzle.config.ts'
+Using 'pg' driver for database querying
+[⣷] Pulling schema from database...
+npm warn config production Use `--omit=dev` instead.
+[⣯] Pulling schema from database...
+[⢿] Pulling schema from database...
+[⣻] Pulling schema from database...
+[⣽] Pulling schema from database...
+[⣷] Pulling schema from database...
+[⣯] Pulling schema from database...
+[✓] Pulling schema from database...
+· You're about to delete icd10_codes table with 97584 items
+· You're about to delete cpt_codes table with 16645 items
+· You're about to delete pos_codes table with 53 items
+· You're about to delete carc_codes table with 264 items
+· You're about to delete era_auto_post_secondary column in payers table with 234 items
+· You're about to delete era_auto_post_refunds column in payers table with 234 items
+ Warning  Found data-loss statements:
+· You're about to delete va_location_rates table with 2160 items
+· You're about to delete rarc_codes table with 229 items
+· You're about to delete taxonomy_codes table with 553 items
+· You're about to delete auto_followup_days column in payers table with 234 items
+· You're about to delete last_active_at column in users table with 6 items
+· You're about to delete era_auto_post_clean column in payers table with 234 items
+· You're about to delete era_auto_post_contractual column in payers table with 234 items
+· You're about to delete era_hold_if_mismatch column in payers table with 234 items
+· You're about to delete billing_location column in practice_settings table with 2 items
+· You're about to delete oa_submitter_id column in practice_settings table with 2 items
+· You're about to delete oa_sftp_username column in practice_settings table with 2 items
+Do you still want to push changes?
+· You're about to delete oa_sftp_password column in practice_settings table with 2 items
+· You're about to delete oa_connected column in practice_settings table with 2 items
+· You're about to delete default_tos column in practice_settings table with 2 items
+· You're about to delete default_ordering_provider_id column in practice_settings table with 2 items
+· You're about to delete homebound_default column in practice_settings table with 2 items
+· You're about to delete exclude_facility column in practice_settings table with 2 items
+· You're about to delete onboarding_dismissed_at column in organizations table with 2 items
+THIS ACTION WILL CAUSE DATA LOSS AND CANNOT BE REVERTED
+❯ No, abort
+  internalQuery: undefined,
+  Yes, I want to remove 7 tables, remove 17 columns, npm warn config production Use `--omit=dev` instead.
+  where: undefined,
+> rest-express@1.0.0 seed
+> NODE_ENV=production node dist/seed.cjs
+  schema: undefined,
+Seeding database with realistic healthcare data...
+  table: undefined,
+error: column "organization_id" does not exist
+    at /app/dist/seed.cjs:2:13326
+  column: undefined,
+    at async /app/dist/seed.cjs:8:37957
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async Vx (/app/dist/seed.cjs:23:9641) {
+  length: 116,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '460',
+  dataType: undefined,
+  internalPosition: undefined,
+  constraint: undefined,
+  file: 'parse_relation.c',
+  line: '3716',
+  routine: 'errorMissingColumn'
+}
+npm warn config production Use `--omit=dev` instead.
+> rest-express@1.0.0 start
+> NODE_ENV=production node dist/index.cjs
+Assigned existing data to demo organization
+WARNING: SUPER_ADMIN_PASSWORD not set — using default 'admin123'. Set this env var in production!
+WARNING: DANIELA_PASSWORD not set — using default 'clinic123'. Set this env var in production!
+Payer database and HCPCS descriptions updated
+Seeded demo ERA batches
+10:12:02 PM [express] serving on port 8080
