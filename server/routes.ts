@@ -382,18 +382,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!process.env.SUPER_ADMIN_PASSWORD) {
         console.warn("WARNING: SUPER_ADMIN_PASSWORD not set — using default 'admin123'. Set this env var in production!");
       }
+      const hashed = await hashPassword(superPwd);
       const { rows: saCheck } = await pool.query("SELECT id FROM users WHERE email = 'abeer@tekrevol.com'");
       if (saCheck.length === 0) {
-        const hashed = await hashPassword(superPwd);
         await pool.query(
           "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, 'abeer@tekrevol.com', $1, 'super_admin', 'Abeer (Platform Admin)', NULL)",
           [hashed]
         );
         console.log("Created super_admin user: abeer@tekrevol.com");
-      } else if (process.env.SUPER_ADMIN_PASSWORD) {
-        const hashed = await hashPassword(superPwd);
-        await pool.query("UPDATE users SET password = $1 WHERE email = 'abeer@tekrevol.com'", [hashed]);
-        console.log("Updated super_admin password from environment variable");
+      } else {
+        await pool.query("UPDATE users SET password = $1, role = 'super_admin' WHERE email = 'abeer@tekrevol.com'", [hashed]);
+        console.log("Synced super_admin password: abeer@tekrevol.com");
       }
     }
 
@@ -414,7 +413,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         );
         console.log("Created Chajinel Clinic organization");
       }
-      // Always ensure Daniela's user exists and password reflects env var
+      // Always ensure Daniela's user exists and password is current
       {
         const { hashPassword } = await import("./auth");
         const danielaPwd = process.env.DANIELA_PASSWORD || 'clinic123';
@@ -422,18 +421,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           console.warn("WARNING: DANIELA_PASSWORD not set — using default 'clinic123'. Set this env var in production!");
         }
         const danielaEmail = process.env.DANIELA_EMAIL || 'daniela@chajinel.com';
+        const hashed = await hashPassword(danielaPwd);
         const { rows: dCheck } = await pool.query("SELECT id FROM users WHERE email = $1", [danielaEmail]);
         if (dCheck.length === 0) {
-          const hashed = await hashPassword(danielaPwd);
           await pool.query(
             "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, $1, $2, 'admin', 'Daniela', $3)",
             [danielaEmail, hashed, CHAJINEL_ORG_ID]
           );
           console.log(`Created Chajinel admin user: ${danielaEmail}`);
-        } else if (process.env.DANIELA_PASSWORD) {
-          const hashed = await hashPassword(danielaPwd);
-          await pool.query("UPDATE users SET password = $1 WHERE email = $2", [hashed, danielaEmail]);
-          console.log(`Updated Daniela password from environment variable`);
+        } else {
+          await pool.query("UPDATE users SET password = $1, organization_id = $2, role = 'admin' WHERE email = $3", [hashed, CHAJINEL_ORG_ID, danielaEmail]);
+          console.log(`Synced Daniela password and org: ${danielaEmail}`);
         }
       }
     }
