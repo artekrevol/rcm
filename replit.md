@@ -95,6 +95,14 @@ The system uses Passport.js with a local strategy, bcrypt for password hashing, 
   - **Billing sidebar**: "My Practice" link added (admin-only) between Dashboard and Patients.
   - **Super Admin API routes**: `GET /api/super-admin/vitals`, `GET /api/super-admin/orgs`, `GET /api/super-admin/orgs/:orgId`.
 
+- **Stedi real-time eligibility integration** (replaces VerifyTX in billing flow):
+  - New service: `server/services/stedi-eligibility.ts` — wraps Stedi 270/271 API with 30s timeout, parses benefitsInformation, returns structured EligibilityResult.
+  - DB migrations: `vob_verifications.lead_id` + `payer_id` made nullable; new columns `verification_method` (default `'manual'`), `stedi_transaction_id`, `verified_by` added at startup.
+  - API: `GET /api/billing/stedi/status` (returns `{ configured: boolean }`); `POST /api/billing/patients/:id/vob/check` (live Stedi call); `POST /api/billing/patients/:id/vob/manual` (manual entry).
+  - Eligibility tab on patient detail: live mode shows "Check Eligibility" (Zap icon) when STEDI_API_KEY set; always shows "Enter Manually" button with full form (payer, member ID, copay, deductible, coinsurance, OOP max, network status, prior auth, dates, notes). VOB cards show network status/prior auth badges, Stedi transaction ID, verified-by.
+  - VerifyTX routes remain intact for the Intake module; only billing flow uses Stedi.
+  - Env var required: `STEDI_API_KEY` — set in Railway/Replit secrets.
+
 - **Sprint 2 additions**:
   - **Claim Defaults tab** in Practice Settings (`/billing/settings?tab=claim-defaults`): Default TOS, default ordering provider, homebound default toggle, exclude facility toggle. Saves via `PUT /api/billing/practice-settings`. Claim wizard pre-populates from these defaults.
   - **Payer edit dialog enhanced**: Added `auto_followup_days` field + ERA Auto-Posting Rules section (5 toggles). OA submit handler sets `follow_up_date` from payer's `auto_followup_days`. ERA PATCH supports `auto-post` action with per-payer rules.

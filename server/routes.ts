@@ -624,6 +624,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_era_lines_era ON era_lines(era_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_era_lines_claim ON era_lines(claim_id)`);
 
+    // ── vob_verifications: make lead_id + payer_id nullable, add Stedi columns ─
+    await pool.query(`ALTER TABLE vob_verifications ALTER COLUMN lead_id DROP NOT NULL`);
+    await pool.query(`ALTER TABLE vob_verifications ALTER COLUMN payer_id DROP NOT NULL`);
+    await pool.query(`ALTER TABLE vob_verifications ADD COLUMN IF NOT EXISTS verification_method VARCHAR DEFAULT 'manual'`);
+    await pool.query(`ALTER TABLE vob_verifications ADD COLUMN IF NOT EXISTS stedi_transaction_id VARCHAR`);
+    await pool.query(`ALTER TABLE vob_verifications ADD COLUMN IF NOT EXISTS verified_by VARCHAR`);
+
     // Seed CARC/RARC codes, POS codes, full taxonomy codes, and additional payers
     const { seedReferenceTables } = await import("./seeds/reference-tables");
     await seedReferenceTables(pool);
@@ -3087,6 +3094,149 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [req.params.id]
       );
       res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Stedi configuration status (used by frontend to toggle live vs manual mode)
+  app.get("/api/billing/stedi/status", requireRole("admin", "rcm_manager"), async (_req, res) => {
+    const { isStediConfigured } = await import("./services/stedi-eligibility");
+    res.json({ configured: isStediConfigured() });
+  });
+
+  // Run live Stedi eligibility check for a billing patient
+  app.post("/api/billing/patients/:id/vob/check", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const patientId = req.params.id;
+
+      // Verify patient belongs to org
+      const { rows: patRows } = await db.query(
+        `SELECT p.*, ps.npi as practice_npi, ps.name as practice_name
+         FROM patients p
+         LEFT JOIN practice_settings ps ON ps.organization_id = p.organization_id
+         WHERE p.id = $1`, [patientId]
+      );
+      if (!patRows.length || !verifyOrg(patRows[0], req)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+      const patient = patRows[0];
+
+      // Resolve payer EDI ID from patient's insurance carrier or explicit payer_id
+      let ediPayerId = "00000";
+      let payerNameResolved = patient.insurance_carrier || "Unknown";
+      if (patient.payer_id) {
+        const { rows: payerRows } = await db.query(
+          `SELECT edi_payer_id, name FROM payers WHERE id = $1`, [patient.payer_id]
+        );
+        if (payerRows.length) {
+          ediPayerId = payerRows[0].edi_payer_id || ediPayerId;
+          payerNameResolved = payerRows[0].name || payerNameResolved;
+        }
+      }
+
+      if (!patient.member_id) {
+        return res.status(400).json({ error: "Patient has no member ID — cannot run eligibility check" });
+      }
+      if (!patient.first_name || !patient.last_name) {
+        return res.status(400).json({ error: "Patient first and last name are required for eligibility check" });
+      }
+      if (!patient.dob) {
+        return res.status(400).json({ error: "Patient date of birth is required for eligibility check" });
+      }
+      if (!patient.practice_npi) {
+        return res.status(400).json({ error: "Practice NPI not set — configure it in Settings → Practice" });
+      }
+
+      const controlNumber = String(Date.now()).slice(-9);
+      const dobFormatted = patient.dob.replace(/-/g, "");
+
+      const { checkEligibility } = await import("./services/stedi-eligibility");
+      const result = await checkEligibility({
+        controlNumber,
+        tradingPartnerServiceId: ediPayerId,
+        providerNpi: patient.practice_npi,
+        providerName: patient.practice_name || "Provider",
+        subscriberFirstName: patient.first_name,
+        subscriberLastName: patient.last_name,
+        subscriberDob: dobFormatted,
+        subscriberMemberId: patient.member_id,
+        serviceTypeCodes: ["42"],
+      });
+
+      const userName = (req as any).user?.username || (req as any).user?.email || null;
+      const vobId = `vob-stedi-${Date.now()}`;
+
+      await db.query(
+        `INSERT INTO vob_verifications
+           (id, patient_id, payer_id, payer_name, member_id, status, policy_status, policy_type,
+            plan_name, effective_date, term_date, copay, deductible, deductible_met, coinsurance,
+            out_of_pocket_max, prior_auth_required, network_status, raw_response, error_message,
+            verification_method, stedi_transaction_id, verified_by, context, organization_id, verified_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21,$22,$23,$24,$25,NOW())`,
+        [
+          vobId, patientId, patient.payer_id || null, payerNameResolved, patient.member_id,
+          result.status === "error" ? "error" : "verified",
+          result.policyStatus, result.policyType, result.planName,
+          result.effectiveDate, result.termDate,
+          result.copay, result.deductible, result.deductibleMet, result.coinsurance,
+          result.outOfPocketMax, result.priorAuthRequired, result.networkStatus,
+          JSON.stringify(result.rawResponse), result.errorMessage,
+          "stedi", result.stediTransactionId, userName, "billing", orgId,
+        ]
+      );
+
+      res.json({ ...result, id: vobId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Save a manual VOB entry for a billing patient
+  app.post("/api/billing/patients/:id/vob/manual", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const patientId = req.params.id;
+
+      const ownerCheck = await db.query("SELECT organization_id FROM patients WHERE id = $1", [patientId]);
+      if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) {
+        return res.status(404).json({ error: "Patient not found" });
+      }
+
+      const {
+        payerName, memberId, policyStatus, planName, effectiveDate, termDate,
+        copay, deductible, deductibleMet, coinsurance, outOfPocketMax,
+        priorAuthRequired, networkStatus, payerNotes,
+      } = req.body;
+
+      if (!memberId) return res.status(400).json({ error: "Member ID is required" });
+      if (!payerName) return res.status(400).json({ error: "Payer name is required" });
+
+      const userName = (req as any).user?.username || (req as any).user?.email || null;
+      const vobId = `vob-manual-${Date.now()}`;
+
+      await db.query(
+        `INSERT INTO vob_verifications
+           (id, patient_id, payer_name, member_id, status, policy_status, plan_name,
+            effective_date, term_date, copay, deductible, deductible_met, coinsurance,
+            out_of_pocket_max, prior_auth_required, network_status, payer_notes,
+            verification_method, verified_by, context, organization_id, verified_at)
+         VALUES ($1,$2,$3,$4,'verified',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'manual',$17,$18,$19,NOW())`,
+        [
+          vobId, patientId, payerName, memberId,
+          policyStatus || "Active", planName || null,
+          effectiveDate || null, termDate || null,
+          copay ?? null, deductible ?? null, deductibleMet ?? null, coinsurance ?? null,
+          outOfPocketMax ?? null, priorAuthRequired ?? false, networkStatus || "unknown",
+          payerNotes || null, userName, "billing", orgId,
+        ]
+      );
+
+      const { rows } = await db.query("SELECT * FROM vob_verifications WHERE id = $1", [vobId]);
+      res.json(rows[0]);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

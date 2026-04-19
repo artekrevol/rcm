@@ -454,10 +454,10 @@ export type ChatAnalytics = typeof chatAnalytics.$inferSelect;
 
 export const vobVerifications = pgTable("vob_verifications", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  leadId: varchar("lead_id").notNull(),
+  leadId: varchar("lead_id"),
   patientId: varchar("patient_id"),
   verifytxVobId: text("verifytx_vob_id"),
-  payerId: text("payer_id").notNull(),
+  payerId: text("payer_id"),
   payerName: text("payer_name").notNull(),
   memberId: text("member_id").notNull(),
   status: text("status").notNull().default("pending"),

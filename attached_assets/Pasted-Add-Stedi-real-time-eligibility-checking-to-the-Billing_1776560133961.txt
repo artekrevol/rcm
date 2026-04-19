@@ -1,0 +1,224 @@
+Add Stedi real-time eligibility checking to the Billing module. This replaces 
+VerifyTX entirely — remove all VerifyTX references from the billing flow. 
+The feature works in two modes: live API mode (when STEDI_API_KEY is set) 
+and manual entry mode (always available as a fallback).
+
+Work through each item in order and confirm before moving to the next.
+
+---
+
+## ITEM 1 — Schema Changes
+
+1a. Make lead_id nullable in vob_verifications:
+ALTER TABLE vob_verifications ALTER COLUMN lead_id DROP NOT NULL;
+
+1b. Add verification_method column:
+ALTER TABLE vob_verifications 
+  ADD COLUMN IF NOT EXISTS verification_method VARCHAR DEFAULT 'manual';
+
+1c. Add stedi_transaction_id column (for matching responses):
+ALTER TABLE vob_verifications 
+  ADD COLUMN IF NOT EXISTS stedi_transaction_id VARCHAR;
+
+1d. Add verified_by column (who ran the check or made the call):
+ALTER TABLE vob_verifications 
+  ADD COLUMN IF NOT EXISTS verified_by VARCHAR;
+
+These must be idempotent — safe to run on every server restart.
+
+---
+
+## ITEM 2 — Stedi Eligibility Service
+
+Create a new file: server/services/stedi-eligibility.ts
+
+```typescript
+const STEDI_API_KEY = process.env.STEDI_API_KEY;
+const STEDI_ELIGIBILITY_URL = 
+  'https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/eligibility/v3';
+
+export function isStediConfigured(): boolean {
+  return !!STEDI_API_KEY;
+}
+
+export interface EligibilityRequest {
+  controlNumber: string;
+  tradingPartnerServiceId: string;  // payer EDI ID e.g. "00570"
+  providerNpi: string;
+  providerName: string;
+  subscriberFirstName: string;
+  subscriberLastName: string;
+  subscriberDob: string;    // YYYYMMDD
+  subscriberMemberId: string;
+  serviceTypeCodes?: string[];  // default ["42"] for home health
+}
+
+export interface EligibilityResult {
+  status: 'active' | 'inactive' | 'error';
+  policyStatus: string;
+  policyType: string;
+  planName: string | null;
+  effectiveDate: string | null;
+  termDate: string | null;
+  copay: number | null;
+  deductible: number | null;
+  deductibleMet: number | null;
+  coinsurance: number | null;
+  outOfPocketMax: number | null;
+  outOfPocketMet: number | null;
+  priorAuthRequired: boolean;
+  networkStatus: string;
+  rawResponse: Record<string, unknown>;
+  stediTransactionId: string | null;
+  errorMessage: string | null;
+}
+
+export async function checkEligibility(
+  req: EligibilityRequest
+): Promise<EligibilityResult> {
+  if (!STEDI_API_KEY) {
+    throw new Error('Stedi API key not configured');
+  }
+
+  const body = {
+    controlNumber: req.controlNumber,
+    tradingPartnerServiceId: req.tradingPartnerServiceId,
+    provider: {
+      organizationName: req.providerName,
+      npi: req.providerNpi,
+    },
+    subscriber: {
+      firstName: req.subscriberFirstName.toUpperCase(),
+      lastName: req.subscriberLastName.toUpperCase(),
+      dateOfBirth: req.subscriberDob,
+      memberId: req.subscriberMemberId,
+    },
+    encounter: {
+      serviceTypeCodes: req.serviceTypeCodes || ['42'],
+    },
+  };
+
+  const response = await fetch(STEDI_ELIGIBILITY_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Key ${STEDI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || data.status === 'ERROR') {
+    return {
+      status: 'error',
+      policyStatus: 'error',
+      policyType: '',
+      planName: null,
+      effectiveDate: null,
+      termDate: null,
+      copay: null,
+      deductible: null,
+      deductibleMet: null,
+      coinsurance: null,
+      outOfPocketMax: null,
+      outOfPocketMet: null,
+      priorAuthRequired: false,
+      networkStatus: 'unknown',
+      rawResponse: data,
+      stediTransactionId: data.meta?.traceId || null,
+      errorMessage: data.errors?.[0]?.description || 
+                    data.message || 
+                    'Eligibility check failed',
+    };
+  }
+
+  // Parse the 271 response
+  // Stedi returns benefits in data.benefitsInformation[]
+  const benefits = data.benefitsInformation || [];
+  const planInfo = data.planInformation || {};
+  const subscriber = data.subscriber || {};
+
+  // Find active coverage indicator (code "1" = active)
+  const coverageBenefit = benefits.find((b: any) => b.code === '1');
+  const isActive = !!coverageBenefit || 
+                   data.planStatus?.[0]?.statusCode === '1';
+
+  // Extract copay (code B = co-payment)
+  const copayBenefit = benefits.find((b: any) => 
+    b.code === 'B' && b.serviceTypeCodes?.includes('42')
+  ) || benefits.find((b: any) => b.code === 'B');
+
+  // Extract deductible (code C)
+  const deductibleBenefit = benefits.find((b: any) => 
+    b.code === 'C' && b.inPlanNetworkIndicatorCode === 'Y'
+  ) || benefits.find((b: any) => b.code === 'C');
+
+  // Extract deductible met (code G = deductible - amt met)
+  const deductibleMetBenefit = benefits.find((b: any) => b.code === 'G');
+
+  // Extract OOP max (code G or specific type)
+  const oopBenefit = benefits.find((b: any) => 
+    b.code === 'G' && b.serviceTypeCodes?.includes('30')
+  );
+
+  // Extract coinsurance (code A)
+  const coinsuranceBenefit = benefits.find((b: any) => b.code === 'A');
+
+  // Prior auth required (code AR)
+  const priorAuthBenefit = benefits.find((b: any) => b.code === 'AR');
+
+  // Network status
+  const networkIndicator = subscriber.inPlanNetworkIndicatorCode || 
+    coverageBenefit?.inPlanNetworkIndicatorCode;
+
+  // Dates
+  const eligDates = data.planDateInformation || {};
+  
+  return {
+    status: isActive ? 'active' : 'inactive',
+    policyStatus: isActive ? 'Active' : 'Inactive',
+    policyType: planInfo.groupDescription || 
+                subscriber.groupDescription || '',
+    planName: planInfo.planDescription || 
+              data.planName || null,
+    effectiveDate: eligDates.eligibilityBegin || 
+                   eligDates.planBegin || null,
+    termDate: eligDates.eligibilityEnd || 
+              eligDates.planEnd || null,
+    copay: copayBenefit?.benefitAmount 
+      ? parseFloat(copayBenefit.benefitAmount) 
+      : null,
+    deductible: deductibleBenefit?.benefitAmount 
+      ? parseFloat(deductibleBenefit.benefitAmount) 
+      : null,
+    deductibleMet: deductibleMetBenefit?.benefitAmount 
+      ? parseFloat(deductibleMetBenefit.benefitAmount) 
+      : null,
+    coinsurance: coinsuranceBenefit?.benefitPercent 
+      ? parseFloat(coinsuranceBenefit.benefitPercent) 
+      : null,
+    outOfPocketMax: oopBenefit?.benefitAmount 
+      ? parseFloat(oopBenefit.benefitAmount) 
+      : null,
+    outOfPocketMet: null,  // not always returned
+    priorAuthRequired: !!priorAuthBenefit,
+    networkStatus: networkIndicator === 'Y' ? 'in-network' 
+      : networkIndicator === 'N' ? 'out-of-network' 
+      : 'unknown',
+    rawResponse: data,
+    stediTransactionId: data.meta?.traceId || null,
+    errorMessage: null,
+  };
+}
+```
+
+---
+
+## ITEM 3 — New API Endpoints
+
+Add two new endpoints to server/routes.ts under the billing section:
+
+**Endpoint A — Run live Stedi eligibility check:**
+POST /api/billing/patients/:id/vob/check
+Role: admin, rcm_manager

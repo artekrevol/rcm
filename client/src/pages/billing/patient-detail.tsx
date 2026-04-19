@@ -27,6 +27,19 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { validateNPI } from "@shared/npi-validation";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   ArrowLeft,
   Loader2,
   FileText,
@@ -38,6 +51,10 @@ import {
   CheckCircle2,
   Clock,
   Save,
+  Zap,
+  PenLine,
+  Info,
+  XCircle,
 } from "lucide-react";
 
 const REFERRAL_SOURCES = [
@@ -414,7 +431,28 @@ function ClaimsTab({ patientId }: { patientId: string }) {
   );
 }
 
-function EligibilityTab({ patientId }: { patientId: string }) {
+const EMPTY_MANUAL = {
+  payerName: "", memberId: "", policyStatus: "Active", planName: "",
+  effectiveDate: "", termDate: "", copay: "", deductible: "", deductibleMet: "",
+  coinsurance: "", outOfPocketMax: "", priorAuthRequired: false,
+  networkStatus: "unknown", payerNotes: "",
+};
+
+function EligibilityTab({ patientId, patient }: { patientId: string; patient: any }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showManual, setShowManual] = useState(false);
+  const [manualForm, setManualForm] = useState({ ...EMPTY_MANUAL });
+
+  const { data: stediStatus } = useQuery<{ configured: boolean }>({
+    queryKey: ["/api/billing/stedi/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/stedi/status");
+      if (!res.ok) return { configured: false };
+      return res.json();
+    },
+  });
+
   const { data: vobs = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/billing/patients", patientId, "vob"],
     queryFn: async () => {
@@ -424,57 +462,319 @@ function EligibilityTab({ patientId }: { patientId: string }) {
     },
   });
 
+  const checkMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/billing/patients/${patientId}/vob/check`, {});
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Eligibility check failed");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patientId, "vob"] });
+      if (data.status === "error") {
+        toast({ title: "Eligibility returned an error", description: data.errorMessage || "Payer returned an error", variant: "destructive" });
+      } else {
+        toast({ title: `Coverage ${data.status}`, description: `${data.policyStatus}${data.planName ? ` · ${data.planName}` : ""}` });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Check failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const manualMutation = useMutation({
+    mutationFn: async (form: typeof manualForm) => {
+      const payload = {
+        ...form,
+        copay: form.copay !== "" ? parseFloat(form.copay) : null,
+        deductible: form.deductible !== "" ? parseFloat(form.deductible) : null,
+        deductibleMet: form.deductibleMet !== "" ? parseFloat(form.deductibleMet) : null,
+        coinsurance: form.coinsurance !== "" ? parseFloat(form.coinsurance) : null,
+        outOfPocketMax: form.outOfPocketMax !== "" ? parseFloat(form.outOfPocketMax) : null,
+      };
+      const res = await apiRequest("POST", `/api/billing/patients/${patientId}/vob/manual`, payload);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Save failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patientId, "vob"] });
+      setShowManual(false);
+      setManualForm({ ...EMPTY_MANUAL });
+      toast({ title: "Manual VOB saved" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  function openManual() {
+    setManualForm({
+      ...EMPTY_MANUAL,
+      payerName: patient?.insurance_carrier || "",
+      memberId: patient?.member_id || "",
+    });
+    setShowManual(true);
+  }
+
+  function mf(field: string, value: any) {
+    setManualForm(prev => ({ ...prev, [field]: value }));
+  }
+
+  const stediConfigured = stediStatus?.configured ?? false;
+
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h3 className="text-lg font-medium">Eligibility Verifications</h3>
+    <TooltipProvider>
+      <div className="space-y-4">
+        {/* Header bar */}
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-medium">Eligibility Verifications</h3>
+          <div className="flex items-center gap-2">
+            {!stediConfigured && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 dark:bg-amber-950 dark:text-amber-400 border border-amber-200 dark:border-amber-800 rounded-md px-2 py-1 cursor-default">
+                    <Info className="h-3 w-3" />
+                    Manual mode
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Live eligibility checks require a STEDI_API_KEY environment variable. Use manual entry to record VOB results from phone calls.
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {stediConfigured && (
+              <Button
+                size="sm"
+                onClick={() => checkMutation.mutate()}
+                disabled={checkMutation.isPending}
+                data-testid="button-check-eligibility"
+              >
+                {checkMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Zap className="h-4 w-4 mr-2" />}
+                Check Eligibility
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={openManual} data-testid="button-manual-vob">
+              <PenLine className="h-4 w-4 mr-2" />
+              Enter Manually
+            </Button>
+          </div>
+        </div>
+
+        {/* VOB cards */}
+        {vobs.length === 0 ? (
+          <Card>
+            <CardContent className="py-12 text-center">
+              <Shield className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+              <p className="text-muted-foreground text-sm">No eligibility verifications yet.</p>
+              <p className="text-muted-foreground text-xs mt-1">
+                {stediConfigured ? 'Click "Check Eligibility" for a live check, or "Enter Manually" to record a phone VOB.' : 'Click "Enter Manually" to record benefits collected by phone.'}
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {vobs.map((v: any) => (
+              <Card key={v.id} data-testid={`card-vob-${v.id}`}>
+                <CardContent className="p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      {/* Status + badges row */}
+                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                        {v.status === "verified" && v.policy_status !== "error" ? (
+                          <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 border-0 gap-1">
+                            <CheckCircle2 className="h-3 w-3" />
+                            {v.policy_status || "Active"}
+                          </Badge>
+                        ) : v.status === "error" ? (
+                          <Badge variant="destructive" className="gap-1">
+                            <XCircle className="h-3 w-3" />
+                            Error
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs capitalize">{v.status}</Badge>
+                        )}
+                        <Badge variant="outline" className="text-xs capitalize bg-muted/40">
+                          {v.verification_method === "stedi" ? "Stedi live" : v.verification_method === "manual" ? "Manual" : v.context || "unknown"}
+                        </Badge>
+                        {v.network_status && v.network_status !== "unknown" && (
+                          <Badge variant="outline" className={`text-xs ${v.network_status === "in-network" ? "text-emerald-600 border-emerald-200 bg-emerald-50 dark:bg-emerald-950" : "text-orange-600 border-orange-200 bg-orange-50 dark:bg-orange-950"}`}>
+                            {v.network_status}
+                          </Badge>
+                        )}
+                        {v.prior_auth_required && (
+                          <Badge variant="outline" className="text-xs text-amber-600 border-amber-200 bg-amber-50 dark:bg-amber-950 gap-1">
+                            <AlertTriangle className="h-3 w-3" />
+                            Prior Auth Required
+                          </Badge>
+                        )}
+                      </div>
+
+                      {/* Plan info */}
+                      {(v.plan_name || v.policy_type || v.payer_name) && (
+                        <p className="text-sm font-medium mb-2">
+                          {v.plan_name || v.payer_name}
+                          {v.policy_type ? <span className="font-normal text-muted-foreground"> · {v.policy_type}</span> : null}
+                        </p>
+                      )}
+
+                      {/* Benefits grid */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-sm">
+                        {v.copay != null && <div><span className="text-muted-foreground">Copay:</span> <span className="font-medium">${v.copay}</span></div>}
+                        {v.deductible != null && <div><span className="text-muted-foreground">Deductible:</span> <span className="font-medium">${v.deductible}</span></div>}
+                        {v.deductible_met != null && <div><span className="text-muted-foreground">Deductible Met:</span> <span className="font-medium">${v.deductible_met}</span></div>}
+                        {v.coinsurance != null && <div><span className="text-muted-foreground">Coinsurance:</span> <span className="font-medium">{v.coinsurance}%</span></div>}
+                        {v.out_of_pocket_max != null && <div><span className="text-muted-foreground">OOP Max:</span> <span className="font-medium">${v.out_of_pocket_max}</span></div>}
+                        {v.effective_date && <div><span className="text-muted-foreground">Effective:</span> <span className="font-medium">{v.effective_date}</span></div>}
+                        {v.term_date && <div><span className="text-muted-foreground">Term:</span> <span className="font-medium">{v.term_date}</span></div>}
+                      </div>
+
+                      {/* Error message */}
+                      {v.error_message && (
+                        <p className="text-xs text-destructive mt-2 bg-destructive/5 rounded p-2">{v.error_message}</p>
+                      )}
+
+                      {/* Notes */}
+                      {v.payer_notes && (
+                        <p className="text-xs text-muted-foreground mt-2 italic">{v.payer_notes}</p>
+                      )}
+                    </div>
+
+                    <div className="text-right text-xs text-muted-foreground whitespace-nowrap shrink-0">
+                      {v.verified_at && (
+                        <div className="flex items-center gap-1 justify-end">
+                          <Clock className="h-3 w-3" />
+                          {new Date(v.verified_at).toLocaleDateString()}
+                        </div>
+                      )}
+                      {v.verified_by && <div className="mt-0.5">{v.verified_by}</div>}
+                      {v.stedi_transaction_id && (
+                        <div className="mt-0.5 font-mono text-[10px] opacity-50">{v.stedi_transaction_id.slice(0, 12)}…</div>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
       </div>
 
-      {vobs.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <Shield className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-            <p className="text-muted-foreground">No eligibility verifications found for this patient.</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {vobs.map((v: any) => (
-            <Card key={v.id} data-testid={`card-vob-${v.id}`}>
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <Badge variant="outline" className="text-xs capitalize">{v.context || "unknown"}</Badge>
-                      <Badge variant={v.status === "verified" ? "default" : "outline"} className="text-xs">
-                        {v.status}
-                      </Badge>
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-8 gap-y-1 mt-2 text-sm">
-                      {v.copay && <div><span className="text-muted-foreground">Copay:</span> ${v.copay}</div>}
-                      {v.deductible && <div><span className="text-muted-foreground">Deductible:</span> ${v.deductible}</div>}
-                      {v.out_of_pocket_max && <div><span className="text-muted-foreground">OOP Max:</span> ${v.out_of_pocket_max}</div>}
-                      {v.coinsurance && <div><span className="text-muted-foreground">Coinsurance:</span> {v.coinsurance}%</div>}
-                      {v.network_status && <div><span className="text-muted-foreground">Network:</span> {v.network_status}</div>}
-                    </div>
-                  </div>
-                  <div className="text-right text-sm text-muted-foreground">
-                    {v.verified_at && (
-                      <div className="flex items-center gap-1">
-                        <Clock className="h-3 w-3" />
-                        {new Date(v.verified_at).toLocaleDateString()}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-    </div>
+      {/* Manual entry dialog */}
+      <Dialog open={showManual} onOpenChange={setShowManual}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Enter Benefits Manually</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="manual-payer">Payer Name *</Label>
+                <Input id="manual-payer" value={manualForm.payerName} onChange={e => mf("payerName", e.target.value)} placeholder="e.g. Aetna" data-testid="input-manual-payer" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="manual-member">Member ID *</Label>
+                <Input id="manual-member" value={manualForm.memberId} onChange={e => mf("memberId", e.target.value)} placeholder="W123456789" data-testid="input-manual-member" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="manual-policy-status">Policy Status</Label>
+                <Select value={manualForm.policyStatus} onValueChange={v => mf("policyStatus", v)}>
+                  <SelectTrigger id="manual-policy-status" data-testid="select-policy-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Active">Active</SelectItem>
+                    <SelectItem value="Inactive">Inactive</SelectItem>
+                    <SelectItem value="Unknown">Unknown</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="manual-network">Network Status</Label>
+                <Select value={manualForm.networkStatus} onValueChange={v => mf("networkStatus", v)}>
+                  <SelectTrigger id="manual-network" data-testid="select-network-status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="in-network">In-Network</SelectItem>
+                    <SelectItem value="out-of-network">Out-of-Network</SelectItem>
+                    <SelectItem value="unknown">Unknown</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="manual-plan">Plan Name</Label>
+              <Input id="manual-plan" value={manualForm.planName} onChange={e => mf("planName", e.target.value)} placeholder="e.g. PPO Gold" data-testid="input-manual-plan" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="manual-eff">Effective Date</Label>
+                <Input id="manual-eff" type="date" value={manualForm.effectiveDate} onChange={e => mf("effectiveDate", e.target.value)} data-testid="input-manual-effective" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="manual-term">Termination Date</Label>
+                <Input id="manual-term" type="date" value={manualForm.termDate} onChange={e => mf("termDate", e.target.value)} data-testid="input-manual-term" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="manual-copay">Copay ($)</Label>
+                <Input id="manual-copay" type="number" min="0" step="0.01" value={manualForm.copay} onChange={e => mf("copay", e.target.value)} placeholder="0.00" data-testid="input-manual-copay" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="manual-coins">Coinsurance (%)</Label>
+                <Input id="manual-coins" type="number" min="0" max="100" step="1" value={manualForm.coinsurance} onChange={e => mf("coinsurance", e.target.value)} placeholder="20" data-testid="input-manual-coinsurance" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="manual-ded">Deductible ($)</Label>
+                <Input id="manual-ded" type="number" min="0" step="0.01" value={manualForm.deductible} onChange={e => mf("deductible", e.target.value)} placeholder="1500.00" data-testid="input-manual-deductible" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="manual-ded-met">Deductible Met ($)</Label>
+                <Input id="manual-ded-met" type="number" min="0" step="0.01" value={manualForm.deductibleMet} onChange={e => mf("deductibleMet", e.target.value)} placeholder="0.00" data-testid="input-manual-deductible-met" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="manual-oop">Out-of-Pocket Max ($)</Label>
+              <Input id="manual-oop" type="number" min="0" step="0.01" value={manualForm.outOfPocketMax} onChange={e => mf("outOfPocketMax", e.target.value)} placeholder="5000.00" data-testid="input-manual-oop" />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="manual-auth"
+                checked={manualForm.priorAuthRequired as boolean}
+                onChange={e => mf("priorAuthRequired", e.target.checked)}
+                className="h-4 w-4"
+                data-testid="checkbox-prior-auth"
+              />
+              <Label htmlFor="manual-auth">Prior Authorization Required</Label>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="manual-notes">Notes</Label>
+              <Textarea id="manual-notes" value={manualForm.payerNotes} onChange={e => mf("payerNotes", e.target.value)} rows={2} placeholder="Any notes from the phone call..." data-testid="textarea-manual-notes" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowManual(false)} data-testid="button-cancel-manual">Cancel</Button>
+            <Button
+              onClick={() => manualMutation.mutate(manualForm)}
+              disabled={manualMutation.isPending || !manualForm.payerName || !manualForm.memberId}
+              data-testid="button-save-manual"
+            >
+              {manualMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save VOB
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </TooltipProvider>
   );
 }
 
@@ -672,7 +972,7 @@ export default function PatientDetail() {
           <ClaimsTab patientId={patientId} />
         </TabsContent>
         <TabsContent value="eligibility">
-          <EligibilityTab patientId={patientId} />
+          <EligibilityTab patientId={patientId} patient={patient} />
         </TabsContent>
         <TabsContent value="notes">
           <NotesTab patient={patient} />
