@@ -1612,23 +1612,139 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/claims/:id/denial-recovery", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const orgId = getOrgId(req);
       const { rows: [claim] } = await db.query(`SELECT * FROM claims WHERE id = $1`, [req.params.id]);
       if (!claim || !verifyOrg(claim, req)) return res.status(404).json({ error: "Claim not found" });
 
-      // Fetch denials for this claim
       const { rows: denials } = await db.query(
-        `SELECT * FROM denials WHERE claim_id = $1 ORDER BY created_at DESC`,
-        [req.params.id]
+        `SELECT d.*, cc.description as carc_description, cc.group_code
+         FROM denials d
+         LEFT JOIN carc_codes cc ON d.denial_reason_text = cc.code
+         ORDER BY d.created_at DESC`,
+        []
       );
+      const claimDenials = denials.filter((d: any) => d.claim_id === req.params.id);
 
-      // Also check ERA lines for CARC codes
       const { rows: eraLines } = await db.query(
         `SELECT el.*, eb.check_number FROM era_lines el JOIN era_batches eb ON el.era_id = eb.id WHERE el.claim_id = $1 ORDER BY el.created_at DESC LIMIT 5`,
         [req.params.id]
       );
 
-      res.json({ claim, denials, eraLines });
+      // Enrich: for each denial CARC code, fetch full record from carc_codes table
+      const carcCodesInvolved = [...new Set([
+        ...claimDenials.map((d: any) => d.denial_reason_text).filter(Boolean),
+        ...eraLines.flatMap((el: any) => {
+          try { const sl = Array.isArray(el.service_lines) ? el.service_lines : JSON.parse(el.service_lines || "[]"); return sl.map((s: any) => s.carc || s.adjustment_code).filter(Boolean); } catch { return []; }
+        }),
+      ])];
+
+      let carcDetails: any[] = [];
+      if (carcCodesInvolved.length > 0) {
+        const { rows } = await db.query(
+          `SELECT code, description, group_code FROM carc_codes WHERE code = ANY($1)`,
+          [carcCodesInvolved]
+        );
+        carcDetails = rows;
+      }
+
+      // Build intelligence: map each CARC to root cause + recommended action using carc_codes table
+      const carcMap = Object.fromEntries(carcDetails.map(c => [c.code, c]));
+      const recoveryActions = carcCodesInvolved.map((code: string) => {
+        const carc = carcMap[code];
+        const gc = carc?.group_code || "";
+        let rootCause = carc?.description || `CARC ${code}`;
+        let action = "Review denial reason and contact payer for clarification";
+        if (gc === "CO") action = "Contractual obligation — verify contract terms or write off per agreement";
+        if (gc === "PR") action = "Patient responsibility — bill patient or secondary insurance";
+        if (gc === "OA") action = "Other adjustment — review payer remittance for details";
+        if (gc === "PI") action = "Payer-initiated adjustment — no action required unless disputing";
+        if (code === "CO-16" || code === "16") action = "Missing/invalid claim information — check NPI, auth number, and diagnosis pointers";
+        if (code === "CO-29" || code === "29") action = "Timely filing exceeded — file appeal with original submission proof";
+        if (code === "CO-45" || code === "45") action = "Contractual write-off — adjust per contract (no patient billing)";
+        if (code === "CO-97" || code === "97") action = "Bundled service — unbundle or add modifier 59 if separate service";
+        if (code === "CO-50" || code === "50") action = "Medical necessity — obtain prior auth documentation and appeal";
+        return { code, rootCause, action, groupCode: gc };
+      });
+
+      res.json({ claim, denials: claimDenials, eraLines, carcDetails, recoveryActions });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Manual 277/835 Response Refresh ────────────────────────────────────────
+  app.post("/api/billing/refresh-responses", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const results: { type: string; processed: number; errors: string[] } = { type: "277+835", processed: 0, errors: [] };
+
+      const { isSFTPConfigured, retrieve277Acknowledgments, retrieve835ERA } = await import("./services/office-ally");
+      if (!(isSFTPConfigured as any)()) {
+        return res.json({ message: "SFTP not configured — manual refresh unavailable. Configure OA_SFTP_HOST, OA_SFTP_USERNAME, OA_SFTP_PASSWORD to enable.", processed: 0 });
+      }
+
+      // Process 277 acknowledgments
+      try {
+        const acks = await retrieve277Acknowledgments();
+        for (const ack of acks) {
+          // Parse 277: look for CLM01 (claim control number) and status codes
+          const lines = ack.split(/~\n|~/);
+          for (const seg of lines) {
+            const parts = seg.trim().split("*");
+            if (parts[0] === "STC" && parts.length > 2) {
+              const statusCode = parts[1];
+              const claimRef = lines.find(s => s.startsWith("REF*"))?.split("*")?.[2];
+              if (claimRef) {
+                let newStatus = "acknowledged";
+                if (statusCode.startsWith("A1")) newStatus = "acknowledged";
+                if (statusCode.startsWith("A2")) newStatus = "submitted";
+                if (statusCode.startsWith("A3") || statusCode.startsWith("R")) newStatus = "denied";
+                try {
+                  await db.query(
+                    `UPDATE claims SET status = $1, updated_at = NOW() WHERE id LIKE $2 AND organization_id = $3`,
+                    [newStatus, `%${claimRef.slice(0, 15)}%`, orgId]
+                  );
+                  await db.query(
+                    `INSERT INTO claim_events (id, claim_id, type, notes, timestamp)
+                     SELECT $1, id, '277 Acknowledgment', $2, NOW() FROM claims WHERE id LIKE $3 LIMIT 1`,
+                    [crypto.randomUUID(), `Status: ${statusCode}`, `%${claimRef.slice(0, 15)}%`]
+                  );
+                  results.processed++;
+                } catch (e: any) { results.errors.push(e.message); }
+              }
+            }
+          }
+        }
+      } catch (e: any) { results.errors.push(`277 error: ${e.message}`); }
+
+      // Process 835 ERA files
+      try {
+        const eras = await retrieve835ERA();
+        for (const era of eras) {
+          const lines = era.split(/~\n|~/);
+          let checkNum = "", payerName = "", payDate = "";
+          for (const seg of lines) {
+            const parts = seg.trim().split("*");
+            if (parts[0] === "BPR") payDate = parts[2] || "";
+            if (parts[0] === "TRN") checkNum = parts[2] || "";
+            if (parts[0] === "N1" && parts[1] === "PR") payerName = parts[2] || "";
+            if (parts[0] === "CLP" && parts.length > 3) {
+              const claimRef = parts[1], claimStatus = parts[2], paidAmt = parts[4];
+              try {
+                const eraId = crypto.randomUUID();
+                await db.query(
+                  `INSERT INTO era_batches (id, org_id, payer_name, check_number, payment_date, total_amount, status)
+                   VALUES ($1, $2, $3, $4, $5, $6, 'unposted') ON CONFLICT DO NOTHING`,
+                  [eraId, orgId, payerName, checkNum, payDate, paidAmt || 0]
+                );
+                results.processed++;
+              } catch (e: any) { results.errors.push(e.message); }
+            }
+          }
+        }
+      } catch (e: any) { results.errors.push(`835 error: ${e.message}`); }
+
+      res.json({ ...results, message: `Processed ${results.processed} response(s) from Office Ally` });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2103,6 +2219,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       if (!c.icd10_primary)
         warnings.push({ field: "claim.icd10", message: "No primary ICD-10 diagnosis code", severity: "error" });
+      // 837P allows max 12 ICD-10 codes total (1 primary + 11 secondary)
+      const secondaryIcds = Array.isArray(c.icd10_secondary) ? c.icd10_secondary : (c.icd10_secondary ? (() => { try { return JSON.parse(c.icd10_secondary); } catch { return []; } })() : []);
+      if (secondaryIcds.length > 11)
+        warnings.push({ field: "claim.icd10_secondary", message: `837P supports max 12 ICD-10 codes (1 primary + 11 secondary). You have ${secondaryIcds.length} secondary codes — excess codes will be dropped.`, severity: "warning" });
       if (!c.place_of_service)
         warnings.push({ field: "claim.pos", message: "Place of service code is missing", severity: "warning" });
 
@@ -2130,6 +2250,77 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         const pr = await db.query("SELECT npi FROM providers WHERE id = $1", [provId]);
         if (!pr.rows.length || !pr.rows[0].npi || pr.rows[0].npi.replace(/\D/g, "").length !== 10)
           warnings.push({ field: "provider.npi", message: "Rendering provider NPI is missing or not 10 digits", severity: "error" });
+      }
+
+      // ── Prevention Rules Engine ─────────────────────────────────────────────
+      const ediOrgId2 = getOrgId(req);
+      const { rows: activeRules } = await db.query(
+        `SELECT * FROM rules WHERE enabled = true AND (organization_id = $1 OR organization_id IS NULL OR payer = 'All')
+         ORDER BY prevention_action DESC`,
+        [ediOrgId2 || ""]
+      );
+
+      const payerNameLower = (payerInfo.name || c.payer || "").toLowerCase();
+      const isVA = payerNameLower.includes("va") || payerNameLower.includes("veterans") || payerNameLower.includes("triwest") || payerNameLower.includes("vaccn");
+      const isMedicare = payerNameLower.includes("medicare");
+
+      for (const rule of activeRules) {
+        const ruleForPayer = rule.payer === "All" || (isVA && rule.payer === "VA Community Care") || (isMedicare && rule.payer === "Medicare");
+        if (!ruleForPayer) continue;
+
+        const severity: "error" | "warning" = rule.prevention_action === "block" ? "error" : "warning";
+        const tp = rule.trigger_pattern;
+
+        if (tp === "member_id_format" && (!pat.member_id || pat.member_id.trim() === "")) {
+          warnings.push({ field: "patient.member_id", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+        } else if (tp === "rendering_npi") {
+          if (!provId) warnings.push({ field: "provider.npi", message: `[Rule] ${rule.name}`, severity });
+        } else if (tp === "place_of_service" && isVA && c.place_of_service && c.place_of_service !== "12") {
+          warnings.push({ field: "claim.place_of_service", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+        } else if (tp === "home_health_pos_mismatch") {
+          const hhCodes = ["G0299","G0300","G0151","G0152","G0153","G0156","T1019"];
+          const rawLinesCodes = (Array.isArray(c.service_lines) ? c.service_lines : []).map((sl: any) => sl.hcpcsCode || sl.hcpcs_code || sl.code || "");
+          if (rawLinesCodes.some((code: string) => hhCodes.includes(code)) && c.place_of_service !== "12") {
+            warnings.push({ field: "claim.place_of_service", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+          }
+        } else if (tp === "authorization_required" && isVA && !c.authorization_number) {
+          warnings.push({ field: "claim.authorization_number", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+        } else if (tp === "diagnosis_code_version") {
+          const icdCodesAll = [c.icd10_primary, ...(Array.isArray(c.icd10_secondary) ? c.icd10_secondary : [])].filter(Boolean);
+          const hasIcd9 = icdCodesAll.some((code: string) => /^\d{3}(\.\d+)?$/.test(code) && !code.startsWith("Z") && !code.startsWith("M"));
+          if (hasIcd9) warnings.push({ field: "claim.icd10", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+        } else if (tp === "timely_filing" && c.service_date) {
+          const daysSince = Math.floor((Date.now() - new Date(c.service_date).getTime()) / 86400000);
+          const limit = isVA ? 180 : isMedicare ? 365 : 365;
+          if (daysSince >= limit - 30 && daysSince < limit) {
+            warnings.push({ field: "claim.service_date", message: `[Rule] ${rule.name}: ${daysSince} days since service (limit ${limit})`, severity: "warning" });
+          }
+        } else if (tp === "timely_filing_exceeded" && c.service_date) {
+          const daysSince = Math.floor((Date.now() - new Date(c.service_date).getTime()) / 86400000);
+          const limit = isVA ? 180 : isMedicare ? 365 : 365;
+          if (daysSince >= limit) {
+            warnings.push({ field: "claim.service_date", message: `[Rule] ${rule.name}: ${daysSince} days since service exceeds ${limit}-day limit`, severity });
+          }
+        } else if (tp === "medicare_timely_filing" && isMedicare && c.service_date) {
+          const daysSince = Math.floor((Date.now() - new Date(c.service_date).getTime()) / 86400000);
+          if (daysSince >= 335) warnings.push({ field: "claim.service_date", message: `[Rule] ${rule.name}: ${daysSince} days since service (365-day limit)`, severity: "warning" });
+        } else if (tp === "medicare_timely_exceeded" && isMedicare && c.service_date) {
+          const daysSince = Math.floor((Date.now() - new Date(c.service_date).getTime()) / 86400000);
+          if (daysSince >= 365) warnings.push({ field: "claim.service_date", message: `[Rule] ${rule.name}: ${daysSince} days — claim cannot be paid`, severity });
+        } else if (tp === "diagnosis_pointer") {
+          const rawLinesDP = Array.isArray(c.service_lines) ? c.service_lines : [];
+          const missingPointer = rawLinesDP.some((sl: any) => !sl.diagnosisPointers && !sl.diagnosisPointer && !sl.diagnosis_pointer);
+          if (missingPointer) warnings.push({ field: "claim.service_lines", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+        } else if (tp === "provider_taxonomy") {
+          if (provId) {
+            const txRow = await db.query("SELECT taxonomy_code FROM providers WHERE id = $1", [provId]);
+            if (!txRow.rows[0]?.taxonomy_code) warnings.push({ field: "provider.taxonomy_code", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+          }
+        } else if (tp === "missing_required_fields") {
+          if (!c.icd10_primary || (Array.isArray(c.service_lines) ? c.service_lines : []).length === 0) {
+            warnings.push({ field: "claim", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+          }
+        }
       }
 
       const errors = warnings.filter(w => w.severity === "error");
@@ -2223,10 +2414,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           amount: Number(c.amount) || 0,
           claim_frequency_code: c.claim_frequency_code || "1",
           orig_claim_number: c.orig_claim_number || null,
-          homebound_indicator: !!c.homebound_indicator,
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
           delay_reason_code: c.delay_reason_code || null,
           service_lines: serviceLines,
-          icd10_codes: icd10Codes.length ? icd10Codes : ["Z00.00"],
+          icd10_codes: icd10Codes.length ? icd10Codes : (() => { throw new Error("VALIDATION_ERROR: Claim has no ICD-10 diagnosis codes. Please add at least one diagnosis code before generating EDI."); })(),
         },
         patient: {
           first_name: pat.first_name || "",
@@ -2268,6 +2459,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await db.query(
         `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
         [crypto.randomUUID(), req.params.id, c.patient_id, "edi_export", "837P EDI file generated", (req.user as any)?.id || null]
+      );
+
+      // Set follow_up_date (30 days from today) and status = submitted on manual EDI download
+      await db.query(
+        `UPDATE claims SET status = CASE WHEN status = 'draft' THEN 'submitted' ELSE status END,
+         follow_up_date = COALESCE(follow_up_date, NOW() + INTERVAL '30 days'),
+         follow_up_status = COALESCE(follow_up_status, 'pending'), updated_at = NOW()
+         WHERE id = $1`,
+        [req.params.id]
       );
 
       res.setHeader("Content-Type", "application/edi-x12");
@@ -2367,8 +2567,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           auth_number: c.authorization_number || null,
           payer: c.payer || payerInfo.name,
           amount: Number(c.amount) || 0,
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          delay_reason_code: c.delay_reason_code || null,
+          claim_frequency_code: c.claim_frequency_code || "1",
+          orig_claim_number: c.orig_claim_number || null,
           service_lines: serviceLines,
-          icd10_codes: icd10Codes.length ? icd10Codes : ["Z00.00"],
+          icd10_codes: icd10Codes.length ? icd10Codes : (() => { throw new Error("VALIDATION_ERROR: Claim has no ICD-10 diagnosis codes. Please add at least one diagnosis code before submitting."); })(),
         },
         patient: {
           first_name: pat.first_name || "",

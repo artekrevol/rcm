@@ -7,7 +7,7 @@ const OA_CONFIG = {
   password: process.env.OA_SFTP_PASSWORD,
 };
 
-function isSFTPConfigured(): boolean {
+export function isSFTPConfigured(): boolean {
   return !!(OA_CONFIG.username && OA_CONFIG.password);
 }
 

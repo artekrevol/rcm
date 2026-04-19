@@ -180,18 +180,20 @@ export function generate837P(input: EDI837PInput): string {
     segments.push(`REF*G1*${claim.auth_number}`);
   }
 
-  // REF*4N: Reason for late filing (delay reason code)
-  if (claim.delay_reason_code) {
+  // REF*4N: Reason for late filing — omit if empty/none (not a valid X12 qualifier)
+  if (claim.delay_reason_code && claim.delay_reason_code !== "none") {
     segments.push(`REF*4N*${claim.delay_reason_code}`);
   }
 
-  // NTE: Homebound indicator for VA home health / Medicare
-  if (claim.homebound_indicator) {
+  // NTE: Homebound indicator — only emit when explicitly true, not for "N" string
+  if (claim.homebound_indicator === true) {
     segments.push(`NTE*ADD*PATIENT IS HOMEBOUND`);
   }
 
+  // 837P allows max 12 ICD-10 codes in a single HI segment; cap to prevent rejection
   const diagCodes = claim.icd10_codes
-    .map((code, i) => `${i === 0 ? "ABK" : "ABF"}:${code}`)
+    .slice(0, 12)
+    .map((code, i) => `${i === 0 ? "ABK" : "ABF"}:${code.replace(/\./g, "")}`)
     .join("*");
   segments.push(`HI*${diagCodes}`);
 

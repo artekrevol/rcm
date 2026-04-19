@@ -1,0 +1,83 @@
+CRITICAL: 277 and 835 Responses Are Never Processed
+This is the most operationally damaging finding. The retrieve277Acknowledgments() and retrieve835ERA() functions exist in the Office Ally service — but they are never called anywhere. There is no route, no polling job, no scheduler, nothing that triggers them.
+What this means in practice: Daniela submits a claim. It goes to Office Ally via SFTP. Office Ally processes it and puts a 277CA acknowledgment file back on the SFTP server. That file sits there forever. ClaimShield never reads it. The Claim Tracker shows "Submitted" indefinitely. The dashboard shows the claim in limbo. No rejection, no acceptance, no status — because nothing is reading the responses.
+CMD's Claim Tracker works because it receives 277 status messages and updates the claim record. ClaimShield has the parsing code but no trigger to run it.
+Fix needed: A polling endpoint or a background job that runs retrieve277Acknowledgments() and retrieve835ERA() on a schedule (every 15 minutes or triggered manually), parses the responses, and updates claim_events and claim status accordingly. At minimum, a manual "Refresh Status" button on the Claim Tracker that calls a /api/billing/refresh-responses endpoint.
+
+🔴 CRITICAL: Fallback ICD-10 Code Z00.00 Will Cause Immediate Denial
+In two places in the submission flow:
+javascripticd10_codes: icd10Codes.length ? icd10Codes : ["Z00.00"],
+Z00.00 is "Encounter for general adult medical examination without abnormal findings." If a claim somehow makes it to submission with no ICD-10 code — which the validator should catch but doesn't always — it goes out with a wellness exam code attached to a home nursing visit. The payer will deny it as medically unnecessary (CO-50) because G0299 (skilled nursing) is not supported by a wellness encounter code.
+This fallback should either throw an error and block submission, or return a validation failure. It should never silently substitute a clinical code.
+
+🔴 CRITICAL: VA Payer ID VACCN Is Not a Real Clearinghouse Payer ID
+The VA Community Care payer in the database has payer_id = 'VACCN'. This is a placeholder identifier created during seeding. Real VA Community Care claims must use the actual clearinghouse payer ID — which depends on the regional contractor:
+
+TriWest Healthcare Alliance (most of the US): EDI Payer ID TRWST or 84146
+Optum/UHC (some regions): EDI Payer ID 87726 or UHC
+
+The NM1*40 payer loop in the 837P uses this payer_id as the routing identifier. If VACCN is sent to Office Ally, the clearinghouse cannot route the claim to any payer. It will be rejected immediately at the clearinghouse level with an unknown payer error — before VA ever sees it.
+Before Chajinel's first real claim, you need to confirm which VA contractor covers their geographic area (Texas is TriWest) and update the payer record with the correct EDI ID.
+
+🟠 HIGH: TCN Extraction from Letter Data Is Fragile
+The Proof of Timely Filing Letter is supposed to cite the Transaction Control Number as proof the claim was submitted. The code extracts it as:
+javascriptconst tcn = claim.availity_icn 
+  || submissionEvent?.notes?.match(/TCN[:\s]+(\S+)/i)?.[1] 
+  || null;
+The availity_icn field is only populated when the claim is submitted via the old Availity path (which is no longer the target). The regex parses the notes field of a claim event — which is a free-text string like "837P submitted: claim_abc_1234.edi". This will almost never contain a TCN because the TCN comes back in the 277 acknowledgment response, which as established above is never processed.
+The result: the Timely Filing Letter will have a blank or null TCN field for every real claim. A letter without a TCN is not valid proof of timely filing. Insurers will reject it.
+
+🟠 HIGH: Provider Taxonomy Code Is Hardcoded as Home Health Default
+Throughout the submission flow, the fallback taxonomy code is hardcoded:
+javascripttaxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
+163W00000X is "Registered Nurse" taxonomy — correct for home health RN visits. But this hardcoded default will be wrong for:
+
+LPN visits (taxonomy 164W00000X)
+Physical therapy (225100000X)
+Occupational therapy (225X00000X)
+Home health aide (376G00000X)
+
+When Chajinel adds other provider types beyond RN, every EDI file will have the wrong taxonomy code in the PRV segment, which is a VA rejection trigger (per the seeded prevention rule itself: "VA: Missing Provider Taxonomy Code").
+
+🟠 HIGH: Service Line units Field Handling Is Inconsistent for Timed Codes
+From CMD's analysis: home health timed codes (G0299, G0162) bill in 15-minute increments. The wizard has unitIntervalMinutes and hours fields to support this — you enter hours worked, the system converts to 15-minute units. But:
+javascriptunits: parseInt(l.units) || 0,
+The wizard computes units from hours internally and stores the result. But parseInt(l.units) — if l.units is "8" (8 units of 15 minutes = 2 hours of skilled nursing), the EDI correctly outputs 8. However the displayed rate and charge on the CMS-1500 may not match because ratePerUnit is the per-15-minute rate, not the per-hour rate. A claim showing 8 units at $40.89/unit = $327.12 is correct EDI but may confuse a biller who thinks "8 hours at $40.89/hour" — they would expect $327.12 but at a different per-unit interpretation. No VA denial, but a source of daily biller confusion.
+
+🟠 HIGH: icd10_secondary Stored as Raw JSON Array — No Validation
+The wizard collects ICD-10 secondary codes and the PATCH endpoint stores them as JSON.stringify(val). There is no validation that:
+
+The codes are valid ICD-10 format
+The same code isn't duplicated in both primary and secondary
+The total code count doesn't exceed 12 (CMS-1500 limit for Box 21)
+
+CMD's claim data spec shows ICD codes labeled A through L (12 positions). If more than 12 are submitted, the 837P HI segment will exceed spec limits and fail validation.
+
+🟡 MEDIUM: Claim Tracker's OR organization_id IS NULL Means Demo Claims Leak Into Daniela's Tracker
+Already noted in the security audit, but the CMD-lens impact is specific: Daniela will open her Claim Tracker and see 4 claims for a patient named "Megan Perez" — a demo VA patient who doesn't exist in her clinic. She will either:
+
+Try to work them (wasted time)
+Get confused about why there's data she didn't enter
+Lose trust in the platform on day one
+
+This is the highest-impact UX consequence of the multi-tenancy bug for an onboarding scenario.
+
+🟡 MEDIUM: Follow-Up Queue Shows Daniela Claims She Can't Action
+The follow-up queue query uses AND (c.organization_id = $1 OR c.organization_id IS NULL). This means Daniela sees demo claims in her worklist. She clicks "Add Note" on a demo claim, adds a note — and it saves to a claim that isn't hers, in an org that isn't hers. No error, no warning.
+
+🟡 MEDIUM: Delay Reason Code Values Don't Match X12 Spec
+The wizard offers delay reason code "6" as "Delay in delivering dental models" — this is a dental-specific code. The spec also shows code "15" as "Natural disaster." Neither is relevant for home health. More critically, X12 HIPAA 5010 delay reason codes are submitted in the REF*4N segment where the value must be a valid qualifier from table X12-365. Code "none" (which is the wizard's default value) is not a valid X12 code — the REF*4N segment simply should not be present when there's no delay reason. The code does filter this out (delayReasonCode !== "none") but the label in the dropdown is misleading.
+
+🟡 MEDIUM: No Payer Agreement Status Tracking for ERA Enrollment
+CMD has a full payer agreement system that tracks which payers have approved ERA agreements, which are pending, and which require provider action. ClaimShield has no equivalent. When ERA files don't arrive from a payer, there's no way to know if it's because:
+
+The ERA agreement was never submitted
+The agreement is pending approval
+The payer doesn't support ERA
+The clearinghouse routing is wrong
+
+This will be Daniela's first support call: "I submitted claims but no ERA came back." Without agreement status tracking, the answer is "check with Office Ally" — which is exactly the manual process ClaimShield is supposed to replace.
+
+Complete Priority Matrix
+Consolidating both audit passes into a single ordered list:
+PriorityIssueImpact on DanielaFix ComplexityP0277/835 responses never retrieved — claim status never updatesClaims stuck at "Submitted" foreverMedium — add polling endpoint + parserP0Multi-tenancy broken — demo data visible to all orgsDaniela sees fake patients and claims on day 1Low — WHERE clausesP0EDI SV1 diagnosis pointer alpha vs numericEvery claim rejected by clearinghouseLow — mapping functionP0VA payer ID VACCN is not a real EDI routing IDClaims can't route to VA payerLow — update payer recordP0Prevention rules don't execute at submissionRules page is cosmetic — no actual preventionMedium — wire rules engine to validationP0ICD-10 codes not stripped of decimal in HI segmentPayer rejection on Z51.11, M79.3 and othersLow — one-line fixP1ERA posting doesn't track financial balancesNo audit trail of what was paid vs billedHigh — schema + logicP1Z00.00 fallback ICD-10 code on submissionSilent clinical billing errorLow — throw error insteadP1Remittance code action engine missingCO-45 write-offs require manual workHigh — new featureP1Ordering provider wrong in PDF (uses rendering provider data)Box 17/17b incorrect on every home health claimLow — fix data lookupP1SE segment count formula offClearinghouse may reject on segment count mismatchLow — fix formulaP2TCN not captured from 277 responseTimely filing letters have blank TCNBlocked by P0 fixP2Provider taxonomy hardcoded to RN onlyWrong taxonomy for non-RN visitsLow — remove hardcoded fallbackP2Denial recovery uses 13-code static listUnknown CARC codes get no guidanceMedium — database-driven lookupP2Follow-up date only set on OA submit, not manual EDIManual submissions never appear in work queueLow — set on EDI download tooP2Payer agreement status tracking absentNo visibility into ERA enrollment stateMedium — new featureP3FPRR formula counts pending as resolvedDashboard KPI is overstatedLow — fix formulaP3Patient DOB stored as text, no normalizationSilent EDI date errorsLow — normalize on saveP3Duplicate claim detection absentRisk of billing same visit twiceMedium — add checkP3Payer type code for VA uses name-matchingMay route with wrong payer typeLow — fix lookup

@@ -1,0 +1,62 @@
+🔴 CRITICAL: Prevention Rules Are Display-Only — They Don't Actually Run
+This is the most damaging finding from a billing perspective. CMD's prevention rules run at the moment of submission and block the claim from going out. ClaimShield's 22 rules exist in the database and display on the Rules page — but there is no code that actually executes them against a claim before submission.
+The /api/billing/claims/:id/edi-validate endpoint checks NPI length, Tax ID format, and whether service lines exist. It does not touch the rules table at all. The timely filing rule, the duplicate claim rule, the VA authorization rule — none of them fire.
+Daniela will see a clean green checklist, submit a claim, and it will get denied for a rule violation that ClaimShield's own rules page says it prevents.
+Fix: The EDI validation endpoint must query the rules table, evaluate each enabled rule against the claim's data (service date, payer, codes, diagnosis), and return blocks and warnings from the rules engine before allowing submission.
+
+🔴 CRITICAL: ERA Posting Doesn't Track Financial Balances
+CMD's ERA posting records: billed amount, allowed amount, paid amount, patient responsibility, contractual adjustments, and CARC/RARC per line — then uses that to determine what balance remains and where it goes (write-off vs. patient vs. secondary payer).
+ClaimShield's ERA posting does this:
+javascriptawait db.query(`UPDATE claims SET status = 'paid' WHERE id = $1`, [line.claim_id]);
+That's it. It marks the claim paid and moves on. There is no:
+
+Recording of what was actually paid vs. billed
+Contractual adjustment write-off (CO-45)
+Patient responsibility tracking
+Secondary payer transfer logic
+Running balance on the claim
+
+This means after ERA posting, there is no financial audit trail. You cannot answer "how much was billed vs. collected for this claim" from the data. The A/R Days and collection rate dashboard metrics are therefore also wrong — they're based on claim amounts, not actual payment data.
+
+🔴 CRITICAL: HI Segment Diagnosis Code Qualifier Is Wrong for Multiple Codes
+The EDI generator builds the HI segment as:
+javascript.map((code, i) => `${i === 0 ? "ABK" : "ABF"}:${code}`)
+ABK is correct for the principal diagnosis (ICD-10-CM). ABF is correct for additional diagnoses. This is correct per X12 5010. However, the ICD codes stored in the database may contain periods (e.g., I10 is fine but Z51.11 has a period). The X12 spec requires ICD-10 codes in EDI to exclude the decimal point. Looking at the actual CMS-1500 Daniela generated — Box 21 shows I10 and Z51.11. The period in Z51.11 will cause a payer-level rejection on the HI segment.
+Fix: Strip all periods from ICD-10 codes before writing them to the HI segment:
+typescriptconst cleanCode = code.replace('.', '');
+
+🟠 HIGH: Denial Recovery Agent Returns Raw Data — No Intelligence Layer
+CMD's Intelligent Claim Rejections translates raw EDI rejection text into plain English. ClaimShield's denial recovery endpoint returns:
+javascriptres.json({ claim, denials, eraLines });
+That's the raw claim record, raw denial records, and raw ERA lines. The front-end is doing all the interpretation. There's no server-side logic that maps CARC codes to root causes, no recommended action engine, no field-level routing logic. Whatever the front-end is doing, it's static logic baked into the React component — meaning it's not driven by the 264 CARC codes in the database, it's driven by a hardcoded switch statement in the UI.
+This means: any CARC code not in that hardcoded list gets no recovery guidance. For Daniela's VA claims, VA-specific rejection codes (not standard CARC) will show nothing.
+Fix: The denial recovery endpoint should query carc_codes table for the denial code, return the description and standard group code, and classify into root cause categories server-side using the full 264-code library — not a 13-code hardcoded list.
+
+🟠 HIGH: Remittance Code Action Engine Missing Entirely
+CMD has a per-remittance-code action configuration that defines what happens automatically when each CARC arrives in an ERA — write off, transfer to patient, set to denied, etc. ClaimShield has 264 CARC codes seeded in the database but no action configuration on them. There is no table for remittance_code_actions, no per-payer action logic, and the ERA posting just marks lines as "posted" regardless of what the adjustment codes mean.
+From the CMD crawl: CO-45 adjustments (contractual write-offs) should be auto-configured for VA claims. PR-1, PR-2, PR-3 (deductible, co-insurance, co-payment) should transfer to patient responsibility. Without this, every ERA that contains adjustments requires the biller to manually interpret and record what to do — exactly the manual work ClaimShield is supposed to eliminate.
+
+🟠 HIGH: No Per-Payer Follow-Up Date Auto-Scheduling Actually Fires
+The payer table has auto_followup_days column. The claim submission endpoint has this logic:
+javascriptif (auto_followup_days) {
+  UPDATE claims SET follow_up_date = submission_date + auto_followup_days
+}
+But this only runs in /api/billing/claims/:id/submit-oa (Office Ally submission). If a claim is submitted by downloading the EDI file manually and uploading to a portal — which is the current workflow since Stedi isn't live yet — the follow-up date never gets set. The Follow-Up Work Queue will be empty for all manually submitted claims.
+
+🟠 HIGH: EDI Segment Count (SE) Is Calculated Wrong
+javascriptconst segCount = segments.length - 2 + 1;
+segments.push(`SE*${segCount}*0001`);
+The X12 spec says SE01 (segment count) must include the ST and SE segments themselves. The formula segments.length - 2 + 1 subtracts 2 (ISA and GS, presumably) and adds 1 for SE. But it's not subtracting the right segments. The count should be: all segments from ST through SE inclusive, which is (segments after GS push) - (ISA, GS) + 1 (for SE itself). The current formula is almost certainly off by 1-2 depending on how many segments precede ST. Clearinghouses validate the SE segment count and will reject if it doesn't match the actual segment count.
+
+🟡 MEDIUM: homeboundIndicator Stored as VARCHAR Instead of BOOLEAN
+typescripthomeboundIndicator: varchar("homebound_indicator").default("Y"),
+The schema stores this as a string "Y" by default. The EDI generator checks:
+javascriptif (claim.homebound_indicator) { segments.push(`NTE*ADD*PATIENT IS HOMEBOUND`); }
+Since "Y" is truthy, this works — but "N" is also truthy, meaning a claim where the biller explicitly set Homebound = No would still output the homebound NTE segment. The claim wizard also uses a boolean toggle but the schema stores a string. The CMS-1500 generator checks !!claim.homebound_indicator which will also be true for "N".
+
+🟡 MEDIUM: No Duplicate Claim Detection Before Submission
+CMD has a duplicate claim rule that fires before submission. ClaimShield has a rule seeded that says it blocks duplicates, but as established above, rules don't execute at submission. More specifically, the claim creation draft endpoint does not check for an existing claim with the same patient, service date, and HCPCS code. Daniela billing Chajinel's monthly claims could accidentally create and submit duplicate claims for the same patient and date with no warning.
+
+🟡 MEDIUM: getPayerTypeCode() Uses Name-Matching — VA Claims Will Get Wrong Payer Type
+javascriptif (name.includes("va") || name.includes("tricare")) return "CH";
+VA Community Care payer in the database may be stored as "VA Community Care" — which contains "VA" and correctly returns "CH" (CHAMPVA/TRICARE). But if a payer is named "VA Austin" or "Veterans Affairs" or "VACCN" — these won't match. More critically, "CH" is the code for CHAMPVA/TRICARE, not for VA Community Care. VA Community Care claims should use payer type "VA" or in the SBR segment use the correct code per payer companion guide. This may cause VA payer-specific routing issues.
