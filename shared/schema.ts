@@ -544,6 +544,7 @@ export const providers = pgTable("providers", {
   npi: varchar("npi").notNull().unique(),
   taxonomyCode: varchar("taxonomy_code"),
   individualTaxId: varchar("individual_tax_id"),
+  licenseNumber: varchar("license_number"),
   isDefault: boolean("is_default").default(false),
   isActive: boolean("is_active").default(true),
   organizationId: varchar("organization_id"),

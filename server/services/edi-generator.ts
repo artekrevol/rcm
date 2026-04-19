@@ -49,6 +49,7 @@ export interface EDI837PInput {
     last_name: string;
     npi: string;
     taxonomy_code: string;
+    license_number?: string | null;
   };
   ordering_provider?: {
     first_name: string;
@@ -122,8 +123,9 @@ export function generate837P(input: EDI837PInput): string {
 
   segments.push(`BHT*0019*00*${claimControlNumber}*${date}*${time}*CH`);
 
+  // NM1*41: Submitter — use XX (NPI) qualifier since we submit with NPI, not clearinghouse ETIN
   segments.push(
-    `NM1*41*2*${practice.name}*****46*${practice.npi}`
+    `NM1*41*2*${practice.name}*****XX*${practice.npi}`
   );
   const billingPhone = (practice.phone || "0000000000").replace(/\D/g, "");
   segments.push(`PER*IC*Billing Contact*TE*${billingPhone}`);
@@ -168,7 +170,8 @@ export function generate837P(input: EDI837PInput): string {
   );
   // CLM: CLM01=control#, CLM02=charge, CLM05=POS:B:freq, CLM06=provider sig, CLM07=assignment, CLM08=benefits, CLM09=release
   segments.push(
-    `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:${freqCode}*Y*A*Y*I`
+    // CLM09=Y: "provider has signed statement permitting release" — most payers including VA and Medicare expect Y not I
+  `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:${freqCode}*Y*A*Y*Y`
   );
 
   // REF*F8: Original claim ICN/TCN for replacement/void claims
@@ -202,6 +205,10 @@ export function generate837P(input: EDI837PInput): string {
     `NM1*82*1*${provider.last_name}*${provider.first_name}****XX*${provider.npi}`
   );
   segments.push(`PRV*PE*PXC*${provider.taxonomy_code}`);
+  // REF*1C: State license number — required by CareFirst, some VA companions, and commercial payers
+  if (provider.license_number) {
+    segments.push(`REF*1C*${provider.license_number}`);
+  }
 
   // Loop 2310D: Ordering Provider (NM1*DQ) — only if different from rendering
   if (ordering_provider && ordering_provider.npi !== provider.npi) {

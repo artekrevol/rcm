@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EDI 837P Audit Report</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:        #0D1117;
+    --surface:   #161B22;
+    --surface2:  #1C2128;
+    --border:    #30363D;
+    --red:       #F85149;
+    --red-dim:   rgba(248,81,73,0.12);
+    --amber:     #E3B341;
+    --amber-dim: rgba(227,179,65,0.12);
+    --green:     #3FB950;
+    --green-dim: rgba(63,185,80,0.12);
+    --blue:      #58A6FF;
+    --blue-dim:  rgba(88,166,255,0.12);
+    --text:      #E6EDF3;
+    --text-dim:  #8B949E;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+  html { font-size: 10px; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    padding: 40px;
+    max-width: 1100px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+
+  /* HEADER */
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+    margin-bottom: 32px;
+  }
+  .header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+  }
+  .title {
+    font-family: var(--mono);
+    font-size: 2.4rem;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+  .title span { color: var(--blue); }
+  .subtitle { font-size: 1.3rem; color: var(--text-dim); margin-top: 4px; }
+  .meta {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    line-height: 1.8;
+  }
+  .meta .filename { color: var(--amber); }
+
+  /* SCORE STRIP */
+  .score-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 32px;
+  }
+  .score-cell {
+    background: var(--surface);
+    padding: 18px 20px;
+    text-align: center;
+  }
+  .score-num {
+    font-family: var(--mono);
+    font-size: 3.2rem;
+    font-weight: 600;
+    line-height: 1;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .score-num.red    { color: var(--red); }
+  .score-num.amber  { color: var(--amber); }
+  .score-num.green  { color: var(--green); }
+  .score-num.blue   { color: var(--blue); }
+  .score-label { font-size: 1.15rem; color: var(--text-dim); }
+
+  /* RAW EDI BLOCK */
+  .edi-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    margin-bottom: 32px;
+    font-family: var(--mono);
+    font-size: 1.15rem;
+    line-height: 2.0;
+    overflow-x: auto;
+  }
+  .edi-block .seg-line { display: flex; gap: 12px; align-items: baseline; }
+  .seg-num { color: var(--text-dim); min-width: 28px; font-size: 1.0rem; text-align: right; user-select: none; }
+  .seg-ok    { color: var(--text); }
+  .seg-err   { color: var(--red); background: var(--red-dim); padding: 1px 4px; border-radius: 3px; }
+  .seg-warn  { color: var(--amber); background: var(--amber-dim); padding: 1px 4px; border-radius: 3px; }
+
+  /* SECTION */
+  .section { margin-bottom: 36px; }
+  .section-header {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+  }
+
+  /* FINDING CARDS */
+  .finding {
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .finding-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    cursor: default;
+  }
+  .finding.critical .finding-header { background: var(--red-dim); border-bottom: 1px solid rgba(248,81,73,0.3); }
+  .finding.warning  .finding-header { background: var(--amber-dim); border-bottom: 1px solid rgba(227,179,65,0.3); }
+  .finding.info     .finding-header { background: var(--blue-dim); border-bottom: 1px solid rgba(88,166,255,0.3); }
+  .finding.pass     .finding-header { background: var(--green-dim); border-bottom: none; }
+
+  .badge {
+    font-family: var(--mono);
+    font-size: 1.0rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .badge.critical { background: var(--red); color: #000; }
+  .badge.warning  { background: var(--amber); color: #000; }
+  .badge.info     { background: var(--blue); color: #000; }
+  .badge.pass     { background: var(--green); color: #000; }
+
+  .finding-title {
+    font-size: 1.35rem;
+    font-weight: 600;
+    flex: 1;
+  }
+  .finding.critical .finding-title { color: var(--red); }
+  .finding.warning  .finding-title { color: var(--amber); }
+  .finding.info     .finding-title { color: var(--blue); }
+  .finding.pass     .finding-title { color: var(--green); }
+
+  .seg-tag {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    background: var(--surface2);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  .finding-body {
+    padding: 14px 18px;
+    background: var(--surface);
+    font-size: 1.25rem;
+    color: var(--text-dim);
+    line-height: 1.65;
+  }
+
+  .finding-body .actual {
+    font-family: var(--mono);
+    font-size: 1.15rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    color: var(--red);
+    margin: 0 2px;
+  }
+  .finding-body .expected {
+    font-family: var(--mono);
+    font-size: 1.15rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    color: var(--green);
+    margin: 0 2px;
+  }
+  .finding-body .neutral {
+    font-family: var(--mono);
+    font-size: 1.15rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    color: var(--text);
+    margin: 0 2px;
+  }
+  .fix-box {
+    margin-top: 10px;
+    background: var(--surface2);
+    border-left: 3px solid var(--green);
+    padding: 10px 14px;
+    border-radius: 0 4px 4px 0;
+    font-size: 1.2rem;
+    color: var(--text);
+  }
+  .fix-box strong { color: var(--green); font-family: var(--mono); font-size: 1.1rem; }
+  .impact-box {
+    margin-top: 10px;
+    background: var(--surface2);
+    border-left: 3px solid var(--red);
+    padding: 10px 14px;
+    border-radius: 0 4px 4px 0;
+    font-size: 1.2rem;
+    color: var(--text);
+  }
+  .impact-box strong { color: var(--red); font-family: var(--mono); font-size: 1.1rem; }
+
+  /* PASS LIST */
+  .pass-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .pass-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 1.2rem;
+  }
+  .pass-item .check { color: var(--green); font-size: 1.4rem; }
+  .pass-item .seg  { font-family: var(--mono); color: var(--blue); font-size: 1.1rem; min-width: 80px; }
+  .pass-item .desc { color: var(--text-dim); }
+
+  /* MISSING TABLE */
+  .missing-table { width: 100%; border-collapse: collapse; font-size: 1.2rem; }
+  .missing-table th {
+    font-family: var(--mono);
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--text-dim);
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .missing-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    color: var(--text-dim);
+  }
+  .missing-table tr:last-child td { border-bottom: none; }
+  .missing-table .seg-cell { font-family: var(--mono); color: var(--blue); font-size: 1.1rem; white-space: nowrap; }
+  .missing-table .req-cell .r { color: var(--red); font-weight: 600; }
+  .missing-table .req-cell .o { color: var(--amber); font-weight: 600; }
+  .missing-table .req-cell .c { color: var(--text-dim); }
+
+  /* FOOTER */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    margin-top: 40px;
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-top">
+    <div>
+      <div class="title">EDI <span>837P</span> Audit Report</div>
+      <div class="subtitle">X12 HIPAA 5010 · Professional Claim · Full Segment Validation</div>
+    </div>
+    <div class="meta">
+      <div class="filename">claim_6a64045e-1d12-41e0-974d-d39e6c29b396_837P.edi</div>
+      <div>Audited: April 18, 2026</div>
+      <div>Standard: 005010X222A1</div>
+      <div>Total Segments: 32 · SE Count: ✓ 28 (correct)</div>
+    </div>
+  </div>
+</div>
+
+<!-- SCORE STRIP -->
+<div class="score-strip">
+  <div class="score-cell">
+    <span class="score-num red">5</span>
+    <div class="score-label">Hard Errors (Rejection)</div>
+  </div>
+  <div class="score-cell">
+    <span class="score-num amber">4</span>
+    <div class="score-label">Warnings (Likely Denial)</div>
+  </div>
+  <div class="score-cell">
+    <span class="score-num amber">5</span>
+    <div class="score-label">Missing Segments</div>
+  </div>
+  <div class="score-cell">
+    <span class="score-num green">22</span>
+    <div class="score-label">Segments Pass</div>
+  </div>
+</div>
+
+<!-- RAW EDI WITH ANNOTATIONS -->
+<div class="section">
+  <div class="section-header">Raw EDI — Annotated</div>
+  <div class="edi-block">
+    <div class="seg-line"><span class="seg-num">1</span><span class="seg-ok">ISA*00*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*00*&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*ZZ*1234567893&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*ZZ*00570&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;*260417*2235*^*00501*465354222*0*P*:</span></div>
+    <div class="seg-line"><span class="seg-num">2</span><span class="seg-ok">GS*HC*1234567893*00570*20260417*2235*1*X*005010X222A1</span></div>
+    <div class="seg-line"><span class="seg-num">3</span><span class="seg-ok">ST*837*0001*005010X222A1</span></div>
+    <div class="seg-line"><span class="seg-num">4</span><span class="seg-ok">BHT*0019*00*6a64045e1d1241e0974d*20260417*2235*CH</span></div>
+    <div class="seg-line"><span class="seg-num">5</span><span class="seg-warn">NM1*41*2*ClaimShield Demo Practice*****46*1234567893 <em style="font-family:var(--sans);font-size:1.0rem;">⚠ qualifier '46'=ETIN but value is an NPI</em></span></div>
+    <div class="seg-line"><span class="seg-num">6</span><span class="seg-ok">PER*IC*Billing Contact*TE*5125550100</span></div>
+    <div class="seg-line"><span class="seg-num">7</span><span class="seg-ok">NM1*40*2*CareFirst BlueCross BlueShield*****46*00570</span></div>
+    <div class="seg-line"><span class="seg-num">8</span><span class="seg-ok">HL*1**20*1</span></div>
+    <div class="seg-line"><span class="seg-num">9</span><span class="seg-ok">PRV*BI*PXC*251B00000X</span></div>
+    <div class="seg-line"><span class="seg-num">10</span><span class="seg-ok">NM1*85*2*ClaimShield Demo Practice*****XX*1234567893</span></div>
+    <div class="seg-line"><span class="seg-num">11</span><span class="seg-ok">N3*4200 Monterey Oaks Blvd Ste 200</span></div>
+    <div class="seg-line"><span class="seg-num">12</span><span class="seg-ok">N4*Austin*TX*78749</span></div>
+    <div class="seg-line"><span class="seg-num">13</span><span class="seg-ok">REF*EI*123456789</span></div>
+    <div class="seg-line"><span class="seg-num">14</span><span class="seg-ok">HL*2*1*22*0</span></div>
+    <div class="seg-line"><span class="seg-num">15</span><span class="seg-ok">SBR*P*18*******CI</span></div>
+    <div class="seg-line"><span class="seg-num">16</span><span class="seg-ok">NM1*IL*1*Jonguitud*Daniela****MI*XEA907038988</span></div>
+    <div class="seg-line"><span class="seg-num">17</span><span class="seg-ok">N3*4200 Monterey Oaks Blvd Ste 200</span></div>
+    <div class="seg-line"><span class="seg-num">18</span><span class="seg-err">N4*Austin*<u>CA</u>*78749 <em style="font-family:var(--sans);font-size:1.0rem;">❌ Austin TX ≠ state 'CA' — demographic mismatch</em></span></div>
+    <div class="seg-line"><span class="seg-num">19</span><span class="seg-ok">DMG*D8*19830927*F</span></div>
+    <div class="seg-line"><span class="seg-num">20</span><span class="seg-ok">NM1*PR*2*CareFirst BlueCross BlueShield*****PI*00570</span></div>
+    <div class="seg-line"><span class="seg-num">21</span><span class="seg-ok">CLM*6a64045e1d1241e0974d*120.00***12:B:1*Y*A*Y*I</span></div>
+    <div class="seg-line"><span class="seg-num">22</span><span class="seg-ok">NTE*ADD*PATIENT IS HOMEBOUND</span></div>
+    <div class="seg-line"><span class="seg-num">23</span><span class="seg-err">HI*ABK:<u>G89.29</u>*ABF:I10*ABF:<u>Z51.11</u> <em style="font-family:var(--sans);font-size:1.0rem;">❌ decimals in ICD-10 codes not allowed in EDI</em></span></div>
+    <div class="seg-line"><span class="seg-num">24</span><span class="seg-warn">NM1*82*1*<u>Valid</u>*Diana****XX*1245319599 <em style="font-family:var(--sans);font-size:1.0rem;">⚠ test data placeholder name</em></span></div>
+    <div class="seg-line"><span class="seg-num">25</span><span class="seg-ok">PRV*PE*PXC*163W00000X</span></div>
+    <div class="seg-line"><span class="seg-num">26</span><span class="seg-warn">NM1*DQ*1*<u>Valid</u>*Alice****XX*1234567893 <em style="font-family:var(--sans);font-size:1.0rem;">⚠ ordering NPI = billing NPI — wrong physician</em></span></div>
+    <div class="seg-line"><span class="seg-num">27</span><span class="seg-ok">LX*1</span></div>
+    <div class="seg-line"><span class="seg-num">28</span><span class="seg-err">SV1*HC:<u>G0008</u>*120.00*UN*4***<u>A</u> <em style="font-family:var(--sans);font-size:1.0rem;">❌ wrong HCPCS code + alpha pointer must be numeric</em></span></div>
+    <div class="seg-line"><span class="seg-num">29</span><span class="seg-ok">DTP*472*D8*20260417</span></div>
+    <div class="seg-line"><span class="seg-num">30</span><span class="seg-ok">SE*28*0001</span></div>
+    <div class="seg-line"><span class="seg-num">31</span><span class="seg-ok">GE*1*1</span></div>
+    <div class="seg-line"><span class="seg-num">32</span><span class="seg-ok">IEA*1*465354222</span></div>
+  </div>
+</div>
+
+<!-- HARD ERRORS -->
+<div class="section">
+  <div class="section-header">❌ Hard Errors — Will Cause Rejection</div>
+
+  <div class="finding critical">
+    <div class="finding-header">
+      <span class="badge critical">ERR-1</span>
+      <span class="seg-tag">SV1-07</span>
+      <span class="finding-title">Diagnosis Pointer Must Be Numeric — 'A' Is Not Valid in EDI</span>
+    </div>
+    <div class="finding-body">
+      This is the exact error Stedi flagged: <em>"Element SV1-07-01 must use N0 number format; value found was 'A'"</em>. The X12 HIPAA 5010 spec requires SV1-07 (diagnosis pointer) to use numeric references — <span class="expected">1</span> <span class="expected">2</span> <span class="expected">3</span> <span class="expected">4</span> — not the alphabetic letters used on the paper CMS-1500 form.
+      <br><br>
+      The claim wizard stores <span class="actual">A</span> <span class="actual">B</span> <span class="actual">C</span> <span class="actual">D</span> from the checkbox UI and that value flows directly into the EDI segment unchanged. This error will cause rejection at every clearinghouse that validates X12 element types.
+      <div class="fix-box"><strong>FIX:</strong> Add a mapping function in edi-generator.ts before writing SV1: A→1, B→2, C→3, D→4. Apply it to all diagnosis pointer values before the SV1 segment is built.</div>
+    </div>
+  </div>
+
+  <div class="finding critical">
+    <div class="finding-header">
+      <span class="badge critical">ERR-2</span>
+      <span class="seg-tag">HI</span>
+      <span class="finding-title">ICD-10 Codes Contain Decimal Points — Not Allowed in X12</span>
+    </div>
+    <div class="finding-body">
+      Two of the three diagnosis codes contain periods: <span class="actual">G89.29</span> and <span class="actual">Z51.11</span>. X12 HIPAA 5010 requires ICD-10 codes in the HI segment to be transmitted without any decimal point. The correct form is <span class="expected">G8929</span> and <span class="expected">Z5111</span>. Only <span class="neutral">I10</span> is correctly formatted.
+      <br><br>
+      This is a payer-level rejection — the claim will pass clearinghouse format validation but be rejected during payer adjudication because the code does not match any entry in the ICD-10 master file with the decimal still in.
+      <div class="fix-box"><strong>FIX:</strong> In edi-generator.ts, strip all periods from ICD-10 codes before writing the HI segment: <code>code.replace('.', '')</code></div>
+    </div>
+  </div>
+
+  <div class="finding critical">
+    <div class="finding-header">
+      <span class="badge critical">ERR-3</span>
+      <span class="seg-tag">N4 — Line 18</span>
+      <span class="finding-title">Patient State 'CA' Contradicts City 'Austin' and ZIP 78749 (Texas)</span>
+    </div>
+    <div class="finding-body">
+      The patient address shows <span class="actual">N4*Austin*CA*78749</span>. Austin is in Texas. ZIP code 78749 is a South Austin ZIP code. State <span class="actual">CA</span> (California) is inconsistent with both the city and ZIP. The billing provider address on line 12 correctly shows <span class="neutral">N4*Austin*TX*78749</span>.
+      <br><br>
+      Root cause: the patient record was created using the state from the insurance card (a California-based BCBS plan) rather than the patient's physical address state. Payers run demographic validation — name, DOB, and address must match what the insurer has on file. A state mismatch causes eligibility validation failure.
+      <div class="fix-box"><strong>FIX:</strong> Separate "insurance state" from "residential state" in the patient form. The N4 segment must use the patient's physical address state, not the insurance plan's home state. Update Daniela's patient record: State = TX.</div>
+    </div>
+  </div>
+
+  <div class="finding critical">
+    <div class="finding-header">
+      <span class="badge critical">ERR-4</span>
+      <span class="seg-tag">SV1-01-2</span>
+      <span class="finding-title">HCPCS Code G0008 Is an Influenza Vaccine Admin Code — Not Home Health</span>
+    </div>
+    <div class="finding-body">
+      The procedure code billed is <span class="actual">G0008</span> — "Administration of influenza virus vaccine." This is a preventive care vaccine administration code with no clinical relationship to home health nursing visits. It was used during the demo to demonstrate code search functionality.
+      <br><br>
+      For Chajinel's skilled nursing home visits, the correct codes are:
+      <ul style="margin: 8px 0 0 20px; color: var(--text-dim);">
+        <li><span class="expected">G0299</span> — Direct skilled nursing services of a registered nurse (RN) in the home, per 15 minutes</li>
+        <li><span class="expected">G0162</span> — Skilled nursing for care plan management in the home, per 15 minutes</li>
+        <li><span class="expected">S9123</span> — Nursing care in the home, per hour (RN)</li>
+      </ul>
+      <div class="impact-box"><strong>IMPACT:</strong> A G0008 claim submitted to VA Community Care will be denied immediately — it is not covered under a home health authorization. This has no coding basis whatsoever for a nursing visit.</div>
+    </div>
+  </div>
+
+  <div class="finding critical">
+    <div class="finding-header">
+      <span class="badge critical">ERR-5</span>
+      <span class="seg-tag">NM1*41-09</span>
+      <span class="finding-title">Submitter ID Qualifier Is '46' (ETIN) But Value Is an NPI</span>
+    </div>
+    <div class="finding-body">
+      The submitter loop uses qualifier <span class="actual">46</span> (Electronic Transmitter Identification Number — ETIN) but the value <span class="actual">1234567893</span> is the practice NPI. These are different identifiers. The ETIN is assigned by the clearinghouse during enrollment and is specific to the submitter's trading partner agreement. It is not the same as the NPI.
+      <br><br>
+      Office Ally assigns an ETIN during account setup. Stedi uses your API key or account ID as the submitter reference. Using the NPI in an ETIN field may cause routing failures at the interchange level before the claim is even parsed.
+      <div class="fix-box"><strong>FIX:</strong> After Office Ally account setup, obtain the ETIN from Office Ally and store it in practice settings. Use that value in NM1-41-09. If the clearinghouse doesn't require a separate ETIN, use qualifier <span class="expected">XX</span> (NPI) instead of <span class="expected">46</span>.</div>
+    </div>
+  </div>
+</div>
+
+<!-- WARNINGS -->
+<div class="section">
+  <div class="section-header">⚠ Warnings — Likely to Cause Denial or Processing Issues</div>
+
+  <div class="finding warning">
+    <div class="finding-header">
+      <span class="badge warning">WARN-1</span>
+      <span class="seg-tag">NM1*DQ</span>
+      <span class="finding-title">Ordering Provider NPI Equals Billing Provider NPI</span>
+    </div>
+    <div class="finding-body">
+      The ordering provider (Loop 2310E) has NPI <span class="actual">1234567893</span> — identical to the billing practice NPI in NM1*85. The ordering provider on a home health VA claim must be the referring physician who ordered the home care — not the billing practice itself. VA Community Care requires a valid ordering physician NPI that is enrolled with them as a referring provider.
+      <div class="fix-box"><strong>FIX:</strong> Daniela needs to provide the NPI of the VA physician who referred the patient for home health services. This should be a separate field in the patient record, not defaulting to the practice NPI.</div>
+    </div>
+  </div>
+
+  <div class="finding warning">
+    <div class="finding-header">
+      <span class="badge warning">WARN-2</span>
+      <span class="seg-tag">NM1*82, NM1*DQ</span>
+      <span class="finding-title">Provider Names Are Test Data Placeholders</span>
+    </div>
+    <div class="finding-body">
+      Both provider names in this file are placeholder values — rendering provider <span class="actual">Valid, Diana</span> and ordering provider <span class="actual">Valid, Alice</span>. These are not real provider names and will fail NPI registry cross-validation at the payer. The NPI <span class="neutral">1245319599</span> for Diana Valid would need to match a real enrolled provider.
+      <div class="fix-box"><strong>FIX:</strong> Before the first real claim submission, Daniela must add her actual nurses with real NPIs in Settings → Providers. The demo provider data must not carry over into live claims.</div>
+    </div>
+  </div>
+
+  <div class="finding warning">
+    <div class="finding-header">
+      <span class="badge warning">WARN-3</span>
+      <span class="seg-tag">CLM-09</span>
+      <span class="finding-title">Release of Information Code Is 'I' — Most Payers Expect 'Y'</span>
+    </div>
+    <div class="finding-body">
+      CLM09 is set to <span class="actual">I</span> (informed consent to release medical information to payer). Most payers — including VA and Medicare — expect <span class="expected">Y</span> (provider has signed statement permitting release). The 'I' code is technically valid per X12 but some payers flag it during adjudication.
+      <div class="fix-box"><strong>FIX:</strong> Change the hardcoded CLM09 value in edi-generator.ts from <code>'I'</code> to <code>'Y'</code>.</div>
+    </div>
+  </div>
+
+  <div class="finding warning">
+    <div class="finding-header">
+      <span class="badge warning">WARN-4</span>
+      <span class="seg-tag">REF*EI</span>
+      <span class="finding-title">Tax ID Is All Nines — Placeholder Value</span>
+    </div>
+    <div class="finding-body">
+      The billing provider Tax ID in REF*EI is <span class="actual">123456789</span>. This is a sequential placeholder, not a real EIN. The IRS EIN format is XX-XXXXXXX (9 digits). A sequential number like 123456789 will fail payer Tax ID validation and may trigger fraud screening flags.
+      <div class="fix-box"><strong>FIX:</strong> Daniela's real EIN must be entered in Settings → Practice → Tax ID before any live claim is submitted.</div>
+    </div>
+  </div>
+</div>
+
+<!-- MISSING SEGMENTS -->
+<div class="section">
+  <div class="section-header">Missing Segments &amp; Loops</div>
+  <table class="missing-table">
+    <thead>
+      <tr>
+        <th>Segment / Loop</th>
+        <th>Status</th>
+        <th>Description &amp; Impact</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="seg-cell">Loop 2310B<br>REF*1C</td>
+        <td class="req-cell"><span class="r">Required by many payers</span></td>
+        <td>Rendering provider state license number. CareFirst BCBS and several VA payer companions require this. Without it, the provider cannot be verified as licensed in the state of service. Add after NM1*82 as <code>REF*1C*[TX-license-number]</code>.</td>
+      </tr>
+      <tr>
+        <td class="seg-cell">Loop 2310E<br>REF*0B</td>
+        <td class="req-cell"><span class="o">Recommended</span></td>
+        <td>Ordering provider secondary identification or NPI cross-reference. When ordering provider is in a different tax entity from the billing provider, this reference is required by several payer companion guides including VA Community Care.</td>
+      </tr>
+      <tr>
+        <td class="seg-cell">Loop 2300<br>REF*D9</td>
+        <td class="req-cell"><span class="o">Recommended for VA</span></td>
+        <td>Claim identifier / Internal Control Number (ICN). VA and Ability use the REF*D9 to track claims through their system. Including it enables better match-back when 277 acknowledgments and 835 ERAs return. Format: <code>REF*D9*[payer-assigned-ICN]</code>.</td>
+      </tr>
+      <tr>
+        <td class="seg-cell">Loop 2300<br>DTP*435</td>
+        <td class="req-cell"><span class="o">Recommended for home health</span></td>
+        <td>Admission date / start of care date. Some VA payer companions require the date home health services formally began (the initial assessment date), separate from the individual service date on the service line.</td>
+      </tr>
+      <tr>
+        <td class="seg-cell">Loop 2300<br>CR7</td>
+        <td class="req-cell"><span class="c">Optional / payer-specific</span></td>
+        <td>Home Health Care Information segment. Required by Medicare for home health claims under HH PPS. Not required for VA Community Care professional claims (837P), but some commercial payers who also support home health may expect it.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- WHAT PASSED -->
+<div class="section">
+  <div class="section-header">✅ Segments That Pass Validation</div>
+  <div class="pass-grid">
+    <div class="pass-item"><span class="check">✓</span><span class="seg">ISA envelope</span><span class="desc">All 16 elements correct, version 00501, delimiters valid</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">GS header</span><span class="desc">HC functional group, version 005010X222A1 correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">ST*837</span><span class="desc">Transaction set identifier and implementation guide correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">BHT*0019</span><span class="desc">Structure code, transaction purpose, and CH (chargeable) correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">HL hierarchy</span><span class="desc">HL*1 (20=billing), HL*2 (22=subscriber, 0=no patient loop) correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">PRV*BI</span><span class="desc">Billing taxonomy PXC qualifier and 251B00000X code present</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">NM1*85</span><span class="desc">Billing provider loop, XX NPI qualifier, organization entity type</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">N3 / N4</span><span class="desc">Billing provider address structure valid (TX is correct for practice)</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">REF*EI</span><span class="desc">Tax ID qualifier correct (EIN format) — value is placeholder but structure OK</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">SBR</span><span class="desc">P (primary), 18 (self), CI (commercial) — correct for BCBS claim</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">NM1*IL</span><span class="desc">Subscriber entity type 1 (person), MI qualifier, member ID present</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">DMG</span><span class="desc">D8 format, DOB 19830927 (8 digits), sex F — all correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">NM1*PR</span><span class="desc">Payer name loop, PI qualifier, payer ID 00570 correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">CLM</span><span class="desc">Control number, charge, POS 12:B:1 composite, Y/A/Y/I flags correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">NTE*ADD</span><span class="desc">Homebound note segment present and correctly coded for home health</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">HI qualifiers</span><span class="desc">ABK (principal ICD-10) and ABF (additional) qualifiers correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">NM1*82</span><span class="desc">Rendering provider loop, XX qualifier, 10-digit NPI present</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">PRV*PE</span><span class="desc">Performing provider specialty, PXC qualifier, 163W00000X (RN) taxonomy</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">LX*1</span><span class="desc">Service line number assignment correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">SV1 composite</span><span class="desc">HC: qualifier, charge, UN unit type, unit count — structure correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">DTP*472</span><span class="desc">Service date qualifier, D8 format, 8-digit date — all correct</span></div>
+    <div class="pass-item"><span class="check">✓</span><span class="seg">SE*28</span><span class="desc">Segment count 28 matches actual ST-through-SE count exactly</span></div>
+  </div>
+</div>
+
+<!-- PRIORITY FIX LIST -->
+<div class="section">
+  <div class="section-header">Fix Priority — Before First Real Claim</div>
+
+  <div class="finding critical">
+    <div class="finding-header">
+      <span class="badge critical">P0 — Blocking</span>
+      <span class="finding-title">3 fixes prevent clearinghouse/payer rejection on every single claim</span>
+    </div>
+    <div class="finding-body">
+      <strong style="color:var(--red);">1. Strip ICD-10 decimal points in HI segment</strong> — one line in edi-generator.ts. Without this fix, any claim with a multi-part ICD-10 code (G89.29, Z51.11, M79.3, E11.9, etc.) will be rejected.
+      <br><br>
+      <strong style="color:var(--red);">2. Convert diagnosis pointer A→1, B→2, C→3, D→4 in SV1-07</strong> — the Stedi error. Without this fix, every single EDI file produced by ClaimShield fails X12 format validation.
+      <br><br>
+      <strong style="color:var(--red);">3. Fix patient state field to use residential state, not insurance state</strong> — UI and data model fix. Without this, patient demographic validation fails at the payer for any patient whose insurance plan is headquartered in a different state.
+    </div>
+  </div>
+
+  <div class="finding warning">
+    <div class="finding-header">
+      <span class="badge warning">P1 — Before Live</span>
+      <span class="finding-title">4 data quality issues require real clinic data before submission</span>
+    </div>
+    <div class="finding-body">
+      <strong style="color:var(--amber);">4. Replace G0008 with correct home health code</strong> (G0299/G0162) — wrong clinical code, will be denied immediately by VA<br><br>
+      <strong style="color:var(--amber);">5. Set Daniela's real EIN in practice settings</strong> — REF*EI placeholder 123456789 fails payer Tax ID validation<br><br>
+      <strong style="color:var(--amber);">6. Add real provider NPIs</strong> — "Valid, Diana" and "Valid, Alice" are test data. Real nurses with real NPIs must be entered before submission.<br><br>
+      <strong style="color:var(--amber);">7. Get actual ordering physician NPI</strong> — the referring VA doctor who ordered home care. NM1*DQ cannot be the billing practice NPI.
+    </div>
+  </div>
+
+  <div class="finding info">
+    <div class="finding-header">
+      <span class="badge info">P2 — After Pilot Starts</span>
+      <span class="finding-title">Structural improvements for production quality</span>
+    </div>
+    <div class="finding-body">
+      <strong style="color:var(--blue);">8. Fix ETIN vs NPI in NM1*41</strong> — obtain ETIN from Office Ally after account setup, or change qualifier from 46 to XX<br><br>
+      <strong style="color:var(--blue);">9. Change CLM09 from 'I' to 'Y'</strong> — release of information flag standardization<br><br>
+      <strong style="color:var(--blue);">10. Add REF*1C (state license) after NM1*82</strong> — required by CareFirst and several other commercial payers for provider credentialing validation<br><br>
+      <strong style="color:var(--blue);">11. Add REF*D9 (claim ICN)</strong> — improves 277/835 match-back tracking with VA and Ability
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <div>ClaimShield EDI Audit · X12 HIPAA 5010 837P · 005010X222A1</div>
+  <div>5 errors · 4 warnings · 5 missing segments · 22 pass</div>
+</div>
+
+</body>
+</html>

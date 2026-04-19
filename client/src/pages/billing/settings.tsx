@@ -76,6 +76,7 @@ function ProvidersTab() {
     npi: "",
     taxonomyCode: "",
     individualTaxId: "",
+    licenseNumber: "",
     isDefault: false,
   });
   const [npiError, setNpiError] = useState("");
@@ -170,7 +171,7 @@ function ProvidersTab() {
   });
 
   function resetForm() {
-    setForm({ firstName: "", lastName: "", credentials: "", customCredentials: "", npi: "", taxonomyCode: "", individualTaxId: "", isDefault: false });
+    setForm({ firstName: "", lastName: "", credentials: "", customCredentials: "", npi: "", taxonomyCode: "", individualTaxId: "", licenseNumber: "", isDefault: false });
     setNpiError("");
     setNpiLookup({ loading: false, result: null });
     setTaxonomySearch("");
@@ -192,6 +193,7 @@ function ProvidersTab() {
       npi: provider.npi,
       taxonomyCode: provider.taxonomy_code || "",
       individualTaxId: provider.individual_tax_id || "",
+      licenseNumber: provider.license_number || "",
       isDefault: provider.is_default,
     });
     setNpiError("");
@@ -216,6 +218,7 @@ function ProvidersTab() {
       npi: form.npi,
       taxonomyCode: form.taxonomyCode || null,
       individualTaxId: form.individualTaxId || null,
+      licenseNumber: form.licenseNumber || null,
       isDefault: form.isDefault,
     };
     if (editingProvider) {
@@ -475,6 +478,10 @@ function ProvidersTab() {
               <div className="space-y-2">
                 <Label htmlFor="prov-taxid">Individual Tax ID</Label>
                 <Input id="prov-taxid" value={form.individualTaxId} onChange={(e) => setForm({ ...form, individualTaxId: e.target.value })} placeholder="9 digits" data-testid="input-provider-tax-id" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="prov-license">State License Number <span className="text-muted-foreground text-xs">(included as REF*1C in EDI — required by CareFirst, VA)</span></Label>
+                <Input id="prov-license" value={form.licenseNumber} onChange={(e) => setForm({ ...form, licenseNumber: e.target.value })} placeholder="e.g. TX-RN-123456" data-testid="input-provider-license" />
               </div>
             </div>
             <div className="flex items-center gap-3 pt-1">

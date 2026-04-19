@@ -572,6 +572,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ADD COLUMN IF NOT EXISTS follow_up_date DATE,
         ADD COLUMN IF NOT EXISTS follow_up_status VARCHAR
     `);
+    // Add license_number to providers (idempotent)
+    await pool.query(`ALTER TABLE providers ADD COLUMN IF NOT EXISTS license_number VARCHAR`);
 
     // Create claim_follow_up_notes table
     await pool.query(`
@@ -859,7 +861,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.post("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, isDefault } = req.body;
+      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault } = req.body;
       if (!firstName?.trim() || !lastName?.trim() || !npi?.trim()) {
         return res.status(400).json({ error: "firstName, lastName, and npi are required" });
       }
@@ -875,9 +877,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           await client.query("UPDATE providers SET is_default = false WHERE is_default = true");
         }
         const { rows } = await client.query(
-          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, is_default)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-          [firstName.trim(), lastName.trim(), credentials || null, npi, taxonomyCode || null, individualTaxId || null, isDefault || false]
+          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, license_number, is_default)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+          [firstName.trim(), lastName.trim(), credentials || null, npi, taxonomyCode || null, individualTaxId || null, licenseNumber || null, isDefault || false]
         );
         await client.query("COMMIT");
         res.json(rows[0]);
@@ -898,7 +900,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const db = await import("./db").then(m => m.pool);
       const ownerCheck = await db.query("SELECT organization_id FROM providers WHERE id = $1", [id]);
       if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Provider not found" });
-      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, isDefault, isActive } = req.body;
+      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault, isActive } = req.body;
       if (npi !== undefined) {
         const { validateNPI } = await import("../shared/npi-validation");
         if (!validateNPI(npi)) {
@@ -920,6 +922,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (npi !== undefined) { fields.push(`npi = $${idx++}`); values.push(npi); }
         if (taxonomyCode !== undefined) { fields.push(`taxonomy_code = $${idx++}`); values.push(taxonomyCode); }
         if (individualTaxId !== undefined) { fields.push(`individual_tax_id = $${idx++}`); values.push(individualTaxId); }
+        if (licenseNumber !== undefined) { fields.push(`license_number = $${idx++}`); values.push(licenseNumber); }
         if (isDefault !== undefined) { fields.push(`is_default = $${idx++}`); values.push(isDefault); }
         if (isActive !== undefined) { fields.push(`is_active = $${idx++}`); values.push(isActive); }
         fields.push(`updated_at = NOW()`);
@@ -2447,6 +2450,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           last_name: prov.last_name || "",
           npi: prov.npi || ps.primary_npi || "0000000000",
           taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
+          license_number: prov.license_number || null,
         },
         ordering_provider: orderingProv,
         payer: payerInfo,
@@ -2602,6 +2606,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           last_name: prov.last_name || "",
           npi: prov.npi || ps.primary_npi || "0000000000",
           taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
+          license_number: prov.license_number || null,
         },
         payer: payerInfo,
       });
@@ -3794,7 +3799,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         const newPatient = await storage.createPatient({
           leadId: req.params.id,
           dob: "1985-03-15",
-          state: extracted.state || "CA",
+          state: extracted.state || "",
           insuranceCarrier: extracted.insuranceCarrier || extracted.insurance_carrier || "Blue Cross",
           memberId: extracted.memberId || extracted.member_id || "MEM" + Math.random().toString(36).slice(2, 10).toUpperCase(),
           planType: "PPO",

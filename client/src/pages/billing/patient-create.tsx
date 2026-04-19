@@ -168,7 +168,7 @@ export default function PatientCreate() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>State</Label>
+              <Label>Residential State <span className="text-muted-foreground text-xs font-normal">(patient's home address — used in EDI)</span></Label>
               <Input value={f.state} onChange={(e) => set({ state: e.target.value })} maxLength={2} placeholder="TX" data-testid="input-state" />
             </div>
           </div>
