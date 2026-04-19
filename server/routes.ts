@@ -151,12 +151,17 @@ function getOrgId(req: any): string | null {
   return user.organization_id || null;
 }
 
+function diagPointerToNumeric(ptr: string): string {
+  const map: Record<string, string> = { A: "1", B: "2", C: "3", D: "4" };
+  return String(ptr).split(":").map(p => map[p.toUpperCase()] || p).join(":");
+}
+
 function verifyOrg(entity: any, req: any): boolean {
   if (!entity) return true;
   const orgId = getOrgId(req);
   if (!orgId) return true;
   const entityOrgId = entity.organizationId || entity.organization_id;
-  return !entityOrgId || entityOrgId === orgId;
+  return entityOrgId === orgId;
 }
 
 export async function registerRoutes(server: Server, app: Express): Promise<void> {
@@ -1061,7 +1066,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const params: any[] = [];
       let idx = 1;
 
-      if (orgId) { baseQuery += ` AND (c.organization_id = $${idx} OR c.organization_id IS NULL)`; params.push(orgId); idx++; }
+      if (orgId) { baseQuery += ` AND c.organization_id = $${idx}`; params.push(orgId); idx++; }
       if (status && status !== "all") { baseQuery += ` AND c.status = $${idx}`; params.push(status); idx++; }
       if (payer_id && payer_id !== "all") { baseQuery += ` AND (c.payer_id = $${idx} OR c.payer = (SELECT name FROM payers WHERE id = $${idx}))`; params.push(payer_id); idx++; }
       if (patient) { baseQuery += ` AND (LOWER(COALESCE(p.first_name || ' ' || p.last_name, l.name,'')) LIKE LOWER($${idx}))`; params.push(`%${patient}%`); idx++; }
@@ -1131,7 +1136,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const params: any[] = [];
       let query = `SELECT eb.*, COUNT(el.id) as line_count FROM era_batches eb LEFT JOIN era_lines el ON el.era_id = eb.id WHERE 1=1`;
       let idx = 1;
-      if (orgId) { query += ` AND (eb.org_id = $${idx} OR eb.org_id IS NULL)`; params.push(orgId); idx++; }
+      if (orgId) { query += ` AND eb.org_id = $${idx}`; params.push(orgId); idx++; }
       query += ` GROUP BY eb.id ORDER BY eb.created_at DESC`;
       const { rows } = await db.query(query, params);
       res.json(rows);
@@ -1166,7 +1171,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const db = await import("./db").then(m => m.pool);
       const orgId = getOrgId(req);
-      const { rows: [era] } = await db.query(`SELECT * FROM era_batches WHERE id = $1 AND (org_id = $2 OR org_id IS NULL)`, [req.params.id, orgId]);
+      const { rows: [era] } = await db.query(`SELECT * FROM era_batches WHERE id = $1 AND org_id = $2`, [req.params.id, orgId]);
       if (!era) return res.status(404).json({ error: "ERA not found" });
       const { rows: lines } = await db.query(
         `SELECT el.*, c.id as matched_claim_id FROM era_lines el LEFT JOIN claims c ON el.claim_id = c.id WHERE el.era_id = $1 ORDER BY el.created_at`,
@@ -1183,7 +1188,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const db = await import("./db").then(m => m.pool);
       const orgId = getOrgId(req);
       const { action } = req.body;
-      const { rows: [era] } = await db.query(`SELECT * FROM era_batches WHERE id = $1 AND (org_id = $2 OR org_id IS NULL)`, [req.params.id, orgId]);
+      const { rows: [era] } = await db.query(`SELECT * FROM era_batches WHERE id = $1 AND org_id = $2`, [req.params.id, orgId]);
       if (!era) return res.status(404).json({ error: "ERA not found" });
 
       if (action === "post") {
@@ -1264,7 +1269,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         LEFT JOIN payers py ON c.payer_id = py.id
         WHERE c.status NOT IN ('paid', 'draft', 'void')
       `;
-      if (orgId) { query += ` AND (c.organization_id = $${idx} OR c.organization_id IS NULL)`; params.push(orgId); idx++; }
+      if (orgId) { query += ` AND c.organization_id = $${idx}`; params.push(orgId); idx++; }
       query += ` ORDER BY c.follow_up_date ASC NULLS LAST, days_outstanding DESC LIMIT 500`;
       const { rows } = await db.query(query, params);
       res.json(rows);
@@ -1314,7 +1319,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!sourceClaim[0]) return res.status(404).json({ error: "Source claim not found" });
       const patientId = sourceClaim[0].patient_id;
       const { rows: unpaidClaims } = await db.query(
-        `SELECT id FROM claims WHERE patient_id = $1 AND id != $2 AND status NOT IN ('paid','draft','void') AND (organization_id = $3 OR organization_id IS NULL)`,
+        `SELECT id FROM claims WHERE patient_id = $1 AND id != $2 AND status NOT IN ('paid','draft','void') AND organization_id = $3`,
         [patientId, source_claim_id, orgId]
       );
       let count = 0;
@@ -1336,7 +1341,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const db = await import("./db").then(m => m.pool);
       const orgId = getOrgId(req);
-      const { rows: [claim] } = await db.query(`SELECT * FROM claims WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`, [req.params.id, orgId]);
+      const { rows: [claim] } = await db.query(`SELECT * FROM claims WHERE id = $1 AND organization_id = $2`, [req.params.id, orgId]);
       if (!claim) return res.status(404).json({ error: "Claim not found" });
 
       const [patientRes, settingsRes, payerRes, eventsRes, denialRes] = await Promise.all([
@@ -1411,6 +1416,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/dashboard/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const orgFilter = orgId ? `AND organization_id = '${orgId.replace(/'/g, "''")}'` : "";
+      const orgPatientFilter = orgId ? `AND p.organization_id = '${orgId.replace(/'/g, "''")}'` : "";
+      const orgClaimFilter = orgId ? `AND c.organization_id = '${orgId.replace(/'/g, "''")}'` : "";
+
       const [pipelineResult, staleDraftsResult, highRiskResult, timelyResult, recentPatientsResult, recentClaimsResult, fprrResult, arDaysResult] = await Promise.all([
         db.query(`
           SELECT
@@ -1424,10 +1434,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             COALESCE(SUM(amount) FILTER (WHERE status IN ('denied','suspended')), 0) as denied_amount,
             COUNT(*) FILTER (WHERE status NOT IN ('draft')) as total_submitted,
             COUNT(*) FILTER (WHERE status IN ('denied','suspended')) as total_denied
-          FROM claims
+          FROM claims WHERE 1=1 ${orgFilter}
         `),
-        db.query(`SELECT COUNT(*)::int as count FROM claims WHERE status = 'draft' AND created_at < NOW() - INTERVAL '7 days'`),
-        db.query(`SELECT COUNT(*)::int as count FROM claims WHERE readiness_status = 'RED' AND status NOT IN ('paid','denied')`),
+        db.query(`SELECT COUNT(*)::int as count FROM claims WHERE status = 'draft' AND created_at < NOW() - INTERVAL '7 days' ${orgFilter}`),
+        db.query(`SELECT COUNT(*)::int as count FROM claims WHERE readiness_status = 'RED' AND status NOT IN ('paid','denied') ${orgFilter}`),
         db.query(`
           SELECT COUNT(*)::int as count FROM (
             SELECT DISTINCT ON (c.id) c.id
@@ -1436,6 +1446,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             WHERE c.service_date IS NOT NULL
               AND c.status NOT IN ('paid', 'denied', 'draft')
               AND c.service_date < NOW() - ((COALESCE(p.timely_filing_days, 365) - 30) || ' days')::interval
+              ${orgClaimFilter}
           ) t
         `),
         db.query(`
@@ -1445,9 +1456,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           FROM patients p
           INNER JOIN (
             SELECT DISTINCT ON (patient_id) patient_id, service_date as last_service_date, status as last_claim_status, created_at
-            FROM claims ORDER BY patient_id, created_at DESC
+            FROM claims WHERE 1=1 ${orgFilter} ORDER BY patient_id, created_at DESC
           ) latest ON latest.patient_id = p.id
           LEFT JOIN leads l ON p.lead_id = l.id
+          WHERE 1=1 ${orgPatientFilter}
           ORDER BY latest.created_at DESC
           LIMIT 8
         `),
@@ -1457,6 +1469,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           FROM claims c
           LEFT JOIN patients p ON c.patient_id = p.id
           LEFT JOIN leads l ON p.lead_id = l.id
+          WHERE 1=1 ${orgClaimFilter}
           ORDER BY c.created_at DESC
           LIMIT 10
         `),
@@ -1465,7 +1478,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             COUNT(*) FILTER (WHERE status NOT IN ('draft')) as total_submitted,
             COUNT(*) FILTER (WHERE status = 'paid') as total_paid,
             COUNT(*) FILTER (WHERE status IN ('denied','suspended')) as total_denied
-          FROM claims
+          FROM claims WHERE 1=1 ${orgFilter}
         `),
         db.query(`
           SELECT
@@ -1473,6 +1486,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           FROM claims
           WHERE status NOT IN ('paid','draft','void')
             AND service_date IS NOT NULL
+            ${orgFilter}
         `),
       ]);
 
@@ -1481,7 +1495,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const totalSubmitted = parseInt(fpr.total_submitted) || 0;
       const totalPaid = parseInt(fpr.total_paid) || 0;
       const totalDenied = parseInt(fpr.total_denied) || 0;
-      const fprrValue = totalSubmitted > 0 ? Math.round(((totalSubmitted - totalDenied) / totalSubmitted) * 100) : null;
+      const fprrValue = totalSubmitted > 0 ? Math.round((totalPaid / totalSubmitted) * 100) : null;
       const arDays = parseFloat(arDaysResult.rows[0]?.avg_ar_days) || 0;
       const denialRate = totalSubmitted > 0 ? Math.round((totalDenied / totalSubmitted) * 100) : 0;
 
@@ -1975,6 +1989,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         provider = provResult.rows[0] || null;
       }
 
+      let orderingProvider = null;
+      if (claim.ordering_provider_id && claim.ordering_provider_id !== claim.provider_id) {
+        const opResult = await db.query("SELECT first_name, last_name, npi FROM providers WHERE id = $1", [claim.ordering_provider_id]);
+        orderingProvider = opResult.rows[0] || null;
+      }
+
       const orgId = getOrgId(req);
       const practiceResult = orgId
         ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])
@@ -1987,7 +2007,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (payerResult.rows[0]) payerName = payerResult.rows[0].name;
       }
 
-      res.json({ claim, patient, provider, practice, payerName });
+      res.json({ claim, patient, provider, orderingProvider, practice, payerName });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -2171,7 +2191,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         units: Number(sl.units) || 1,
         charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
         modifier: sl.modifier || null,
-        diagnosis_pointer: sl.diagnosisPointer || sl.diagnosis_pointer || "1",
+        diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
         service_date: sl.service_date || sl.serviceDate || null,
       }));
 
@@ -2324,7 +2344,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         units: Number(sl.units) || 1,
         charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
         modifier: sl.modifier || null,
-        diagnosis_pointer: sl.diagnosisPointer || sl.diagnosis_pointer || "1",
+        diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
         service_date: sl.service_date || sl.serviceDate || null,
       }));
       const icd10Codes: string[] = [];
@@ -2653,25 +2673,29 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const search = (req.query.search as string || "").trim().toLowerCase();
       const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
       let query = `
         SELECT p.*, l.name as lead_name,
           (SELECT MAX(COALESCE(c.service_date::text, c.created_at::text)) FROM claims c WHERE c.patient_id = p.id) as last_claim_date,
           (SELECT c.status FROM claims c WHERE c.patient_id = p.id ORDER BY COALESCE(c.service_date, c.created_at::date) DESC LIMIT 1) as last_claim_status
         FROM patients p
         LEFT JOIN leads l ON p.lead_id = l.id
+        WHERE 1=1
       `;
       const params: any[] = [];
+      let idx = 1;
+      if (orgId) { query += ` AND p.organization_id = $${idx}`; params.push(orgId); idx++; }
       if (search) {
-        query += ` WHERE (
-          LOWER(COALESCE(p.first_name, '')) LIKE $1
-          OR LOWER(COALESCE(p.last_name, '')) LIKE $1
-          OR LOWER(COALESCE(p.first_name || ' ' || p.last_name, '')) LIKE $1
-          OR LOWER(COALESCE(l.name, '')) LIKE $1
-          OR LOWER(COALESCE(p.dob, '')) LIKE $1
-          OR LOWER(COALESCE(p.insurance_carrier, '')) LIKE $1
-          OR LOWER(COALESCE(p.member_id, '')) LIKE $1
+        query += ` AND (
+          LOWER(COALESCE(p.first_name, '')) LIKE $${idx}
+          OR LOWER(COALESCE(p.last_name, '')) LIKE $${idx}
+          OR LOWER(COALESCE(p.first_name || ' ' || p.last_name, '')) LIKE $${idx}
+          OR LOWER(COALESCE(l.name, '')) LIKE $${idx}
+          OR LOWER(COALESCE(p.dob, '')) LIKE $${idx}
+          OR LOWER(COALESCE(p.insurance_carrier, '')) LIKE $${idx}
+          OR LOWER(COALESCE(p.member_id, '')) LIKE $${idx}
         )`;
-        params.push(`%${search}%`);
+        params.push(`%${search}%`); idx++;
       }
       query += ` ORDER BY p.created_at DESC`;
       const { rows } = await db.query(query, params);

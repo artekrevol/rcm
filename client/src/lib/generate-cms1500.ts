@@ -266,12 +266,13 @@ export async function buildCMS1500DataFromClaim(claimId: string): Promise<CMS150
     credentials: 'include',
   });
   if (!res.ok) throw new Error(`Failed to fetch claim data: ${res.status}`);
-  const { claim, patient, provider, practice, payerName } = await res.json();
+  const { claim, patient, provider, orderingProvider, practice, payerName } = await res.json();
 
   const addr = typeof patient?.address === 'object' && patient.address !== null
     ? patient.address
     : {};
 
+  const alphaPointers = ['A','B','C','D','E','F'];
   let serviceLines: CMS1500Data['serviceLines'] = [];
   if (Array.isArray(claim.service_lines) && claim.service_lines.length > 0) {
     serviceLines = claim.service_lines.map((line: any, i: number) => ({
@@ -279,7 +280,7 @@ export async function buildCMS1500DataFromClaim(claimId: string): Promise<CMS150
       modifier:         line.modifier || '',
       units:            Number(line.units) || 1,
       charge:           Number(line.totalCharge || line.charge || 0),
-      diagnosisPointer: ['A','B','C','D','E','F'][i] || 'A',
+      diagnosisPointer: line.diagnosisPointers || line.diagnosisPointer || line.diagnosis_pointer || alphaPointers[i] || 'A',
     }));
   } else if (Array.isArray(claim.cpt_codes) && claim.cpt_codes.length > 0) {
     const perLine = Number(claim.amount || 0) / claim.cpt_codes.length;
@@ -288,7 +289,7 @@ export async function buildCMS1500DataFromClaim(claimId: string): Promise<CMS150
       modifier: '',
       units: 1,
       charge: Math.round(perLine * 100) / 100,
-      diagnosisPointer: ['A','B','C','D','E','F'][i] || 'A',
+      diagnosisPointer: alphaPointers[i] || 'A',
     }));
   }
 
@@ -340,11 +341,11 @@ export async function buildCMS1500DataFromClaim(claimId: string): Promise<CMS150
     icd10Primary:              claim.icd10_primary   || '',
     icd10Secondary,
 
-    // Box 17/17b — Ordering provider
-    orderingProviderName:      claim.ordering_provider_id
-      ? [provider?.first_name, provider?.last_name].filter(Boolean).join(' ')
+    // Box 17/17b — Ordering provider (separate from rendering provider)
+    orderingProviderName:      orderingProvider
+      ? [orderingProvider.first_name, orderingProvider.last_name].filter(Boolean).join(' ')
       : undefined,
-    orderingProviderNPI:       claim.ordering_provider_id ? (provider?.npi || undefined) : undefined,
+    orderingProviderNPI:       orderingProvider?.npi || undefined,
 
     // Box 22 — Claim frequency / resubmission
     claimFrequencyCode:        claim.claim_frequency_code || undefined,

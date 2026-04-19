@@ -1,0 +1,106 @@
+CRITICAL — Security & Data Integrity
+
+1. Multi-Tenancy Completely Broken — Daniela Sees All Data
+Root cause — three compounding bugs:
+Bug A: verifyOrg() has a logic hole (routes.ts line 159)
+javascriptreturn !entityOrgId || entityOrgId === orgId;
+If an entity has no organization_id (NULL), this returns true — meaning any user can access it. Combined with the fact that demo data was seeded without org scoping initially, Daniela can see all demo data.
+Bug B: /api/billing/patients has zero org scoping (routes.ts line 2652)
+sqlSELECT p.* FROM patients p LEFT JOIN leads l ON p.lead_id = l.id
+-- NO WHERE organization_id = $1
+This returns every patient in the database to every logged-in user regardless of org.
+Bug C: /api/billing/dashboard/stats is completely unscoped (routes.ts lines 1415–1470)
+Every single query — pipeline counts, AR days, FPRR, recent claims, recent patients — pulls from the entire claims and patients tables with no WHERE organization_id filter. Daniela's dashboard shows Abeer's demo data.
+Fix needed: Add WHERE organization_id = $orgId to every query in all three locations. Also add it to the /api/billing/claim-tracker, /api/billing/follow-up, and /api/billing/eras endpoints which have the same issue.
+
+2. EDI Error: SV1-07-01 Must Use N0 Number Format — Value Was 'A'
+Root cause (edi-generator.ts line 221 + routes.ts line 2174):
+javascriptdiagnosis_pointer: sl.diagnosisPointer || sl.diagnosis_pointer || "1",
+The X12 HIPAA 5010 spec requires SV1-07 (diagnosis code pointer) to use numeric reference numbers (1, 2, 3, 4) in the 837P format — not the alphabetic letters (A, B, C, D) that appear on the CMS-1500 paper form. The wizard stores 'A', 'B', 'C', 'D' from the checkbox UI, and that value flows directly into the EDI file unchanged. The clearinghouse validator correctly rejects it.
+Fix needed:
+javascript// Map A→1, B→2, C→3, D→4 before writing to SV1
+function diagPointerToNumeric(ptr: string): string {
+  const map: Record<string, string> = { A:'1', B:'2', C:'3', D:'4' };
+  return ptr.split(':').map(p => map[p.toUpperCase()] || p).join(':');
+}
+// Then in the service line mapping:
+diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointer || sl.diagnosis_pointer || 'A'),
+
+3. CMS-1500 PDF — Ordering Provider Bug
+Root cause (generate-cms1500.ts lines ~260–265):
+javascriptorderingProviderName: claim.ordering_provider_id
+  ? [provider?.first_name, provider?.last_name].filter(Boolean).join(' ')
+  : undefined,
+orderingProviderNPI: claim.ordering_provider_id ? (provider?.npi || undefined) : undefined,
+When ordering_provider_id is set, it uses the rendering provider's name and NPI instead of looking up the ordering provider separately. The provider variable in this context is the rendering provider. The PDF will show the wrong doctor in Box 17/17b.
+Fix needed: The /api/billing/claims/:id/pdf-data endpoint must separately query and return the ordering provider when ordering_provider_id is set, then buildCMS1500DataFromClaim must use that separate object.
+
+4. CMS-1500 PDF — Service Facility Name Is Wrong
+Root cause (generate-cms1500.ts):
+javascriptdraw('serviceFacilityName', `${lastName}, ${firstName}`);  // Patient name!
+draw('serviceFacilityAddress', data.patientAddress || '');
+Box 32 (Service Facility Location) is being populated with the patient's name and address. For POS 12 (Home Health), this is actually correct per CMS guidelines — but the label logic is using lastName/firstName which are scoped to the patient, so this accidentally works. However it will break if refactored, and it's confusing. Should be explicit.
+
+🟠 HIGH — Functional Bugs
+
+5. Dashboard Stats Use Wrong FPRR Formula
+Root cause (routes.ts lines 1488–1490):
+javascriptconst fprrValue = totalSubmitted > 0 
+  ? Math.round(((totalSubmitted - totalDenied) / totalSubmitted) * 100) 
+  : null;
+This calculates (submitted - denied) / submitted which counts pending claims as "resolved". FPRR should only be paid on first submission / total first submissions. A claim pending 60 days is not a first-pass resolution.
+
+6. Claim Frequency Code Defaults Missing in EDI
+Root cause (routes.ts line 2174 area — fallback):
+javascriptdiagnosis_pointer: sl.diagnosisPointer || sl.diagnosis_pointer || "1",
+The fallback is "1" (numeric), but as noted above the stored value is alphabetic. If diagnosisPointer is empty, it falls back to "1" which is valid — but that means a claim with no pointer set gets a valid-looking EDI that points to diagnosis code 1 (whatever is first). This is a silent wrong data bug, not an error.
+
+7. Patient DOB Field Is a Text Field — No Validation
+Root cause (schema.ts):
+dob: text("dob")
+DOB is stored as plain text. The claim wizard and patient form accept any string. The EDI generator calls formatDate8(dob) which silently returns empty string on bad input. A patient created with DOB "09/27/83" instead of "1983-09-27" will generate an 837P with an empty BirthDate segment — causing payer rejection with no clear error in the UI.
+Fix: Normalize all DOB input to YYYY-MM-DD on save. The parseDOB() function in the CMS-1500 generator already handles multiple formats — the same logic should be applied at the API layer.
+
+8. OR organization_id IS NULL Pattern Still in Claims Queries
+Root cause (routes.ts lines 1064, 1267, 1317, 1339):
+sqlAND (c.organization_id = $1 OR c.organization_id IS NULL)
+This was added as a migration safety net to handle old records without org IDs. The startup migration now backfills all NULL org IDs to demo-org-001 (line 373). The IS NULL escape hatch should be removed — it's now a security hole that lets any authenticated user access any claim that somehow gets saved without an org ID.
+
+9. Claim Wizard diagnosisPointers Stored as diagnosisPointers vs diagnosis_pointer Mismatch
+Root cause: The claim wizard saves service lines with diagnosisPointers (camelCase, plural), but the EDI generator reads diagnosisPointer (singular) or diagnosis_pointer (snake_case). The fallback chain sl.diagnosisPointer || sl.diagnosis_pointer || "1" misses sl.diagnosisPointers (with an 's'). This means if the wizard saves the plural form, the EDI always gets "1" as the fallback.
+Check the claim wizard save payload to confirm which key name is actually used.
+
+10. ERA Table Missing organization_id in List Query
+sql-- routes.ts era listing
+SELECT * FROM era_batches  -- no org filter
+ERA batches for all orgs will be visible to all orgs. Daniela would see demo ERA data.
+
+🟡 MEDIUM — UX and Correctness Issues
+
+11. verifyPassword Has a Plaintext Fallback
+Root cause (auth.ts lines ~75–80):
+javascriptif (!hash.startsWith("$2")) {
+  return password === hash;  // plaintext comparison!
+}
+Any user whose password was stored as plaintext (during early development) can log in with their plaintext password. This should be removed. The needsRehash function exists — use it properly.
+
+12. Session Secret Falls Back to Hardcoded Value in Production
+Root cause (auth.ts):
+javascriptsecret: sessionSecret || "claimshield-dev-secret",
+If SESSION_SECRET is not set in Railway environment variables, production sessions are signed with a predictable hardcoded secret. Anyone who knows this string can forge session cookies.
+
+13. Login Rate Limiter Is In-Memory — Resets on Restart
+Root cause (auth.ts):
+javascriptconst loginAttempts = new Map<...>()
+Rate limit state is stored in memory. Any server restart clears all rate limit counters. On Railway, this happens on every deploy. An attacker who knows deploy frequency can bypass brute-force protection.
+
+14. CMS-1500 Box 21 Diagnosis Pointer Mapping Is Wrong in buildCMS1500DataFromClaim
+Root cause (generate-cms1500.ts):
+javascriptdiagnosisPointer: ['A','B','C','D','E','F'][i] || 'A',
+This auto-assigns pointers A, B, C, D based on line index — ignoring the actual DX pointers the biller selected in the wizard. A claim where line 1 points to diagnosis C (not A) will generate a PDF with incorrect Box 24E values.
+
+15. getOrgId Returns Null for Super Admin Without Impersonation — Silent Failures
+When Abeer (super_admin) accesses billing routes without an impersonation context, getOrgId returns null. Queries that use if (orgId) { add filter } simply omit the org filter entirely and return all data. Other queries that require an orgId to INSERT will fail silently or insert with null org ID.
+
+Summary Table
+#IssueSeverityFix Complexity1Patients list completely unscoped — all users see all patients🔴 CriticalLow — add WHERE clause2Dashboard stats unscoped — all users see cross-org data🔴 CriticalLow — add WHERE clauses3EDI SV1-07 diagnosis pointer is alphabetic not numeric🔴 CriticalLow — add mapping function4Ordering provider in PDF uses rendering provider data🔴 CriticalMedium — fix API response5verifyOrg allows NULL org_id entities to pass🔴 CriticalLow — flip the condition6OR organization_id IS NULL escape hatch in claims queries🟠 HighLow — remove the OR clause7FPRR formula counts pending claims as resolved🟠 HighLow — fix formula8Patient DOB stored as text, no normalization🟠 HighMedium — normalize on save9diagnosisPointers key mismatch in service line save/read🟠 HighLow — fix key name10ERA batches not org-scoped🟠 HighLow — add WHERE clause11Plaintext password fallback in auth🟡 MediumLow — remove the fallback12Session secret hardcoded fallback in production🟡 MediumLow — throw if missing13In-memory rate limiter resets on deploy🟡 MediumMedium — move to Redis/DB14CMS-1500 ignores actual DX pointer selections🟡 MediumLow — pass through wizard values15Super admin without impersonation causes unscoped queries🟡 MediumMedium — add guard
