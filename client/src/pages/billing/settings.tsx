@@ -30,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { validateNPI } from "@shared/npi-validation";
@@ -910,6 +911,44 @@ function PayersTab() {
     eraAutoPostSecondary: true, eraAutoPostRefunds: true, eraHoldIfMismatch: true,
   });
   const [payerSearch, setPayerSearch] = useState("");
+  const [payerDialogTab, setPayerDialogTab] = useState("settings");
+  const [addReqForm, setAddReqForm] = useState({
+    code: "", codeType: "HCPCS", authRequired: true,
+    authConditions: "", authValidityDays: "", authNumberFormatHint: "",
+    typicalTurnaroundDays: "", submissionMethod: "", portalUrl: "", notes: "",
+  });
+  const [addingReq, setAddingReq] = useState(false);
+
+  const { data: payerAuthReqs = [], refetch: refetchAuthReqs } = useQuery<any[]>({
+    queryKey: ["/api/billing/payer-auth-requirements", editingPayer?.id],
+    queryFn: async () => {
+      if (!editingPayer?.id) return [];
+      const res = await fetch(`/api/billing/payer-auth-requirements?payerId=${editingPayer.id}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!editingPayer?.id && payerDialogTab === "auth-reqs",
+  });
+
+  const addReqMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/billing/payer-auth-requirements", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchAuthReqs();
+      setAddReqForm({ code: "", codeType: "HCPCS", authRequired: true, authConditions: "", authValidityDays: "", authNumberFormatHint: "", typicalTurnaroundDays: "", submissionMethod: "", portalUrl: "", notes: "" });
+      setAddingReq(false);
+      toast({ title: "Auth requirement saved" });
+    },
+    onError: () => toast({ title: "Error saving requirement", variant: "destructive" }),
+  });
+
+  const deleteReqMutation = useMutation({
+    mutationFn: async (id: number) => apiRequest("DELETE", `/api/billing/payer-auth-requirements/${id}`),
+    onSuccess: () => { refetchAuthReqs(); toast({ title: "Requirement deleted" }); },
+    onError: () => toast({ title: "Error deleting requirement", variant: "destructive" }),
+  });
 
   const { data: payers = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/billing/payers"],
@@ -1071,107 +1110,301 @@ function PayersTab() {
         </Table>
       </div>
 
-      <Dialog open={!!editingPayer} onOpenChange={(o) => !o && setEditingPayer(null)}>
-        <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
+      <Dialog open={!!editingPayer} onOpenChange={(o) => { if (!o) { setEditingPayer(null); setPayerDialogTab("settings"); setAddingReq(false); } }}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Payer — {editingPayer?.name}</DialogTitle>
-            <DialogDescription>Update the EDI payer ID and billing rules for this payer.</DialogDescription>
+            <DialogDescription>Update EDI settings, billing rules, and per-code authorization requirements.</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-5 py-2">
-            <div className="space-y-2">
-              <Label>EDI Payer ID</Label>
-              <Input
-                value={editForm.payerId}
-                onChange={(e) => setEditForm({ ...editForm, payerId: e.target.value })}
-                placeholder="e.g. 00052 or BCBSMA"
-                data-testid="input-edit-payer-id"
-              />
-              <p className="text-xs text-muted-foreground">This ID is used in the ISA/GS segments of 837P EDI submissions.</p>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Timely Filing (days)</Label>
-                <Input
-                  type="number"
-                  value={editForm.timelyFilingDays}
-                  onChange={(e) => setEditForm({ ...editForm, timelyFilingDays: e.target.value })}
-                  data-testid="input-edit-payer-filing-days"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Auto Follow-Up After (days)</Label>
-                <Input
-                  type="number"
-                  value={editForm.autoFollowupDays}
-                  onChange={(e) => setEditForm({ ...editForm, autoFollowupDays: e.target.value })}
-                  placeholder="30"
-                  data-testid="input-edit-payer-followup-days"
-                />
-                <p className="text-xs text-muted-foreground">Days after submission to schedule follow-up</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Switch
-                checked={editForm.authRequired}
-                onCheckedChange={(v) => setEditForm({ ...editForm, authRequired: v })}
-                data-testid="toggle-edit-payer-auth-required"
-              />
-              <Label>Prior authorization required</Label>
-            </div>
 
-            <div className="border-t pt-4 space-y-3">
-              <p className="text-sm font-semibold">ERA Auto-Posting Rules</p>
-              <p className="text-xs text-muted-foreground">Configure which ERA line types are automatically posted without manual review.</p>
-              {[
-                { key: "eraAutoPostClean", label: "Auto-post clean paid lines", testId: "toggle-era-clean" },
-                { key: "eraAutoPostContractual", label: "Auto-post contractual adjustments (CO-45)", testId: "toggle-era-contractual" },
-                { key: "eraAutoPostSecondary", label: "Auto-post secondary payer credits", testId: "toggle-era-secondary" },
-                { key: "eraAutoPostRefunds", label: "Auto-post refund / credit balance adjustments", testId: "toggle-era-refunds" },
-              ].map(({ key, label, testId }) => (
-                <div key={key} className="flex items-center justify-between px-1">
-                  <span className="text-sm">{label}</span>
-                  <Switch
-                    checked={(editForm as any)[key]}
-                    onCheckedChange={(v) => setEditForm({ ...editForm, [key]: v })}
-                    data-testid={testId}
+          <Tabs value={payerDialogTab} onValueChange={setPayerDialogTab}>
+            <TabsList className="w-full" data-testid="tabs-payer-edit">
+              <TabsTrigger value="settings" className="flex-1" data-testid="tab-payer-settings">Settings</TabsTrigger>
+              <TabsTrigger value="auth-reqs" className="flex-1" data-testid="tab-payer-auth-reqs">Auth Requirements</TabsTrigger>
+            </TabsList>
+
+            {/* Settings tab — existing fields */}
+            <TabsContent value="settings" className="mt-4">
+              <div className="grid gap-5">
+                <div className="space-y-2">
+                  <Label>EDI Payer ID</Label>
+                  <Input
+                    value={editForm.payerId}
+                    onChange={(e) => setEditForm({ ...editForm, payerId: e.target.value })}
+                    placeholder="e.g. 00052 or BCBSMA"
+                    data-testid="input-edit-payer-id"
                   />
+                  <p className="text-xs text-muted-foreground">This ID is used in the ISA/GS segments of 837P EDI submissions.</p>
                 </div>
-              ))}
-              <div className="flex items-center justify-between px-1 pt-1 border-t">
-                <div>
-                  <span className="text-sm">Hold ERA if payment differs from allowable</span>
-                  <p className="text-xs text-muted-foreground">Flag for manual review when paid ≠ contracted rate</p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Timely Filing (days)</Label>
+                    <Input
+                      type="number"
+                      value={editForm.timelyFilingDays}
+                      onChange={(e) => setEditForm({ ...editForm, timelyFilingDays: e.target.value })}
+                      data-testid="input-edit-payer-filing-days"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Auto Follow-Up After (days)</Label>
+                    <Input
+                      type="number"
+                      value={editForm.autoFollowupDays}
+                      onChange={(e) => setEditForm({ ...editForm, autoFollowupDays: e.target.value })}
+                      placeholder="30"
+                      data-testid="input-edit-payer-followup-days"
+                    />
+                    <p className="text-xs text-muted-foreground">Days after submission to schedule follow-up</p>
+                  </div>
                 </div>
-                <Switch
-                  checked={editForm.eraHoldIfMismatch}
-                  onCheckedChange={(v) => setEditForm({ ...editForm, eraHoldIfMismatch: v })}
-                  data-testid="toggle-era-hold-mismatch"
-                />
+                <div className="flex items-center gap-3">
+                  <Switch
+                    checked={editForm.authRequired}
+                    onCheckedChange={(v) => setEditForm({ ...editForm, authRequired: v })}
+                    data-testid="toggle-edit-payer-auth-required"
+                  />
+                  <div>
+                    <Label>Prior authorization required (default)</Label>
+                    <p className="text-xs text-muted-foreground">Applies to all codes unless overridden in the Auth Requirements tab.</p>
+                  </div>
+                </div>
+
+                <div className="border-t pt-4 space-y-3">
+                  <p className="text-sm font-semibold">ERA Auto-Posting Rules</p>
+                  <p className="text-xs text-muted-foreground">Configure which ERA line types are automatically posted without manual review.</p>
+                  {[
+                    { key: "eraAutoPostClean", label: "Auto-post clean paid lines", testId: "toggle-era-clean" },
+                    { key: "eraAutoPostContractual", label: "Auto-post contractual adjustments (CO-45)", testId: "toggle-era-contractual" },
+                    { key: "eraAutoPostSecondary", label: "Auto-post secondary payer credits", testId: "toggle-era-secondary" },
+                    { key: "eraAutoPostRefunds", label: "Auto-post refund / credit balance adjustments", testId: "toggle-era-refunds" },
+                  ].map(({ key, label, testId }) => (
+                    <div key={key} className="flex items-center justify-between px-1">
+                      <span className="text-sm">{label}</span>
+                      <Switch
+                        checked={(editForm as any)[key]}
+                        onCheckedChange={(v) => setEditForm({ ...editForm, [key]: v })}
+                        data-testid={testId}
+                      />
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between px-1 pt-1 border-t">
+                    <div>
+                      <span className="text-sm">Hold ERA if payment differs from allowable</span>
+                      <p className="text-xs text-muted-foreground">Flag for manual review when paid ≠ contracted rate</p>
+                    </div>
+                    <Switch
+                      checked={editForm.eraHoldIfMismatch}
+                      onCheckedChange={(v) => setEditForm({ ...editForm, eraHoldIfMismatch: v })}
+                      data-testid="toggle-era-hold-mismatch"
+                    />
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingPayer(null)}>Cancel</Button>
-            <Button
-              onClick={() => updateMutation.mutate({
-                id: editingPayer?.id,
-                payerId: editForm.payerId,
-                timelyFilingDays: parseInt(editForm.timelyFilingDays) || 365,
-                authRequired: editForm.authRequired,
-                autoFollowupDays: parseInt(editForm.autoFollowupDays) || 30,
-                eraAutoPostClean: editForm.eraAutoPostClean,
-                eraAutoPostContractual: editForm.eraAutoPostContractual,
-                eraAutoPostSecondary: editForm.eraAutoPostSecondary,
-                eraAutoPostRefunds: editForm.eraAutoPostRefunds,
-                eraHoldIfMismatch: editForm.eraHoldIfMismatch,
-              })}
-              disabled={updateMutation.isPending}
-              data-testid="button-save-edit-payer"
-            >
-              {updateMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Save Changes
-            </Button>
-          </DialogFooter>
+              <div className="flex justify-end gap-2 mt-6">
+                <Button variant="outline" onClick={() => setEditingPayer(null)}>Cancel</Button>
+                <Button
+                  onClick={() => updateMutation.mutate({
+                    id: editingPayer?.id,
+                    payerId: editForm.payerId,
+                    timelyFilingDays: parseInt(editForm.timelyFilingDays) || 365,
+                    authRequired: editForm.authRequired,
+                    autoFollowupDays: parseInt(editForm.autoFollowupDays) || 30,
+                    eraAutoPostClean: editForm.eraAutoPostClean,
+                    eraAutoPostContractual: editForm.eraAutoPostContractual,
+                    eraAutoPostSecondary: editForm.eraAutoPostSecondary,
+                    eraAutoPostRefunds: editForm.eraAutoPostRefunds,
+                    eraHoldIfMismatch: editForm.eraHoldIfMismatch,
+                  })}
+                  disabled={updateMutation.isPending}
+                  data-testid="button-save-edit-payer"
+                >
+                  {updateMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Save Changes
+                </Button>
+              </div>
+            </TabsContent>
+
+            {/* Auth Requirements tab */}
+            <TabsContent value="auth-reqs" className="mt-4 space-y-4" data-testid="content-auth-reqs">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Per-Code Authorization Rules</p>
+                  <p className="text-xs text-muted-foreground">Override the default payer auth policy for specific HCPCS/CPT codes.</p>
+                </div>
+                <Button size="sm" onClick={() => setAddingReq(!addingReq)} data-testid="button-add-auth-req">
+                  <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Rule
+                </Button>
+              </div>
+
+              {addingReq && (
+                <div className="border rounded-lg p-4 space-y-3 bg-muted/20" data-testid="form-add-auth-req">
+                  <p className="text-sm font-semibold">New Authorization Rule</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Code *</Label>
+                      <Input
+                        placeholder="e.g. G0299"
+                        value={addReqForm.code}
+                        onChange={(e) => setAddReqForm({ ...addReqForm, code: e.target.value.toUpperCase() })}
+                        data-testid="input-req-code"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Code Type</Label>
+                      <Select value={addReqForm.codeType} onValueChange={(v) => setAddReqForm({ ...addReqForm, codeType: v })}>
+                        <SelectTrigger data-testid="select-req-code-type"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="HCPCS">HCPCS</SelectItem>
+                          <SelectItem value="CPT">CPT</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Auth Validity (days)</Label>
+                      <Input
+                        type="number"
+                        placeholder="e.g. 365"
+                        value={addReqForm.authValidityDays}
+                        onChange={(e) => setAddReqForm({ ...addReqForm, authValidityDays: e.target.value })}
+                        data-testid="input-req-validity"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Typical Turnaround (days)</Label>
+                      <Input
+                        type="number"
+                        placeholder="e.g. 3"
+                        value={addReqForm.typicalTurnaroundDays}
+                        onChange={(e) => setAddReqForm({ ...addReqForm, typicalTurnaroundDays: e.target.value })}
+                        data-testid="input-req-turnaround"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Submission Method</Label>
+                      <Select value={addReqForm.submissionMethod || "_none"} onValueChange={(v) => setAddReqForm({ ...addReqForm, submissionMethod: v === "_none" ? "" : v })}>
+                        <SelectTrigger data-testid="select-req-method"><SelectValue placeholder="Select method" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="_none">— None —</SelectItem>
+                          <SelectItem value="portal">Provider portal</SelectItem>
+                          <SelectItem value="phone">Phone</SelectItem>
+                          <SelectItem value="fax">Fax</SelectItem>
+                          <SelectItem value="edi">EDI 278</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Auth Number Format Hint</Label>
+                      <Input
+                        placeholder="e.g. VA-XXXXXXXX-XXXX"
+                        value={addReqForm.authNumberFormatHint}
+                        onChange={(e) => setAddReqForm({ ...addReqForm, authNumberFormatHint: e.target.value })}
+                        data-testid="input-req-hint"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Portal URL</Label>
+                    <Input
+                      placeholder="https://..."
+                      value={addReqForm.portalUrl}
+                      onChange={(e) => setAddReqForm({ ...addReqForm, portalUrl: e.target.value })}
+                      data-testid="input-req-portal-url"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Conditions / Notes</Label>
+                    <Textarea
+                      placeholder="e.g. Required for all new PT episodes > 12 visits"
+                      value={addReqForm.authConditions}
+                      onChange={(e) => setAddReqForm({ ...addReqForm, authConditions: e.target.value })}
+                      rows={2}
+                      data-testid="textarea-req-conditions"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={addReqForm.authRequired}
+                      onCheckedChange={(v) => setAddReqForm({ ...addReqForm, authRequired: v })}
+                      data-testid="toggle-req-auth-required"
+                    />
+                    <Label className="text-xs">Auth required for this code</Label>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setAddingReq(false)}>Cancel</Button>
+                    <Button
+                      size="sm"
+                      disabled={!addReqForm.code || addReqMutation.isPending}
+                      onClick={() => addReqMutation.mutate({
+                        payerId: editingPayer?.id,
+                        payerName: editingPayer?.name,
+                        code: addReqForm.code,
+                        codeType: addReqForm.codeType,
+                        authRequired: addReqForm.authRequired,
+                        authConditions: addReqForm.authConditions || null,
+                        authValidityDays: addReqForm.authValidityDays ? parseInt(addReqForm.authValidityDays) : null,
+                        authNumberFormatHint: addReqForm.authNumberFormatHint || null,
+                        typicalTurnaroundDays: addReqForm.typicalTurnaroundDays ? parseInt(addReqForm.typicalTurnaroundDays) : null,
+                        submissionMethod: addReqForm.submissionMethod || null,
+                        portalUrl: addReqForm.portalUrl || null,
+                        notes: addReqForm.notes || null,
+                      })}
+                      data-testid="button-save-auth-req"
+                    >
+                      {addReqMutation.isPending && <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />}
+                      Save Rule
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {payerAuthReqs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground text-sm border rounded-lg" data-testid="empty-auth-reqs">
+                  No per-code auth rules yet. The payer-level default applies.
+                </div>
+              ) : (
+                <Table data-testid="table-auth-reqs">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Code</TableHead>
+                      <TableHead>Auth?</TableHead>
+                      <TableHead>Conditions</TableHead>
+                      <TableHead>Valid (days)</TableHead>
+                      <TableHead>Method</TableHead>
+                      <TableHead className="w-8"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {payerAuthReqs.map((r: any) => (
+                      <TableRow key={r.id} data-testid={`row-auth-req-${r.id}`}>
+                        <TableCell className="font-mono text-xs font-medium">{r.code}</TableCell>
+                        <TableCell>
+                          {r.auth_required
+                            ? <Badge variant="destructive" className="text-xs">Required</Badge>
+                            : <Badge variant="secondary" className="text-xs">Not required</Badge>
+                          }
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">{r.auth_conditions || "—"}</TableCell>
+                        <TableCell className="text-xs">{r.auth_validity_days || "—"}</TableCell>
+                        <TableCell className="text-xs capitalize">{r.submission_method || "—"}</TableCell>
+                        <TableCell>
+                          <Button
+                            size="sm" variant="ghost"
+                            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                            onClick={() => deleteReqMutation.mutate(r.id)}
+                            disabled={deleteReqMutation.isPending}
+                            data-testid={`button-delete-req-${r.id}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
 

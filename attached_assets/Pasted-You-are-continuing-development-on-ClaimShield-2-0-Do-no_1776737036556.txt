@@ -1,0 +1,357 @@
+You are continuing development on ClaimShield 2.0. Do not modify any existing functionality unless explicitly instructed. Work through each item in order and confirm completion before moving to the next.
+
+---
+
+## CONTEXT
+
+The payers table currently has a single boolean `auth_required` field. This is too coarse — it can only say "this payer requires auth for everything" or "nothing." In reality, prior authorization requirements are per-payer per-procedure-code. A biller needs to know:
+
+1. Does THIS code require prior auth for THIS payer?
+2. What are the conditions or notes? (e.g., "required only for visits > 3")
+3. Is the auth number on this claim valid format?
+4. Is the auth number going to expire before the claim's service date?
+
+This sprint builds that intelligence layer and wires it into the claim wizard.
+
+---
+
+## ITEM 1 — New Table: payer_auth_requirements
+
+Create a new table that captures prior auth requirements at the payer + CPT/HCPCS code level.
+
+```sql
+CREATE TABLE IF NOT EXISTS payer_auth_requirements (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  payer_id VARCHAR NOT NULL,         -- FK to payers.id
+  payer_name VARCHAR NOT NULL,       -- denormalized for display
+  code VARCHAR NOT NULL,             -- CPT or HCPCS code e.g. 'G0299'
+  code_type VARCHAR NOT NULL DEFAULT 'HCPCS', -- 'CPT' | 'HCPCS'
+  auth_required BOOLEAN NOT NULL DEFAULT true,
+  auth_conditions TEXT,              -- free text: "Required for > 3 visits per episode"
+  auth_validity_days INTEGER,        -- how many days an auth is typically valid (e.g. 90)
+  auth_number_format VARCHAR,        -- regex or description of valid format
+  auth_number_format_hint VARCHAR,   -- human-readable hint: "10 digits + V + 6 digits"
+  typical_turnaround_days INTEGER,   -- how many days payer typically takes to approve
+  submission_method VARCHAR,         -- 'phone' | 'portal' | 'api' | 'fax'
+  portal_url TEXT,                   -- where to submit (e.g. Availity URL)
+  notes TEXT,                        -- anything else the biller should know
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_payer_auth_req_payer_id 
+  ON payer_auth_requirements(payer_id);
+CREATE INDEX IF NOT EXISTS idx_payer_auth_req_code 
+  ON payer_auth_requirements(code);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_payer_auth_req_unique 
+  ON payer_auth_requirements(payer_id, code);
+```
+
+This table is global (no org_id) — auth requirements are payer policy, not org-specific.
+
+---
+
+## ITEM 2 — Seed Data for VA Community Care and BCBS
+
+After creating the table, seed it with the actual codes Chajinel bills.
+
+**Step 1:** Look up the VA Community Care payer in the payers table. Find its id where name = 'VA Community Care' or payer_id = 'VACCN' or similar. Use that id in the inserts below.
+
+**Step 2:** Look up a BCBS Texas/CareFirst payer in the payers table. Find its id. Use that id in the BCBS inserts.
+
+**VA Community Care (TriWest) — Home Health codes:**
+These are the key codes for home health nursing and therapy. VA Community Care does NOT use the standard commercial prior auth process — the VA issues a referral authorization before the patient is ever seen. That auth number comes on the referral paperwork and goes on every claim.
+
+```sql
+INSERT INTO payer_auth_requirements 
+  (payer_id, payer_name, code, code_type, auth_required, auth_conditions, 
+   auth_validity_days, auth_number_format_hint, typical_turnaround_days, 
+   submission_method, notes)
+VALUES
+-- Skip ON CONFLICT if already exists
+(
+  '[VA payer id]', 'VA Community Care', 'G0299', 'HCPCS', true,
+  'VA issues a Community Care authorization (VA referral) before first visit. Auth number is on the VA referral document. Required on every claim.',
+  90, 'Alphanumeric, 10-20 characters. Provided on VA CC referral. Starts with the letter V followed by digits in most cases.',
+  0, 'portal',
+  'VA Community Care auth is NOT submitted by the provider. The VA issues it proactively when the referral is approved. Contact the referring VA facility if auth is missing. Portal: va.gov/COMMUNITYCARE'
+),
+(
+  '[VA payer id]', 'VA Community Care', 'G0300', 'HCPCS', true,
+  'Same as G0299. VA-issued referral authorization required on every claim.',
+  90, 'Alphanumeric, 10-20 characters. Provided on VA CC referral.',
+  0, 'portal',
+  'LPN home health visits. Authorization provided by VA on referral. See G0299 notes.'
+),
+(
+  '[VA payer id]', 'VA Community Care', 'G0151', 'HCPCS', true,
+  'VA-issued referral authorization required on every claim.',
+  90, 'Alphanumeric, 10-20 characters. Provided on VA CC referral.',
+  0, 'portal',
+  'Physical therapy home health visits. Auth from VA referral. Confirm authorized number of visits.'
+),
+(
+  '[VA payer id]', 'VA Community Care', 'G0152', 'HCPCS', true,
+  'VA-issued referral authorization required on every claim.',
+  90, 'Alphanumeric, 10-20 characters. Provided on VA CC referral.',
+  0, 'portal',
+  'Occupational therapy home health visits. Auth from VA referral. Confirm authorized number of visits.'
+),
+(
+  '[VA payer id]', 'VA Community Care', 'G0153', 'HCPCS', true,
+  'VA-issued referral authorization required on every claim.',
+  90, 'Alphanumeric, 10-20 characters. Provided on VA CC referral.',
+  0, 'portal',
+  'Speech therapy home health visits. Auth from VA referral.'
+),
+(
+  '[VA payer id]', 'VA Community Care', 'G0162', 'HCPCS', true,
+  'VA-issued referral authorization required on every claim.',
+  90, 'Alphanumeric, 10-20 characters. Provided on VA CC referral.',
+  0, 'portal',
+  'Skilled nursing services requiring specialized care. Auth from VA referral.'
+)
+ON CONFLICT (payer_id, code) DO NOTHING;
+```
+
+**BCBS (Texas/CareFirst) — Home Health codes:**
+BCBS requires prior authorization for home health services submitted through Availity.
+
+```sql
+INSERT INTO payer_auth_requirements
+  (payer_id, payer_name, code, code_type, auth_required, auth_conditions,
+   auth_validity_days, typical_turnaround_days, submission_method, portal_url, notes)
+VALUES
+(
+  '[BCBS payer id]', 'Blue Cross Blue Shield', 'G0299', 'HCPCS', true,
+  'Prior authorization required before first home health visit. Submit through Availity. Typically approved for a 60-day episode.',
+  60, 3, 'portal',
+  'https://www.availity.com',
+  'Submit PA request through Availity portal before first visit. Include plan of care, physician orders, and homebound status documentation. 60-day episode authorization is standard.'
+),
+(
+  '[BCBS payer id]', 'Blue Cross Blue Shield', 'G0300', 'HCPCS', true,
+  'Prior authorization required. Submit through Availity. Same episode as G0299 if same patient.',
+  60, 3, 'portal',
+  'https://www.availity.com',
+  'LPN visits. May be covered under same PA as RN visits in same episode. Verify with BCBS.'
+),
+(
+  '[BCBS payer id]', 'Blue Cross Blue Shield', 'G0151', 'HCPCS', true,
+  'Prior authorization required for PT visits. Must include plan of care and functional goals.',
+  60, 3, 'portal',
+  'https://www.availity.com',
+  'Physical therapy home visits. Submit PA through Availity with PT evaluation, plan of care, and homebound documentation.'
+),
+(
+  '[BCBS payer id]', 'Blue Cross Blue Shield', 'G0152', 'HCPCS', true,
+  'Prior authorization required for OT visits.',
+  60, 3, 'portal',
+  'https://www.availity.com',
+  'Occupational therapy home visits. Separate PA from PT — submit independently.'
+)
+ON CONFLICT (payer_id, code) DO NOTHING;
+```
+
+---
+
+## ITEM 3 — New API Endpoints
+
+Add the following endpoints to server/routes.ts under the billing section.
+
+**GET /api/billing/payer-auth-requirements**
+Role: admin, rcm_manager
+Query params: payerId (required), code (optional — if provided, return only that code)
+Logic:
+
+If code provided: return single row where payer_id = payerId AND code = code
+If no code: return all rows for that payer
+Returns empty array (not 404) if no requirements exist for a payer/code
+
+
+**GET /api/billing/payer-auth-requirements/check**
+Role: admin, rcm_manager
+Query params: payerId (required), codes (comma-separated list of codes)
+Logic:
+Returns an object keyed by code. Each value has:
+{
+code: string,
+authRequired: boolean,
+conditions: string | null,
+hint: string | null,
+validityDays: number | null,
+turnaroundDays: number | null,
+submissionMethod: string | null,
+portalUrl: string | null,
+notes: string | null
+}
+For any code not found in payer_auth_requirements:
+Fall back to checking payers.auth_required — if true, return
+{ authRequired: true, conditions: 'Auth required per payer default policy', hint: null }
+If payers.auth_required is false or payer not found:
+{ authRequired: false }
+This ensures the endpoint always returns a result for every code,
+even without granular data.
+
+**POST /api/billing/payer-auth-requirements** (admin only)
+Body: all fields from payer_auth_requirements table
+Logic: insert row, return created row. Used for future admin UI.
+
+---
+
+## ITEM 4 — Prior Authorization Lifecycle Upgrade
+
+The existing `prior_authorizations` table tracks auth numbers but has no request lifecycle. Add the following columns to support full PA tracking:
+
+```sql
+ALTER TABLE prior_authorizations 
+  ADD COLUMN IF NOT EXISTS request_status VARCHAR DEFAULT 'not_started',
+  -- values: 'not_started' | 'pending' | 'submitted' | 'approved' | 'denied' | 'expired' | 'not_required'
+  
+  ADD COLUMN IF NOT EXISTS cpt_codes JSONB DEFAULT '[]',
+  -- array of codes this auth covers e.g. ["G0299", "G0300"]
+  
+  ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS decision_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS denial_reason TEXT,
+  ADD COLUMN IF NOT EXISTS clinical_notes TEXT,
+  ADD COLUMN IF NOT EXISTS request_method VARCHAR,
+  -- 'phone' | 'portal' | 'api' | 'fax'
+  
+  ADD COLUMN IF NOT EXISTS requested_by VARCHAR,
+  -- who submitted the PA request
+  
+  ADD COLUMN IF NOT EXISTS expiration_date DATE;
+  -- when this auth expires (separate from the existing fields if any)
+```
+
+Note: Check if `expiration_date` already exists before adding. Use ADD COLUMN IF NOT EXISTS throughout.
+
+For the existing `status` column on prior_authorizations: leave it as-is. The new `request_status` column is additive and tracks the workflow before authorization is obtained. The existing `status` column (Pending/Approved/Denied/Expired) maps to the post-decision state.
+
+---
+
+## ITEM 5 — Claim Wizard PA Checklist
+
+This is the key user-facing feature. When a biller selects a payer and adds service lines in the claim wizard, the system should show a PA checklist panel.
+
+**Where it goes:**
+After the payer selection in Step 1 (Insurance / Patient Info), add a "Prior Authorization" section that appears when:
+- A payer is selected AND
+- Any service lines have been added OR the payer has `auth_required = true`
+
+**How it works:**
+
+When `payerId` and `serviceLines` (array of CPT/HCPCS codes) are both set in the wizard state, call:
+`GET /api/billing/payer-auth-requirements/check?payerId=X&codes=G0299,G0300`
+
+Then show a PA status panel with the following logic:
+
+**For each code that returns `authRequired: true`:**
+
+Show a checklist row with:
+- Code + plain-English description (from the HCPCS codes table if available)
+- A status indicator: one of:
+  - ✅ "Auth number on file" — green, when claim has an auth_number AND no expiration issue
+  - ⚠️ "Auth required — not entered" — amber warning
+  - 🔴 "Auth missing — submission blocked" — red error (used as a hard block)
+- If `conditions` exists: show it as a small grey note below the code
+- If `hint` exists: show it as placeholder text near the auth input
+- If `portalUrl` exists: show a small "Submit PA →" link
+
+**Auth number field behavior:**
+
+The existing single auth_number field on the claim maps to ALL service lines. This is correct for VA (one VA auth number per claim). For BCBS with multiple codes potentially having separate auths, the single field is a limitation — but keep it for now. Add a note: "This auth number applies to all service lines on this claim."
+
+**VA Community Care special handling:**
+
+When the selected payer is VA Community Care (match on name OR payer_id containing 'VA' or 'VACCN' or 'TRWST'):
+
+Show a special info banner above the auth field:
+ℹ️ VA Community Care Authorization
+The VA issues a referral authorization number on the patient's Community Care
+referral paperwork. Enter that number here exactly as it appears on the referral.
+Do not submit a PA request — the VA provides this proactively.
+
+Also add VA auth number validation in the claim wizard validation logic:
+- If payer is VA Community Care AND auth_number field is blank → hard ERROR (not warning)
+  Message: "VA Community Care requires the authorization number from the VA referral. Claim cannot be submitted without it."
+- If payer is VA Community Care AND auth_number is present → no warning
+
+This replaces the existing soft warning "Authorization number blank — payer requires prior auth" for VA specifically, making it a hard block.
+
+**For non-VA payers with auth_required:**
+- Missing auth number → WARNING (not block) with actionable text: "Enter authorization number before submitting. Get it from [payer portal URL if available]."
+
+---
+
+## ITEM 6 — PA Requirements Admin Tab in Payer Settings
+
+Add a "Auth Requirements" tab to the existing payer edit dialog (the modal/sheet that opens when editing a payer in Settings > Payers).
+
+**The tab shows:**
+
+A table of all auth requirements for this payer from `payer_auth_requirements`, with columns:
+- Code
+- Auth Required (yes/no badge)
+- Conditions (truncated)
+- Valid for (days)
+- Submission method
+
+An "Add Requirement" button that opens a small form:
+- Code (text input)
+- Auth Required (toggle, default on)
+- Conditions (textarea, optional)
+- Auth Number Format Hint (text, optional)
+- Valid for X days (number, optional)
+- Typical turnaround (number, optional)
+- Submission method (select: phone / portal / fax / api)
+- Portal URL (text, optional)
+- Notes (textarea, optional)
+- Save → calls POST /api/billing/payer-auth-requirements
+
+An "Edit" and "Delete" action per row.
+
+This gives billers and admins the ability to maintain their own PA requirement rules as they learn payer policies — without needing a developer.
+
+---
+
+## ITEM 7 — Wire PA Check into Pre-Submission Validation
+
+The existing `validateClaim()` function in the claim wizard runs before submission. Update it to incorporate the PA intelligence:
+In the validate step:
+
+If payer is selected and service lines exist:
+Fetch payer_auth_requirements for the payer + codes combination
+For each code where authRequired = true:
+If auth_number is blank:
+
+VA payer: push to errors[] (hard block)
+"VA auth number is required. Enter the authorization from the VA referral."
+Other payers: push to warnings[] (soft warning)
+"Auth required for [code] — enter authorization number before submitting."
+
+If auth_number is present AND auth_validity_days is set:
+Check if any service_date on the claim is more than auth_validity_days
+from today. If so, push warning:
+"Authorization may have expired. Typical validity is [X] days — confirm
+the auth number is still active with [payer name] before submitting."
+Existing logic for payers.auth_required boolean:
+Keep it as a fallback for payers with no granular auth requirements.
+If payers.auth_required = true AND no payer_auth_requirements rows exist
+for this payer: show the existing soft warning as before.
+
+
+---
+
+## TECHNICAL NOTES
+
+- All new endpoints require requireAuth middleware. Admin-only endpoints require requireRole('admin'). Auth requirement reads require requireRole('admin', 'rcm_manager').
+- payer_auth_requirements has no org_id — it is global system data, not org-specific. Do not scope it by org.
+- The payer_id in payer_auth_requirements references the internal UUID id from the payers table, not the EDI payer_id string.
+- All schema changes (ALTER TABLE) must use IF NOT EXISTS / IF EXISTS as appropriate to be safe on re-run.
+- Do NOT remove or modify any existing validation logic — only extend it. The existing "Authorization number blank — payer requires prior auth" warning should remain as a fallback for payers without granular auth requirements.
+- When looking up payer IDs for seeding, do a SELECT to find the actual payers table rows rather than hardcoding UUIDs.
+
+Work through items 1 through 7 in order. After completing each item, confirm what was built and flag anything that needs input before proceeding to the next.

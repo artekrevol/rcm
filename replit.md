@@ -103,6 +103,18 @@ The system uses Passport.js with a local strategy, bcrypt for password hashing, 
   - VerifyTX routes remain intact for the Intake module; only billing flow uses Stedi.
   - Env var required: `STEDI_API_KEY` — set in Railway/Replit secrets.
 
+- **Payer Prior-Authorization Intelligence Layer** (Sprint 4):
+  - **`payer_auth_requirements` table** (global, no org_id): Stores per-payer, per-code auth rules. Columns: id, payer_id, payer_name, code, code_type, auth_required, auth_conditions, auth_validity_days, auth_number_format_hint, typical_turnaround_days, submission_method, portal_url, notes, is_active, updated_at. Unique index on (payer_id, code). Seeded with VA Community Care (G0299, G0300, G0151, G0152, G0159, G0160, G0179) and BCBS TX (G0299, G0300, G0151) rules at startup.
+  - **Prior_authorizations lifecycle columns** added at startup: request_status, cpt_codes, submitted_at, decision_at, denial_reason, clinical_notes, request_method, requested_by, expiration_date.
+  - **API endpoints** (admin/rcm_manager):
+    - `GET /api/billing/payer-auth-requirements?payerId=X` — list all active rules for a payer
+    - `GET /api/billing/payer-auth-requirements/check?payerId=X&codes=G0299,G0300` — resolves auth requirements for a comma-separated list of codes; falls back to payer-level auth_required flag
+    - `POST /api/billing/payer-auth-requirements` — create/upsert rule (admin only)
+    - `PATCH /api/billing/payer-auth-requirements/:id` — update rule (admin only)
+    - `DELETE /api/billing/payer-auth-requirements/:id` — delete rule (admin only)
+  - **Claim wizard PA checklist** (step 1, Authorization card): When payer + service line codes are known, fetches auth check and shows per-code rows with icons (green=auth on file, red=VA missing, amber=non-VA missing). VA Community Care shows a blue guidance banner. Portal URL links show "Submit PA →" for non-VA payers. Validation updated: VA missing auth = hard ERROR (blocks submission); non-VA = soft WARNING. Auth validity window checked if validityDays set.
+  - **Payer edit dialog** in Settings → Payers: Converted to tabbed layout. "Settings" tab retains existing fields. "Auth Requirements" tab shows per-code rules table with add/delete functionality.
+
 - **Sprint 2 additions**:
   - **Claim Defaults tab** in Practice Settings (`/billing/settings?tab=claim-defaults`): Default TOS, default ordering provider, homebound default toggle, exclude facility toggle. Saves via `PUT /api/billing/practice-settings`. Claim wizard pre-populates from these defaults.
   - **Payer edit dialog enhanced**: Added `auto_followup_days` field + ERA Auto-Posting Rules section (5 toggles). OA submit handler sets `follow_up_date` from payer's `auto_followup_days`. ERA PATCH supports `auto-post` action with per-payer rules.

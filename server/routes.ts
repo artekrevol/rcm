@@ -631,6 +631,83 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE vob_verifications ADD COLUMN IF NOT EXISTS stedi_transaction_id VARCHAR`);
     await pool.query(`ALTER TABLE vob_verifications ADD COLUMN IF NOT EXISTS verified_by VARCHAR`);
 
+    // ── payer_auth_requirements table (global, no org_id) ────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS payer_auth_requirements (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        payer_id VARCHAR NOT NULL,
+        payer_name VARCHAR NOT NULL,
+        code VARCHAR NOT NULL,
+        code_type VARCHAR NOT NULL DEFAULT 'HCPCS',
+        auth_required BOOLEAN NOT NULL DEFAULT true,
+        auth_conditions TEXT,
+        auth_validity_days INTEGER,
+        auth_number_format VARCHAR,
+        auth_number_format_hint VARCHAR,
+        typical_turnaround_days INTEGER,
+        submission_method VARCHAR,
+        portal_url TEXT,
+        notes TEXT,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_payer_auth_req_payer_id ON payer_auth_requirements(payer_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_payer_auth_req_code ON payer_auth_requirements(code)`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payer_auth_req_unique ON payer_auth_requirements(payer_id, code)`);
+
+    // ── Seed VA Community Care + BCBS auth requirements ──────────────────────
+    const { rows: vaRows } = await pool.query(`SELECT id FROM payers WHERE payer_id = 'VACCN' OR name = 'VA Community Care' LIMIT 1`);
+    const { rows: bcbsTxRows } = await pool.query(`SELECT id FROM payers WHERE payer_id = '00621' OR name ILIKE '%Blue Cross Blue Shield of Texas%' LIMIT 1`);
+    if (vaRows.length > 0) {
+      const vaId = vaRows[0].id;
+      const vaCodes = [
+        ['G0299','HCPCS','VA issues a Community Care authorization (VA referral) before first visit. Auth number is on the VA referral document. Required on every claim.','Alphanumeric, 10-20 characters. Provided on VA CC referral. Starts with the letter V followed by digits in most cases.','RN home health visits. Authorization provided by VA on referral. Contact the referring VA facility if auth is missing. Portal: va.gov/COMMUNITYCARE'],
+        ['G0300','HCPCS','Same as G0299. VA-issued referral authorization required on every claim.','Alphanumeric, 10-20 characters. Provided on VA CC referral.','LPN home health visits. Authorization provided by VA on referral. See G0299 notes.'],
+        ['G0151','HCPCS','VA-issued referral authorization required on every claim.','Alphanumeric, 10-20 characters. Provided on VA CC referral.','Physical therapy home health visits. Auth from VA referral. Confirm authorized number of visits.'],
+        ['G0152','HCPCS','VA-issued referral authorization required on every claim.','Alphanumeric, 10-20 characters. Provided on VA CC referral.','Occupational therapy home health visits. Auth from VA referral. Confirm authorized number of visits.'],
+        ['G0153','HCPCS','VA-issued referral authorization required on every claim.','Alphanumeric, 10-20 characters. Provided on VA CC referral.','Speech therapy home health visits. Auth from VA referral.'],
+        ['G0162','HCPCS','VA-issued referral authorization required on every claim.','Alphanumeric, 10-20 characters. Provided on VA CC referral.','Skilled nursing services requiring specialized care. Auth from VA referral.'],
+      ];
+      for (const [code, codeType, conditions, hint, notes] of vaCodes) {
+        await pool.query(
+          `INSERT INTO payer_auth_requirements (payer_id, payer_name, code, code_type, auth_required, auth_conditions, auth_validity_days, auth_number_format_hint, typical_turnaround_days, submission_method, notes)
+           VALUES ($1,'VA Community Care',$2,$3,true,$4,90,$5,0,'portal',$6)
+           ON CONFLICT (payer_id, code) DO NOTHING`,
+          [vaId, code, codeType, conditions, hint, notes]
+        );
+      }
+    }
+    if (bcbsTxRows.length > 0) {
+      const bcbsId = bcbsTxRows[0].id;
+      const bcbsCodes = [
+        ['G0299','HCPCS','Prior authorization required before first home health visit. Submit through Availity. Typically approved for a 60-day episode.','Submit PA request through Availity portal before first visit. Include plan of care, physician orders, and homebound status documentation. 60-day episode authorization is standard.'],
+        ['G0300','HCPCS','Prior authorization required. Submit through Availity. Same episode as G0299 if same patient.','LPN visits. May be covered under same PA as RN visits in same episode. Verify with BCBS.'],
+        ['G0151','HCPCS','Prior authorization required for PT visits. Must include plan of care and functional goals.','Physical therapy home visits. Submit PA through Availity with PT evaluation, plan of care, and homebound documentation.'],
+        ['G0152','HCPCS','Prior authorization required for OT visits.','Occupational therapy home visits. Separate PA from PT — submit independently.'],
+      ];
+      for (const [code, codeType, conditions, notes] of bcbsCodes) {
+        await pool.query(
+          `INSERT INTO payer_auth_requirements (payer_id, payer_name, code, code_type, auth_required, auth_conditions, auth_validity_days, typical_turnaround_days, submission_method, portal_url, notes)
+           VALUES ($1,'Blue Cross Blue Shield of Texas',$2,$3,true,$4,60,3,'portal','https://www.availity.com',$5)
+           ON CONFLICT (payer_id, code) DO NOTHING`,
+          [bcbsId, code, codeType, conditions, notes]
+        );
+      }
+    }
+
+    // ── prior_authorizations: add lifecycle columns ───────────────────────────
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS request_status VARCHAR DEFAULT 'not_started'`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS cpt_codes JSONB DEFAULT '[]'`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS decision_at TIMESTAMP`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS denial_reason TEXT`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS clinical_notes TEXT`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS request_method VARCHAR`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS requested_by VARCHAR`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS expiration_date DATE`);
+
     // Seed CARC/RARC codes, POS codes, full taxonomy codes, and additional payers
     const { seedReferenceTables } = await import("./seeds/reference-tables");
     await seedReferenceTables(pool);
@@ -2816,6 +2893,161 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       if (rows.length === 0) return res.status(404).json({ error: "Payer not found" });
       res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Payer Auth Requirements (global lookup, no org scope) ──────────────────
+  app.get("/api/billing/payer-auth-requirements", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { payerId, code } = req.query as { payerId?: string; code?: string };
+      if (!payerId) return res.status(400).json({ error: "payerId is required" });
+      let query = `SELECT * FROM payer_auth_requirements WHERE payer_id = $1 AND is_active = true`;
+      const params: any[] = [payerId];
+      if (code) { query += ` AND code = $2`; params.push(code.toUpperCase()); }
+      query += ` ORDER BY code`;
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/billing/payer-auth-requirements/check", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { payerId, codes } = req.query as { payerId?: string; codes?: string };
+      if (!payerId) return res.status(400).json({ error: "payerId is required" });
+      if (!codes) return res.json({});
+      const codeList = codes.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+      if (codeList.length === 0) return res.json({});
+
+      // Fetch granular auth requirements for this payer + these codes
+      const { rows: authRows } = await db.query(
+        `SELECT * FROM payer_auth_requirements WHERE payer_id = $1 AND code = ANY($2) AND is_active = true`,
+        [payerId, codeList]
+      );
+      const authMap: Record<string, any> = {};
+      for (const r of authRows) authMap[r.code] = r;
+
+      // Fallback: payer-level auth_required flag
+      const { rows: payerRows } = await db.query(`SELECT auth_required, name FROM payers WHERE id = $1`, [payerId]);
+      const payerAuthRequired = payerRows[0]?.auth_required ?? false;
+      const payerName = payerRows[0]?.name || "payer";
+
+      const result: Record<string, any> = {};
+      for (const code of codeList) {
+        if (authMap[code]) {
+          const r = authMap[code];
+          result[code] = {
+            code,
+            authRequired: r.auth_required,
+            conditions: r.auth_conditions || null,
+            hint: r.auth_number_format_hint || null,
+            validityDays: r.auth_validity_days || null,
+            turnaroundDays: r.typical_turnaround_days ?? null,
+            submissionMethod: r.submission_method || null,
+            portalUrl: r.portal_url || null,
+            notes: r.notes || null,
+          };
+        } else if (payerAuthRequired) {
+          result[code] = {
+            code,
+            authRequired: true,
+            conditions: `Auth required per ${payerName} default policy`,
+            hint: null,
+            validityDays: null,
+            turnaroundDays: null,
+            submissionMethod: null,
+            portalUrl: null,
+            notes: null,
+          };
+        } else {
+          result[code] = { code, authRequired: false };
+        }
+      }
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/payer-auth-requirements", requireRole("admin"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const {
+        payerId, payerName, code, codeType, authRequired, authConditions,
+        authValidityDays, authNumberFormatHint, typicalTurnaroundDays,
+        submissionMethod, portalUrl, notes,
+      } = req.body;
+      if (!payerId || !payerName || !code) return res.status(400).json({ error: "payerId, payerName, code are required" });
+      const { rows } = await db.query(
+        `INSERT INTO payer_auth_requirements
+           (payer_id, payer_name, code, code_type, auth_required, auth_conditions,
+            auth_validity_days, auth_number_format_hint, typical_turnaround_days,
+            submission_method, portal_url, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT (payer_id, code) DO UPDATE SET
+           payer_name = EXCLUDED.payer_name,
+           auth_required = EXCLUDED.auth_required,
+           auth_conditions = EXCLUDED.auth_conditions,
+           auth_validity_days = EXCLUDED.auth_validity_days,
+           auth_number_format_hint = EXCLUDED.auth_number_format_hint,
+           typical_turnaround_days = EXCLUDED.typical_turnaround_days,
+           submission_method = EXCLUDED.submission_method,
+           portal_url = EXCLUDED.portal_url,
+           notes = EXCLUDED.notes,
+           updated_at = NOW()
+         RETURNING *`,
+        [payerId, payerName, code.toUpperCase(), codeType || 'HCPCS',
+         authRequired ?? true, authConditions || null, authValidityDays || null,
+         authNumberFormatHint || null, typicalTurnaroundDays ?? null,
+         submissionMethod || null, portalUrl || null, notes || null]
+      );
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/billing/payer-auth-requirements/:id", requireRole("admin"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const fields: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+      const allowed = ['auth_required','auth_conditions','auth_validity_days','auth_number_format_hint','typical_turnaround_days','submission_method','portal_url','notes','is_active'];
+      const keyMap: Record<string, string> = {
+        authRequired: 'auth_required', authConditions: 'auth_conditions',
+        authValidityDays: 'auth_validity_days', authNumberFormatHint: 'auth_number_format_hint',
+        typicalTurnaroundDays: 'typical_turnaround_days', submissionMethod: 'submission_method',
+        portalUrl: 'portal_url', isActive: 'is_active',
+      };
+      for (const [k, v] of Object.entries(req.body)) {
+        const col = keyMap[k] || k;
+        if (allowed.includes(col)) { fields.push(`${col} = $${idx++}`); values.push(v); }
+      }
+      if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
+      fields.push(`updated_at = NOW()`);
+      values.push(req.params.id);
+      const { rows } = await db.query(
+        `UPDATE payer_auth_requirements SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+      if (!rows.length) return res.status(404).json({ error: "Not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/billing/payer-auth-requirements/:id", requireRole("admin"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      await db.query(`DELETE FROM payer_auth_requirements WHERE id = $1`, [req.params.id]);
+      res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

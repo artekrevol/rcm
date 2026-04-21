@@ -48,6 +48,7 @@ import {
   Copy,
   Clock,
   DollarSign,
+  Info,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { validateNPI } from "@shared/npi-validation";
@@ -854,6 +855,27 @@ export default function ClaimWizard() {
   const providers = wizardData?.providers || [];
   const payers = wizardData?.payers || [];
 
+  // Resolve matched payer from patient's payer_id or insurance_carrier name
+  const matchedPayer = payers.find((p: any) => p.id === patient?.payer_id || p.name === patient?.insurance_carrier) || null;
+  const isVAPayer = !!matchedPayer && (
+    matchedPayer.payer_id === "VACCN" || matchedPayer.payer_id === "TRWST" ||
+    (matchedPayer.name || "").toLowerCase().includes("va community care") ||
+    (matchedPayer.name || "").toLowerCase().includes("triwest")
+  );
+  const activeCodes = serviceLines.filter((l) => l.code).map((l) => l.code);
+  const paCodesParam = activeCodes.join(",");
+
+  const { data: paCheckResult = {} } = useQuery<Record<string, any>>({
+    queryKey: ["/api/billing/payer-auth-requirements/check", matchedPayer?.id, paCodesParam],
+    queryFn: async () => {
+      if (!matchedPayer?.id || !paCodesParam) return {};
+      const res = await fetch(`/api/billing/payer-auth-requirements/check?payerId=${matchedPayer.id}&codes=${encodeURIComponent(paCodesParam)}`);
+      if (!res.ok) return {};
+      return res.json();
+    },
+    enabled: !!matchedPayer?.id && activeCodes.length > 0,
+  });
+
   useEffect(() => {
     if (providers.length > 0 && !providerId) {
       const def = providers.find((p: any) => p.is_default);
@@ -1135,8 +1157,34 @@ export default function ClaimWizard() {
     });
     if (!icd10Primary.code) errors.push("No primary ICD-10 diagnosis");
 
-    if (!authNumber) {
-      const matchedPayer = payers.find((p: any) => p.name === patient?.insurance_carrier || p.id === patient?.payer_id);
+    // PA check: use granular auth requirements first, then fall back to payer-level flag
+    const paCodesRequiringAuth = Object.values(paCheckResult).filter((v: any) => v.authRequired);
+    if (paCodesRequiringAuth.length > 0) {
+      if (!authNumber) {
+        if (isVAPayer) {
+          errors.push("VA Community Care requires the authorization number from the VA referral. Claim cannot be submitted without it.");
+        } else {
+          for (const pa of paCodesRequiringAuth) {
+            const portalRef = pa.portalUrl ? ` Get it from ${pa.portalUrl}` : "";
+            warnings.push(`Auth required for ${pa.code} — enter authorization number before submitting.${portalRef}`);
+          }
+        }
+      } else if (authNumber) {
+        // Check auth validity window
+        for (const pa of paCodesRequiringAuth) {
+          if (pa.validityDays && serviceDate) {
+            const today = new Date();
+            const svcDate = new Date(serviceDate);
+            const diffDays = Math.floor((today.getTime() - svcDate.getTime()) / 86400000);
+            if (diffDays > pa.validityDays) {
+              warnings.push(`Authorization may have expired. Typical validity is ${pa.validityDays} days — confirm the auth number is still active with ${matchedPayer?.name || "the payer"} before submitting.`);
+              break;
+            }
+          }
+        }
+      }
+    } else if (!authNumber) {
+      // Fallback: payer-level auth_required boolean for payers without granular data
       if (matchedPayer?.auth_required) warnings.push("Authorization number blank — payer requires prior auth");
     }
     serviceLines.forEach((l, i) => {
@@ -1348,16 +1396,93 @@ export default function ClaimWizard() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>Authorization</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="h-4 w-4" />
+                Prior Authorization
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* VA Community Care special banner */}
+              {isVAPayer && activeCodes.length > 0 && (
+                <div className="flex gap-3 p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30" data-testid="banner-va-auth">
+                  <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+                  <div className="text-sm text-blue-800 dark:text-blue-200">
+                    <p className="font-semibold mb-0.5">VA Community Care Authorization</p>
+                    <p className="text-xs leading-relaxed">The VA issues a referral authorization number on the patient's Community Care referral paperwork. Enter that number here exactly as it appears on the referral. Do not submit a PA request — the VA provides this proactively.</p>
+                  </div>
+                </div>
+              )}
+
+              {/* PA checklist per code */}
+              {activeCodes.length > 0 && Object.keys(paCheckResult).length > 0 && (
+                <div className="space-y-2" data-testid="panel-pa-checklist">
+                    {activeCodes.filter((code) => paCheckResult[code]?.authRequired).map((code) => {
+                      const pa = paCheckResult[code];
+                      const hasAuth = !!authNumber;
+                      return (
+                        <div key={code} className="flex items-start gap-3 p-2.5 rounded-md border bg-muted/30" data-testid={`pa-row-${code}`}>
+                          <div className="mt-0.5 shrink-0">
+                            {hasAuth ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                            ) : isVAPayer ? (
+                              <XCircle className="h-4 w-4 text-red-500" />
+                            ) : (
+                              <AlertTriangle className="h-4 w-4 text-amber-500" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-sm font-medium">{code}</span>
+                              <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                                hasAuth
+                                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                                  : isVAPayer
+                                  ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                                  : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                              }`}>
+                                {hasAuth ? "Auth number on file" : isVAPayer ? "Auth missing — required" : "Auth required — not entered"}
+                              </span>
+                              {pa.turnaroundDays === 0 && (
+                                <span className="text-xs text-muted-foreground">VA provides auth</span>
+                              )}
+                              {pa.turnaroundDays > 0 && (
+                                <span className="text-xs text-muted-foreground">~{pa.turnaroundDays} day turnaround</span>
+                              )}
+                            </div>
+                            {pa.conditions && (
+                              <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{pa.conditions}</p>
+                            )}
+                            {pa.portalUrl && !isVAPayer && (
+                              <a href={pa.portalUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary mt-0.5 hover:underline" data-testid={`link-pa-portal-${code}`}>
+                                <ExternalLink className="h-3 w-3" />
+                                Submit PA →
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {activeCodes.some((c) => paCheckResult[c] && !paCheckResult[c].authRequired) && (
+                      <p className="text-xs text-muted-foreground px-1">
+                        {activeCodes.filter((c) => paCheckResult[c] && !paCheckResult[c].authRequired).join(", ")} — no prior auth required
+                      </p>
+                    )}
+                </div>
+              )}
+
+              {/* Auth number input */}
               <div className="space-y-1.5">
                 <Label>Authorization Number</Label>
                 <Input
                   value={authNumber}
                   onChange={(e) => setAuthNumber(e.target.value)}
-                  placeholder="Enter auth number..."
+                  placeholder={isVAPayer ? "Enter VA referral auth number exactly as on paperwork..." : paCheckResult && Object.values(paCheckResult).some((v: any) => v.hint) ? Object.values(paCheckResult).find((v: any) => v.hint)?.hint : "Enter auth number..."}
                   data-testid="input-auth-number"
                 />
+                {activeCodes.length > 0 && activeCodes.some((c) => paCheckResult[c]?.authRequired) && (
+                  <p className="text-xs text-muted-foreground">This auth number applies to all service lines on this claim.</p>
+                )}
               </div>
               {authNumber && authNumber !== patient?.authorization_number && (
                 <div className="flex items-center gap-2">
