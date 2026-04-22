@@ -718,6 +718,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS requested_by VARCHAR`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS expiration_date DATE`);
 
+    // ── Payers: stedi_payer_id + supported_transactions + updated_at ─────────
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_payer_id VARCHAR`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS supported_transactions JSONB DEFAULT '[]'`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`);
+
     // ── ITEM 1: Fix TriWest payer ID VACCN → TWVACCN (Stedi uses TWVACCN) ─────
     await pool.query(`
       UPDATE payers
@@ -3167,6 +3172,112 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       res.json(rows[0]);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Stedi payer network cache (1-hour TTL, module-level) ───────────────────
+  let _stediPayerCache: { payers: any[]; ts: number } | null = null;
+  async function fetchStediPayerNetwork(): Promise<any[]> {
+    const now = Date.now();
+    if (_stediPayerCache && now - _stediPayerCache.ts < 60 * 60 * 1000) return _stediPayerCache.payers;
+    const apiKey = process.env.STEDI_API_KEY;
+    if (!apiKey) return [];
+    const res = await fetch("https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/payers", {
+      headers: { Authorization: `Key ${apiKey}` },
+    });
+    if (!res.ok) throw new Error(`Stedi payer network API ${res.status}`);
+    const body = await res.json();
+    // Normalize: handle both { payers: [...] } and [...]
+    const raw: any[] = Array.isArray(body) ? body : (body.payers || body.data || []);
+    const payers = raw.map((p: any) => ({
+      payerId: p.payerId || p.payer_id || "",
+      payerName: p.payerName || p.payer_name || "",
+      supportedTransactions: Array.isArray(p.supportedTransactions)
+        ? p.supportedTransactions.map((t: any) => (typeof t === "string" ? t : t.transactionSetName || t.name || ""))
+        : [],
+      enrollmentRequired: p.enrollmentRequired || {},
+    }));
+    _stediPayerCache = { payers, ts: now };
+    return payers;
+  }
+
+  // POST /api/billing/payers/sync-stedi
+  app.post("/api/billing/payers/sync-stedi", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const apiKey = process.env.STEDI_API_KEY;
+      if (!apiKey) return res.status(400).json({ error: "STEDI_API_KEY is not configured" });
+      const stediPayers = await fetchStediPayerNetwork();
+      if (stediPayers.length === 0) return res.status(502).json({ error: "Stedi returned an empty payer list — check API key and connectivity" });
+
+      // Build lookup maps
+      const byId = new Map<string, any>(stediPayers.map((p) => [p.payerId.toUpperCase(), p]));
+
+      const db = await import("./db").then(m => m.pool);
+      const { rows: ourPayers } = await db.query("SELECT id, name, payer_id, stedi_payer_id FROM payers ORDER BY name");
+
+      const matched: any[] = [];
+      const already_correct: any[] = [];
+      const unmatched: any[] = [];
+
+      for (const payer of ourPayers) {
+        let stediMatch: any = null;
+
+        // A: exact payer_id match
+        if (payer.payer_id) stediMatch = byId.get(payer.payer_id.toUpperCase()) || null;
+
+        // B: fuzzy name match (case-insensitive partial)
+        if (!stediMatch) {
+          const lc = payer.name.toLowerCase();
+          stediMatch = stediPayers.find((s) => {
+            const sn = s.payerName.toLowerCase();
+            return sn.includes(lc) || lc.includes(sn) || sn.split(" ").filter((w: string) => w.length > 4).every((w: string) => lc.includes(w));
+          }) || null;
+        }
+
+        if (!stediMatch) {
+          unmatched.push({ id: payer.id, name: payer.name, current_payer_id: payer.payer_id });
+          continue;
+        }
+
+        const newId = stediMatch.payerId;
+        const supportedTx: string[] = stediMatch.supportedTransactions;
+
+        if (payer.payer_id === newId && payer.stedi_payer_id === newId) {
+          already_correct.push({ id: payer.id, name: payer.name, payer_id: newId });
+          // Still update supported_transactions in case they changed
+          await db.query(
+            "UPDATE payers SET supported_transactions = $1, updated_at = NOW() WHERE id = $2",
+            [JSON.stringify(supportedTx), payer.id]
+          );
+          continue;
+        }
+
+        const oldId = payer.payer_id;
+        await db.query(
+          "UPDATE payers SET payer_id = $1, stedi_payer_id = $2, supported_transactions = $3, updated_at = NOW() WHERE id = $4",
+          [newId, newId, JSON.stringify(supportedTx), payer.id]
+        );
+        matched.push({ id: payer.id, name: payer.name, old_payer_id: oldId, new_payer_id: newId });
+      }
+
+      res.json({ matched, already_correct, unmatched, total_stedi_payers: stediPayers.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/billing/payers/stedi-search?q=name
+  app.get("/api/billing/payers/stedi-search", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const q = (req.query.q as string || "").toLowerCase().trim();
+      if (!q || q.length < 2) return res.json([]);
+      const stediPayers = await fetchStediPayerNetwork();
+      const matches = stediPayers
+        .filter((p) => p.payerName.toLowerCase().includes(q) || p.payerId.toLowerCase().includes(q))
+        .slice(0, 8);
+      res.json(matches);
+    } catch (err: any) {
+      res.json([]); // fail silently — non-critical
     }
   });
 

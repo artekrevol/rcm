@@ -54,7 +54,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-import { CheckCircle, Send, Wifi, FileText, Zap, XCircle, Info } from "lucide-react";
+import { CheckCircle, Send, Wifi, FileText, Zap, XCircle, Info, RefreshCw, CheckCheck, AlertCircle } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -912,6 +912,11 @@ function PayersTab() {
   });
   const [payerSearch, setPayerSearch] = useState("");
   const [payerDialogTab, setPayerDialogTab] = useState("settings");
+  const [showSyncModal, setShowSyncModal] = useState(false);
+  const [syncResult, setSyncResult] = useState<any>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [stediSuggestion, setStediSuggestion] = useState<any>(null);
+  const [stediSearching, setStediSearching] = useState(false);
   const [addReqForm, setAddReqForm] = useState({
     code: "", codeType: "HCPCS", authRequired: true,
     authConditions: "", authValidityDays: "", authNumberFormatHint: "",
@@ -958,6 +963,38 @@ function PayersTab() {
       return res.json();
     },
   });
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await apiRequest("POST", "/api/billing/payers/sync-stedi");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sync failed");
+      setSyncResult(data);
+      setShowSyncModal(true);
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/payers"] });
+    } catch (err: any) {
+      toast({ title: "Sync failed", description: err.message, variant: "destructive" });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    const name = form.name.trim();
+    if (name.length < 3) { setStediSuggestion(null); return; }
+    const timer = setTimeout(async () => {
+      setStediSearching(true);
+      try {
+        const res = await fetch(`/api/billing/payers/stedi-search?q=${encodeURIComponent(name)}`);
+        const matches = await res.json();
+        setStediSuggestion(matches[0] || null);
+      } catch { setStediSuggestion(null); }
+      finally { setStediSearching(false); }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [form.name]);
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -1010,10 +1047,16 @@ function PayersTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium">Payers</h3>
-        <Button onClick={() => setShowDialog(true)} data-testid="button-add-payer">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Custom Payer
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleSync} disabled={syncing} data-testid="button-sync-stedi-payers">
+            {syncing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+            Sync from Stedi
+          </Button>
+          <Button onClick={() => { setShowDialog(true); setStediSuggestion(null); }} data-testid="button-add-payer">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Custom Payer
+          </Button>
+        </div>
       </div>
 
       <p className="text-sm text-muted-foreground bg-muted/50 border rounded-md p-3">
@@ -1037,6 +1080,7 @@ function PayersTab() {
             <TableRow>
               <TableHead>Payer Name</TableHead>
               <TableHead>EDI Payer ID</TableHead>
+              <TableHead>Transactions</TableHead>
               <TableHead>Timely Filing</TableHead>
               <TableHead>Auth Required</TableHead>
               <TableHead>Status</TableHead>
@@ -1047,14 +1091,32 @@ function PayersTab() {
             {filteredPayers.map((p: any) => (
               <TableRow key={p.id} className={!p.is_active ? "opacity-50" : ""} data-testid={`row-payer-${p.id}`}>
                 <TableCell className="font-medium">
-                  {p.name}
-                  {p.is_custom && <Badge variant="outline" className="ml-2 text-xs">Custom</Badge>}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {p.name}
+                    {p.is_custom && <Badge variant="outline" className="text-xs">Custom</Badge>}
+                    {p.stedi_payer_id && (
+                      <span className="inline-flex items-center gap-0.5 text-xs bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800 rounded-full px-1.5 py-0.5" data-testid={`badge-stedi-payer-${p.id}`}>
+                        <Zap className="h-2.5 w-2.5" /> Stedi
+                      </span>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell>
                   {p.payer_id ? (
                     <span className="font-mono text-sm">{p.payer_id}</span>
                   ) : (
                     <span className="text-muted-foreground text-xs italic">No ID set</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {p.supported_transactions && Array.isArray(p.supported_transactions) && p.supported_transactions.length > 0 ? (
+                    <div className="flex flex-wrap gap-1">
+                      {p.supported_transactions.slice(0, 3).map((tx: string) => (
+                        <span key={tx} className="text-xs bg-muted rounded px-1 py-0.5 font-mono">{tx}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">—</span>
                   )}
                 </TableCell>
                 <TableCell>{p.timely_filing_days} days</TableCell>
@@ -1408,7 +1470,7 @@ function PayersTab() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showDialog} onOpenChange={setShowDialog}>
+      <Dialog open={showDialog} onOpenChange={(o) => { setShowDialog(o); if (!o) { setStediSuggestion(null); setForm({ name: "", payerId: "", timelyFilingDays: "365", authRequired: false }); } }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Add Custom Payer</DialogTitle>
@@ -1417,12 +1479,33 @@ function PayersTab() {
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
               <Label>Payer Name *</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="input-payer-name" />
+              <div className="relative">
+                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="input-payer-name" />
+                {stediSearching && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              </div>
+              {stediSuggestion && (
+                <div className="flex items-center justify-between p-2 rounded-md bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 text-sm" data-testid="banner-stedi-suggestion">
+                  <span className="flex items-center gap-1.5 text-yellow-800 dark:text-yellow-200">
+                    <Zap className="h-3.5 w-3.5 text-yellow-600" />
+                    Found in Stedi network: <span className="font-mono font-semibold">{stediSuggestion.payerId}</span>
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-xs text-yellow-700 dark:text-yellow-300 hover:text-yellow-900"
+                    onClick={() => setForm({ ...form, payerId: stediSuggestion.payerId })}
+                    data-testid="button-accept-stedi-suggestion"
+                  >
+                    Use this ID
+                  </Button>
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Payer ID</Label>
-                <Input value={form.payerId} onChange={(e) => setForm({ ...form, payerId: e.target.value })} data-testid="input-payer-id" />
+                <Input value={form.payerId} onChange={(e) => setForm({ ...form, payerId: e.target.value })} placeholder={stediSuggestion ? stediSuggestion.payerId : ""} data-testid="input-payer-id" />
               </div>
               <div className="space-y-2">
                 <Label>Timely Filing (days)</Label>
@@ -1440,6 +1523,75 @@ function PayersTab() {
               {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Add Payer
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Sync Results Modal */}
+      <Dialog open={showSyncModal} onOpenChange={setShowSyncModal}>
+        <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RefreshCw className="h-4 w-4 text-primary" />
+              Stedi Payer Sync Results
+            </DialogTitle>
+            <DialogDescription>
+              Matched against {syncResult?.total_stedi_payers?.toLocaleString()} payers in the Stedi network.
+            </DialogDescription>
+          </DialogHeader>
+          {syncResult && (
+            <div className="space-y-4 py-2">
+              {/* Matched */}
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-green-700 dark:text-green-300">
+                  <CheckCheck className="h-4 w-4" />
+                  {syncResult.matched.length} payer{syncResult.matched.length !== 1 ? "s" : ""} updated
+                </div>
+                {syncResult.matched.length > 0 && (
+                  <div className="rounded-md border divide-y text-sm">
+                    {syncResult.matched.map((p: any) => (
+                      <div key={p.id} className="px-3 py-2 flex items-center justify-between" data-testid={`sync-matched-${p.id}`}>
+                        <span className="font-medium">{p.name}</span>
+                        <span className="text-muted-foreground font-mono text-xs">
+                          {p.old_payer_id || "—"} → <span className="text-green-700 dark:text-green-400 font-semibold">{p.new_payer_id}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Already correct */}
+              {syncResult.already_correct.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                    <CheckCircle className="h-4 w-4 text-green-500" />
+                    {syncResult.already_correct.length} payer{syncResult.already_correct.length !== 1 ? "s" : ""} already correct
+                  </div>
+                </div>
+              )}
+
+              {/* Unmatched */}
+              {syncResult.unmatched.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-amber-700 dark:text-amber-400">
+                    <AlertCircle className="h-4 w-4" />
+                    {syncResult.unmatched.length} payer{syncResult.unmatched.length !== 1 ? "s" : ""} could not be matched — set their Payer IDs manually
+                  </div>
+                  <div className="rounded-md border divide-y text-sm">
+                    {syncResult.unmatched.map((p: any) => (
+                      <div key={p.id} className="px-3 py-2 flex items-center justify-between" data-testid={`sync-unmatched-${p.id}`}>
+                        <span className="font-medium">{p.name}</span>
+                        <span className="text-muted-foreground font-mono text-xs">{p.current_payer_id || "No ID"}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button onClick={() => setShowSyncModal(false)} data-testid="button-close-sync-modal">Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1714,6 +1866,15 @@ function ClearinghouseTab() {
     },
   });
   const stediConfigured = stediStatus?.configured ?? false;
+  const { data: allPayers = [] } = useQuery<any[]>({
+    queryKey: ["/api/billing/payers"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/payers");
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const stediEnrolledPayers = allPayers.filter((p: any) => p.stedi_payer_id);
 
   const [oaForm, setOaForm] = useState({
     submitterId: "",
@@ -1836,55 +1997,62 @@ function ClearinghouseTab() {
           </div>
         )}
 
-        {/* Payer enrollment table */}
+        {/* Payer enrollment table — dynamic from Stedi-synced payers */}
         <div data-testid="section-stedi-payers">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Payer Enrollment Status</p>
-          <div className="rounded-md border overflow-hidden text-sm">
-            <table className="w-full">
-              <thead className="bg-muted/50">
-                <tr>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Payer</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">EDI Payer ID</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Transaction Set</th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                <tr data-testid="row-payer-vaccn">
-                  <td className="px-3 py-2 font-medium">VA Community Care (TriWest)</td>
-                  <td className="px-3 py-2 font-mono text-xs">TWVACCN</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">837P · 277CA · 835</td>
-                  <td className="px-3 py-2">
-                    {stediConfigured ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-300 font-medium"><CheckCircle className="h-3 w-3 text-green-500" /> Enrolled</span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Pending API key</span>
-                    )}
-                  </td>
-                </tr>
-                <tr data-testid="row-payer-bcbs">
-                  <td className="px-3 py-2 font-medium">BCBS Texas</td>
-                  <td className="px-3 py-2 font-mono text-xs">BCBSTX</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">837P · 277CA · 835</td>
-                  <td className="px-3 py-2">
-                    {stediConfigured ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-300 font-medium"><CheckCircle className="h-3 w-3 text-green-500" /> Enrolled</span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Pending API key</span>
-                    )}
-                  </td>
-                </tr>
-                <tr data-testid="row-payer-medicare">
-                  <td className="px-3 py-2 font-medium">Medicare</td>
-                  <td className="px-3 py-2 font-mono text-xs">MCAID</td>
-                  <td className="px-3 py-2 text-xs text-muted-foreground">837P · 277CA · 835</td>
-                  <td className="px-3 py-2">
-                    <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Enrollment pending</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Payer Enrollment Status</p>
+            {stediEnrolledPayers.length === 0 && (
+              <span className="text-xs text-muted-foreground">Run "Sync from Stedi" in the Payers tab to populate</span>
+            )}
           </div>
+          {stediEnrolledPayers.length > 0 ? (
+            <div className="rounded-md border overflow-hidden text-sm">
+              <table className="w-full">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Payer</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">EDI Payer ID</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Supported Transactions</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Eligibility</th>
+                    <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {stediEnrolledPayers.map((p: any) => {
+                    const txs: string[] = Array.isArray(p.supported_transactions) ? p.supported_transactions : [];
+                    const supports271 = txs.length === 0 || txs.some((t) => t.includes("270") || t.includes("271") || t.toLowerCase().includes("eligibility"));
+                    return (
+                      <tr key={p.id} data-testid={`row-enrollment-${p.id}`}>
+                        <td className="px-3 py-2 font-medium">{p.name}</td>
+                        <td className="px-3 py-2 font-mono text-xs">{p.stedi_payer_id}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          {txs.length > 0 ? txs.join(" · ") : "—"}
+                        </td>
+                        <td className="px-3 py-2">
+                          {supports271 ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><CheckCircle className="h-3 w-3" /> Supported</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><XCircle className="h-3 w-3" /> Not supported</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {stediConfigured ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-300 font-medium"><CheckCircle className="h-3 w-3 text-green-500" /> Enrolled</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Pending API key</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
+              No Stedi-synced payers yet. Go to the Payers tab and click "Sync from Stedi" to match your payers against the Stedi network and populate this table.
+            </div>
+          )}
         </div>
       </div>
 

@@ -527,6 +527,23 @@ function EligibilityTab({ patientId, patient }: { patientId: string; patient: an
 
   const stediConfigured = stediStatus?.configured ?? false;
 
+  const { data: allPayers = [] } = useQuery<any[]>({
+    queryKey: ["/api/billing/payers"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/payers");
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const patientPayerRecord = allPayers.find((p: any) =>
+    p.name?.toLowerCase() === patient?.insurance_carrier?.toLowerCase() ||
+    (patient?.payer_id && p.id === patient.payer_id)
+  );
+  const txs: string[] = patientPayerRecord?.supported_transactions && Array.isArray(patientPayerRecord.supported_transactions) ? patientPayerRecord.supported_transactions : [];
+  const payerSupports271 = txs.length === 0 || txs.some((t: string) => t.includes("270") || t.includes("271") || t.toLowerCase().includes("eligibility"));
+
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
 
   return (
@@ -549,7 +566,20 @@ function EligibilityTab({ patientId, patient }: { patientId: string; patient: an
                 </TooltipContent>
               </Tooltip>
             )}
-            {stediConfigured && (
+            {stediConfigured && !payerSupports271 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 dark:bg-amber-950 dark:text-amber-400 border border-amber-200 dark:border-amber-800 rounded-md px-2 py-1 cursor-default" data-testid="badge-eligibility-not-supported">
+                    <Info className="h-3 w-3" />
+                    Eligibility not supported
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  {patient?.insurance_carrier || "This payer"} does not support 270/271 electronic eligibility checks via Stedi. Use "Enter Manually" to record benefits from a phone call.
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {stediConfigured && payerSupports271 && (
               <Button
                 size="sm"
                 onClick={() => checkMutation.mutate()}
