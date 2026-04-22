@@ -418,25 +418,35 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         );
         console.log("Created Chajinel Clinic organization");
       }
-      // Always ensure Daniela's user exists and password is current
+      // Always ensure Chajinel users exist and passwords are current
       {
         const { hashPassword } = await import("./auth");
-        const danielaPwd = process.env.DANIELA_PASSWORD || 'clinic123';
+        const chajinelPwd = process.env.DANIELA_PASSWORD || 'clinic123';
         if (!process.env.DANIELA_PASSWORD) {
           console.warn("WARNING: DANIELA_PASSWORD not set — using default 'clinic123'. Set this env var in production!");
         }
-        const danielaEmail = process.env.DANIELA_EMAIL || 'daniela@chajinel.com';
-        const hashed = await hashPassword(danielaPwd);
-        const { rows: dCheck } = await pool.query("SELECT id FROM users WHERE email = $1", [danielaEmail]);
-        if (dCheck.length === 0) {
-          await pool.query(
-            "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, $1, $2, 'admin', 'Daniela', $3)",
-            [danielaEmail, hashed, CHAJINEL_ORG_ID]
-          );
-          console.log(`Created Chajinel admin user: ${danielaEmail}`);
-        } else {
-          await pool.query("UPDATE users SET password = $1, organization_id = $2, role = 'admin' WHERE email = $3", [hashed, CHAJINEL_ORG_ID, danielaEmail]);
-          console.log(`Synced Daniela password and org: ${danielaEmail}`);
+        const hashed = await hashPassword(chajinelPwd);
+
+        const chajinelUsers = [
+          { email: process.env.DANIELA_EMAIL || 'daniela@chajinel.com', name: 'Daniela' },
+          { email: 'djonguitud@chajinel.com', name: 'D Jonguitud' },
+        ];
+
+        for (const cu of chajinelUsers) {
+          const { rows: cuCheck } = await pool.query("SELECT id FROM users WHERE email = $1", [cu.email]);
+          if (cuCheck.length === 0) {
+            await pool.query(
+              "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, $1, $2, 'admin', $3, $4)",
+              [cu.email, hashed, cu.name, CHAJINEL_ORG_ID]
+            );
+            console.log(`Created Chajinel user: ${cu.email}`);
+          } else {
+            await pool.query(
+              "UPDATE users SET password = $1, organization_id = $2, role = 'admin' WHERE email = $3",
+              [hashed, CHAJINEL_ORG_ID, cu.email]
+            );
+            console.log(`Synced Chajinel user: ${cu.email}`);
+          }
         }
       }
     }
