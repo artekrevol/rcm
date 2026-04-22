@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { CreditCard, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, Loader2, ArrowLeft } from "lucide-react";
+import { CreditCard, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, Loader2, ArrowLeft, Zap } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { Link } from "wouter";
@@ -250,7 +250,7 @@ export default function ERAPage() {
           <CardContent className="py-16 text-center text-muted-foreground">
             <CreditCard className="h-10 w-10 mx-auto mb-3 opacity-30" />
             <p className="font-medium">No ERA batches received yet</p>
-            <p className="text-sm mt-1">835 remittance files from Office Ally will appear here when available.</p>
+            <p className="text-sm mt-1">835 remittance files from Stedi are polled every 6 hours and will appear here automatically.</p>
           </CardContent>
         </Card>
       ) : (
@@ -269,7 +269,14 @@ export default function ERAPage() {
                       <CreditCard className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <p className="font-semibold">{era.payer_name}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold">{era.payer_name}</p>
+                        {era.stedi_era_id && (
+                          <span className="inline-flex items-center gap-1 text-xs bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800 rounded-full px-1.5 py-0.5" data-testid={`badge-stedi-source-${era.id?.slice(0, 8)}`}>
+                            <Zap className="h-2.5 w-2.5" /> Stedi
+                          </span>
+                        )}
+                      </div>
                       <div className="text-sm text-muted-foreground flex gap-3 flex-wrap">
                         {era.check_number && <span>Check #{era.check_number}</span>}
                         {era.payment_date && <span>{format(new Date(era.payment_date), "MM/dd/yyyy")}</span>}

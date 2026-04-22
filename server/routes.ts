@@ -2924,13 +2924,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         await db.query(fuSql, fuParams);
 
         await db.query(
-          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
-          [crypto.randomUUID(), c.id, "Submitted via Stedi", `837P submitted to Stedi. Transaction ID: ${result.transactionId || "N/A"}. Status: ${result.status || "Accepted"}`]
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+          [crypto.randomUUID(), c.id, "Submitted via Stedi", `837P submitted to Stedi. Transaction ID: ${result.transactionId || "N/A"}. Status: ${result.status || "Accepted"}`, c.organization_id]
         );
         if (followUpDate) {
           await db.query(
-            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
-            [crypto.randomUUID(), c.id, "Follow-Up Scheduled", `Auto follow-up scheduled for ${followUpDate} (${followUpDays} days from submission)`]
+            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+            [crypto.randomUUID(), c.id, "Follow-Up Scheduled", `Auto follow-up scheduled for ${followUpDate} (${followUpDays} days from submission)`, c.organization_id]
           );
         }
         await db.query(
@@ -2966,7 +2966,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!isStediConfigured()) return res.status(400).json({ error: "Stedi not configured" });
 
       const db = await import("./db").then(m => m.pool);
-      const claimResult = await db.query("SELECT stedi_transaction_id, status FROM claims WHERE id = $1", [req.params.id]);
+      const claimResult = await db.query("SELECT stedi_transaction_id, status, organization_id FROM claims WHERE id = $1", [req.params.id]);
       if (!claimResult.rows.length) return res.status(404).json({ error: "Claim not found" });
 
       const { acknowledgments } = await poll277Acknowledgments(
@@ -2974,6 +2974,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
 
       const txnId = claimResult.rows[0].stedi_transaction_id;
+      const orgId = claimResult.rows[0].organization_id;
       const match = acknowledgments.find(
         (a) => a.transactionId === txnId || a.claimControlNumber === req.params.id
       );
@@ -2983,8 +2984,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (claimResult.rows[0].status === "submitted") {
           await db.query("UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2", [newStatus, req.params.id]);
           await db.query(
-            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
-            [crypto.randomUUID(), req.params.id, "277CA Received", `Payer acknowledgment: ${match.statusDescription}. Payer: ${match.payer}`]
+            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+            [crypto.randomUUID(), req.params.id, "277CA Received", `Payer acknowledgment: ${match.statusDescription}. Payer: ${match.payer}`, orgId]
           );
         }
         res.json({ found: true, status: newStatus, acknowledgment: match });
@@ -6783,15 +6784,24 @@ async function pollStedi835ERA() {
       }
       const eraId = crypto.randomUUID();
       await db.query(
-        `INSERT INTO era_batches (id, organization_id, payer_name, check_number, check_date, total_amount, status, stedi_era_id, raw_data, created_at)
+        `INSERT INTO era_batches (id, org_id, payer_name, check_number, payment_date, total_amount, status, stedi_era_id, raw_data, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, 'unposted', $7, $8, NOW())`,
         [eraId, orgId, era.payerName, era.checkNumber, era.checkDate, era.totalPayment, era.eraId, JSON.stringify(era.rawData)]
       );
       for (const line of era.claimLines) {
+        const claimRow = await db.query("SELECT id FROM claims WHERE id = $1 LIMIT 1", [line.claimControlNumber]);
+        const matchedClaimId = claimRow.rows[0]?.id || null;
+        const serviceLines = line.adjustments.map((adj: any) => ({
+          carc: adj.code,
+          carc_desc: adj.reason,
+          billed: line.billedAmount,
+          allowed: line.allowedAmount,
+          paid: line.paidAmount,
+        }));
         await db.query(
-          `INSERT INTO era_claim_lines (id, era_batch_id, claim_control_number, patient_name, billed_amount, allowed_amount, paid_amount, adjustment_codes, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-          [crypto.randomUUID(), eraId, line.claimControlNumber, line.patientName, line.billedAmount, line.allowedAmount, line.paidAmount, JSON.stringify(line.adjustments)]
+          `INSERT INTO era_lines (id, era_id, claim_id, org_id, patient_name, billed_amount, allowed_amount, paid_amount, service_lines, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())`,
+          [crypto.randomUUID(), eraId, matchedClaimId, orgId, line.patientName, line.billedAmount, line.allowedAmount, line.paidAmount, JSON.stringify(serviceLines)]
         );
       }
       console.log(`[835 Poll] Imported ERA: ${era.checkNumber} — $${era.totalPayment}`);

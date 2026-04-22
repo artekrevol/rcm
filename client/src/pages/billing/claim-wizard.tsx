@@ -887,7 +887,7 @@ export default function ClaimWizard() {
   const stediConfigured = stediStatus?.configured ?? false;
 
   const [stediSubmitting, setStediSubmitting] = useState(false);
-  const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string } | null>(null);
+  const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string; validationErrors?: string[] } | null>(null);
 
   useEffect(() => {
     if (providers.length > 0 && !providerId) {
@@ -1770,6 +1770,13 @@ export default function ClaimWizard() {
                   <div>
                     <p className="font-semibold">Stedi rejected the submission</p>
                     <p className="text-xs mt-0.5">{stediResult.error}</p>
+                    {stediResult.validationErrors && stediResult.validationErrors.length > 0 && (
+                      <ul className="mt-1.5 space-y-0.5">
+                        {stediResult.validationErrors.map((e: string, i: number) => (
+                          <li key={i} className="text-xs font-mono bg-red-100/50 dark:bg-red-900/20 rounded px-1.5 py-0.5">{e}</li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 </div>
               )}

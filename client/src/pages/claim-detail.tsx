@@ -43,6 +43,8 @@ import {
   ChevronDown,
   XCircle,
   Info,
+  Zap,
+  RefreshCw,
 } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
@@ -184,10 +186,21 @@ export default function ClaimDetailPage() {
   const [ediDownloading, setEdiDownloading] = useState(false);
   const [timelinessPdfLoading, setTimelinessPdfLoading] = useState(false);
   const [appealPdfLoading, setAppealPdfLoading] = useState(false);
+  const [checking277, setChecking277] = useState(false);
+  const [check277Result, setCheck277Result] = useState<{ found: boolean; status?: string; message?: string } | null>(null);
 
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
   });
+  const { data: stediStatus } = useQuery<{ configured: boolean }>({
+    queryKey: ["/api/billing/stedi/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/stedi/status");
+      if (!res.ok) return { configured: false };
+      return res.json();
+    },
+  });
+  const stediConfigured = stediStatus?.configured ?? false;
 
   const { data: claim, isLoading: claimLoading } = useQuery<Claim>({
     queryKey: ["/api/claims", id],
@@ -361,7 +374,7 @@ export default function ClaimDetailPage() {
                   }
                 }}
               >
-                {ediValidating ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Checking…</> : "837P EDI file — for Office Ally / electronic submission"}
+                {ediValidating ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Checking…</> : "Download 837P EDI — for electronic submission"}
               </DropdownMenuItem>
               <DropdownMenuItem
                 data-testid="menu-timely-filing"
@@ -427,6 +440,37 @@ export default function ClaimDetailPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {stediConfigured && claim.status === "submitted" && (claim as any).submissionMethod === "stedi" && (
+            <Button
+              variant="outline"
+              className="gap-2"
+              disabled={checking277}
+              onClick={async () => {
+                setChecking277(true);
+                setCheck277Result(null);
+                try {
+                  const res = await fetch(`/api/billing/claims/${id}/check-277`, { method: "POST", credentials: "include" });
+                  const data = await res.json();
+                  setCheck277Result(data);
+                  if (data.found) {
+                    queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+                    queryClient.invalidateQueries({ queryKey: ["/api/claims", id, "events"] });
+                    toast({ title: `277CA: ${data.status}`, description: `Acknowledgment received from payer.` });
+                  } else {
+                    toast({ title: "No acknowledgment yet", description: data.message });
+                  }
+                } catch (err: any) {
+                  toast({ title: "Check failed", description: err.message, variant: "destructive" });
+                } finally {
+                  setChecking277(false);
+                }
+              }}
+              data-testid="button-check-277"
+            >
+              {checking277 ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {checking277 ? "Checking..." : "Check 277 Status"}
+            </Button>
+          )}
           <Button
             variant="outline"
             className="gap-2"
@@ -565,8 +609,39 @@ export default function ClaimDetailPage() {
                   </p>
                 </div>
               </div>
+              {(claim as any).submissionMethod && (claim as any).submissionMethod !== "manual" && (
+                <div className="flex items-start gap-3">
+                  <Zap className="h-4 w-4 text-yellow-500 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-xs text-muted-foreground">Submitted via</p>
+                    <p className="text-sm font-medium capitalize">{(claim as any).submissionMethod === "stedi" ? "Stedi clearinghouse" : (claim as any).submissionMethod}</p>
+                    {(claim as any).stediTransactionId && (
+                      <p className="text-xs font-mono text-muted-foreground mt-0.5 truncate" data-testid="text-stedi-txn-id">{(claim as any).stediTransactionId}</p>
+                    )}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
+
+          {check277Result && (
+            <div className={`p-3 rounded-lg border text-sm ${check277Result.found ? "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800" : "bg-muted border-border"}`} data-testid="panel-277-result">
+              {check277Result.found ? (
+                <div className="flex items-start gap-2 text-green-800 dark:text-green-200">
+                  <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0 text-green-600" />
+                  <div>
+                    <p className="font-medium">277CA received — {check277Result.status}</p>
+                    <p className="text-xs mt-0.5">Claim status updated. See timeline below.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 text-muted-foreground">
+                  <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                  <p className="text-xs">{check277Result.message}</p>
+                </div>
+              )}
+            </div>
+          )}
 
           {patient && (
             <Card>
