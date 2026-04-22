@@ -1553,8 +1553,8 @@ function PayersTab() {
                       <div key={p.id} className="px-3 py-2 flex items-center justify-between gap-2" data-testid={`sync-matched-${p.id}`}>
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="font-medium truncate">{p.name}</span>
-                          {p.match_strategy && p.match_strategy !== "payer_id" && p.match_strategy !== "name" && (
-                            <span className="shrink-0 text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded px-1.5 py-0.5">via {p.match_strategy.replace("_", " ").toUpperCase()}</span>
+                          {p.match_strategy === "manual_override" && (
+                            <span className="shrink-0 text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded px-1.5 py-0.5">manual override</span>
                           )}
                         </div>
                         <span className="shrink-0 text-muted-foreground font-mono text-xs">

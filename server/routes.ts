@@ -718,12 +718,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS requested_by VARCHAR`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS expiration_date DATE`);
 
-    // ── Payers: stedi_payer_id + supported_transactions + updated_at + npi + tax_id ──
+    // ── Payers: stedi_payer_id + supported_transactions + updated_at ──────────
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_payer_id VARCHAR`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS supported_transactions JSONB DEFAULT '[]'`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`);
-    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS npi VARCHAR`);
-    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS tax_id VARCHAR`);
+    await pool.query(`ALTER TABLE payers DROP COLUMN IF EXISTS npi`);
+    await pool.query(`ALTER TABLE payers DROP COLUMN IF EXISTS tax_id`);
 
     // ── ITEM 1: Fix TriWest payer ID VACCN → TWVACCN (Stedi uses TWVACCN) ─────
     await pool.query(`
@@ -3198,9 +3198,6 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ? p.supportedTransactions.map((t: any) => (typeof t === "string" ? t : t.transactionSetName || t.name || ""))
         : [],
       enrollmentRequired: p.enrollmentRequired || {},
-      // Strategy C identifiers — Stedi may expose these
-      npi: p.npi || p.NPI || "",
-      taxId: p.taxId || p.tax_id || p.federalTaxId || p.federal_tax_id || "",
     }));
     _stediPayerCache = { payers, ts: now };
     return payers;
@@ -3224,18 +3221,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const stediPayers = await fetchStediPayerNetwork();
       if (stediPayers.length === 0) return res.status(502).json({ error: "Stedi returned an empty payer list — check API key and connectivity" });
 
-      // Build lookup maps
+      // Build lookup map by Stedi payer ID
       const byId = new Map<string, any>(stediPayers.map((p) => [p.payerId.toUpperCase(), p]));
-      const byNpi = new Map<string, any>();
-      const byTaxId = new Map<string, any>();
-      for (const p of stediPayers) {
-        if (p.npi) byNpi.set(p.npi.replace(/\D/g, ""), p);
-        if (p.taxId) byTaxId.set(p.taxId.replace(/\D/g, ""), p);
-      }
 
       const db = await import("./db").then(m => m.pool);
       const { rows: ourPayers } = await db.query(
-        "SELECT id, name, payer_id, stedi_payer_id, npi, tax_id, timely_filing_days FROM payers ORDER BY name"
+        "SELECT id, name, payer_id, stedi_payer_id, timely_filing_days FROM payers ORDER BY name"
       );
 
       const matched: any[] = [];
@@ -3246,8 +3237,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         let stediMatch: any = null;
         let matchStrategy = "";
 
+        // Strategy C (highest priority): admin has manually pinned a stedi_payer_id
+        // Skip A and B entirely — trust the explicit override
+        if (payer.stedi_payer_id) {
+          stediMatch = byId.get(payer.stedi_payer_id.toUpperCase()) || null;
+          if (stediMatch) matchStrategy = "manual_override";
+        }
+
         // Strategy A: exact payer_id match
-        if (payer.payer_id) {
+        if (!stediMatch && payer.payer_id) {
           stediMatch = byId.get(payer.payer_id.toUpperCase()) || null;
           if (stediMatch) matchStrategy = "payer_id";
         }
@@ -3261,19 +3259,6 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
               sn.split(" ").filter((w: string) => w.length > 4).every((w: string) => lc.includes(w));
           }) || null;
           if (stediMatch) matchStrategy = "name";
-        }
-
-        // Strategy C: NPI or Tax ID match
-        if (!stediMatch) {
-          const npiClean = (payer.npi || "").replace(/\D/g, "");
-          const taxClean = (payer.tax_id || "").replace(/\D/g, "");
-          if (npiClean && byNpi.has(npiClean)) {
-            stediMatch = byNpi.get(npiClean);
-            matchStrategy = "npi";
-          } else if (taxClean && byTaxId.has(taxClean)) {
-            stediMatch = byTaxId.get(taxClean);
-            matchStrategy = "tax_id";
-          }
         }
 
         if (!stediMatch) {
