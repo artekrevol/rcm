@@ -45,8 +45,10 @@ import {
   Info,
   Zap,
   RefreshCw,
+  FlaskConical,
+  ChevronRight,
 } from "lucide-react";
-import { format, differenceInDays } from "date-fns";
+import { format, differenceInDays, formatDistanceToNow } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
 import { generateAndDownloadClaimPdf } from "@/lib/generate-claim-pdf";
 
@@ -188,6 +190,8 @@ export default function ClaimDetailPage() {
   const [appealPdfLoading, setAppealPdfLoading] = useState(false);
   const [checking277, setChecking277] = useState(false);
   const [check277Result, setCheck277Result] = useState<{ found: boolean; status?: string; message?: string } | null>(null);
+  const [validationErrorsExpanded, setValidationErrorsExpanded] = useState(false);
+  const [testingClaim, setTestingClaim] = useState(false);
 
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
@@ -480,6 +484,36 @@ export default function ClaimDetailPage() {
             <HelpCircle className="h-4 w-4" />
             Why this decision?
           </Button>
+          {stediConfigured && ["draft", "created", "pending"].includes(claim.status) && (
+            <Button
+              variant="outline"
+              className="gap-2"
+              disabled={testingClaim}
+              onClick={async () => {
+                setTestingClaim(true);
+                try {
+                  const res = await fetch(`/api/billing/claims/${id}/test-stedi`, { method: "POST", credentials: "include" });
+                  const data = await res.json();
+                  if (data.success) {
+                    toast({ title: "Claim passed validation", description: "EDI structure is valid and ready to submit." });
+                  } else {
+                    const errCount = (data.validationErrors || []).length;
+                    toast({ title: "Validation failed", description: errCount > 0 ? `${errCount} issue(s) found. See Validation Status for details.` : (data.error || "Stedi validation failed"), variant: "destructive" });
+                  }
+                  queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+                  queryClient.invalidateQueries({ queryKey: ["/api/claims", id, "events"] });
+                } catch (err: any) {
+                  toast({ title: "Test failed", description: err.message, variant: "destructive" });
+                } finally {
+                  setTestingClaim(false);
+                }
+              }}
+              data-testid="button-run-test-validation"
+            >
+              {testingClaim ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+              {testingClaim ? "Validating..." : "Run Test Validation"}
+            </Button>
+          )}
           {canSubmit && (
             <Button
               className="gap-2"
@@ -623,6 +657,81 @@ export default function ClaimDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          {/* Validation Status Card (from Stedi test) */}
+          {(() => {
+            const testStatus = (claim as any).last_test_status || (claim as any).lastTestStatus;
+            const testAt = (claim as any).last_test_at || (claim as any).lastTestAt;
+            const testErrors: any[] = (() => {
+              const raw = (claim as any).last_test_errors || (claim as any).lastTestErrors;
+              if (!raw) return [];
+              if (Array.isArray(raw)) return raw;
+              try { return JSON.parse(raw); } catch { return []; }
+            })();
+            const relativeTime = testAt ? formatDistanceToNow(new Date(testAt), { addSuffix: true }) : null;
+
+            if (!testStatus) {
+              return (
+                <Card data-testid="card-validation-status-none">
+                  <CardContent className="p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <FlaskConical className="h-4 w-4 text-muted-foreground" />
+                        <div>
+                          <p className="text-xs font-medium">Validation Status</p>
+                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50 inline-block" /> Not yet validated
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            }
+
+            const passed = testStatus === "Accepted";
+            return (
+              <Card className={passed ? "border-green-200 dark:border-green-800" : "border-red-200 dark:border-red-800"} data-testid="card-validation-status">
+                <CardContent className="p-3 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <FlaskConical className={`h-4 w-4 shrink-0 ${passed ? "text-green-600" : "text-red-500"}`} />
+                      <div>
+                        <p className="text-xs font-medium">Validation Status</p>
+                        <div className={`inline-flex items-center gap-1 text-xs mt-0.5 font-medium ${passed ? "text-green-700 dark:text-green-400" : "text-red-700 dark:text-red-400"}`} data-testid="text-validation-status">
+                          {passed
+                            ? <><CheckCircle2 className="h-3 w-3" /> Passed validation</>
+                            : <><XCircle className="h-3 w-3" /> Failed — {testErrors.length} error{testErrors.length !== 1 ? "s" : ""}</>
+                          }
+                        </div>
+                        {relativeTime && <p className="text-xs text-muted-foreground">Last tested {relativeTime}</p>}
+                      </div>
+                    </div>
+                    {!passed && testErrors.length > 0 && (
+                      <button
+                        onClick={() => setValidationErrorsExpanded(v => !v)}
+                        className="text-muted-foreground hover:text-foreground shrink-0"
+                        data-testid="button-toggle-validation-errors"
+                      >
+                        {validationErrorsExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+                    )}
+                  </div>
+                  {!passed && validationErrorsExpanded && testErrors.length > 0 && (
+                    <div className="space-y-1.5 pt-1 border-t">
+                      {testErrors.slice(0, 5).map((err: any, i: number) => (
+                        <div key={i} className="text-xs bg-red-50 dark:bg-red-950/30 rounded p-2">
+                          {err.code && err.code !== "UNKNOWN" && <span className="font-mono text-red-600 dark:text-red-400 mr-1">{err.code}:</span>}
+                          <span className="text-muted-foreground">{err.message || String(err)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {check277Result && (
             <div className={`p-3 rounded-lg border text-sm ${check277Result.found ? "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800" : "bg-muted border-border"}`} data-testid="panel-277-result">

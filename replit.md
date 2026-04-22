@@ -37,6 +37,7 @@ The platform adopts an enterprise SaaS design aesthetic with shadcn/ui and Tailw
 - **EDI/Clearinghouse Integration**: Supports 837P EDI generation and submission via SFTP (Office Ally) and integrates with Stedi for real-time eligibility checks (270/271) and automated processing of 277 acknowledgments and 835 remittances.
 - **Admin Module**: A `super_admin` role provides access to a dedicated admin module for platform overview, clinic management, and user activity monitoring, bypassing organizational scope.
 - **CMS-1500 PDF Generation**: Enhanced to include new claim fields.
+- **Test Claim Mode**: Free end-to-end EDI validation via Stedi's production API with ISA15='T' (Test indicator per X12 5010 spec). Claims are validated fully but never transmitted to the real payer. Available in: (1) claim wizard Review step — "Test This Claim First" button with pass/fail modal and plain-English error mapping; (2) claim detail page — "Run Test Validation" button. Results stored in `last_test_status`, `last_test_at`, `last_test_errors` on the claims table. Validation Status card shown in claim detail sidebar. Claim tracker shows validation badge (Passed/N errors/Not tested) for draft claims. "Test Validation" events rendered in grey in timeline to distinguish from real submissions. super_admin can test any claim across all orgs.
 
 ## External Dependencies
 

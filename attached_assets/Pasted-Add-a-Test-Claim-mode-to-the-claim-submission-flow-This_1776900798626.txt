@@ -1,0 +1,367 @@
+Add a "Test Claim" mode to the claim submission flow.
+
+This uses Stedi's production API key with ISA15 set to 'T' 
+to validate a claim end-to-end through Stedi's full 
+validation pipeline without sending it to a real payer.
+
+═══════════════════════════════════════════════════════
+HOW STEDI TEST MODE WORKS
+═══════════════════════════════════════════════════════
+Stedi test API keys are only available for eligibility 
+checks — they cannot be used for claim submission.
+
+Instead, test claim submission works as follows:
+- Use the same production API key (STEDI_API_KEY)
+- Use the same production API endpoint
+- Set ISA15 = 'T' (Test) instead of 'P' (Production) 
+  in the 837P EDI string before sending
+- Stedi's production environment accepts ISA15='T' 
+  claims, runs full EDI validation, and returns a 
+  real 277CA acknowledgment
+- The claim is NEVER transmitted to the real payer
+- This is the correct approach per X12 5010 spec — 
+  ISA15 is the interchange usage indicator that tells 
+  the receiving system whether this is test or 
+  production data
+
+To also test ERA (835) response:
+- Set the payer ID in NM109 of Loop 2010BB to 'STEDI'
+  (the Stedi Test Payer) instead of the real payer ID
+- Stedi will return a test 835 ERA for this claim
+- Use this specifically when testing ERA posting logic
+- For general EDI validation, keep the real payer ID 
+  and just use ISA15='T' — this validates routing 
+  without generating a test ERA
+
+Test submissions are free — Stedi only charges $0.20 
+per claim for ISA15='P' (Production) submissions.
+
+═══════════════════════════════════════════════════════
+IMPLEMENTATION
+═══════════════════════════════════════════════════════
+
+STEP 1 — New server function in stedi-claims.ts
+
+Add a testClaim() function alongside the existing 
+submitClaim() function:
+
+export async function testClaim(
+  params: StediClaimSubmissionParams
+): Promise<StediSubmissionResult> {
+  if (!STEDI_API_KEY) {
+    throw new Error('STEDI_API_KEY not configured');
+  }
+
+  // Generate EDI same as production
+  let ediContent = params.ediContent;
+
+  // Set ISA15 to 'T' (Test) instead of 'P' (Production)
+  // ISA15 is the 15th element of the ISA segment
+  // ISA*00*          *00*          *ZZ*SENDER*ZZ*RECEIVER*DATE*TIME*^*00501*CTRL*0*P*:~
+  //                                                                              ^ this is ISA15
+  ediContent = ediContent.replace(
+    /(\*[TP]\*)/,  // matches *P* or *T* at ISA15 position
+    '*T*'
+  );
+
+  // Submit to Stedi production endpoint with ISA15='T'
+  // This triggers test mode — no payer transmission
+  const response = await fetch(STEDI_CLAIMS_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Key ${STEDI_API_KEY}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': `test-${params.claimId}-${Date.now()}`,
+    },
+    body: JSON.stringify({
+      transactionSets: [ediContent],
+    }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    return {
+      success: false,
+      rawResponse: data,
+      error: data.message || data.errors?.[0]?.description ||
+             `Stedi test validation error: ${response.status}`,
+    };
+  }
+
+  const txn = data.transactionSets?.[0] || data;
+  const accepted = txn.status === 'Accepted' ||
+                   data.status === 'Accepted' ||
+                   response.status === 200;
+
+  return {
+    success: accepted,
+    transactionId: txn.transactionId || data.transactionId,
+    status: txn.status || (accepted ? 'Accepted' : 'Rejected'),
+    validationErrors: txn.errors || data.errors || [],
+    rawResponse: data,
+    error: accepted ? undefined :
+           (txn.errors?.[0]?.message || 'Claim failed Stedi validation'),
+  };
+}
+
+STEP 2 — New backend endpoint
+
+Add POST /api/billing/claims/:id/test-stedi
+Role: admin, rcm_manager
+
+Logic:
+1. Fetch claim, verify org (same as submit-stedi)
+2. Fetch patient, practice settings, provider, payer
+3. Check isStediConfigured() — return 400 if not
+4. Generate 837P EDI using existing generate837P()
+5. Call testClaim({ ediContent, claimId }) 
+   from stedi-claims.ts
+6. Do NOT update claim status
+7. Do NOT set follow_up_date
+8. Do NOT create a 'Submitted' claim event
+9. DO create a claim event:
+   type = 'Test Validation'
+   notes = `Stedi test validation: ${result.status}. 
+            ${result.validationErrors?.length || 0} 
+            validation issue(s) found.
+            Transaction ID: ${result.transactionId}`
+10. DO update a test_result column on the claim:
+    ALTER TABLE claims 
+      ADD COLUMN IF NOT EXISTS last_test_status VARCHAR,
+      ADD COLUMN IF NOT EXISTS last_test_at TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS last_test_errors JSONB;
+    
+    UPDATE claims SET
+      last_test_status = $status,
+      last_test_at = NOW(),
+      last_test_errors = $errors
+    WHERE id = $claimId
+
+11. Return:
+{
+  success: boolean,
+  status: 'Accepted' | 'Rejected',
+  transactionId: string,
+  validationErrors: [
+    {
+      code: string,
+      message: string,
+      segment: string,    // which EDI segment failed
+      field: string,      // which field within segment
+    }
+  ],
+  summary: string        // human readable summary
+}
+
+STEP 3 — Claim Review step UI changes
+
+On the Review/Submit step of the claim wizard, 
+show two distinct actions:
+
+Primary button (blue, prominent):
+"Submit Claim →"
+Submits to real payer via Stedi production.
+Shows cost: "$0.20 clearinghouse fee"
+
+Secondary button (outlined, below primary):
+"Test This Claim First"
+Runs test validation. Free. No payer contact.
+
+Add a help text block between the buttons:
+"Not sure if your claim is ready? Run a free test 
+first — Stedi will validate your EDI and tell you 
+exactly what to fix before you submit for real."
+
+STEP 4 — Test Result Modal
+
+When "Test This Claim First" is clicked:
+1. Show a loading spinner with text 
+   "Validating claim with Stedi..."
+2. On response, show a modal:
+
+IF ACCEPTED (success = true):
+┌─────────────────────────────────────────┐
+│  ✓ Claim Passed Validation              │
+│                                         │
+│  Your claim is EDI-valid and ready to   │
+│  submit to [Payer Name].                │
+│                                         │
+│  Stedi confirmed:                       │
+│  • EDI structure is correct             │
+│  • All required segments present        │
+│  • Payer ID routes correctly            │
+│  • Segment counts verified              │
+│                                         │
+│  Note: This validates EDI format only.  │
+│  The payer may still deny based on      │
+│  medical necessity or coverage rules    │
+│  that only apply during adjudication.   │
+│                                         │
+│  Transaction ID: [id]                   │
+│                                         │
+│  [Submit Claim Now]  [Close]            │
+└─────────────────────────────────────────┘
+
+IF REJECTED (success = false):
+┌─────────────────────────────────────────┐
+│  ✗ Claim Failed Validation              │
+│                                         │
+│  [N] issue(s) must be fixed before      │
+│  this claim can be submitted.           │
+│                                         │
+│  Issues found:                          │
+│  ┌──────────────────────────────────┐   │
+│  │ ✗ SV1-07: Diagnosis pointer must │   │
+│  │   be numeric (1,2,3,4) not       │   │
+│  │   alphabetic (A,B,C,D)           │   │
+│  │   → Fix: Go to service lines     │   │
+│  │     and correct diagnosis pointer│   │
+│  └──────────────────────────────────┘   │
+│  ┌──────────────────────────────────┐   │
+│  │ ✗ NM109: Billing provider NPI    │   │
+│  │   is missing or invalid          │   │
+│  │   → Fix: Check Practice Settings │   │
+│  │     → Provider NPI               │   │
+│  └──────────────────────────────────┘   │
+│                                         │
+│  [Fix These Issues]  [Close]            │
+└─────────────────────────────────────────┘
+
+"Fix These Issues" closes the modal and 
+scrolls the wizard back to the relevant step.
+
+Map common Stedi validation error codes to 
+plain English + fix instructions:
+
+const VALIDATION_ERROR_MAP = {
+  // Segment errors
+  'SV1-07': {
+    plain: 'Diagnosis pointer must be numeric (1,2,3,4)',
+    fix: 'Go to service lines and correct the diagnosis pointer',
+    step: 'service_lines'
+  },
+  'NM109': {
+    plain: 'Provider NPI is missing or invalid (must be 10 digits)',
+    fix: 'Check Settings → Providers → NPI field',
+    step: 'provider'
+  },
+  'CLM05': {
+    plain: 'Place of service code is missing or invalid',
+    fix: 'Check the Place of Service field in claim details',
+    step: 'claim_info'
+  },
+  'HI': {
+    plain: 'Diagnosis code format is invalid — remove any decimal points',
+    fix: 'ICD-10 codes in EDI must not contain periods (I10 not I1.0)',
+    step: 'diagnoses'
+  },
+  'DTP': {
+    plain: 'Date format is invalid — must be CCYYMMDD',
+    fix: 'Check date of service format',
+    step: 'claim_info'
+  },
+  'REF': {
+    plain: 'Reference number (auth/referral) format is invalid',
+    fix: 'Check the authorization number field',
+    step: 'claim_info'
+  },
+  // Add more as discovered from real Stedi responses
+}
+
+For any error code not in the map, show the raw 
+Stedi error message as-is with:
+"→ Review the flagged field and correct before resubmitting"
+
+STEP 5 — Claim detail page indicator
+
+On the claim detail page, show a "Validation Status" 
+badge derived from last_test_status:
+
+If last_test_status = 'Accepted':
+  Green badge: "✓ Passed validation"
+  Subtext: "Last tested [relative time, e.g. '2 hours ago']"
+
+If last_test_status = 'Rejected':
+  Red badge: "✗ Failed validation — [N] errors"
+  Subtext: "Last tested [relative time]"
+  Show the error list collapsed, expandable
+
+If last_test_status is null (never tested):
+  Grey badge: "○ Not yet validated"
+  Link: "Run test validation →"
+
+STEP 6 — Claim Tracker column
+
+Add a "Validation" column to the Claim Tracker table
+for claims in draft or created status:
+
+Show one of:
+✓ Passed     (green, last_test_status = Accepted)
+✗ [N] errors (red, last_test_status = Rejected)  
+○ Not tested (grey, null)
+
+Clicking the badge opens the claim detail page 
+scrolled to the validation status section.
+
+Only show this column for claims with status 
+= 'draft' or 'created'. Hide for submitted/paid 
+claims where validation is no longer relevant.
+
+STEP 7 — Super Admin test capability
+
+In the admin panel (/admin) claim detail view,
+add a "Run Test Validation" button for any claim 
+regardless of which org it belongs to.
+
+This lets the platform owner validate claims 
+across all clinics during onboarding and support 
+without triggering real submissions.
+
+The endpoint POST /api/billing/claims/:id/test-stedi 
+already bypasses org scoping for super_admin role 
+via the existing requireRole middleware — 
+confirm this works correctly.
+
+═══════════════════════════════════════════════════════
+IMPORTANT CONSTRAINTS
+═══════════════════════════════════════════════════════
+
+1. NEVER auto-submit after a passing test.
+   The biller must explicitly click "Submit Claim" 
+   as a completely separate action after seeing 
+   the test result. The test modal should never 
+   have a "Submit Now" button that is pre-selected 
+   or defaulted — the biller must make a conscious 
+   choice to submit.
+
+2. Test submissions must NEVER change claim status 
+   to 'submitted', 'acknowledged', or any status 
+   that would appear in the Follow-Up Queue or 
+   trigger the 277CA polling job.
+
+3. The claim event created for a test submission 
+   must be clearly labeled differently from real 
+   submission events. Use type='Test Validation' 
+   not type='Submitted'. The Claim Tracker timeline 
+   should show test events in a different color 
+   (grey, not blue) so billers can distinguish 
+   test runs from real submissions.
+
+4. Test submissions are free per Stedi's pricing 
+   (ISA15='T' claims are not billed). Display this 
+   clearly in the UI so billers use the feature 
+   liberally rather than avoiding it to save money.
+
+5. The Idempotency-Key for test submissions must 
+   include a timestamp suffix (test-{claimId}-{Date.now()}) 
+   so the same claim can be tested multiple times 
+   without being deduplicated by Stedi.
+
+6. If Stedi returns an unexpected response format 
+   for test claims (their test pipeline may return 
+   slightly different JSON than production), 
+   log the raw response and show a fallback message:
+   "Stedi returned an unexpected response. 
+    Check the Activity Log for raw details."
+   Never crash or show a blank modal.

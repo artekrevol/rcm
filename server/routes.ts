@@ -3007,6 +3007,166 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // ── Stedi Test Validation (ISA15='T', no payer transmission) ───────────────
+  app.post("/api/billing/claims/:id/test-stedi", requireRole("admin", "rcm_manager", "super_admin"), async (req, res) => {
+    try {
+      const { isStediConfigured, testClaim: stediTestClaim } = await import("./services/stedi-claims");
+      if (!isStediConfigured()) {
+        return res.status(400).json({ success: false, error: "Stedi API key not configured. Add STEDI_API_KEY to environment variables." });
+      }
+
+      const db = await import("./db").then(m => m.pool);
+
+      // Ensure test columns exist
+      await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_status VARCHAR`).catch(() => {});
+      await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_at TIMESTAMP`).catch(() => {});
+      await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_errors JSONB`).catch(() => {});
+
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (!claimResult.rows.length) return res.status(404).json({ success: false, error: "Claim not found" });
+      const c = claimResult.rows[0];
+      if (!verifyOrg(c, req)) return res.status(404).json({ success: false, error: "Claim not found" });
+
+      const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
+      const stOrgId = getOrgId(req);
+      const settingsResult = stOrgId
+        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [stOrgId])
+        : await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const ps = settingsResult.rows[0];
+      if (!ps) return res.status(400).json({ success: false, error: "Practice settings not configured" });
+
+      let provId = c.provider_id;
+      if (!provId) {
+        const defaultProv = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        if (defaultProv.rows.length) provId = defaultProv.rows[0].id;
+      }
+      let prov: any = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
+      if (provId) {
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, license_number FROM providers WHERE id = $1", [provId]);
+        if (provResult.rows.length) prov = provResult.rows[0];
+      }
+
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      if (c.payer_id) {
+        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      } else if (c.payer) {
+        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      }
+
+      const pat = patientResult.rows[0] || {};
+      const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
+      const serviceLines = rawLines.map((sl: any) => ({
+        hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
+        units: Number(sl.units) || 1,
+        charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
+        modifier: sl.modifier || null,
+        diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
+        service_date: sl.service_date || sl.serviceDate || null,
+      }));
+      const icd10Codes: string[] = [];
+      if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
+      if (Array.isArray(c.icd10_secondary)) {
+        for (const code of c.icd10_secondary) {
+          if (code && !icd10Codes.includes(code)) icd10Codes.push(code);
+        }
+      }
+      if (!icd10Codes.length) {
+        return res.status(400).json({ success: false, error: "VALIDATION_ERROR: Claim has no ICD-10 diagnosis codes." });
+      }
+
+      const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
+      const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
+
+      const { generate837P } = await import("./services/edi-generator");
+      const ediString = generate837P({
+        claim: {
+          id: c.id,
+          patient_id: c.patient_id,
+          service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+          place_of_service: c.place_of_service || "12",
+          auth_number: c.authorization_number || null,
+          payer: c.payer || payerInfo.name,
+          amount: Number(c.amount) || 0,
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          delay_reason_code: c.delay_reason_code || null,
+          claim_frequency_code: c.claim_frequency_code || "1",
+          orig_claim_number: c.orig_claim_number || null,
+          service_lines: serviceLines,
+          icd10_codes: icd10Codes,
+        },
+        patient: {
+          first_name: pat.first_name || "",
+          last_name: pat.last_name || "",
+          dob: pat.dob || "1900-01-01",
+          member_id: pat.member_id || pat.insurance_id || "",
+          insurance_carrier: pat.insurance_carrier || c.payer || "",
+          sex: pat.sex || null,
+          address: (patAddr as any).street || (patAddr as any).street1 || null,
+          city: (patAddr as any).city || null,
+          state: (patAddr as any).state || pat.state || null,
+          zip: (patAddr as any).zip || null,
+        },
+        practice: {
+          name: ps.practice_name || "Practice",
+          npi: ps.primary_npi || "0000000000",
+          tax_id: ps.tax_id || "000000000",
+          taxonomy_code: ps.taxonomy_code || "163W00000X",
+          address: (addr as any).street || (addr as any).street1 || (addr as any).address || "",
+          city: (addr as any).city || "",
+          state: (addr as any).state || "",
+          zip: (addr as any).zip || "",
+          phone: ps.phone || "",
+        },
+        provider: {
+          first_name: prov.first_name || "",
+          last_name: prov.last_name || "",
+          npi: prov.npi || ps.primary_npi || "0000000000",
+          taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
+          license_number: prov.license_number || null,
+        },
+        payer: payerInfo,
+      });
+
+      const result = await stediTestClaim({ ediContent: ediString, claimId: c.id });
+
+      const errCount = (result.validationErrors || []).length;
+      const eventNotes = `Stedi test validation: ${result.status || (result.success ? "Accepted" : "Rejected")}. ${errCount} validation issue(s) found.${result.transactionId ? ` Transaction ID: ${result.transactionId}` : ""}`;
+
+      await db.query(
+        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+        [crypto.randomUUID(), c.id, "Test Validation", eventNotes, c.organization_id]
+      );
+
+      await db.query(
+        `UPDATE claims SET last_test_status = $1, last_test_at = NOW(), last_test_errors = $2, updated_at = NOW() WHERE id = $3`,
+        [
+          result.success ? "Accepted" : "Rejected",
+          JSON.stringify(result.validationErrors || []),
+          c.id,
+        ]
+      );
+
+      const summary = result.success
+        ? `Claim passed Stedi EDI validation. It is ready to submit to ${payerInfo.name}.`
+        : `Claim failed Stedi EDI validation. ${errCount} issue(s) must be fixed before submission.`;
+
+      res.json({
+        success: result.success,
+        status: result.success ? "Accepted" : "Rejected",
+        transactionId: result.transactionId,
+        validationErrors: result.validationErrors || [],
+        summary,
+        payerName: payerInfo.name,
+        error: result.error,
+      });
+    } catch (err: any) {
+      console.error("Stedi test error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // ── 277CA Manual Check ─────────────────────────────────────────────────────
   app.post("/api/billing/claims/:id/check-277", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {

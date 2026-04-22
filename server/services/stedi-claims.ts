@@ -14,12 +14,19 @@ export interface StediClaimSubmissionParams {
   isTest?: boolean;
 }
 
+export interface StediValidationError {
+  code: string;
+  message: string;
+  segment?: string;
+  field?: string;
+}
+
 export interface StediSubmissionResult {
   success: boolean;
   transactionId?: string;
   controlNumber?: string;
   status?: string;
-  validationErrors?: string[];
+  validationErrors?: (string | StediValidationError)[];
   rawResponse?: Record<string, unknown>;
   error?: string;
 }
@@ -78,6 +85,83 @@ export async function submitClaim(
     error: accepted
       ? undefined
       : txn.errors?.[0]?.message || "Claim rejected by Stedi",
+  };
+}
+
+export async function testClaim(
+  params: StediClaimSubmissionParams
+): Promise<StediSubmissionResult> {
+  if (!STEDI_API_KEY) {
+    throw new Error("STEDI_API_KEY not configured");
+  }
+
+  let edi = params.ediContent;
+
+  // Force ISA15 to 'T' (Test) — the 15th ISA element
+  // ISA*00*          *00*          *ZZ*SENDER*ZZ*RECEIVER*DATE*TIME*^*00501*CTRL*0*P*:~
+  //                                                                              ^ this is ISA15 (P or T)
+  edi = edi.replace(
+    /^(ISA\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*)[PT](\*)/m,
+    "$1T$2"
+  );
+
+  const response = await fetch(STEDI_CLAIMS_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${STEDI_API_KEY}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": `test-${params.claimId}-${Date.now()}`,
+    },
+    body: JSON.stringify({
+      transactionSets: [edi],
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const rawErrors: any[] = (data as any).errors || [];
+    const structuredErrors: StediValidationError[] = rawErrors.map((e: any) => ({
+      code: e.code || e.errorCode || "UNKNOWN",
+      message: e.message || e.description || String(e),
+      segment: e.segment || e.loopId || undefined,
+      field: e.field || e.elementId || undefined,
+    }));
+    return {
+      success: false,
+      rawResponse: data as Record<string, unknown>,
+      validationErrors: structuredErrors.length > 0 ? structuredErrors : undefined,
+      error:
+        (data as any).message ||
+        rawErrors[0]?.description ||
+        rawErrors[0]?.message ||
+        `Stedi test validation error: ${response.status}`,
+    };
+  }
+
+  const txn = (data as any).transactionSets?.[0] || data;
+  const accepted =
+    txn.status === "Accepted" ||
+    (data as any).status === "Accepted" ||
+    response.status === 200;
+
+  const rawErrors: any[] = txn.errors || (data as any).errors || [];
+  const structuredErrors: StediValidationError[] = rawErrors.map((e: any) => ({
+    code: e.code || e.errorCode || "UNKNOWN",
+    message: e.message || e.description || String(e),
+    segment: e.segment || e.loopId || undefined,
+    field: e.field || e.elementId || undefined,
+  }));
+
+  return {
+    success: accepted,
+    transactionId: txn.transactionId || (data as any).transactionId,
+    status: txn.status || (accepted ? "Accepted" : "Rejected"),
+    validationErrors: structuredErrors.length > 0 ? structuredErrors : [],
+    rawResponse: data as Record<string, unknown>,
+    error: accepted
+      ? undefined
+      : rawErrors[0]?.message || "Claim failed Stedi validation",
   };
 }
 

@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronDown, ChevronRight, ExternalLink, CheckCircle2, AlertCircle, AlertTriangle,
-  XCircle, Search, Radio, FileText, Loader2, Clock,
+  XCircle, Search, Radio, FileText, Loader2, Clock, FlaskConical,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -35,24 +35,59 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function ValidationBadge({ claim }: { claim: any }) {
+  const testStatus = claim.last_test_status;
+  const testErrors: any[] = (() => {
+    const raw = claim.last_test_errors;
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    try { return JSON.parse(raw); } catch { return []; }
+  })();
+
+  if (!["draft", "created", "pending"].includes(claim.status)) return null;
+
+  if (!testStatus) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full" data-testid={`badge-validation-none-${claim.id?.slice(0, 8)}`}>
+        <FlaskConical className="h-3 w-3" /> Not tested
+      </span>
+    );
+  }
+  if (testStatus === "Accepted") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded-full" data-testid={`badge-validation-pass-${claim.id?.slice(0, 8)}`}>
+        <CheckCircle2 className="h-3 w-3" /> Passed
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/30 px-2 py-0.5 rounded-full" data-testid={`badge-validation-fail-${claim.id?.slice(0, 8)}`}>
+      <XCircle className="h-3 w-3" /> {testErrors.length || "?"} error{(testErrors.length || 0) !== 1 ? "s" : ""}
+    </span>
+  );
+}
+
 function EventRow({ event }: { event: any }) {
-  const isError = event.type === "Denied" || (event.notes || "").toLowerCase().includes("reject") || (event.notes || "").toLowerCase().includes("error");
+  const isTest = event.type === "Test Validation";
+  const isError = !isTest && (event.type === "Denied" || (event.notes || "").toLowerCase().includes("reject") || (event.notes || "").toLowerCase().includes("error"));
   const isFixed = event.type === "MarkedFixed" || event.type === "Resubmitted";
 
   return (
-    <div className={`ml-8 pl-4 border-l py-2 text-sm ${isError ? "border-red-300" : "border-muted"}`}>
+    <div className={`ml-8 pl-4 border-l py-2 text-sm ${isError ? "border-red-300" : isTest ? "border-gray-200 dark:border-gray-700" : "border-muted"}`}>
       <div className="flex items-start gap-2">
         {isFixed ? <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" /> :
+         isTest ? <FlaskConical className="h-4 w-4 text-gray-400 mt-0.5 shrink-0" /> :
          isError ? <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" /> :
          <Clock className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium">{event.type}</span>
-            <Badge variant="outline" className="text-xs">
+            <span className={`font-medium ${isTest ? "text-muted-foreground" : ""}`}>{event.type}</span>
+            <Badge variant="outline" className={`text-xs ${isTest ? "text-muted-foreground border-muted" : ""}`}>
               {event.timestamp ? format(new Date(event.timestamp), "MMM d, yyyy h:mm a") : "—"}
             </Badge>
+            {isTest && <Badge variant="outline" className="text-xs text-gray-400 border-gray-200">Free test</Badge>}
           </div>
-          {event.notes && <p className="text-muted-foreground mt-0.5">{event.notes}</p>}
+          {event.notes && <p className={`mt-0.5 ${isTest ? "text-muted-foreground/70" : "text-muted-foreground"}`}>{event.notes}</p>}
         </div>
       </div>
     </div>
@@ -93,7 +128,7 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
             >
               {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
             </button>
-            <div className="flex-1 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm min-w-0">
+            <div className="flex-1 grid grid-cols-2 md:grid-cols-6 gap-3 text-sm min-w-0">
               <div>
                 <p className="text-xs text-muted-foreground">Claim #</p>
                 <p className="font-mono font-medium">{claim.id?.slice(0, 8)}</p>
@@ -113,6 +148,10 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
               <div>
                 <p className="text-xs text-muted-foreground">Status</p>
                 <StatusBadge status={claim.status} />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Validation</p>
+                <ValidationBadge claim={claim} />
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">

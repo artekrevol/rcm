@@ -49,6 +49,7 @@ import {
   Clock,
   DollarSign,
   Info,
+  FlaskConical,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { validateNPI } from "@shared/npi-validation";
@@ -134,6 +135,30 @@ const DELAY_REASON_CODES = [
   { value: "11", label: "11 – Other" },
   { value: "15", label: "15 – Natural disaster" },
 ];
+
+const VALIDATION_ERROR_MAP: Record<string, { plain: string; fix: string; step: string }> = {
+  "SV1-07": { plain: "Diagnosis pointer must be numeric (1,2,3,4)", fix: "Go to service lines and correct the diagnosis pointer", step: "service_lines" },
+  "NM109":  { plain: "Provider NPI is missing or invalid (must be 10 digits)", fix: "Check Settings → Providers → NPI field", step: "provider" },
+  "CLM05":  { plain: "Place of service code is missing or invalid", fix: "Check the Place of Service field in claim details", step: "claim_info" },
+  "HI":     { plain: "Diagnosis code format is invalid — remove any decimal points", fix: "ICD-10 codes in EDI must not contain periods (I10 not I1.0)", step: "diagnoses" },
+  "DTP":    { plain: "Date format is invalid — must be CCYYMMDD", fix: "Check date of service format", step: "claim_info" },
+  "REF":    { plain: "Reference number (auth/referral) format is invalid", fix: "Check the authorization number field", step: "claim_info" },
+  "CLM01":  { plain: "Claim control number is missing or invalid", fix: "Ensure the claim has been saved before submitting", step: "claim_info" },
+  "NM103":  { plain: "Organization or last name is missing", fix: "Check Practice Settings → Practice Name", step: "provider" },
+  "NM104":  { plain: "First name is missing for individual provider", fix: "Check provider first name in Settings → Providers", step: "provider" },
+  "PWK":    { plain: "Attachment control number format is invalid", fix: "Review any attachment references on the claim", step: "claim_info" },
+};
+
+function mapValidationError(err: any): { plain: string; fix: string; code: string } {
+  const code = (typeof err === "string") ? err : (err.code || "UNKNOWN");
+  const rawMsg = (typeof err === "string") ? err : (err.message || "Unknown error");
+  for (const [key, val] of Object.entries(VALIDATION_ERROR_MAP)) {
+    if (code.includes(key) || rawMsg.includes(key)) {
+      return { plain: val.plain, fix: val.fix, code };
+    }
+  }
+  return { plain: rawMsg, fix: "Review the flagged field and correct before resubmitting", code };
+}
 
 function emptyLine(): ServiceLine {
   return {
@@ -895,7 +920,10 @@ export default function ClaimWizard() {
   const stediConfigured = stediStatus?.configured ?? false;
 
   const [stediSubmitting, setStediSubmitting] = useState(false);
-  const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string; validationErrors?: string[] } | null>(null);
+  const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string; validationErrors?: any[] } | null>(null);
+  const [testingClaim, setTestingClaim] = useState(false);
+  const [showTestModal, setShowTestModal] = useState(false);
+  const [testClaimResult, setTestClaimResult] = useState<{ success: boolean; status?: string; transactionId?: string; validationErrors?: any[]; summary?: string; payerName?: string; error?: string } | null>(null);
 
   useEffect(() => {
     if (providers.length > 0 && !providerId) {
@@ -1896,38 +1924,72 @@ export default function ClaimWizard() {
               </DropdownMenu>
 
               {stediConfigured ? (
-                <Button
-                  onClick={async () => {
-                    if (!claimId) return;
-                    setStediSubmitting(true);
-                    setStediResult(null);
-                    try {
-                      const res = await fetch(`/api/billing/claims/${claimId}/submit-stedi`, {
-                        method: "POST",
-                        credentials: "include",
-                        headers: { "Content-Type": "application/json" },
-                      });
-                      const result = await res.json();
-                      setStediResult(result);
-                      if (result.success) {
-                        queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
-                        toast({ title: "Claim submitted via Stedi", description: `Transaction ID: ${result.transactionId || "N/A"}` });
-                      } else {
-                        toast({ title: "Stedi submission failed", description: result.error, variant: "destructive" });
+                <div className="flex flex-col items-end gap-2">
+                  <Button
+                    onClick={async () => {
+                      if (!claimId) return;
+                      setStediSubmitting(true);
+                      setStediResult(null);
+                      try {
+                        const res = await fetch(`/api/billing/claims/${claimId}/submit-stedi`, {
+                          method: "POST",
+                          credentials: "include",
+                          headers: { "Content-Type": "application/json" },
+                        });
+                        const result = await res.json();
+                        setStediResult(result);
+                        if (result.success) {
+                          queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
+                          toast({ title: "Claim submitted via Stedi", description: `Transaction ID: ${result.transactionId || "N/A"}` });
+                        } else {
+                          toast({ title: "Stedi submission failed", description: result.error, variant: "destructive" });
+                        }
+                      } catch (err: any) {
+                        setStediResult({ success: false, error: err.message });
+                        toast({ title: "Submission error", description: err.message, variant: "destructive" });
+                      } finally {
+                        setStediSubmitting(false);
                       }
-                    } catch (err: any) {
-                      setStediResult({ success: false, error: err.message });
-                      toast({ title: "Submission error", description: err.message, variant: "destructive" });
-                    } finally {
-                      setStediSubmitting(false);
-                    }
-                  }}
-                  disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || stediSubmitting || stediResult?.success}
-                  data-testid="button-submit-stedi"
-                >
-                  {stediSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  {stediResult?.success ? "Submitted ✓" : stediSubmitting ? "Submitting..." : "Submit via Stedi"}
-                </Button>
+                    }}
+                    disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || stediSubmitting || stediResult?.success}
+                    data-testid="button-submit-stedi"
+                  >
+                    {stediSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    {stediResult?.success ? "Submitted ✓" : stediSubmitting ? "Submitting..." : "Submit Claim →"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      if (!claimId) return;
+                      setTestingClaim(true);
+                      setTestClaimResult(null);
+                      try {
+                        const res = await fetch(`/api/billing/claims/${claimId}/test-stedi`, {
+                          method: "POST",
+                          credentials: "include",
+                          headers: { "Content-Type": "application/json" },
+                        });
+                        const result = await res.json();
+                        setTestClaimResult(result);
+                        setShowTestModal(true);
+                        queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
+                      } catch (err: any) {
+                        toast({ title: "Test failed", description: err.message, variant: "destructive" });
+                      } finally {
+                        setTestingClaim(false);
+                      }
+                    }}
+                    disabled={testingClaim || validationErrors.length > 0 || stediResult?.success}
+                    data-testid="button-test-stedi"
+                    className="text-xs"
+                  >
+                    {testingClaim ? <><Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> Validating claim with Stedi...</> : <><FlaskConical className="h-3 w-3 mr-1.5" /> Test This Claim First — Free</>}
+                  </Button>
+                  <p className="text-xs text-muted-foreground text-right max-w-[220px]">
+                    Not sure if your claim is ready? Run a free test first — Stedi will validate your EDI and tell you exactly what to fix.
+                  </p>
+                </div>
               ) : (
                 <Button
                   onClick={() => setShowSubmitModal(true)}
@@ -1952,6 +2014,112 @@ export default function ClaimWizard() {
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSubmitModal(false)} data-testid="button-close-submit-dialog">Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Stedi Test Validation Result Modal */}
+      <Dialog open={showTestModal} onOpenChange={setShowTestModal}>
+        <DialogContent className="max-w-lg" data-testid="dialog-test-result">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              {testClaimResult?.success
+                ? <><CheckCircle2 className="h-5 w-5 text-green-600" /> Claim Passed Validation</>
+                : <><XCircle className="h-5 w-5 text-red-600" /> Claim Failed Validation</>
+              }
+            </DialogTitle>
+          </DialogHeader>
+
+          {testClaimResult?.success ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Your claim is EDI-valid and ready to submit to {testClaimResult.payerName || "the payer"}.
+              </p>
+              <div className="bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 rounded-lg p-3 space-y-1">
+                <p className="text-xs font-medium text-green-800 dark:text-green-200">Stedi confirmed:</p>
+                <ul className="text-xs text-green-700 dark:text-green-300 space-y-0.5">
+                  <li>• EDI structure is correct</li>
+                  <li>• All required segments present</li>
+                  <li>• Payer ID routes correctly</li>
+                  <li>• Segment counts verified</li>
+                </ul>
+              </div>
+              <p className="text-xs text-muted-foreground bg-muted/50 rounded p-2.5">
+                Note: This validates EDI format only. The payer may still deny based on medical necessity or coverage rules that only apply during adjudication.
+              </p>
+              {testClaimResult.transactionId && (
+                <p className="text-xs text-muted-foreground font-mono">Transaction ID: {testClaimResult.transactionId}</p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {(testClaimResult?.validationErrors || []).length > 0
+                  ? `${(testClaimResult?.validationErrors || []).length} issue(s) must be fixed before this claim can be submitted.`
+                  : testClaimResult?.error || "Stedi returned an unexpected response. Check the Activity Log for raw details."
+                }
+              </p>
+              {(testClaimResult?.validationErrors || []).length > 0 && (
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {(testClaimResult?.validationErrors || []).map((err: any, i: number) => {
+                    const mapped = mapValidationError(err);
+                    return (
+                      <div key={i} className="border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 rounded-lg p-3 text-sm" data-testid={`validation-error-${i}`}>
+                        <div className="flex items-start gap-2">
+                          <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                          <div className="space-y-1">
+                            {mapped.code && mapped.code !== "UNKNOWN" && (
+                              <span className="font-mono text-xs bg-red-100 dark:bg-red-900/30 px-1.5 py-0.5 rounded text-red-700 dark:text-red-300">{mapped.code}</span>
+                            )}
+                            <p className="font-medium text-sm">{mapped.plain}</p>
+                            <p className="text-xs text-muted-foreground">→ Fix: {mapped.fix}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowTestModal(false)} data-testid="button-close-test-modal">
+              {testClaimResult?.success ? "Close" : "Fix These Issues"}
+            </Button>
+            {testClaimResult?.success && (
+              <Button
+                onClick={async () => {
+                  setShowTestModal(false);
+                  if (!claimId) return;
+                  setStediSubmitting(true);
+                  setStediResult(null);
+                  try {
+                    const res = await fetch(`/api/billing/claims/${claimId}/submit-stedi`, {
+                      method: "POST",
+                      credentials: "include",
+                      headers: { "Content-Type": "application/json" },
+                    });
+                    const result = await res.json();
+                    setStediResult(result);
+                    if (result.success) {
+                      queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
+                      toast({ title: "Claim submitted via Stedi", description: `Transaction ID: ${result.transactionId || "N/A"}` });
+                    } else {
+                      toast({ title: "Stedi submission failed", description: result.error, variant: "destructive" });
+                    }
+                  } catch (err: any) {
+                    setStediResult({ success: false, error: err.message });
+                    toast({ title: "Submission error", description: err.message, variant: "destructive" });
+                  } finally {
+                    setStediSubmitting(false);
+                  }
+                }}
+                data-testid="button-submit-after-test"
+              >
+                Submit Claim Now
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
