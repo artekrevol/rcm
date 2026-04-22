@@ -207,7 +207,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_secondary BOOLEAN DEFAULT true`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_refunds BOOLEAN DEFAULT true`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_hold_if_mismatch BOOLEAN DEFAULT true`);
-    await pool.query(`UPDATE payers SET era_auto_post_clean = true, era_auto_post_contractual = true WHERE payer_id = 'VACCN' AND (era_auto_post_clean = false OR era_auto_post_clean IS NULL)`);
+    await pool.query(`UPDATE payers SET era_auto_post_clean = true, era_auto_post_contractual = true WHERE payer_id IN ('VACCN', 'TWVACCN') AND (era_auto_post_clean = false OR era_auto_post_clean IS NULL)`);
 
     // Sprint-3 schema additions
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP`);
@@ -707,6 +707,54 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS request_method VARCHAR`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS requested_by VARCHAR`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS expiration_date DATE`);
+
+    // ── ITEM 1: Fix TriWest payer ID VACCN → TWVACCN (Stedi uses TWVACCN) ─────
+    await pool.query(`
+      UPDATE payers
+      SET payer_id = 'TWVACCN', updated_at = NOW()
+      WHERE (name ILIKE '%VA Community Care%' OR payer_id = 'VACCN')
+        AND payer_id != 'TWVACCN'
+        AND is_active = true
+    `);
+    // Update payer_auth_requirements payer_id references too (if any were seeded as VACCN)
+    await pool.query(`
+      UPDATE payer_auth_requirements
+      SET payer_id = (SELECT id FROM payers WHERE name ILIKE '%VA Community Care%' AND payer_id = 'TWVACCN' LIMIT 1)
+      WHERE payer_name = 'VA Community Care'
+        AND payer_id NOT IN (SELECT id FROM payers WHERE payer_id = 'TWVACCN' LIMIT 1)
+    `).catch(() => {}); // Non-critical — ignore if payer_auth_requirements uses UUID payer_id
+
+    // ── Stedi integration: stedi_transaction_id on claims ───────────────────
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS stedi_transaction_id VARCHAR`);
+
+    // ── ERA: add stedi_era_id + raw_data to era_batches ─────────────────────
+    await pool.query(`ALTER TABLE era_batches ADD COLUMN IF NOT EXISTS stedi_era_id VARCHAR`);
+    await pool.query(`ALTER TABLE era_batches ADD COLUMN IF NOT EXISTS raw_data JSONB`);
+
+    // ── era_claim_lines table ────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS era_claim_lines (
+        id VARCHAR PRIMARY KEY,
+        era_batch_id VARCHAR NOT NULL,
+        claim_control_number VARCHAR,
+        patient_name VARCHAR,
+        billed_amount DECIMAL(10,2),
+        allowed_amount DECIMAL(10,2),
+        paid_amount DECIMAL(10,2),
+        adjustment_codes JSONB DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_era_claim_lines_batch ON era_claim_lines(era_batch_id)`);
+
+    // ── system_settings table (for poll timestamps) ──────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR PRIMARY KEY,
+        value TEXT,
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
     // Seed CARC/RARC codes, POS codes, full taxonomy codes, and additional payers
     const { seedReferenceTables } = await import("./seeds/reference-tables");
@@ -2732,6 +2780,219 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     } catch (err: any) {
       console.error("OA submit error:", err);
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ── Stedi claim submission ─────────────────────────────────────────────────
+  app.post("/api/billing/claims/:id/submit-stedi", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { isStediConfigured, submitClaim: stediSubmitClaim } = await import("./services/stedi-claims");
+      if (!isStediConfigured()) {
+        return res.status(400).json({ success: false, error: "Stedi API key not configured. Add STEDI_API_KEY to environment variables." });
+      }
+
+      const db = await import("./db").then(m => m.pool);
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (!claimResult.rows.length) return res.status(404).json({ success: false, error: "Claim not found" });
+      const c = claimResult.rows[0];
+      if (!verifyOrg(c, req)) return res.status(404).json({ success: false, error: "Claim not found" });
+
+      const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
+      const stOrgId = getOrgId(req);
+      const settingsResult = stOrgId
+        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [stOrgId])
+        : await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const ps = settingsResult.rows[0];
+      if (!ps) return res.status(400).json({ success: false, error: "Practice settings not configured" });
+
+      let provId = c.provider_id;
+      if (!provId) {
+        const defaultProv = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        if (defaultProv.rows.length) provId = defaultProv.rows[0].id;
+      }
+      let prov: any = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
+      if (provId) {
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, license_number FROM providers WHERE id = $1", [provId]);
+        if (provResult.rows.length) prov = provResult.rows[0];
+      }
+
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      if (c.payer_id) {
+        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      } else if (c.payer) {
+        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      }
+
+      const pat = patientResult.rows[0] || {};
+      const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
+      const serviceLines = rawLines.map((sl: any) => ({
+        hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
+        units: Number(sl.units) || 1,
+        charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
+        modifier: sl.modifier || null,
+        diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
+        service_date: sl.service_date || sl.serviceDate || null,
+      }));
+      const icd10Codes: string[] = [];
+      if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
+      if (Array.isArray(c.icd10_secondary)) {
+        for (const code of c.icd10_secondary) {
+          if (code && !icd10Codes.includes(code)) icd10Codes.push(code);
+        }
+      }
+      if (!icd10Codes.length) {
+        return res.status(400).json({ success: false, error: "VALIDATION_ERROR: Claim has no ICD-10 diagnosis codes." });
+      }
+
+      const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
+      const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
+
+      const { generate837P } = await import("./services/edi-generator");
+      const ediString = generate837P({
+        claim: {
+          id: c.id,
+          patient_id: c.patient_id,
+          service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+          place_of_service: c.place_of_service || "12",
+          auth_number: c.authorization_number || null,
+          payer: c.payer || payerInfo.name,
+          amount: Number(c.amount) || 0,
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          delay_reason_code: c.delay_reason_code || null,
+          claim_frequency_code: c.claim_frequency_code || "1",
+          orig_claim_number: c.orig_claim_number || null,
+          service_lines: serviceLines,
+          icd10_codes: icd10Codes,
+        },
+        patient: {
+          first_name: pat.first_name || "",
+          last_name: pat.last_name || "",
+          dob: pat.dob || "1900-01-01",
+          member_id: pat.member_id || pat.insurance_id || "",
+          insurance_carrier: pat.insurance_carrier || c.payer || "",
+          sex: pat.sex || null,
+          address: (patAddr as any).street || (patAddr as any).street1 || null,
+          city: (patAddr as any).city || null,
+          state: (patAddr as any).state || pat.state || null,
+          zip: (patAddr as any).zip || null,
+        },
+        practice: {
+          name: ps.practice_name || "Practice",
+          npi: ps.primary_npi || "0000000000",
+          tax_id: ps.tax_id || "000000000",
+          taxonomy_code: ps.taxonomy_code || "163W00000X",
+          address: (addr as any).street || (addr as any).street1 || (addr as any).address || "",
+          city: (addr as any).city || "",
+          state: (addr as any).state || "",
+          zip: (addr as any).zip || "",
+          phone: ps.phone || "",
+        },
+        provider: {
+          first_name: prov.first_name || "",
+          last_name: prov.last_name || "",
+          npi: prov.npi || ps.primary_npi || "0000000000",
+          taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
+          license_number: prov.license_number || null,
+        },
+        payer: payerInfo,
+      });
+
+      const result = await stediSubmitClaim({ ediContent: ediString, claimId: c.id });
+
+      if (result.success) {
+        let followUpDays = 30;
+        if (c.payer_id) {
+          const { rows: payerFU } = await db.query(`SELECT auto_followup_days FROM payers WHERE id = $1`, [c.payer_id]);
+          if (payerFU.length > 0 && payerFU[0].auto_followup_days != null) {
+            followUpDays = Number(payerFU[0].auto_followup_days);
+          }
+        }
+        const followUpDate = followUpDays > 0
+          ? new Date(Date.now() + followUpDays * 86400000).toISOString().slice(0, 10)
+          : null;
+
+        await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS stedi_transaction_id VARCHAR`).catch(() => {});
+
+        const fuSql = followUpDate
+          ? `UPDATE claims SET status = 'submitted', submission_method = 'stedi', stedi_transaction_id = $3, follow_up_date = $2, updated_at = NOW() WHERE id = $1`
+          : `UPDATE claims SET status = 'submitted', submission_method = 'stedi', stedi_transaction_id = $2, updated_at = NOW() WHERE id = $1`;
+        const fuParams = followUpDate
+          ? [c.id, followUpDate, result.transactionId || null]
+          : [c.id, result.transactionId || null];
+        await db.query(fuSql, fuParams);
+
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
+          [crypto.randomUUID(), c.id, "Submitted via Stedi", `837P submitted to Stedi. Transaction ID: ${result.transactionId || "N/A"}. Status: ${result.status || "Accepted"}`]
+        );
+        if (followUpDate) {
+          await db.query(
+            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
+            [crypto.randomUUID(), c.id, "Follow-Up Scheduled", `Auto follow-up scheduled for ${followUpDate} (${followUpDays} days from submission)`]
+          );
+        }
+        await db.query(
+          `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+          [crypto.randomUUID(), c.id, c.patient_id, "edi_submitted", `837P submitted via Stedi. Transaction: ${result.transactionId || "N/A"}`, (req.user as any)?.id || null]
+        );
+      } else {
+        const errMsg = result.error || "Stedi rejected the claim";
+        const validationList = (result.validationErrors || []).join(", ");
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
+          [crypto.randomUUID(), c.id, "Submission Failed", `Stedi rejected: ${errMsg}${validationList ? ". Validation: " + validationList : ""}`]
+        );
+      }
+
+      res.json({
+        success: result.success,
+        transactionId: result.transactionId,
+        status: result.status,
+        validationErrors: result.validationErrors || [],
+        error: result.error,
+      });
+    } catch (err: any) {
+      console.error("Stedi submit error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ── 277CA Manual Check ─────────────────────────────────────────────────────
+  app.post("/api/billing/claims/:id/check-277", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { isStediConfigured, poll277Acknowledgments } = await import("./services/stedi-claims");
+      if (!isStediConfigured()) return res.status(400).json({ error: "Stedi not configured" });
+
+      const db = await import("./db").then(m => m.pool);
+      const claimResult = await db.query("SELECT stedi_transaction_id, status FROM claims WHERE id = $1", [req.params.id]);
+      if (!claimResult.rows.length) return res.status(404).json({ error: "Claim not found" });
+
+      const { acknowledgments } = await poll277Acknowledgments(
+        new Date(Date.now() - 30 * 86400000).toISOString() // Look back 30 days
+      );
+
+      const txnId = claimResult.rows[0].stedi_transaction_id;
+      const match = acknowledgments.find(
+        (a) => a.transactionId === txnId || a.claimControlNumber === req.params.id
+      );
+
+      if (match) {
+        const newStatus = match.status === "4" ? "rejected" : "acknowledged";
+        if (claimResult.rows[0].status === "submitted") {
+          await db.query("UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2", [newStatus, req.params.id]);
+          await db.query(
+            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
+            [crypto.randomUUID(), req.params.id, "277CA Received", `Payer acknowledgment: ${match.statusDescription}. Payer: ${match.payer}`]
+          );
+        }
+        res.json({ found: true, status: newStatus, acknowledgment: match });
+      } else {
+        res.json({ found: false, status: claimResult.rows[0].status, message: "No 277CA acknowledgment found yet. Check back in 30 minutes." });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -6465,6 +6726,92 @@ Warmly,
   });
 
 }
+
+// ── Stedi 277CA polling job ─────────────────────────────────────────────────
+async function pollStedi277Acknowledgments() {
+  const { isStediConfigured, poll277Acknowledgments } = await import("./services/stedi-claims").catch(() => ({ isStediConfigured: () => false, poll277Acknowledgments: async () => ({ acknowledgments: [], lastCheckTimestamp: "" }) }));
+  if (!isStediConfigured()) return;
+  try {
+    const db = await import("./db").then(m => m.pool);
+    const settingRow = await db.query("SELECT value FROM system_settings WHERE key = 'stedi_last_277_poll'").catch(() => ({ rows: [] as any[] }));
+    const since = settingRow.rows[0]?.value || new Date(Date.now() - 86400000).toISOString();
+    const { acknowledgments, lastCheckTimestamp } = await poll277Acknowledgments(since);
+    for (const ack of acknowledgments) {
+      if (!ack.claimControlNumber && !ack.transactionId) continue;
+      const claimResult = await db.query(
+        `SELECT id, status, organization_id FROM claims WHERE id = $1 OR stedi_transaction_id = $2 LIMIT 1`,
+        [ack.claimControlNumber, ack.transactionId]
+      );
+      if (!claimResult.rows.length) continue;
+      const claim = claimResult.rows[0];
+      let newStatus: string;
+      if (ack.status === "4") newStatus = "rejected";
+      else if (ack.status === "1" || ack.status === "3") newStatus = "acknowledged";
+      else continue;
+      if (claim.status !== "submitted") continue;
+      await db.query("UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2", [newStatus, claim.id]);
+      await db.query(
+        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+        [crypto.randomUUID(), claim.id, "277CA Received", `Payer acknowledgment: ${ack.statusDescription}. Payer: ${ack.payer}`, claim.organization_id]
+      );
+    }
+    await db.query(
+      `INSERT INTO system_settings (key, value, updated_at) VALUES ('stedi_last_277_poll', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+      [lastCheckTimestamp]
+    );
+  } catch (err) {
+    console.error("[277 Poll] Error:", err);
+  }
+}
+
+// ── Stedi 835 ERA polling job ───────────────────────────────────────────────
+async function pollStedi835ERA() {
+  const { isStediConfigured, poll835ERA } = await import("./services/stedi-claims").catch(() => ({ isStediConfigured: () => false, poll835ERA: async () => ({ eras: [], lastCheckTimestamp: "" }) }));
+  if (!isStediConfigured()) return;
+  try {
+    const db = await import("./db").then(m => m.pool);
+    const settingRow = await db.query("SELECT value FROM system_settings WHERE key = 'stedi_last_835_poll'").catch(() => ({ rows: [] as any[] }));
+    const since = settingRow.rows[0]?.value || new Date(Date.now() - 7 * 86400000).toISOString();
+    const { eras, lastCheckTimestamp } = await poll835ERA(since);
+    for (const era of eras) {
+      const existing = await db.query("SELECT id FROM era_batches WHERE check_number = $1 LIMIT 1", [era.checkNumber]);
+      if (existing.rows.length) continue;
+      let orgId: string | null = null;
+      for (const line of era.claimLines) {
+        const claimRow = await db.query("SELECT organization_id FROM claims WHERE id = $1 LIMIT 1", [line.claimControlNumber]);
+        if (claimRow.rows[0]?.organization_id) { orgId = claimRow.rows[0].organization_id; break; }
+      }
+      const eraId = crypto.randomUUID();
+      await db.query(
+        `INSERT INTO era_batches (id, organization_id, payer_name, check_number, check_date, total_amount, status, stedi_era_id, raw_data, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'unposted', $7, $8, NOW())`,
+        [eraId, orgId, era.payerName, era.checkNumber, era.checkDate, era.totalPayment, era.eraId, JSON.stringify(era.rawData)]
+      );
+      for (const line of era.claimLines) {
+        await db.query(
+          `INSERT INTO era_claim_lines (id, era_batch_id, claim_control_number, patient_name, billed_amount, allowed_amount, paid_amount, adjustment_codes, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+          [crypto.randomUUID(), eraId, line.claimControlNumber, line.patientName, line.billedAmount, line.allowedAmount, line.paidAmount, JSON.stringify(line.adjustments)]
+        );
+      }
+      console.log(`[835 Poll] Imported ERA: ${era.checkNumber} — $${era.totalPayment}`);
+    }
+    await db.query(
+      `INSERT INTO system_settings (key, value, updated_at) VALUES ('stedi_last_835_poll', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+      [lastCheckTimestamp]
+    );
+  } catch (err) {
+    console.error("[835 Poll] Error:", err);
+  }
+}
+
+// Start polling jobs (run immediately, then on schedule)
+setTimeout(() => {
+  pollStedi277Acknowledgments();
+  setInterval(pollStedi277Acknowledgments, 15 * 60 * 1000); // Every 15 minutes
+  pollStedi835ERA();
+  setInterval(pollStedi835ERA, 6 * 60 * 60 * 1000); // Every 6 hours
+}, 5000); // 5-second delay after startup to allow DB migrations to complete
 
 function generateIntakeTranscript(patientName: string): string {
   return `Agent: Good morning! This is Sarah from Claim Shield Health calling to verify insurance benefits. May I speak with ${patientName}?

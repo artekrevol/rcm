@@ -858,7 +858,7 @@ export default function ClaimWizard() {
   // Resolve matched payer from patient's payer_id or insurance_carrier name
   const matchedPayer = payers.find((p: any) => p.id === patient?.payer_id || p.name === patient?.insurance_carrier) || null;
   const isVAPayer = !!matchedPayer && (
-    matchedPayer.payer_id === "VACCN" || matchedPayer.payer_id === "TRWST" ||
+    matchedPayer.payer_id === "VACCN" || matchedPayer.payer_id === "TWVACCN" || matchedPayer.payer_id === "TRWST" ||
     (matchedPayer.name || "").toLowerCase().includes("va community care") ||
     (matchedPayer.name || "").toLowerCase().includes("triwest")
   );
@@ -875,6 +875,19 @@ export default function ClaimWizard() {
     },
     enabled: !!matchedPayer?.id && activeCodes.length > 0,
   });
+
+  const { data: stediStatus } = useQuery<{ configured: boolean }>({
+    queryKey: ["/api/billing/stedi/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/stedi/status");
+      if (!res.ok) return { configured: false };
+      return res.json();
+    },
+  });
+  const stediConfigured = stediStatus?.configured ?? false;
+
+  const [stediSubmitting, setStediSubmitting] = useState(false);
+  const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string } | null>(null);
 
   useEffect(() => {
     if (providers.length > 0 && !providerId) {
@@ -1739,9 +1752,41 @@ export default function ClaimWizard() {
             </Card>
           )}
 
+          {/* Stedi submission result */}
+          {stediResult && (
+            <div className={`p-3 rounded-lg border text-sm ${stediResult.success ? "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800" : "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"}`} data-testid="panel-stedi-result">
+              {stediResult.success ? (
+                <div className="flex items-start gap-2 text-green-800 dark:text-green-200">
+                  <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0 text-green-600" />
+                  <div>
+                    <p className="font-semibold">Claim submitted via Stedi clearinghouse</p>
+                    {stediResult.transactionId && <p className="text-xs mt-0.5">Transaction ID: <span className="font-mono">{stediResult.transactionId}</span></p>}
+                    <p className="text-xs mt-0.5">Status: {stediResult.status || "Accepted"}. You'll be notified when the payer acknowledges (usually within 30 minutes).</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 text-red-800 dark:text-red-200">
+                  <XCircle className="h-4 w-4 mt-0.5 shrink-0 text-red-600" />
+                  <div>
+                    <p className="font-semibold">Stedi rejected the submission</p>
+                    <p className="text-xs mt-0.5">{stediResult.error}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Stedi not configured notice (when OA is the fallback) */}
+          {!stediConfigured && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 text-xs text-blue-700 dark:text-blue-300" data-testid="notice-stedi-not-configured">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              Connect Stedi for real-time electronic submission and automatic 277CA status tracking.
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-3 justify-between pt-2">
             <Button variant="outline" onClick={() => setStep(1)} data-testid="button-step3-back">Back to Service</Button>
-            <div className="flex gap-3">
+            <div className="flex gap-3 flex-wrap">
               <Button variant="outline" onClick={handleSaveDraft} disabled={saveMutation.isPending} data-testid="button-save-draft">
                 {saveMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Save as Draft
@@ -1809,15 +1854,74 @@ export default function ClaimWizard() {
                   >
                     Claim summary — readable format
                   </DropdownMenuItem>
+                  {stediConfigured && claimId && (
+                    <DropdownMenuItem
+                      data-testid="menu-download-edi-wizard"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`/api/billing/claims/${claimId}/edi`, { credentials: "include" });
+                          if (!res.ok) throw new Error("EDI generation failed");
+                          const blob = await res.blob();
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `claim_${claimId}_837P.edi`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                          toast({ title: "837P EDI downloaded" });
+                        } catch (err: any) {
+                          toast({ title: "EDI download failed", description: err.message, variant: "destructive" });
+                        }
+                      }}
+                    >
+                      Download 837P EDI file
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button
-                onClick={() => setShowSubmitModal(true)}
-                disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged)}
-                data-testid="button-submit-claim"
-              >
-                Submit to Availity
-              </Button>
+
+              {stediConfigured ? (
+                <Button
+                  onClick={async () => {
+                    if (!claimId) return;
+                    setStediSubmitting(true);
+                    setStediResult(null);
+                    try {
+                      const res = await fetch(`/api/billing/claims/${claimId}/submit-stedi`, {
+                        method: "POST",
+                        credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                      });
+                      const result = await res.json();
+                      setStediResult(result);
+                      if (result.success) {
+                        queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
+                        toast({ title: "Claim submitted via Stedi", description: `Transaction ID: ${result.transactionId || "N/A"}` });
+                      } else {
+                        toast({ title: "Stedi submission failed", description: result.error, variant: "destructive" });
+                      }
+                    } catch (err: any) {
+                      setStediResult({ success: false, error: err.message });
+                      toast({ title: "Submission error", description: err.message, variant: "destructive" });
+                    } finally {
+                      setStediSubmitting(false);
+                    }
+                  }}
+                  disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || stediSubmitting || stediResult?.success}
+                  data-testid="button-submit-stedi"
+                >
+                  {stediSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  {stediResult?.success ? "Submitted ✓" : stediSubmitting ? "Submitting..." : "Submit via Stedi"}
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => setShowSubmitModal(true)}
+                  disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged)}
+                  data-testid="button-submit-claim"
+                >
+                  Submit via Office Ally
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -1826,9 +1930,9 @@ export default function ClaimWizard() {
       <Dialog open={showSubmitModal} onOpenChange={setShowSubmitModal}>
         <DialogContent data-testid="dialog-submit">
           <DialogHeader>
-            <DialogTitle>Submit to Availity</DialogTitle>
+            <DialogTitle>Submit via Office Ally</DialogTitle>
             <DialogDescription>
-              Direct submission is coming in a future update. Use Generate PDF and upload to your Availity portal.
+              Connect Office Ally SFTP credentials in Settings → Clearinghouse to enable automated submission. Or add STEDI_API_KEY for instant electronic submission via Stedi.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

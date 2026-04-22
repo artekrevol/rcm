@@ -1,0 +1,626 @@
+Good. Now I have the full picture. Here's exactly what needs to change — organized by priority.
+What the Production API Unlocks
+
+The codebase currently has:
+
+    Claim submission: submit-oa endpoint → Office Ally SFTP (built, works)
+    Eligibility: Stedi service designed but test-key only (mock patients)
+    277CA: Never retrieved (dead code in office-ally.ts)
+    835 ERA: Never retrieved automatically
+    TriWest payer ID: VACCN (wrong — Stedi uses TWVACCN)
+
+With a production key, all of this flips. Here's the Replit prompt:
+
+You are continuing development on ClaimShield 2.0. We now have a Stedi 
+production API key stored as STEDI_API_KEY in Railway environment variables. 
+This sprint wires Stedi as the primary clearinghouse for claim submission, 
+277CA acknowledgment tracking, and 835 ERA retrieval. Office Ally SFTP 
+remains as a fallback but Stedi becomes the default.
+
+Do not modify any existing functionality unless explicitly instructed. 
+Work through each item in order and confirm before moving to the next.
+
+---
+
+## CONTEXT — Current State
+
+The server has:
+- server/services/office-ally.ts — SFTP submission (works, keep it)
+- server/services/stedi-eligibility.ts — eligibility service (already built 
+  in previous sprint, now activate with production key)
+- POST /api/billing/claims/:id/submit-oa — Office Ally submission endpoint
+- No Stedi claim submission endpoint
+- No 277CA retrieval running anywhere
+- No 835 ERA auto-retrieval running anywhere
+- payers table has VA Community Care with payer_id = 'VACCN' — WRONG for Stedi
+  (Stedi uses 'TWVACCN' for TriWest VA Community Care)
+
+---
+
+## ITEM 1 — Fix TriWest Payer ID for Stedi
+
+Update the VA Community Care payer record in the database:
+
+```sql
+UPDATE payers 
+SET payer_id = 'TWVACCN', 
+    updated_at = NOW()
+WHERE (name ILIKE '%VA Community Care%' OR payer_id = 'VACCN')
+  AND is_active = true;
+```
+
+Also update the startup seed that sets era_auto_post_clean for the VACCN payer:
+
+Change: WHERE payer_id = 'VACCN'
+To:     WHERE payer_id IN ('VACCN', 'TWVACCN')
+
+
+This must happen idempotently at startup before any claim is submitted.
+
+---
+
+## ITEM 2 — Stedi Claim Submission Service
+
+Create server/services/stedi-claims.ts:
+
+```typescript
+const STEDI_API_KEY = process.env.STEDI_API_KEY;
+const STEDI_CLAIMS_URL = 
+  'https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/professionalclaims/v3/submission';
+const STEDI_POLL_URL =
+  'https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/claims/reports';
+
+export function isStediConfigured(): boolean {
+  return !!STEDI_API_KEY;
+}
+
+export interface StediClaimSubmissionParams {
+  ediContent: string;        // Raw 837P EDI string (already generated)
+  claimId: string;           // For idempotency key
+  isTest?: boolean;          // Default false for production
+}
+
+export interface StediSubmissionResult {
+  success: boolean;
+  transactionId?: string;    // Stedi transaction ID
+  controlNumber?: string;    // ISA13 control number
+  status?: string;           // 'Accepted' | 'Rejected'
+  validationErrors?: string[];
+  rawResponse?: Record<string, unknown>;
+  error?: string;
+}
+
+export async function submitClaim(
+  params: StediClaimSubmissionParams
+): Promise<StediSubmissionResult> {
+  if (!STEDI_API_KEY) {
+    throw new Error('STEDI_API_KEY not configured');
+  }
+
+  // Submit raw 837P EDI to Stedi
+  // Stedi accepts X12 EDI directly — no transformation needed
+  const response = await fetch(STEDI_CLAIMS_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Key ${STEDI_API_KEY}`,
+      'Content-Type': 'application/json',
+      'Idempotency-Key': params.claimId,
+    },
+    body: JSON.stringify({
+      transactionSets: [params.ediContent],
+    }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    return {
+      success: false,
+      rawResponse: data,
+      error: data.message || data.errors?.[0]?.description || 
+             `Stedi API error: ${response.status}`,
+    };
+  }
+
+  // Extract transaction details from Stedi response
+  const txn = data.transactionSets?.[0] || data;
+  const accepted = txn.status === 'Accepted' || 
+                   data.status === 'Accepted' ||
+                   response.status === 200;
+
+  return {
+    success: accepted,
+    transactionId: txn.transactionId || data.transactionId,
+    controlNumber: txn.controlNumber || data.controlNumber,
+    status: txn.status || (accepted ? 'Accepted' : 'Rejected'),
+    validationErrors: txn.errors || data.errors || [],
+    rawResponse: data,
+    error: accepted ? undefined : 
+           (txn.errors?.[0]?.message || 'Claim rejected by Stedi'),
+  };
+}
+
+// Poll for 277CA acknowledgments
+// Call this periodically — Stedi returns acknowledgments within 30 minutes
+export async function poll277Acknowledgments(
+  since?: string  // ISO timestamp — only return new acks since this time
+): Promise<{
+  acknowledgments: Array<{
+    transactionId: string;
+    claimControlNumber: string;   // CLM01 from original claim
+    status: '1' | '3' | '4' | '5';  // 1=Accepted, 3=Accepted with changes, 4=Rejected
+    statusDescription: string;
+    payer: string;
+    receivedAt: string;
+    rawData: Record<string, unknown>;
+  }>;
+  lastCheckTimestamp: string;
+}> {
+  if (!STEDI_API_KEY) throw new Error('STEDI_API_KEY not configured');
+
+  const url = new URL(STEDI_POLL_URL);
+  url.searchParams.set('transactionSetType', '277');
+  if (since) url.searchParams.set('startDate', since);
+
+  const response = await fetch(url.toString(), {
+    headers: { 'Authorization': `Key ${STEDI_API_KEY}` },
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.message || `277 poll failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const reports = data.reports || data.transactionSets || [];
+
+  return {
+    acknowledgments: reports.map((r: any) => ({
+      transactionId: r.transactionId || r.id,
+      claimControlNumber: r.claimReference?.patientControlNumber || 
+                          r.patientControlNumber || '',
+      status: r.status || '1',
+      statusDescription: r.statusDescription || 
+                         mapStatusCode(r.status),
+      payer: r.payer?.name || r.payerName || 'Unknown',
+      receivedAt: r.receivedAt || r.createdAt || new Date().toISOString(),
+      rawData: r,
+    })),
+    lastCheckTimestamp: new Date().toISOString(),
+  };
+}
+
+// Poll for 835 ERA files
+export async function poll835ERA(
+  since?: string
+): Promise<{
+  eras: Array<{
+    eraId: string;
+    checkNumber: string;
+    checkDate: string;
+    payerName: string;
+    totalPayment: number;
+    claimLines: Array<{
+      claimControlNumber: string;
+      patientName: string;
+      billedAmount: number;
+      allowedAmount: number;
+      paidAmount: number;
+      adjustments: Array<{
+        code: string;        // CARC code e.g. 'CO-45'
+        amount: number;
+        reason: string;
+      }>;
+    }>;
+    rawData: Record<string, unknown>;
+  }>;
+  lastCheckTimestamp: string;
+}> {
+  if (!STEDI_API_KEY) throw new Error('STEDI_API_KEY not configured');
+
+  const url = new URL(STEDI_POLL_URL);
+  url.searchParams.set('transactionSetType', '835');
+  if (since) url.searchParams.set('startDate', since);
+
+  const response = await fetch(url.toString(), {
+    headers: { 'Authorization': `Key ${STEDI_API_KEY}` },
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.message || `835 poll failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const reports = data.reports || data.transactionSets || [];
+
+  return {
+    eras: reports.map((r: any) => parseERAResponse(r)),
+    lastCheckTimestamp: new Date().toISOString(),
+  };
+}
+
+function mapStatusCode(code: string): string {
+  const map: Record<string, string> = {
+    '1': 'Accepted',
+    '3': 'Accepted with Changes',
+    '4': 'Rejected — Payer did not accept',
+    '5': 'Payer acknowledgment pending',
+  };
+  return map[code] || `Status code: ${code}`;
+}
+
+function parseERAResponse(r: any) {
+  // Parse Stedi's 835 JSON structure into our ERA format
+  const paymentInfo = r.paymentInfo || r.financialInformation || {};
+  const claims = r.claims || r.claimPaymentInfo || [];
+  
+  return {
+    eraId: r.transactionId || r.id,
+    checkNumber: paymentInfo.checkNumber || paymentInfo.traceNumber || 
+                 r.checkNumber || '',
+    checkDate: paymentInfo.checkDate || paymentInfo.effectiveDate || 
+               r.checkDate || new Date().toISOString().slice(0, 10),
+    payerName: r.payer?.name || r.payerName || 'Unknown',
+    totalPayment: parseFloat(paymentInfo.totalActualProviderPaymentAmount || 
+                             paymentInfo.amount || 0),
+    claimLines: claims.map((c: any) => ({
+      claimControlNumber: c.claimPaymentInfo?.patientControlNumber || 
+                          c.patientControlNumber || '',
+      patientName: [c.patient?.firstName, c.patient?.lastName]
+                   .filter(Boolean).join(' ') || 'Unknown',
+      billedAmount: parseFloat(c.claimPaymentInfo?.totalClaimChargeAmount || 0),
+      allowedAmount: parseFloat(c.claimPaymentInfo?.claimPaymentAmount || 0),
+      paidAmount: parseFloat(c.claimPaymentInfo?.claimPaymentAmount || 0),
+      adjustments: (c.claimAdjustments || []).map((adj: any) => ({
+        code: `${adj.claimAdjustmentGroupCode}-${adj.claimAdjustmentReasonCode}`,
+        amount: parseFloat(adj.claimAdjustmentAmount || 0),
+        reason: adj.reasonDescription || adj.claimAdjustmentReasonCode || '',
+      })),
+    })),
+    rawData: r,
+  };
+}
+```
+
+---
+
+## ITEM 3 — Stedi Claim Submission Endpoint
+
+Add a new endpoint to server/routes.ts alongside the existing submit-oa endpoint:
+
+**POST /api/billing/claims/:id/submit-stedi**
+Role: admin, rcm_manager
+
+Logic (mirrors submit-oa exactly, except calls Stedi instead of OA):
+
+    Fetch claim, verify org (same as submit-oa)
+    Fetch patient, practice settings, provider, payer (same as submit-oa)
+    Check: if !isStediConfigured(), return 400 with error "Stedi API key not configured. Add STEDI_API_KEY to environment variables."
+    Generate 837P EDI using existing generate837P() service — same exact call as submit-oa, no changes to EDI generator
+    Apply P0 EDI fixes inline before submission: a. Fix ISA15: ensure it is 'P' (Production) not 'T' (Test) Replace 'ISA00 00 ZZ' segment's 15th element (ISA15) with 'P' if it contains 'T' b. The EDI generator should already handle other fixes from the P0 sprint — do not re-apply here, just verify ISA15
+    Call submitClaim({ ediContent: ediString, claimId: c.id })
+    If success: a. Store stedi_transaction_id on the claim: ALTER TABLE claims ADD COLUMN IF NOT EXISTS stedi_transaction_id VARCHAR; UPDATE claims SET stedi_transaction_id = $txnId WHERE id = $claimId b. Update claim status to 'submitted', submission_method = 'stedi' c. Set follow_up_date same logic as submit-oa (payer auto_followup_days) d. Insert claim_event: type='Submitted via Stedi', notes=837P submitted to Stedi. Transaction ID: ${transactionId} e. Insert activity_log entry same as submit-oa
+    If failure: a. Insert claim_event: type='Submission Failed', notes=Stedi rejected: ${error}. Validation: ${validationErrors.join(', ')} b. Return { success: false, error, validationErrors }
+    Return { success, transactionId, status, validationErrors }
+
+
+---
+
+## ITEM 4 — 277CA Polling Job
+
+The 277CA acknowledgment is what updates claim status from 'submitted' 
+to 'accepted' or 'rejected' by the payer. Currently nothing polls for it.
+
+**Add a polling function that runs every 15 minutes:**
+
+In server/routes.ts or a new server/jobs/poll-acknowledgments.ts:
+
+```typescript
+// Run at startup and every 15 minutes
+async function pollStedi277Acknowledgments() {
+  if (!isStediConfigured()) return;
+  
+  try {
+    const db = await import('./db').then(m => m.pool);
+    
+    // Get timestamp of last successful poll from a settings table or 
+    // fall back to 24 hours ago
+    const settingRow = await db.query(
+      "SELECT value FROM system_settings WHERE key = 'stedi_last_277_poll'"
+    ).catch(() => ({ rows: [] }));
+    const since = settingRow.rows[0]?.value || 
+                  new Date(Date.now() - 86400000).toISOString();
+    
+    const { acknowledgments, lastCheckTimestamp } = 
+      await poll277Acknowledgments(since);
+    
+    for (const ack of acknowledgments) {
+      if (!ack.claimControlNumber) continue;
+      
+      // Find the claim by control number (CLM01 = our claim ID or control num)
+      const claimResult = await db.query(
+        `SELECT id, status, organization_id FROM claims 
+         WHERE id = $1 OR stedi_transaction_id = $2 LIMIT 1`,
+        [ack.claimControlNumber, ack.transactionId]
+      );
+      if (!claimResult.rows.length) continue;
+      
+      const claim = claimResult.rows[0];
+      
+      // Map 277 status to claim status
+      let newStatus: string;
+      if (ack.status === '4') {
+        newStatus = 'rejected';
+      } else if (ack.status === '1' || ack.status === '3') {
+        newStatus = 'acknowledged'; // Accepted by payer — now in adjudication
+      } else {
+        continue; // Unknown status — skip
+      }
+      
+      // Only update if claim is still 'submitted'
+      if (claim.status !== 'submitted') continue;
+      
+      await db.query(
+        'UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2',
+        [newStatus, claim.id]
+      );
+      
+      await db.query(
+        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+         VALUES ($1, $2, $3, $4, NOW(), $5)`,
+        [
+          crypto.randomUUID(),
+          claim.id,
+          '277CA Received',
+          `Payer acknowledgment: ${ack.statusDescription}. Payer: ${ack.payer}`,
+          claim.organization_id
+        ]
+      );
+    }
+    
+    // Save last poll timestamp
+    // Create system_settings table if not exists
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key VARCHAR PRIMARY KEY,
+        value TEXT,
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await db.query(
+      `INSERT INTO system_settings (key, value, updated_at) 
+       VALUES ('stedi_last_277_poll', $1, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+      [lastCheckTimestamp]
+    );
+    
+  } catch (err) {
+    console.error('[277 Poll] Error:', err);
+  }
+}
+
+// Start polling
+pollStedi277Acknowledgments(); // Run immediately on startup
+setInterval(pollStedi277Acknowledgments, 15 * 60 * 1000); // Every 15 minutes
+```
+
+Also add a manual refresh endpoint:
+**POST /api/billing/claims/:id/check-277**
+Role: admin, rcm_manager
+Logic: Run pollStedi277Acknowledgments() filtered to just this claim's 
+transaction ID, return the latest status. Use this for the "Refresh Status" 
+button in the Claim Tracker.
+
+---
+
+## ITEM 5 — 835 ERA Auto-Retrieval
+
+Wire ERA polling into the existing ERA system.
+
+**Add a polling function that runs every 6 hours:**
+
+```typescript
+async function pollStedi835ERA() {
+  if (!isStediConfigured()) return;
+  
+  try {
+    const db = await import('./db').then(m => m.pool);
+    
+    const settingRow = await db.query(
+      "SELECT value FROM system_settings WHERE key = 'stedi_last_835_poll'"
+    ).catch(() => ({ rows: [] }));
+    const since = settingRow.rows[0]?.value || 
+                  new Date(Date.now() - 7 * 86400000).toISOString(); // 7 days back
+    
+    const { eras, lastCheckTimestamp } = await poll835ERA(since);
+    
+    for (const era of eras) {
+      // Check if this ERA check number already exists
+      const existing = await db.query(
+        'SELECT id FROM era_batches WHERE check_number = $1 LIMIT 1',
+        [era.checkNumber]
+      );
+      if (existing.rows.length) continue; // Already imported
+      
+      // Determine org_id — match against submitted claims
+      // Find a claim in this ERA to determine which org it belongs to
+      let orgId: string | null = null;
+      for (const line of era.claimLines) {
+        const claimRow = await db.query(
+          'SELECT organization_id FROM claims WHERE id = $1 LIMIT 1',
+          [line.claimControlNumber]
+        );
+        if (claimRow.rows[0]?.organization_id) {
+          orgId = claimRow.rows[0].organization_id;
+          break;
+        }
+      }
+      
+      // Insert into era_batches
+      const eraId = crypto.randomUUID();
+      await db.query(
+        `INSERT INTO era_batches 
+         (id, organization_id, payer_name, check_number, check_date, 
+          total_amount, status, stedi_era_id, raw_data, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'unposted', $7, $8, NOW())`,
+        [
+          eraId,
+          orgId,
+          era.payerName,
+          era.checkNumber,
+          era.checkDate,
+          era.totalPayment,
+          era.eraId,
+          JSON.stringify(era.rawData)
+        ]
+      );
+      
+      // Insert ERA line items
+      for (const line of era.claimLines) {
+        await db.query(
+          `INSERT INTO era_claim_lines
+           (id, era_batch_id, claim_control_number, patient_name,
+            billed_amount, allowed_amount, paid_amount, 
+            adjustment_codes, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+          [
+            crypto.randomUUID(),
+            eraId,
+            line.claimControlNumber,
+            line.patientName,
+            line.billedAmount,
+            line.allowedAmount,
+            line.paidAmount,
+            JSON.stringify(line.adjustments)
+          ]
+        );
+      }
+      
+      console.log(`[835 Poll] Imported ERA: ${era.checkNumber} — $${era.totalPayment}`);
+    }
+    
+    // Save last poll timestamp
+    await db.query(
+      `INSERT INTO system_settings (key, value, updated_at)
+       VALUES ('stedi_last_835_poll', $1, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
+      [lastCheckTimestamp]
+    );
+    
+  } catch (err) {
+    console.error('[835 Poll] Error:', err);
+  }
+}
+
+// Start polling
+pollStedi835ERA(); // Run immediately on startup
+setInterval(pollStedi835ERA, 6 * 60 * 60 * 1000); // Every 6 hours
+```
+
+Note: If era_claim_lines table doesn't exist, create it:
+```sql
+CREATE TABLE IF NOT EXISTS era_claim_lines (
+  id VARCHAR PRIMARY KEY,
+  era_batch_id VARCHAR NOT NULL,
+  claim_control_number VARCHAR,
+  patient_name VARCHAR,
+  billed_amount DECIMAL(10,2),
+  allowed_amount DECIMAL(10,2),
+  paid_amount DECIMAL(10,2),
+  adjustment_codes JSONB DEFAULT '[]',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+Also add stedi_era_id column to era_batches if not exists:
+```sql
+ALTER TABLE era_batches ADD COLUMN IF NOT EXISTS stedi_era_id VARCHAR;
+ALTER TABLE era_batches ADD COLUMN IF NOT EXISTS raw_data JSONB;
+```
+
+---
+
+## ITEM 6 — Update Claim Submission UI
+
+The claim wizard currently has a "Submit via Office Ally" button. 
+Update the submission flow:
+
+**In the claim wizard review/submit step:**
+
+1. Check /api/billing/stedi-status (existing endpoint from eligibility sprint)
+2. If Stedi is configured (STEDI_API_KEY is set):
+   - Primary button: "Submit via Stedi" → calls /api/billing/claims/:id/submit-stedi
+   - Secondary button (smaller, outlined): "Download EDI" (existing download button)
+   - Remove or hide "Submit via Office Ally" — keep the endpoint but 
+     don't show it as a primary action
+3. If Stedi is NOT configured:
+   - Show "Submit via Office Ally" as before (existing behavior unchanged)
+   - Show a notice: "Connect Stedi for real-time submission tracking"
+
+**In the Claim Tracker, add a "Refresh 277 Status" button:**
+- Visible on any claim with status = 'submitted' and submission_method = 'stedi'
+- Calls POST /api/billing/claims/:id/check-277
+- Shows a spinner while loading, updates status inline on return
+
+---
+
+## ITEM 7 — Clearinghouse Settings Page Update
+
+In Settings → Clearinghouse tab, add a Stedi section:
+
+**Stedi Connection Status:**
+- If STEDI_API_KEY is set: 
+  Green badge "✓ Stedi Connected — Production API"
+  Show: "Claims will be submitted through Stedi clearinghouse"
+- If not set:
+  Grey badge "○ Stedi Not Configured"
+  Show: "Add STEDI_API_KEY to Railway environment variables to enable"
+
+**Stedi Payer Enrollment:**
+- Add a simple table showing enrollment status for key payers:
+  - VA Community Care (TWVACCN) — ERA Enrollment status
+  - BCBS (whatever payer ID is in the payers table)
+- Each row shows: Payer Name, Payer ID, Enrollment Status (Not Enrolled / 
+  Pending / Active), and an "Enroll for ERA" button
+- The "Enroll for ERA" button links to: 
+  https://app.stedi.com (Stedi portal) with a note:
+  "Complete ERA enrollment in the Stedi portal. 
+   TriWest is a 1-click enrollment — takes 1-6 days to activate."
+- This is informational UI only — actual enrollment happens in the Stedi portal
+
+Keep the existing Office Ally section unchanged directly below.
+
+---
+
+## TECHNICAL NOTES
+
+1. The STEDI_API_KEY is already in Railway environment variables. 
+   Do not hardcode it anywhere. Read it as process.env.STEDI_API_KEY.
+
+2. The existing generate837P() function in server/services/edi-generator.ts 
+   generates valid 837P EDI. Use it as-is for Stedi submission — 
+   Stedi accepts raw X12 EDI. Do NOT rewrite the EDI generator.
+
+3. The P0 EDI bugs (SV1-07 diagnosis pointer A→1, ICD decimal stripping) 
+   should already be fixed from the P0 sprint. If they are not, fix them 
+   in the edi-generator.ts before submission. Do not fix them inline 
+   in the submission route.
+
+4. If the Stedi 277/835 API response structure differs from what's 
+   documented above (Stedi's responses can vary), log the actual 
+   response structure and adapt the parser. Do not fail silently — 
+   log parsing errors clearly.
+
+5. The polling jobs (Items 4 and 5) use setInterval. On Railway, 
+   this is fine — the server runs continuously. Do not use a separate 
+   cron service.
+
+6. All new database columns use ADD COLUMN IF NOT EXISTS — safe to 
+   run on fresh and existing databases.
+
+7. Do not remove the Office Ally integration. Keep submit-oa endpoint 
+   fully functional. Stedi is the new default; OA is the fallback.
+
+Work through items 1 through 7 in order. After each item, confirm 
+what was built and flag anything that needs input before proceeding.

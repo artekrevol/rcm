@@ -54,7 +54,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-import { CheckCircle, Send, Wifi, FileText } from "lucide-react";
+import { CheckCircle, Send, Wifi, FileText, Zap, XCircle, Info } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -1705,6 +1705,15 @@ function ClearinghouseTab() {
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
   });
+  const { data: stediStatus } = useQuery<{ configured: boolean }>({
+    queryKey: ["/api/billing/stedi/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/stedi/status");
+      if (!res.ok) return { configured: false };
+      return res.json();
+    },
+  });
+  const stediConfigured = stediStatus?.configured ?? false;
 
   const [oaForm, setOaForm] = useState({
     submitterId: "",
@@ -1785,11 +1794,107 @@ function ClearinghouseTab() {
 
   return (
     <div className="max-w-2xl space-y-6">
+
+      {/* ── Stedi Clearinghouse Section ─────────────────────────────────────── */}
+      <div className="rounded-lg border p-4 space-y-4" data-testid="section-stedi">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Zap className="h-4 w-4 text-yellow-500" />
+              <h3 className="text-base font-semibold">Stedi Clearinghouse</h3>
+              {stediConfigured ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 text-xs font-medium px-2 py-0.5" data-testid="badge-stedi-connected">
+                  <CheckCircle className="h-3 w-3" /> Connected
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 text-xs font-medium px-2 py-0.5" data-testid="badge-stedi-disconnected">
+                  <XCircle className="h-3 w-3" /> Not configured
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">
+              Primary clearinghouse for real-time claim submission, 277CA acknowledgment tracking, and 835 ERA retrieval. Set <code className="bg-muted px-1 rounded text-xs">STEDI_API_KEY</code> in your environment secrets to activate.
+            </p>
+          </div>
+        </div>
+
+        {stediConfigured ? (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 text-sm text-green-800 dark:text-green-200" data-testid="banner-stedi-active">
+            <CheckCircle className="h-4 w-4 mt-0.5 shrink-0 text-green-600" />
+            <div>
+              <p className="font-medium">Stedi is your active clearinghouse</p>
+              <p className="text-xs mt-0.5">Claims submitted from the wizard route through Stedi 837P. 277CA acknowledgments poll every 15 minutes. 835 ERAs poll every 6 hours.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-sm text-blue-800 dark:text-blue-200" data-testid="banner-stedi-setup">
+            <Info className="h-4 w-4 mt-0.5 shrink-0 text-blue-600" />
+            <div>
+              <p className="font-medium">Set up Stedi for electronic claim submission</p>
+              <p className="text-xs mt-0.5">Add <strong>STEDI_API_KEY</strong> in your Replit Secrets panel. Claims will then route through Stedi instead of requiring manual Availity upload.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Payer enrollment table */}
+        <div data-testid="section-stedi-payers">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Payer Enrollment Status</p>
+          <div className="rounded-md border overflow-hidden text-sm">
+            <table className="w-full">
+              <thead className="bg-muted/50">
+                <tr>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Payer</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">EDI Payer ID</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Transaction Set</th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-muted-foreground">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                <tr data-testid="row-payer-vaccn">
+                  <td className="px-3 py-2 font-medium">VA Community Care (TriWest)</td>
+                  <td className="px-3 py-2 font-mono text-xs">TWVACCN</td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">837P · 277CA · 835</td>
+                  <td className="px-3 py-2">
+                    {stediConfigured ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-300 font-medium"><CheckCircle className="h-3 w-3 text-green-500" /> Enrolled</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Pending API key</span>
+                    )}
+                  </td>
+                </tr>
+                <tr data-testid="row-payer-bcbs">
+                  <td className="px-3 py-2 font-medium">BCBS Texas</td>
+                  <td className="px-3 py-2 font-mono text-xs">BCBSTX</td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">837P · 277CA · 835</td>
+                  <td className="px-3 py-2">
+                    {stediConfigured ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-green-700 dark:text-green-300 font-medium"><CheckCircle className="h-3 w-3 text-green-500" /> Enrolled</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Pending API key</span>
+                    )}
+                  </td>
+                </tr>
+                <tr data-testid="row-payer-medicare">
+                  <td className="px-3 py-2 font-medium">Medicare</td>
+                  <td className="px-3 py-2 font-mono text-xs">MCAID</td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">837P · 277CA · 835</td>
+                  <td className="px-3 py-2">
+                    <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">Enrollment pending</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-t pt-2" />
+
+      {/* ── Office Ally Section ──────────────────────────────────────────────── */}
       <div>
-        <h3 className="text-base font-semibold" data-testid="text-clearinghouse-title">Office Ally Integration</h3>
+        <h3 className="text-base font-semibold" data-testid="text-clearinghouse-title">Office Ally Integration <span className="text-xs font-normal text-muted-foreground">(fallback clearinghouse)</span></h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Connect your Office Ally account to enable automatic claim submission
-          and real-time denial tracking. Office Ally is free for VA Community Care
+          Fallback clearinghouse when Stedi is not configured. Office Ally is free for VA Community Care
           and Medicare claims.{" "}
           <a
             href="https://cms.officeally.com"
