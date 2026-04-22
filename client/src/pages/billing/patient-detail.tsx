@@ -105,6 +105,11 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
         defaultProviderId: patient.default_provider_id || "",
         serviceNeeded: patient.service_needed || "",
         preferredName: patient.preferred_name || "",
+        secondaryPayer: patient.secondary_payer_id || "",
+        secondaryMemberId: patient.secondary_member_id || "",
+        secondaryGroupNumber: patient.secondary_group_number || "",
+        secondaryPlanName: patient.secondary_plan_name || "",
+        secondaryRelationship: patient.secondary_relationship || "Self",
       });
       setLoadedId(patient.id);
     }
@@ -150,6 +155,11 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
       defaultProviderId: form.defaultProviderId || null,
       serviceNeeded: form.serviceNeeded || null,
       preferredName: form.preferredName || null,
+      secondaryPayerId: form.secondaryPayer || null,
+      secondaryMemberId: form.secondaryMemberId || null,
+      secondaryGroupNumber: form.secondaryGroupNumber || null,
+      secondaryPlanName: form.secondaryPlanName || null,
+      secondaryRelationship: form.secondaryRelationship || null,
     });
   }
 
@@ -261,6 +271,57 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
           <div className="space-y-2">
             <Label>Authorization Number</Label>
             <Input value={form.authorizationNumber} onChange={(e) => set({ authorizationNumber: e.target.value })} data-testid="input-edit-auth-number" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Secondary Insurance (COB)
+            <span className="text-xs font-normal text-muted-foreground ml-1">Coordination of Benefits</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Secondary Payer Name</Label>
+              <Input
+                value={form.secondaryPayer}
+                onChange={(e) => set({ secondaryPayer: e.target.value })}
+                placeholder="e.g. Medicare, Medicaid, Blue Cross"
+                list="secondary-payer-list"
+                data-testid="input-secondary-payer"
+              />
+              <datalist id="secondary-payer-list">
+                {payers.filter((p: any) => p.is_active).map((p: any) => (
+                  <option key={p.id} value={p.name} />
+                ))}
+              </datalist>
+            </div>
+            <div className="space-y-2">
+              <Label>Member ID</Label>
+              <Input value={form.secondaryMemberId} onChange={(e) => set({ secondaryMemberId: e.target.value })} placeholder="Secondary member ID" data-testid="input-secondary-member-id" />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label>Group Number</Label>
+              <Input value={form.secondaryGroupNumber} onChange={(e) => set({ secondaryGroupNumber: e.target.value })} placeholder="Group #" data-testid="input-secondary-group" />
+            </div>
+            <div className="space-y-2">
+              <Label>Plan Name</Label>
+              <Input value={form.secondaryPlanName} onChange={(e) => set({ secondaryPlanName: e.target.value })} placeholder="Plan name (optional)" data-testid="input-secondary-plan-name" />
+            </div>
+            <div className="space-y-2">
+              <Label>Relationship</Label>
+              <Select value={form.secondaryRelationship} onValueChange={(v) => set({ secondaryRelationship: v })}>
+                <SelectTrigger data-testid="select-secondary-relationship"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectContent>
+                  {["Self", "Spouse", "Child", "Other"].map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </CardContent>
       </Card>

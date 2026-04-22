@@ -1,0 +1,529 @@
+You're right. Here's the corrected prompt:
+
+```
+The previous sprint fixed defaults and data bugs.
+These items were in the audit but not addressed yet.
+Build for ANY clinic billing ANY payer mix.
+Do not optimize for VA or home health specifically.
+Work through each item in order and confirm before 
+moving to the next.
+
+---
+
+## 1. REPORTS PAGE
+
+Build out a fully functional Reports page at 
+/billing/reports. This is currently a placeholder.
+
+All reports must:
+- Work with live data from the database
+- Support date range filtering (default: last 90 days)
+- Support payer filtering (all payers or select one)
+- Be exportable to CSV
+- Work correctly with zero data (good empty states)
+- Work for any specialty, any payer mix
+
+Build these four reports:
+
+REPORT 1 — A/R Aging
+Purpose: Shows all outstanding claims grouped by 
+how long they have been unpaid.
+
+Aging buckets: 0-30 days, 31-60 days, 61-90 days, 
+90+ days
+
+Table columns:
+Patient Name | Payer | Claim ID | Date of Service | 
+Billed Amount | Days Outstanding | Status | 
+Follow-Up Date
+
+Summary row at top:
+Total outstanding by bucket as dollar amounts and 
+claim counts.
+
+Sort by: Days Outstanding descending by default.
+Filter by: Payer, Status, Date Range, Provider.
+
+REPORT 2 — Denial Analysis
+Purpose: Shows denial patterns to help identify 
+systemic billing problems.
+
+Table columns:
+Payer | Total Claims Submitted | Total Denied | 
+Denial Rate % | Top Denial Reason (CARC code + 
+plain English description) | Avg Days to Denial
+
+Chart: Bar chart of denial rate by payer.
+
+Secondary table: Denial reasons ranked by frequency 
+across all payers:
+CARC Code | Description | Count | % of All Denials | 
+Avg Billed Amount Affected
+
+Filter by: Payer, Date Range, Provider, CARC Code.
+
+REPORT 3 — Collections Summary
+Purpose: Shows revenue collected vs billed over time.
+
+Summary cards at top:
+Total Billed | Total Paid | Total Adjusted | 
+Total Outstanding | Collection Rate %
+
+Monthly trend table:
+Month | Billed | Paid | Adjusted | Outstanding | 
+Collection Rate %
+
+Chart: Line chart of billed vs paid by month 
+for last 12 months.
+
+Filter by: Payer, Provider, Date Range.
+
+REPORT 4 — Clean Claim Rate (FPRR)
+Purpose: Measures what percentage of claims are 
+paid on first submission without rework.
+
+CRITICAL — correct formula:
+FPRR = claims paid on first submission WITHOUT 
+any denial or correction event / 
+total claims submitted in period
+
+Do NOT count claims that are still pending as 
+resolved. A claim is "first pass" only if it 
+reached paid status without any intervening 
+denial, correction, or resubmission event.
+
+Table:
+Payer | Claims Submitted | First Pass Paid | 
+FPRR % | Industry Benchmark | vs Benchmark
+
+Industry benchmarks to hardcode as reference:
+- Overall FPRR benchmark: 90%+
+- Denial rate benchmark: under 5%
+- A/R Days benchmark: under 45 days
+These are payer-agnostic industry standards.
+
+Filter by: Payer, Provider, Date Range.
+
+---
+
+## 2. SECONDARY INSURANCE / COB
+
+Required for: Medicare + Medigap, Medicare Advantage 
++ employer plan, commercial + commercial, 
+auto insurance primary + health secondary,
+workers comp primary + health secondary.
+This affects a large percentage of real patients 
+across all specialties.
+
+ADD TO PATIENT RECORD:
+Add a "Secondary Insurance" section on the patient 
+detail page below primary insurance.
+
+Fields:
+- Secondary Payer (searchable dropdown from payers table)
+- Secondary Member ID
+- Secondary Group Number  
+- Secondary Plan Name
+- Patient relationship to secondary insured
+  (Self, Spouse, Child, Other)
+- COB Order for this payer 
+  (Primary, Secondary, Tertiary)
+
+Store in patients table:
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS 
+  secondary_payer_id VARCHAR;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS
+  secondary_member_id VARCHAR;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS
+  secondary_group_number VARCHAR;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS
+  secondary_plan_name VARCHAR;
+ALTER TABLE patients ADD COLUMN IF NOT EXISTS
+  secondary_relationship VARCHAR DEFAULT 'self';
+
+ADD TO CLAIM WIZARD:
+After primary payer selection, add a collapsible 
+"Secondary Insurance" section.
+
+If patient has secondary insurance on their record,
+pre-populate it here. Allow override per claim.
+
+ADD TO 837P EDI GENERATOR:
+When secondary_payer_id is set on a claim, include:
+- Loop 2320 (Other Subscriber Information)
+- Loop 2330A (Other Subscriber Name)
+- Loop 2330B (Other Payer Name)
+Per X12 5010 837P specification.
+
+ADD TO CMS-1500 PDF:
+- Box 9 (Other Insured's Name)
+- Box 9a (Other Insured's Policy or Group Number)
+- Box 9d (Insurance Plan Name or Program Name)
+- Box 11d (Is there another health benefit plan? Yes)
+
+---
+
+## 3. MANUAL 835 ERA UPLOAD
+
+Required for: any clinic that downloads payment 
+files directly from a payer portal (Availity, 
+NaviNet, Waystar portal, payer websites, etc.)
+This is common across all specialties and payers.
+
+Add an "Upload ERA File" button to the ERA Posting 
+page header alongside any existing actions.
+
+File types accepted: .835, .txt, .edi, .x12
+
+On file selection:
+1. Parse the 835 file using the same parsing logic 
+   as the Stedi 835 polling job
+2. Show a preview before posting:
+
+Preview table:
+Check/EFT Number | Payer Name | Check Date | 
+Total Payment Amount
+
+Claim lines table:
+Patient Control Number | Patient Name (if in file) | 
+Billed Amount | Allowed Amount | Paid Amount | 
+Adjustment Codes (CARC) | Action (per CARC rules)
+
+3. "Post ERA" button applies the ERA to matching 
+   claims in the database
+   - Match claims by patient control number (CLM01)
+   - If no match found, show unmatched lines 
+     separately for manual resolution
+   - Apply CARC rules from carc_posting_rules table
+     (CO-45 auto write-off, PR-1/2/3 patient 
+     responsibility, CO-50 flag for appeal, etc.)
+
+4. Store in era_batches with:
+   source = 'manual_upload'
+   raw_data = original file content
+
+Error handling:
+- If file cannot be parsed as valid 835, show 
+  clear error: "This file does not appear to be 
+  a valid 835 ERA file. Please check the file 
+  format and try again."
+- Never crash silently
+
+---
+
+## 4. CODE LOOKUP — MULTI-PAYER RATES
+
+The Code Lookup page currently shows VA rates only.
+Expand it to show rates across all loaded fee schedules.
+
+Update code detail view to show rate columns:
+- VA Community Care rate (existing)
+  Show "Not available" for non-HCPCS codes
+- Medicare Physician Fee Schedule rate
+  Pull from medicare_rates table if it exists
+  Show "Not loaded — sync Medicare fee schedule 
+  to view" if table is empty
+- Custom contracted rate
+  Pull from payer_rate_tables for the active org
+  Show "No contract rate on file" if none
+
+Update empty state text to be completely 
+specialty-agnostic:
+Old: "Enter a code (like G0299) or description 
+     (like 'skilled nursing') to find HCPCS codes 
+     with VA rates."
+New: "Search by CPT or HCPCS code, or enter a 
+     description to find billing codes and 
+     available fee schedule rates."
+
+Update search placeholder:
+Old: "Search by code or description 
+     (e.g. G0299 or skilled nursing)"
+New: "Search by code or description 
+     (e.g. 99213, G0299, or physical therapy)"
+
+Update all rate column headers:
+Remove any column labeled "VA Rate" — replace with 
+"VA Community Care" as the column header so it is 
+clear this is one payer's rate, not the only rate.
+
+---
+
+## 5. RULES — SPECIALTY PACK TAG SYSTEM
+
+The rules page has 31 rules, roughly half of which 
+are VA-specific. A cardiology clinic, a mental health 
+practice, or a primary care office should not see 
+VA-specific rules cluttering their workspace.
+
+Add a tag system to rules:
+
+Schema:
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS 
+  specialty_tags TEXT[] DEFAULT '{}';
+
+Seed tags on existing rules:
+- Any rule with "VA" or "TriWest" in name/description:
+  tags = ['VA Community Care']
+- Any rule mentioning "Medicare" or "ABN" or "NCCI":
+  tags = ['Medicare']  
+- Any rule mentioning specific commercial payers 
+  (Cigna, BCBS, UHC, Aetna, Humana, Kaiser):
+  tags = ['Commercial', '<PayerName>']
+- Any rule mentioning "Medicaid" or "CHIP":
+  tags = ['Medicaid']
+- Any rule mentioning "home health", "homebound", 
+  "POS 12", "G02XX codes":
+  tags = ['Home Health']
+- Any rule mentioning "mental health", "behavioral",
+  "substance abuse":
+  tags = ['Behavioral Health']
+- Generic rules that apply to all claim types:
+  tags = ['Universal']
+
+UI changes on Rules page:
+- Add a tag filter bar above the rules table
+  showing pill buttons: All | Universal | 
+  VA Community Care | Medicare | Commercial | 
+  Medicaid | Home Health | Behavioral Health
+- Default to "All" — shows everything
+- Clicking a tag filters to only rules with that tag
+- Clicking "All" resets
+- Show tag badges on each rule row
+- When adding a custom rule, allow the user to 
+  select one or more specialty tags
+
+---
+
+## 6. PRIOR AUTH — TWO MODES
+
+The Prior Auth page currently assumes providers 
+always initiate the authorization request.
+This is wrong for VA Community Care and some 
+other government programs where authorization 
+is issued proactively with the referral.
+
+This is also wrong for many commercial payers 
+where the PA request goes through the payer's 
+own portal (Availity, NaviNet) and the provider 
+just needs to record the result.
+
+Redesign the Prior Auth page with two distinct modes:
+
+MODE A — "Record Received Authorization"
+Use when: auth number arrives with a referral or 
+is issued proactively by the payer before any 
+request is submitted through ClaimShield.
+Applies to: VA Community Care, some Medicaid 
+managed care plans, some commercial payers.
+
+Fields:
+- Patient (search/select)
+- Payer (search/select from payers table)
+- Authorization Number (free text)
+- Authorized Service(s) — repeating rows:
+  CPT/HCPCS Code | Description | 
+  Authorized Units | Authorized Visits
+- Authorization Start Date
+- Authorization End Date
+- Referring/Ordering Provider Name
+- Referring/Ordering Provider NPI
+- Notes (free text)
+- Source (dropdown): 
+  VA Referral | Payer Portal | Fax | Phone | 
+  Electronic | Other
+
+MODE B — "Track PA Request"
+Use when: provider must submit a PA request and 
+track its status through approval or denial.
+Applies to: most commercial payers, Medicare 
+Advantage, some Medicaid plans.
+
+Fields (in addition to Mode A fields):
+- Request Submitted Date
+- Request Method: Portal | Fax | Phone | Electronic
+- Clinical Justification Notes
+- Supporting Documents (file upload, optional)
+- Status: Pending | Approved | Denied | 
+  Partially Approved | Under Review | Appealing
+- Status Last Updated Date
+- Denial Reason (if denied)
+- Appeal Deadline (if denied — calculated as 
+  denial date + payer-specific appeal window)
+- Approved Units (may differ from requested)
+- Approved Date Range
+
+SHARED FUNCTIONALITY:
+- PA records link to patient record and display 
+  on patient detail page under a "Authorizations" 
+  section
+- PA auth number pre-fills into the claim wizard 
+  when creating a claim for that patient + payer 
+  combination
+- PA expiration warning: show amber badge on 
+  patient record when auth expires within 14 days
+- PA exhaustion warning: show amber badge when 
+  used visits/units reach 80% of authorized amount
+- PA list page shows all active auths with 
+  status, expiration, and utilization at a glance
+
+---
+
+## 7. PROVIDER CREDENTIALS — TAXONOMY AUTO-SUGGEST
+
+When a provider credential type is selected, 
+auto-suggest the most common taxonomy code 
+for that credential as a starting point.
+
+This must cover all specialties, not just 
+home health. The user can always override.
+
+Implement as a lookup table in the frontend:
+
+const TAXONOMY_SUGGESTIONS = {
+  // Physicians
+  'MD': [
+    { code: '207Q00000X', label: 'Family Medicine' },
+    { code: '207R00000X', label: 'Internal Medicine' },
+    { code: '208000000X', label: 'Pediatrics' },
+    { code: '207T00000X', label: 'Neurological Surgery' },
+    { code: '207X00000X', label: 'Orthopedic Surgery' },
+    { code: '207V00000X', label: 'Obstetrics & Gynecology' },
+    { code: '207W00000X', label: 'Ophthalmology' },
+    { code: '207Y00000X', label: 'Otolaryngology' },
+    { code: '208100000X', label: 'Physical Medicine & Rehab' },
+    { code: '2084P0800X', label: 'Psychiatry' },
+    { code: '207ZP0102X', label: 'Pathology' },
+    { code: '2085R0202X', label: 'Diagnostic Radiology' },
+    { code: '208D00000X', label: 'General Practice' },
+  ],
+  'DO': [
+    { code: '207Q00000X', label: 'Family Medicine' },
+    { code: '207R00000X', label: 'Internal Medicine' },
+  ],
+  // Advanced Practice
+  'NP': [
+    { code: '363L00000X', label: 'Nurse Practitioner' },
+    { code: '363LF0000X', label: 'NP — Family' },
+    { code: '363LP2300X', label: 'NP — Primary Care' },
+  ],
+  'PA': [
+    { code: '363A00000X', label: 'Physician Assistant' },
+  ],
+  'CRNA': [
+    { code: '367500000X', label: 'CRNA' },
+  ],
+  'CNM': [
+    { code: '367A00000X', label: 'Certified Nurse Midwife' },
+  ],
+  // Therapy
+  'PT': [
+    { code: '225100000X', label: 'Physical Therapist' },
+  ],
+  'DPT': [
+    { code: '225100000X', label: 'Physical Therapist' },
+  ],
+  'OT': [
+    { code: '225X00000X', label: 'Occupational Therapist' },
+  ],
+  'SLP': [
+    { code: '235Z00000X', label: 'Speech-Language Pathologist' },
+  ],
+  // Mental Health
+  'PsyD': [
+    { code: '103T00000X', label: 'Psychologist' },
+  ],
+  'PhD': [
+    { code: '103T00000X', label: 'Psychologist' },
+  ],
+  'LCSW': [
+    { code: '1041C0700X', label: 'Clinical Social Worker' },
+  ],
+  'LMFT': [
+    { code: '106H00000X', label: 'Marriage & Family Therapist' },
+  ],
+  'LPC': [
+    { code: '101Y00000X', label: 'Counselor' },
+  ],
+  // Nursing
+  'RN': [
+    { code: '163W00000X', label: 'Registered Nurse' },
+  ],
+  'LPN': [
+    { code: '164W00000X', label: 'Licensed Practical Nurse' },
+  ],
+  'CNA': [
+    { code: '376G00000X', label: 'Nursing Home Administrator' },
+  ],
+  // Home Health
+  'HHA': [
+    { code: '374700000X', label: 'Technician — Home Health Aide' },
+  ],
+  'MSW': [
+    { code: '104100000X', label: 'Social Worker' },
+  ],
+  // Dental
+  'DDS': [
+    { code: '122300000X', label: 'Dentist' },
+  ],
+  'DMD': [
+    { code: '122300000X', label: 'Dentist' },
+  ],
+  // Chiropractic
+  'DC': [
+    { code: '111N00000X', label: 'Chiropractor' },
+  ],
+  // Vision
+  'OD': [
+    { code: '152W00000X', label: 'Optometrist' },
+  ],
+  // Podiatry
+  'DPM': [
+    { code: '213E00000X', label: 'Podiatrist' },
+  ],
+}
+
+UI behavior:
+When credential type is selected, show a 
+"Suggested taxonomy codes" section below the 
+taxonomy field with the matching options as 
+clickable chips. Clicking a chip populates 
+the taxonomy field. User can ignore and type 
+their own code instead.
+
+If credential is 'MD' or 'DO', show a specialty 
+sub-selector first since there are many options:
+"What is this physician's specialty?" with a 
+searchable dropdown of the MD taxonomy options.
+
+For credentials with only one suggestion 
+(PT, OT, RN, etc.), auto-fill the taxonomy 
+field directly and show "Auto-filled based on 
+credential type — change if needed" below it.
+
+---
+
+## TECHNICAL NOTES
+
+- All reports must handle empty data gracefully 
+  with helpful empty states, not blank pages or 
+  JavaScript errors
+- The COB/secondary insurance EDI changes must 
+  not break existing single-payer 837P generation
+- The manual 835 upload parser must use the same 
+  parsing logic as the Stedi polling job — 
+  do not write a second parser
+- The Prior Auth redesign should preserve any 
+  existing prior_auth records in the database
+- All new database columns use 
+  ADD COLUMN IF NOT EXISTS
+- The taxonomy suggestion table is frontend-only — 
+  no new database table needed
+- Do not remove any existing VA-specific 
+  functionality — VA clinics are valid customers. 
+  The goal is to stop assuming every clinic is 
+  a VA clinic.
+
+Work through items 1-7 in order. Confirm 
+completion of each before moving to the next.
+```

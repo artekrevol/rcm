@@ -211,6 +211,20 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
     // Sprint-3 schema additions
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP`);
+    // Secondary insurance / COB
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_payer_id VARCHAR`);
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_member_id VARCHAR`);
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_group_number VARCHAR`);
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_plan_name VARCHAR`);
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_relationship VARCHAR DEFAULT 'self'`);
+    // Rules specialty tags
+    await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS specialty_tags TEXT[] DEFAULT '{}'`);
+    await pool.query(`UPDATE rules SET specialty_tags = ARRAY['VA Community Care'] WHERE (name ILIKE '%VA%' OR description ILIKE '%VA%' OR name ILIKE '%TriWest%' OR description ILIKE '%TriWest%') AND specialty_tags = '{}'`);
+    await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Medicare'] WHERE (name ILIKE '%Medicare%' OR description ILIKE '%Medicare%' OR name ILIKE '%ABN%' OR description ILIKE '%NCCI%') AND specialty_tags = '{}'`);
+    await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Home Health'] WHERE (name ILIKE '%home health%' OR description ILIKE '%home health%' OR description ILIKE '%homebound%' OR description ILIKE '%POS 12%') AND specialty_tags = '{}'`);
+    await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Behavioral Health'] WHERE (name ILIKE '%mental health%' OR description ILIKE '%behavioral%' OR description ILIKE '%substance abuse%') AND specialty_tags = '{}'`);
+    await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Medicaid'] WHERE (name ILIKE '%Medicaid%' OR description ILIKE '%Medicaid%' OR description ILIKE '%CHIP%') AND specialty_tags = '{}'`);
+    await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Universal'] WHERE specialty_tags = '{}'`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS denial_patterns (
@@ -614,6 +628,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       )
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_era_batches_org ON era_batches(org_id)`);
+    await pool.query(`ALTER TABLE era_batches ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'stedi'`);
+    await pool.query(`ALTER TABLE era_batches ADD COLUMN IF NOT EXISTS raw_data JSONB`);
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS era_lines (
@@ -717,6 +733,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS request_method VARCHAR`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS requested_by VARCHAR`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS expiration_date DATE`);
+    // Sprint-4: two-mode prior auth additions
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS mode VARCHAR DEFAULT 'received'`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS source VARCHAR`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS referring_provider_name VARCHAR`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS referring_provider_npi VARCHAR`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS clinical_justification TEXT`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS approved_units INTEGER`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS used_units INTEGER DEFAULT 0`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS service_type VARCHAR`);
 
     // ── Payers: stedi_payer_id + supported_transactions + updated_at ──────────
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_payer_id VARCHAR`);
@@ -3680,7 +3705,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         referralPartnerName: "referral_partner_name", defaultProviderId: "default_provider_id",
         serviceNeeded: "service_needed", phone: "phone", email: "email",
         preferredName: "preferred_name", state: "state", planType: "plan_type",
-        payerId: "payer_id", notes: "notes"
+        payerId: "payer_id", notes: "notes",
+        secondaryPayerId: "secondary_payer_id", secondaryMemberId: "secondary_member_id",
+        secondaryGroupNumber: "secondary_group_number", secondaryPlanName: "secondary_plan_name",
+        secondaryRelationship: "secondary_relationship",
       };
       if (req.body.referringProviderNpi) {
         const { validateNPI } = await import("../shared/npi-validation");
@@ -4783,8 +4811,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   app.get("/api/rules", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const rules = await storage.getRules(getOrgId(req));
-    res.json(rules);
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { rows } = await db.query(
+        `SELECT *, COALESCE(specialty_tags, '{}') as specialty_tags FROM rules WHERE organization_id = $1 OR organization_id IS NULL ORDER BY created_at DESC`,
+        [orgId]
+      );
+      res.json(rows);
+    } catch {
+      const rules = await storage.getRules(getOrgId(req));
+      res.json(rules);
+    }
   });
 
   app.post("/api/rules", requireRole("admin", "rcm_manager"), async (req, res) => {
@@ -4793,6 +4831,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return res.status(400).json({ error: parsed.error.message });
     }
     const rule = await storage.createRule({ ...parsed.data, organizationId: getOrgId(req) });
+    if (req.body.specialtyTags && Array.isArray(req.body.specialtyTags)) {
+      const db = await import("./db").then(m => m.pool);
+      await db.query(`UPDATE rules SET specialty_tags = $1 WHERE id = $2`, [req.body.specialtyTags, rule.id]);
+    }
     res.status(201).json(rule);
   });
 
@@ -5245,8 +5287,32 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   app.post("/api/prior-auth", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const auth = await storage.createPriorAuth({ ...req.body, organizationId: getOrgId(req) });
-    res.status(201).json(auth);
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const {
+        patientId, payer, serviceType, authNumber, expiration_date, approvedUnits,
+        notes, status, mode, source, referringProviderName, referringProviderNpi,
+        requestSubmittedDate, requestMethod, clinicalJustification, denialReason,
+      } = req.body;
+      const orgId = getOrgId(req);
+      const { rows } = await db.query(
+        `INSERT INTO prior_authorizations
+          (organization_id, patient_id, payer, service_type, auth_number, expiration_date,
+           approved_units, used_units, notes, status, mode, source, referring_provider_name,
+           referring_provider_npi, request_method, clinical_justification, denial_reason,
+           request_status, requested_date)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11,$12,$13,$14,$15,$16,'not_started',NOW())
+         RETURNING *`,
+        [orgId, patientId || null, payer || null, serviceType || null, authNumber || null,
+         expiration_date || null, approvedUnits ? parseInt(approvedUnits) : null,
+         notes || null, status || 'pending', mode || 'received', source || null,
+         referringProviderName || null, referringProviderNpi || null,
+         requestMethod || null, clinicalJustification || null, denialReason || null]
+      );
+      res.status(201).json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.patch("/api/prior-auth/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
@@ -6906,6 +6972,174 @@ Warmly,
     }
   });
 
+
+  // ── RCM Reports ───────────────────────────────────────────────────────────
+
+  app.get("/api/billing/reports/ar-aging", requireAuth, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { startDate, endDate, payerId, providerId } = req.query as Record<string, string>;
+      const start = startDate || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const end = endDate || new Date().toISOString().slice(0, 10);
+      const conditions: string[] = [`c.status NOT IN ('paid', 'draft')`];
+      const params: any[] = [];
+      if (orgId) { params.push(orgId); conditions.push(`c.organization_id = $${params.length}`); }
+      if (start) { params.push(start); conditions.push(`COALESCE(c.service_date, c.created_at::date) >= $${params.length}`); }
+      if (end) { params.push(end); conditions.push(`COALESCE(c.service_date, c.created_at::date) <= $${params.length}`); }
+      if (payerId && payerId !== "all") { params.push(payerId); conditions.push(`c.payer_id = $${params.length}`); }
+      if (providerId && providerId !== "all") { params.push(providerId); conditions.push(`c.provider_id = $${params.length}`); }
+      const where = `WHERE ${conditions.join(" AND ")}`;
+      const result = await db.query(`
+        SELECT COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') AS patient_name,
+          c.payer, c.id AS claim_id,
+          COALESCE(c.service_date::text, c.created_at::date::text) AS dos,
+          c.amount AS billed_amount,
+          GREATEST(0, (CURRENT_DATE - COALESCE(c.service_date, c.created_at::date))::int) AS days_outstanding,
+          c.status, c.follow_up_date::text AS follow_up_date
+        FROM claims c LEFT JOIN patients p ON c.patient_id = p.id
+        ${where} ORDER BY days_outstanding DESC NULLS LAST LIMIT 500
+      `, params);
+      res.json(result.rows);
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/billing/reports/denial-analysis", requireAuth, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { startDate, endDate, payerId, providerId } = req.query as Record<string, string>;
+      const start = startDate || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const end = endDate || new Date().toISOString().slice(0, 10);
+      const claimParams: any[] = [];
+      const claimConds: string[] = [];
+      if (orgId) { claimParams.push(orgId); claimConds.push(`c.organization_id = $${claimParams.length}`); }
+      if (start) { claimParams.push(start); claimConds.push(`COALESCE(c.service_date, c.created_at::date) >= $${claimParams.length}`); }
+      if (end) { claimParams.push(end); claimConds.push(`COALESCE(c.service_date, c.created_at::date) <= $${claimParams.length}`); }
+      if (payerId && payerId !== "all") { claimParams.push(payerId); claimConds.push(`c.payer_id = $${claimParams.length}`); }
+      if (providerId && providerId !== "all") { claimParams.push(providerId); claimConds.push(`c.provider_id = $${claimParams.length}`); }
+      const cw = claimConds.length ? `WHERE ${claimConds.join(" AND ")}` : "";
+      const byPayer = await db.query(`
+        SELECT c.payer, COUNT(DISTINCT c.id) AS total_submitted,
+          COUNT(DISTINCT d.claim_id) AS total_denied,
+          ROUND(COUNT(DISTINCT d.claim_id)::numeric / NULLIF(COUNT(DISTINCT c.id),0)*100,1) AS denial_rate,
+          MODE() WITHIN GROUP (ORDER BY d.denial_reason_text) AS top_denial_reason,
+          ROUND(AVG(EXTRACT(EPOCH FROM (d.created_at - c.created_at))/86400)::numeric,1) AS avg_days_to_denial
+        FROM claims c LEFT JOIN denials d ON d.claim_id = c.id
+        ${cw} GROUP BY c.payer ORDER BY denial_rate DESC NULLS LAST
+      `, claimParams);
+      const denialParams: any[] = [];
+      const denialConds: string[] = [];
+      if (orgId) { denialParams.push(orgId); denialConds.push(`d.organization_id = $${denialParams.length}`); }
+      if (start) { denialParams.push(start); denialConds.push(`d.created_at::date >= $${denialParams.length}`); }
+      if (end) { denialParams.push(end); denialConds.push(`d.created_at::date <= $${denialParams.length}`); }
+      const dw = denialConds.length ? `WHERE ${denialConds.join(" AND ")}` : "";
+      const total = await db.query(`SELECT COUNT(*) AS cnt FROM denials d ${dw}`, denialParams);
+      const totalCount = parseInt(total.rows[0]?.cnt || "0");
+      const byReason = await db.query(`
+        SELECT d.denial_category AS carc_code, d.denial_reason_text AS description,
+          COUNT(*) AS count,
+          ROUND(COUNT(*)::numeric / NULLIF($${denialParams.length + 1},0)*100,1) AS pct_of_total,
+          ROUND(AVG(c.amount)::numeric,2) AS avg_billed
+        FROM denials d LEFT JOIN claims c ON c.id = d.claim_id ${dw}
+        GROUP BY d.denial_category, d.denial_reason_text ORDER BY count DESC LIMIT 20
+      `, [...denialParams, totalCount]);
+      res.json({ byPayer: byPayer.rows, byReason: byReason.rows });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/billing/reports/collections", requireAuth, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { startDate, endDate, payerId, providerId } = req.query as Record<string, string>;
+      const start = startDate || new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+      const end = endDate || new Date().toISOString().slice(0, 10);
+      const params: any[] = [];
+      const conds: string[] = [];
+      if (orgId) { params.push(orgId); conds.push(`c.organization_id = $${params.length}`); }
+      if (start) { params.push(start); conds.push(`COALESCE(c.service_date, c.created_at::date) >= $${params.length}`); }
+      if (end) { params.push(end); conds.push(`COALESCE(c.service_date, c.created_at::date) <= $${params.length}`); }
+      if (payerId && payerId !== "all") { params.push(payerId); conds.push(`c.payer_id = $${params.length}`); }
+      if (providerId && providerId !== "all") { params.push(providerId); conds.push(`c.provider_id = $${params.length}`); }
+      const cw = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+      const summaryQ = await db.query(`
+        SELECT SUM(c.amount) AS total_billed, COALESCE(SUM(el.paid_amount),0) AS total_paid,
+          COALESCE(SUM(el.billed_amount - el.paid_amount),0) AS total_adjusted,
+          SUM(CASE WHEN c.status NOT IN ('paid') THEN c.amount ELSE 0 END) AS total_outstanding
+        FROM claims c LEFT JOIN era_lines el ON el.claim_id = c.id ${cw}
+      `, params);
+      const monthlyQ = await db.query(`
+        SELECT TO_CHAR(DATE_TRUNC('month', COALESCE(c.service_date, c.created_at::date)),'Mon YYYY') AS month,
+          DATE_TRUNC('month', COALESCE(c.service_date, c.created_at::date)) AS month_sort,
+          SUM(c.amount) AS billed, COALESCE(SUM(el.paid_amount),0) AS paid,
+          COALESCE(SUM(el.billed_amount - el.paid_amount),0) AS adjusted,
+          SUM(CASE WHEN c.status NOT IN ('paid') THEN c.amount ELSE 0 END) AS outstanding,
+          ROUND(COALESCE(SUM(el.paid_amount),0)/NULLIF(SUM(c.amount),0)*100,1) AS collection_rate
+        FROM claims c LEFT JOIN era_lines el ON el.claim_id = c.id ${cw}
+        GROUP BY DATE_TRUNC('month', COALESCE(c.service_date, c.created_at::date))
+        ORDER BY month_sort ASC LIMIT 13
+      `, params);
+      res.json({ summary: summaryQ.rows[0] || {}, monthly: monthlyQ.rows });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.get("/api/billing/reports/clean-claim-rate", requireAuth, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { startDate, endDate, payerId, providerId } = req.query as Record<string, string>;
+      const start = startDate || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const end = endDate || new Date().toISOString().slice(0, 10);
+      const params: any[] = [];
+      const conds: string[] = [`c.status != 'draft'`];
+      if (orgId) { params.push(orgId); conds.push(`c.organization_id = $${params.length}`); }
+      if (start) { params.push(start); conds.push(`COALESCE(c.service_date, c.created_at::date) >= $${params.length}`); }
+      if (end) { params.push(end); conds.push(`COALESCE(c.service_date, c.created_at::date) <= $${params.length}`); }
+      if (payerId && payerId !== "all") { params.push(payerId); conds.push(`c.payer_id = $${params.length}`); }
+      if (providerId && providerId !== "all") { params.push(providerId); conds.push(`c.provider_id = $${params.length}`); }
+      const cw = `WHERE ${conds.join(" AND ")}`;
+      const byPayer = await db.query(`
+        SELECT c.payer, COUNT(*) AS total_submitted,
+          COUNT(*) FILTER (WHERE c.status='paid' AND NOT EXISTS (SELECT 1 FROM denials d WHERE d.claim_id=c.id)) AS first_pass_paid,
+          ROUND(COUNT(*) FILTER (WHERE c.status='paid' AND NOT EXISTS (SELECT 1 FROM denials d WHERE d.claim_id=c.id))::numeric/NULLIF(COUNT(*),0)*100,1) AS fprr
+        FROM claims c ${cw} GROUP BY c.payer ORDER BY fprr DESC NULLS LAST
+      `, params);
+      const overallQ = await db.query(`
+        SELECT COUNT(*) AS total_submitted,
+          COUNT(*) FILTER (WHERE c.status='paid' AND NOT EXISTS (SELECT 1 FROM denials d WHERE d.claim_id=c.id)) AS first_pass_paid,
+          ROUND(COUNT(*) FILTER (WHERE c.status='paid' AND NOT EXISTS (SELECT 1 FROM denials d WHERE d.claim_id=c.id))::numeric/NULLIF(COUNT(*),0)*100,1) AS fprr
+        FROM claims c ${cw}
+      `, params);
+      res.json({ rows: byPayer.rows, overall: overallQ.rows[0] || {} });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post("/api/billing/eras/upload", requireAuth, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { content, filename, preview } = req.body;
+      if (!content) return res.status(400).json({ error: "No file content provided" });
+      const parsed = parse835Manual(content);
+      if (!parsed) return res.status(422).json({ error: "This file does not appear to be a valid 835 ERA file. Please check the file format and try again." });
+      if (preview) return res.json(parsed);
+      const eraId = crypto.randomUUID();
+      await db.query(
+        `INSERT INTO era_batches (id, org_id, payer_name, check_number, payment_date, total_amount, status, source, raw_data, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,'unposted','manual_upload',$7::jsonb,NOW())
+         ON CONFLICT DO NOTHING`,
+        [eraId, orgId, parsed.payerName, parsed.checkNumber, parsed.checkDate, parsed.totalPayment, JSON.stringify({ filename, raw: content.slice(0, 500) })]
+      );
+      for (const line of parsed.claimLines) {
+        const matchedClaim = await db.query(
+          `SELECT id FROM claims WHERE id = $1 LIMIT 1`, [line.claimControlNumber]
+        );
+        const claimId = matchedClaim.rows[0]?.id || null;
+        await db.query(
+          `INSERT INTO era_lines (id, era_id, claim_id, org_id, patient_name, billed_amount, allowed_amount, paid_amount, service_lines) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+          [crypto.randomUUID(), eraId, claimId, orgId, line.patientName, line.billedAmount, line.allowedAmount, line.paidAmount, JSON.stringify(line.adjustments || [])]
+        );
+      }
+      res.json({ eraId, parsed });
+    } catch (err: any) { res.status(500).json({ error: err.message }); }
+  });
+
 }
 
 // ── Stedi 277CA polling job ─────────────────────────────────────────────────
@@ -6943,6 +7177,37 @@ async function pollStedi277Acknowledgments() {
   } catch (err) {
     console.error("[277 Poll] Error:", err);
   }
+}
+
+function parse835Manual(content: string) {
+  try {
+    const segments = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split(/~\n?|~/).filter(Boolean);
+    let checkNumber = ""; let checkDate = ""; let payerName = "Unknown"; let totalPayment = 0;
+    const claimLines: any[] = [];
+    let currentClaim: any = null;
+
+    for (const seg of segments) {
+      const el = seg.trim().split("*");
+      const id = el[0];
+      if (id === "BPR") { totalPayment = parseFloat(el[2] || "0"); checkDate = el[16] || ""; }
+      else if (id === "TRN") { checkNumber = el[2] || ""; }
+      else if (id === "N1" && el[1] === "PR") { payerName = el[2] || "Unknown"; }
+      else if (id === "CLP") {
+        if (currentClaim) claimLines.push(currentClaim);
+        currentClaim = {
+          claimControlNumber: el[1] || "", patientName: "", billedAmount: parseFloat(el[3] || "0"),
+          allowedAmount: parseFloat(el[4] || "0"), paidAmount: parseFloat(el[4] || "0"), adjustments: [],
+        };
+      } else if (id === "NM1" && el[1] === "QC" && currentClaim) {
+        currentClaim.patientName = [el[4], el[3]].filter(Boolean).join(" ");
+      } else if (id === "CAS" && currentClaim) {
+        currentClaim.adjustments.push({ code: `${el[1]}-${el[2]}`, amount: parseFloat(el[3] || "0"), reason: el[2] || "" });
+      }
+    }
+    if (currentClaim) claimLines.push(currentClaim);
+    if (!checkNumber && !claimLines.length) return null;
+    return { checkNumber, checkDate, payerName, totalPayment, claimLines };
+  } catch { return null; }
 }
 
 // ── Stedi 835 ERA polling job ───────────────────────────────────────────────

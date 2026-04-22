@@ -31,11 +31,24 @@ import { Shield, Plus, Pencil, Trash2, ShieldCheck, Search, AlertTriangle, Dolla
 import { format } from "date-fns";
 import type { Rule, InsertRule } from "@shared/schema";
 
+const SPECIALTY_TAGS = ["All", "Universal", "VA Community Care", "Medicare", "Medicaid", "Home Health", "Behavioral Health"];
+
+const TAG_COLORS: Record<string, string> = {
+  "Universal": "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+  "VA Community Care": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+  "Medicare": "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400",
+  "Medicaid": "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400",
+  "Home Health": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
+  "Behavioral Health": "bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-400",
+};
+
 export default function RulesPage() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
+  const [specialtyTag, setSpecialtyTag] = useState("All");
   const [createOpen, setCreateOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
+  const [newRuleTags, setNewRuleTags] = useState<string[]>(["Universal"]);
 
   const [newRule, setNewRule] = useState<Partial<InsertRule>>({
     name: "",
@@ -67,6 +80,7 @@ export default function RulesPage() {
         preventionAction: "",
         enabled: true,
       });
+      setNewRuleTags(["Universal"]);
       toast({ title: "Rule created successfully" });
     },
     onError: () => {
@@ -98,16 +112,19 @@ export default function RulesPage() {
       toast({ title: "Please fill required fields", variant: "destructive" });
       return;
     }
-    createRuleMutation.mutate(newRule as InsertRule);
+    createRuleMutation.mutate({ ...newRule, specialtyTags: newRuleTags } as any);
   };
 
-  const filteredRules = rules?.filter(
-    (rule) =>
+  const filteredRules = rules?.filter((rule) => {
+    const matchesSearch =
       rule.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       rule.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
       rule.payer?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      rule.cptCode?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+      rule.cptCode?.toLowerCase().includes(searchQuery.toLowerCase());
+    const ruleTags: string[] = (rule as any).specialty_tags || [];
+    const matchesTag = specialtyTag === "All" || ruleTags.includes(specialtyTag);
+    return matchesSearch && matchesTag;
+  });
 
   const totalImpact = rules?.reduce((sum, r) => sum + r.impactCount, 0) || 0;
   const enabledCount = rules?.filter((r) => r.enabled).length || 0;
@@ -208,6 +225,28 @@ export default function RulesPage() {
                   data-testid="input-rule-action"
                 />
               </div>
+              <div className="space-y-2">
+                <Label>Specialty Pack(s)</Label>
+                <div className="flex flex-wrap gap-2">
+                  {SPECIALTY_TAGS.filter(t => t !== "All").map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setNewRuleTags(prev =>
+                        prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+                      )}
+                      className={`inline-flex items-center rounded-full px-3 py-0.5 text-xs font-medium border transition-colors ${
+                        newRuleTags.includes(tag)
+                          ? (TAG_COLORS[tag] || "bg-primary/10 text-primary") + " border-current"
+                          : "bg-background text-muted-foreground border-border hover:border-primary/40"
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">Tag this rule for the relevant specialty/payer type(s)</p>
+              </div>
               <div className="flex items-center gap-3">
                 <Switch
                   checked={newRule.enabled}
@@ -295,7 +334,7 @@ export default function RulesPage() {
         </Card>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="space-y-3">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -305,6 +344,23 @@ export default function RulesPage() {
             className="pl-10"
             data-testid="input-search-rules"
           />
+        </div>
+        <div className="flex gap-2 flex-wrap items-center">
+          <span className="text-xs text-muted-foreground font-medium mr-1">Specialty:</span>
+          {SPECIALTY_TAGS.map((tag) => (
+            <button
+              key={tag}
+              onClick={() => setSpecialtyTag(tag)}
+              data-testid={`filter-tag-${tag.replace(/\s+/g, "-").toLowerCase()}`}
+              className={`inline-flex items-center rounded-full px-3 py-0.5 text-xs font-medium transition-colors border ${
+                specialtyTag === tag
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-background text-muted-foreground border-border hover:border-primary/40"
+              }`}
+            >
+              {tag}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -350,6 +406,13 @@ export default function RulesPage() {
                         <p className="text-sm text-muted-foreground truncate">
                           {rule.description}
                         </p>
+                        {((rule as any).specialty_tags || []).length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {((rule as any).specialty_tags as string[]).map((t) => (
+                              <span key={t} className={`inline-flex items-center rounded-full px-2 py-0 text-[10px] font-medium ${TAG_COLORS[t] || "bg-gray-100 text-gray-600"}`}>{t}</span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>

@@ -217,23 +217,40 @@ function CodeCard({ result }: { result: HcpcsResult }) {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
           <div className="flex items-center gap-2 text-sm">
             <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="text-muted-foreground">Unit type:</span>
             <span className="font-medium">{formatUnitType(result.unit_type, result.unit_interval_minutes)}</span>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            <DollarSign className="h-4 w-4 text-muted-foreground shrink-0" />
-            <span className="text-muted-foreground">VA rate (2025):</span>
-            <span className="font-medium">
-              {result.va_rate ? `$${Number(result.va_rate).toFixed(2)} / unit` : "N/A"}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
             <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="text-muted-foreground">Place of service:</span>
             <span className="font-medium">{formatPOS(result.default_pos)}</span>
+          </div>
+        </div>
+
+        <div className="border rounded-md bg-muted/20 p-3 mt-1">
+          <p className="text-xs font-semibold text-muted-foreground mb-2">Fee Schedule Rates</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <p className="text-xs text-muted-foreground">VA Community Care</p>
+              <p className="text-sm font-medium mt-0.5" data-testid={`rate-va-${result.code}`}>
+                {result.va_rate ? `$${Number(result.va_rate).toFixed(2)} / unit` : <span className="text-muted-foreground italic">Not available</span>}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Medicare Physician Fee Schedule</p>
+              <p className="text-sm font-medium mt-0.5 text-muted-foreground italic" data-testid={`rate-medicare-${result.code}`}>
+                Not loaded — sync Medicare fee schedule to view
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Custom Contracted Rate</p>
+              <p className="text-sm font-medium mt-0.5 text-muted-foreground italic" data-testid={`rate-custom-${result.code}`}>
+                No contract rate on file
+              </p>
+            </div>
           </div>
         </div>
 
@@ -320,7 +337,7 @@ export default function BillingHcpcs() {
         <Input
           value={search}
           onChange={(e) => handleSearchChange(e.target.value)}
-          placeholder='Search by code or description (e.g. 99213 or office visit)'
+          placeholder='Search by code or description (e.g. 99213, G0299, or physical therapy)'
           className="pl-10 h-12 text-base"
           data-testid="input-hcpcs-search"
         />
@@ -332,9 +349,9 @@ export default function BillingHcpcs() {
       {!debouncedSearch && !showManualEntry && (
         <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
           <BookOpen className="h-12 w-12 mb-4 opacity-40" />
-          <p className="text-lg font-medium">Search the Code Library</p>
-          <p className="text-sm mt-1 max-w-md">
-            Enter a CPT or HCPCS code (like 99213) or a description (like "office visit") to look up codes and payer-specific rates.
+          <p className="text-lg font-medium">Search by CPT or HCPCS code, or enter a description to find billing codes and available fee schedule rates.</p>
+          <p className="text-sm mt-1 max-w-md text-muted-foreground">
+            Showing VA Community Care, Medicare Physician Fee Schedule, and contracted rates where available.
           </p>
         </div>
       )}

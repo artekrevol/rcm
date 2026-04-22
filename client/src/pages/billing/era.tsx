@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { CreditCard, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, Loader2, ArrowLeft, Zap } from "lucide-react";
+import { CreditCard, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, Loader2, ArrowLeft, Zap, Upload } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { Link } from "wouter";
@@ -209,8 +209,128 @@ function ERADetail({ era, onBack }: { era: any; onBack: () => void }) {
   );
 }
 
+function UploadERADialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { toast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<any | null>(null);
+  const [parsing, setParsing] = useState(false);
+
+  const uploadMutation = useMutation({
+    mutationFn: async (body: { content: string; filename: string }) => {
+      const res = await fetch("/api/billing/eras/upload", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, preview: false }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Upload failed");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/eras"] });
+      const lines = (data.parsed?.claimLines || []).length;
+      toast({ title: "ERA uploaded", description: `${lines} claim line(s) parsed and queued for review` });
+      onClose();
+    },
+    onError: (err: any) => toast({ title: "Upload failed", description: err.message, variant: "destructive" }),
+  });
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    setPreview(null);
+    setParsing(true);
+    try {
+      const text = await f.text();
+      const res = await fetch("/api/billing/eras/upload", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: text, filename: f.name, preview: true }),
+      });
+      if (res.ok) {
+        const parsed = await res.json();
+        setPreview({
+          payerName: parsed.payerName,
+          checkNumber: parsed.checkNumber,
+          paymentDate: parsed.checkDate,
+          totalAmount: parsed.totalPayment,
+          lineCount: (parsed.claimLines || []).length,
+        });
+      }
+    } catch {}
+    setParsing(false);
+  }
+
+  function handleUpload() {
+    if (!file) return;
+    file.text().then((text) => {
+      uploadMutation.mutate({ content: text, filename: file.name });
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Upload 835 ERA File</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div
+            className="border-2 border-dashed border-muted-foreground/30 rounded-lg p-8 text-center cursor-pointer hover:border-primary/40 transition-colors"
+            onClick={() => fileRef.current?.click()}
+            data-testid="dropzone-era-upload"
+          >
+            <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+            <p className="text-sm font-medium">{file ? file.name : "Click to select a .835 or .txt file"}</p>
+            <p className="text-xs text-muted-foreground mt-1">Standard X12 835 remittance file</p>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".835,.txt,.x12,.edi"
+              className="hidden"
+              onChange={handleFileChange}
+              data-testid="input-era-file"
+            />
+          </div>
+
+          {parsing && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Parsing file…
+            </div>
+          )}
+
+          {preview && (
+            <div className="rounded-md border bg-muted/20 p-3 text-sm space-y-1">
+              <p className="font-medium">Parse Preview</p>
+              <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground">
+                <span>Payer:</span><span className="font-medium text-foreground">{preview.payerName || "Unknown"}</span>
+                <span>Check #:</span><span className="font-medium text-foreground">{preview.checkNumber || "—"}</span>
+                <span>Payment Date:</span><span className="font-medium text-foreground">{preview.paymentDate || "—"}</span>
+                <span>Total Amount:</span><span className="font-medium text-foreground text-green-600">${(preview.totalAmount || 0).toFixed(2)}</span>
+                <span>Claim Lines:</span><span className="font-medium text-foreground">{preview.lineCount || 0}</span>
+              </div>
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleUpload} disabled={!file || uploadMutation.isPending} data-testid="button-submit-era-upload">
+            {uploadMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Upload & Queue for Review
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function ERAPage() {
   const [selectedEraId, setSelectedEraId] = useState<string | null>(null);
+  const [showUpload, setShowUpload] = useState(false);
 
   const { data: eras = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/billing/eras"],
@@ -236,10 +356,17 @@ export default function ERAPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold" data-testid="text-page-title">ERA Posting</h1>
-        <p className="text-muted-foreground">Review and post electronic remittance advice (835 files)</p>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold" data-testid="text-page-title">ERA Posting</h1>
+          <p className="text-muted-foreground">Review and post electronic remittance advice (835 files)</p>
+        </div>
+        <Button variant="outline" className="gap-2" onClick={() => setShowUpload(true)} data-testid="button-upload-era">
+          <Upload className="h-4 w-4" />
+          Upload 835 File
+        </Button>
       </div>
+      <UploadERADialog open={showUpload} onClose={() => setShowUpload(false)} />
 
       {isLoading ? (
         <div className="space-y-3">

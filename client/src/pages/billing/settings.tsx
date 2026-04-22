@@ -66,6 +66,96 @@ const CREDENTIAL_OPTIONS = [
   "DDS", "DMD", "OD", "RN", "LPN", "PT", "OT", "SLP", "HHA", "PCA", "Other",
 ];
 
+const TAXONOMY_SUGGESTIONS: Record<string, Array<{ code: string; label: string }>> = {
+  MD: [
+    { code: "207Q00000X", label: "Family Medicine" },
+    { code: "208000000X", label: "Pediatrics" },
+    { code: "207R00000X", label: "Internal Medicine" },
+    { code: "207P00000X", label: "Emergency Medicine" },
+    { code: "2086S0120X", label: "Surgery – Surgical Oncology" },
+  ],
+  DO: [
+    { code: "207Q00000X", label: "Family Medicine (DO)" },
+    { code: "207R00000X", label: "Internal Medicine (DO)" },
+    { code: "207N00000X", label: "Dermatology" },
+  ],
+  NP: [
+    { code: "363L00000X", label: "Nurse Practitioner" },
+    { code: "363LF0000X", label: "NP – Family" },
+    { code: "363LP0200X", label: "NP – Pediatrics" },
+  ],
+  PA: [
+    { code: "363A00000X", label: "Physician Assistant" },
+    { code: "363AM0700X", label: "PA – Medical" },
+    { code: "363AS0400X", label: "PA – Surgical" },
+  ],
+  DPT: [
+    { code: "225100000X", label: "Physical Therapist" },
+    { code: "2251G0003X", label: "PT – Geriatrics" },
+    { code: "2251H0300X", label: "PT – Hand" },
+    { code: "2251H1300X", label: "PT – Human Factors" },
+    { code: "2251N0400X", label: "PT – Neurology" },
+    { code: "2251S0007X", label: "PT – Sports" },
+  ],
+  PT: [
+    { code: "225100000X", label: "Physical Therapist" },
+    { code: "2251G0003X", label: "PT – Geriatrics" },
+    { code: "2251N0400X", label: "PT – Neurology" },
+  ],
+  OT: [
+    { code: "225X00000X", label: "Occupational Therapist" },
+    { code: "225XE0001X", label: "OT – Environmental Modification" },
+    { code: "225XG0600X", label: "OT – Gerontology" },
+    { code: "225XH1200X", label: "OT – Hand" },
+  ],
+  SLP: [
+    { code: "235Z00000X", label: "Speech-Language Pathologist" },
+  ],
+  DC: [
+    { code: "111N00000X", label: "Chiropractor" },
+    { code: "111NI0013X", label: "Chiropractor – Independent Medical Examiner" },
+  ],
+  PsyD: [
+    { code: "103TC0700X", label: "Psychologist – Clinical" },
+    { code: "103TP2700X", label: "Psychologist – Private Practice" },
+  ],
+  PhD: [
+    { code: "103TC0700X", label: "Psychologist – Clinical" },
+    { code: "1041C0700X", label: "Counselor – Clinical" },
+  ],
+  LCSW: [
+    { code: "1041C0700X", label: "Counselor – Clinical" },
+    { code: "101YM0800X", label: "Counselor – Mental Health" },
+  ],
+  LMFT: [
+    { code: "106H00000X", label: "Marriage & Family Therapist" },
+  ],
+  RN: [
+    { code: "163W00000X", label: "Registered Nurse" },
+    { code: "163WC0400X", label: "RN – Case Management" },
+    { code: "163WH0500X", label: "RN – Home Health" },
+  ],
+  LPN: [
+    { code: "164W00000X", label: "Licensed Practical Nurse" },
+  ],
+  HHA: [
+    { code: "374U00000X", label: "Home Health Aide" },
+  ],
+  PCA: [
+    { code: "376G00000X", label: "Nursing Home Administrator" },
+    { code: "374T00000X", label: "Christian Science Practitioner (PCA)" },
+  ],
+  DDS: [
+    { code: "122300000X", label: "Dentist" },
+  ],
+  DMD: [
+    { code: "122300000X", label: "Dentist (DMD)" },
+  ],
+  OD: [
+    { code: "152W00000X", label: "Optometrist" },
+  ],
+};
+
 function ProvidersTab() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -351,7 +441,11 @@ function ProvidersTab() {
             </div>
             <div className="space-y-2">
               <Label>Credentials</Label>
-              <Select value={form.credentials} onValueChange={(v) => setForm({ ...form, credentials: v })}>
+              <Select value={form.credentials} onValueChange={(v) => {
+                const suggestions = TAXONOMY_SUGGESTIONS[v] || [];
+                const autoFill = suggestions.length === 1 && !form.taxonomyCode;
+                setForm({ ...form, credentials: v, taxonomyCode: autoFill ? suggestions[0].code : form.taxonomyCode });
+              }}>
                 <SelectTrigger data-testid="select-provider-credentials">
                   <SelectValue placeholder="Select credentials" />
                 </SelectTrigger>
@@ -363,6 +457,29 @@ function ProvidersTab() {
               </Select>
               {form.credentials === "Other" && (
                 <Input placeholder="Enter credentials" value={form.customCredentials} onChange={(e) => setForm({ ...form, customCredentials: e.target.value })} data-testid="input-provider-custom-credentials" />
+              )}
+              {form.credentials && TAXONOMY_SUGGESTIONS[form.credentials] && (
+                <div className="pt-1">
+                  <p className="text-xs text-muted-foreground mb-1.5">Suggested taxonomy codes for {form.credentials}:</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TAXONOMY_SUGGESTIONS[form.credentials].map((s) => (
+                      <button
+                        key={s.code}
+                        type="button"
+                        onClick={() => setForm({ ...form, taxonomyCode: s.code })}
+                        data-testid={`button-taxonomy-suggest-${s.code}`}
+                        className={`inline-flex flex-col items-start rounded-md border px-2.5 py-1 text-xs transition-colors cursor-pointer ${
+                          form.taxonomyCode === s.code
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-muted/40 text-foreground border-border hover:border-primary/50 hover:bg-muted"
+                        }`}
+                      >
+                        <span className="font-mono font-semibold">{s.code}</span>
+                        <span className="text-[10px] opacity-80">{s.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
             <div className="space-y-2">
