@@ -18,11 +18,14 @@ import { validateNPI } from "@shared/npi-validation";
 import { Loader2, ArrowLeft, AlertTriangle } from "lucide-react";
 
 const REFERRAL_SOURCES_CLINICAL = [
-  "VA Community Care",
   "Physician office",
   "Hospital discharge planner",
+  "Emergency department",
+  "Specialist referral",
+  "Urgent care",
   "Skilled nursing facility transition",
   "Hospice / palliative care transition",
+  "VA Community Care",
 ];
 const REFERRAL_SOURCES_MARKETING = [
   "Google Search",

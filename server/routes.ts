@@ -1116,7 +1116,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         : await db.query("SELECT id FROM practice_settings LIMIT 1");
       if (existing.rows.length > 0) {
         let query = `UPDATE practice_settings SET practice_name=$1, primary_npi=$2, tax_id=$3, taxonomy_code=$4, address=$5, phone=$6, default_pos=$7, billing_location=$9, updated_at=NOW()`;
-        const params: any[] = [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', existing.rows[0].id, billingLocation || null];
+        const params: any[] = [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '11', existing.rows[0].id, billingLocation || null];
         if (oa_submitter_id !== undefined) { query += `, oa_submitter_id=$${params.length + 1}`; params.push(oa_submitter_id); }
         if (oa_sftp_username !== undefined) { query += `, oa_sftp_username=$${params.length + 1}`; params.push(oa_sftp_username); }
         if (oa_sftp_password !== undefined) { query += `, oa_sftp_password=$${params.length + 1}`; params.push(oa_sftp_password); }
@@ -1412,13 +1412,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           COALESCE(p.first_name || ' ' || p.last_name, l.name, 'Unknown') as patient_name,
           p.id as patient_record_id,
           py.name as payer_display,
-          EXTRACT(DAY FROM NOW() - c.service_date)::int as days_outstanding,
+          COALESCE(c.service_date, e.expected_start_date::date) as service_date,
+          EXTRACT(DAY FROM NOW() - COALESCE(c.service_date, e.expected_start_date::date))::int as days_outstanding,
           (SELECT note_text FROM claim_follow_up_notes WHERE claim_id = c.id ORDER BY created_at DESC LIMIT 1) as last_note,
           (SELECT created_at FROM claim_follow_up_notes WHERE claim_id = c.id ORDER BY created_at DESC LIMIT 1) as last_note_at
         FROM claims c
         LEFT JOIN patients p ON c.patient_id = p.id
         LEFT JOIN leads l ON p.lead_id = l.id
         LEFT JOIN payers py ON c.payer_id = py.id
+        LEFT JOIN encounters e ON c.encounter_id = e.id
         WHERE c.status NOT IN ('paid', 'draft', 'void')
       `;
       if (orgId) { query += ` AND c.organization_id = $${idx}`; params.push(orgId); idx++; }
@@ -1704,15 +1706,19 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const hasProvider = (provResult.rows[0]?.cnt || 0) > 0;
       const hasPayer = (payerResult.rows[0]?.cnt || 0) > 0;
 
-      let oaConnected = false;
+      let clearinghouseConnected = false;
       try {
-        if (ps) {
+        // Passes if either Stedi API key is present OR Office Ally is connected
+        const stediConfigured = !!process.env.STEDI_API_KEY;
+        if (!stediConfigured && ps) {
           const { rows: psRows } = orgId
             ? await db.query(`SELECT oa_connected, oa_sftp_username FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
             : await db.query(`SELECT oa_connected, oa_sftp_username FROM practice_settings LIMIT 1`);
-          oaConnected = !!(psRows[0]?.oa_connected && psRows[0]?.oa_sftp_username);
+          clearinghouseConnected = !!(psRows[0]?.oa_connected && psRows[0]?.oa_sftp_username);
+        } else {
+          clearinghouseConnected = stediConfigured;
         }
-      } catch { oaConnected = false; }
+      } catch { clearinghouseConnected = false; }
 
       const hasClaimDefaults = !!ps?.default_pos;
       const hasFirstClaim = (claimResult.rows[0]?.cnt || 0) > 0;
@@ -1728,7 +1734,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         { id: 1, label: "Add practice information", done: hasPractice, link: "/billing/settings?tab=practice" },
         { id: 2, label: "Add at least one provider", done: hasProvider, link: "/billing/settings?tab=providers" },
         { id: 3, label: "Add at least one payer", done: hasPayer, link: "/billing/settings?tab=payers" },
-        { id: 4, label: "Configure Office Ally SFTP credentials", done: oaConnected, link: "/billing/settings?tab=clearinghouse" },
+        { id: 4, label: "Configure a clearinghouse", done: clearinghouseConnected, link: "/billing/settings?tab=clearinghouse" },
         { id: 5, label: "Set claim defaults", done: hasClaimDefaults, link: "/billing/settings?tab=claim-defaults" },
         { id: 6, label: "Submit your first test claim", done: hasFirstClaim, link: "/billing/claims/new" },
       ];
@@ -2080,9 +2086,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
 
       await db.query(
-        `INSERT INTO claims (id, patient_id, encounter_id, payer, cpt_codes, amount, status, risk_score, readiness_status, created_at, payer_id, authorization_number, created_by)
-         VALUES ($1, $2, $3, $4, $5::jsonb, 0, 'draft', 0, 'GREEN', $6, $7, $8, $9)`,
-        [claimId, patientId, encounterId, p.insurance_carrier || 'Unknown', '[]', now, p.payer_id || null, p.authorization_number || null, (req.user as any)?.email || null]
+        `INSERT INTO claims (id, organization_id, patient_id, encounter_id, payer, cpt_codes, amount, status, risk_score, readiness_status, created_at, payer_id, authorization_number, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, 0, 'draft', 0, 'GREEN', $7, $8, $9, $10)`,
+        [claimId, getOrgId(req), patientId, encounterId, p.insurance_carrier || 'Unknown', '[]', now, p.payer_id || null, p.authorization_number || null, (req.user as any)?.email || null]
       );
 
       await db.query(
@@ -3631,17 +3637,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const db = await import("./db").then(m => m.pool);
       const { rows } = await db.query(
         `INSERT INTO patients (
-          id, first_name, last_name, dob, sex, insurance_carrier, member_id, group_number,
+          id, organization_id, first_name, last_name, dob, sex, insurance_carrier, member_id, group_number,
           insured_name, relationship_to_insured, authorization_number, referring_provider_name,
           referring_provider_npi, referral_source, referral_partner_name, default_provider_id,
           service_needed, phone, email, preferred_name, state, plan_type, address, payer_id, created_at
         ) VALUES (
-          gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7,
-          $8, $9, $10, $11, $12, $13, $14, $15,
-          $16, $17, $18, $19, $20, $21, $22, $23, NOW()
+          gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, $10, $11, $12, $13, $14, $15, $16,
+          $17, $18, $19, $20, $21, $22, $23, $24, NOW()
         ) RETURNING *`,
         [
-          firstName.trim(), lastName.trim(), dob, sex || null, insuranceCarrier || null,
+          getOrgId(req), firstName.trim(), lastName.trim(), dob, sex || null, insuranceCarrier || null,
           memberId || null, groupNumber || null, insuredName || null,
           relationshipToInsured || null, authorizationNumber || null,
           referringProviderName || null, referringProviderNpi || null,

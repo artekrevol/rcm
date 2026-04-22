@@ -818,7 +818,7 @@ export default function ClaimDetailPage() {
                     data-testid="button-connect-oa"
                   >
                     <Send className="h-4 w-4 mr-2" />
-                    Connect Office Ally to submit electronically
+                    Configure a clearinghouse to submit electronically
                   </Button>
                 )}
               {claim.status === "denied" && (

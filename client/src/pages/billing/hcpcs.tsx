@@ -320,7 +320,7 @@ export default function BillingHcpcs() {
         <Input
           value={search}
           onChange={(e) => handleSearchChange(e.target.value)}
-          placeholder='Search by code or description (e.g. G0299 or skilled nursing)'
+          placeholder='Search by code or description (e.g. 99213 or office visit)'
           className="pl-10 h-12 text-base"
           data-testid="input-hcpcs-search"
         />
@@ -334,7 +334,7 @@ export default function BillingHcpcs() {
           <BookOpen className="h-12 w-12 mb-4 opacity-40" />
           <p className="text-lg font-medium">Search the Code Library</p>
           <p className="text-sm mt-1 max-w-md">
-            Enter a code (like G0299) or description (like "skilled nursing") to find HCPCS codes with VA rates.
+            Enter a CPT or HCPCS code (like 99213) or a description (like "office visit") to look up codes and payer-specific rates.
           </p>
         </div>
       )}

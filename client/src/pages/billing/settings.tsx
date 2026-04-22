@@ -61,7 +61,10 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
-const CREDENTIAL_OPTIONS = ["RN", "LPN", "PT", "OT", "SLP", "HHA", "PCA", "Other"];
+const CREDENTIAL_OPTIONS = [
+  "MD", "DO", "NP", "PA", "DPT", "DC", "PsyD", "LCSW", "LMFT", "PhD",
+  "DDS", "DMD", "OD", "RN", "LPN", "PT", "OT", "SLP", "HHA", "PCA", "Other",
+];
 
 function ProvidersTab() {
   const { toast } = useToast();
@@ -426,7 +429,7 @@ function ProvidersTab() {
                     id="prov-taxonomy"
                     value={form.taxonomyCode}
                     onChange={(e) => setForm({ ...form, taxonomyCode: e.target.value })}
-                    placeholder="e.g. 163W00000X"
+                    placeholder="e.g. 207Q00000X"
                     data-testid="input-provider-taxonomy"
                   />
                   <Popover open={showTaxonomyPicker} onOpenChange={(o) => { setShowTaxonomyPicker(o); if (!o) setTaxonomySearch(""); }}>
@@ -481,8 +484,8 @@ function ProvidersTab() {
                 <Input id="prov-taxid" value={form.individualTaxId} onChange={(e) => setForm({ ...form, individualTaxId: e.target.value })} placeholder="9 digits" data-testid="input-provider-tax-id" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="prov-license">State License Number <span className="text-muted-foreground text-xs">(included as REF*1C in EDI — required by CareFirst, VA)</span></Label>
-                <Input id="prov-license" value={form.licenseNumber} onChange={(e) => setForm({ ...form, licenseNumber: e.target.value })} placeholder="e.g. TX-RN-123456" data-testid="input-provider-license" />
+                <Label htmlFor="prov-license">State License Number <span className="text-muted-foreground text-xs">(included as REF*1C in EDI — required by many payers)</span></Label>
+                <Input id="prov-license" value={form.licenseNumber} onChange={(e) => setForm({ ...form, licenseNumber: e.target.value })} placeholder="e.g. TX-12345678" data-testid="input-provider-license" />
               </div>
             </div>
             <div className="flex items-center gap-3 pt-1">
@@ -512,7 +515,7 @@ function PracticeInfoTab() {
     taxId: "",
     taxonomyCode: "",
     phone: "",
-    defaultPos: "12",
+    defaultPos: "11",
     street: "",
     city: "",
     state: "",
@@ -559,7 +562,7 @@ function PracticeInfoTab() {
         taxId: settings.tax_id || "",
         taxonomyCode: settings.taxonomy_code || "",
         phone: settings.phone || "",
-        defaultPos: settings.default_pos || "12",
+        defaultPos: settings.default_pos || "11",
         street: addr.street || "",
         city: addr.city || "",
         state: addr.state || "",
@@ -653,21 +656,30 @@ function PracticeInfoTab() {
           <Select value={form.defaultPos} onValueChange={(v) => setForm({ ...form, defaultPos: v })}>
             <SelectTrigger data-testid="select-practice-pos"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="12">12 — Home</SelectItem>
               <SelectItem value="11">11 — Office</SelectItem>
+              <SelectItem value="12">12 — Home</SelectItem>
+              <SelectItem value="10">10 — Telehealth - Patient Home</SelectItem>
+              <SelectItem value="13">13 — Assisted Living Facility</SelectItem>
+              <SelectItem value="19">19 — Off Campus Outpatient Hospital</SelectItem>
               <SelectItem value="21">21 — Inpatient Hospital</SelectItem>
               <SelectItem value="22">22 — Outpatient Hospital</SelectItem>
+              <SelectItem value="23">23 — Emergency Room</SelectItem>
+              <SelectItem value="24">24 — Ambulatory Surgical Center</SelectItem>
+              <SelectItem value="31">31 — Skilled Nursing Facility</SelectItem>
+              <SelectItem value="32">32 — Nursing Facility</SelectItem>
+              <SelectItem value="49">49 — Independent Clinic</SelectItem>
+              <SelectItem value="81">81 — Independent Laboratory</SelectItem>
               <SelectItem value="99">99 — Other</SelectItem>
             </SelectContent>
           </Select>
         </div>
       </div>
       <div className="space-y-2">
-        <Label className="flex items-center gap-1.5"><MapPin className="h-4 w-4" />VA Fee Schedule Location</Label>
-        <p className="text-xs text-muted-foreground">Select the location that matches your practice's billing address. This determines the VA reimbursement rate used in your claims.</p>
+        <Label className="flex items-center gap-1.5"><MapPin className="h-4 w-4" />Fee Schedule Region / Locality</Label>
+        <p className="text-xs text-muted-foreground">Select the location that matches your practice's billing address. Used to look up applicable fee schedule rates (Medicare MAC locality, VA CCN, commercial contract).</p>
         <Select value={form.billingLocation} onValueChange={(v) => setForm({ ...form, billingLocation: v })}>
           <SelectTrigger data-testid="select-billing-location">
-            <SelectValue placeholder="Select VA billing location..." />
+            <SelectValue placeholder="Select billing locality..." />
           </SelectTrigger>
           <SelectContent>
             <div className="p-2">
@@ -746,11 +758,11 @@ function ClaimDefaultsTab() {
   const queryClient = useQueryClient();
   const [initialized, setInitialized] = useState(false);
   const [form, setForm] = useState({
-    defaultPos: "12",
+    defaultPos: "11",
     defaultTos: "none",
     defaultOrderingProviderId: "none",
-    homeboundDefault: true,
-    excludeFacility: true,
+    homeboundDefault: false,
+    excludeFacility: false,
   });
 
   const { data: settings, isLoading } = useQuery<any>({
@@ -765,11 +777,11 @@ function ClaimDefaultsTab() {
   useEffect(() => {
     if (settings && !initialized) {
       setForm({
-        defaultPos: settings.default_pos || "12",
+        defaultPos: settings.default_pos || "11",
         defaultTos: settings.default_tos || "none",
         defaultOrderingProviderId: settings.default_ordering_provider_id || "none",
-        homeboundDefault: settings.homebound_default ?? true,
-        excludeFacility: settings.exclude_facility ?? true,
+        homeboundDefault: settings.homebound_default ?? false,
+        excludeFacility: settings.exclude_facility ?? false,
       });
       setInitialized(true);
     }
@@ -824,11 +836,19 @@ function ClaimDefaultsTab() {
               <Select value={form.defaultPos} onValueChange={(v) => setForm({ ...form, defaultPos: v })}>
                 <SelectTrigger data-testid="select-default-pos"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="12">12 — Home</SelectItem>
                   <SelectItem value="11">11 — Office</SelectItem>
-                  <SelectItem value="13">13 — Assisted Living Facility</SelectItem>
+                  <SelectItem value="12">12 — Home</SelectItem>
                   <SelectItem value="10">10 — Telehealth - Patient Home</SelectItem>
+                  <SelectItem value="13">13 — Assisted Living Facility</SelectItem>
+                  <SelectItem value="19">19 — Off Campus Outpatient Hospital</SelectItem>
+                  <SelectItem value="21">21 — Inpatient Hospital</SelectItem>
                   <SelectItem value="22">22 — Outpatient Hospital</SelectItem>
+                  <SelectItem value="23">23 — Emergency Room</SelectItem>
+                  <SelectItem value="24">24 — Ambulatory Surgical Center</SelectItem>
+                  <SelectItem value="31">31 — Skilled Nursing Facility</SelectItem>
+                  <SelectItem value="32">32 — Nursing Facility</SelectItem>
+                  <SelectItem value="49">49 — Independent Clinic</SelectItem>
+                  <SelectItem value="81">81 — Independent Laboratory</SelectItem>
                   <SelectItem value="99">99 — Other</SelectItem>
                 </SelectContent>
               </Select>
@@ -860,14 +880,14 @@ function ClaimDefaultsTab() {
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-muted-foreground">Used as the ordering provider in Box 17/17b of CMS-1500 for home health claims.</p>
+            <p className="text-xs text-muted-foreground">Used as the ordering provider in Box 17/17b of CMS-1500.</p>
           </div>
 
           <div className="space-y-4 pt-2">
             <div className="flex items-center justify-between p-3 rounded-lg border">
               <div>
                 <p className="text-sm font-medium">Homebound Default</p>
-                <p className="text-xs text-muted-foreground">Pre-check Homebound Indicator = Y on all new claims</p>
+                <p className="text-xs text-muted-foreground">Pre-check Homebound Indicator = Y on new claims (enable only for home health / VA CCN practices)</p>
               </div>
               <Switch
                 checked={form.homeboundDefault}
@@ -878,7 +898,7 @@ function ClaimDefaultsTab() {
             <div className="flex items-center justify-between p-3 rounded-lg border">
               <div>
                 <p className="text-sm font-medium">Exclude Facility from Claims</p>
-                <p className="text-xs text-muted-foreground">Home health has no facility — leaves Box 32 blank by default</p>
+                <p className="text-xs text-muted-foreground">Leave Box 32 (facility address) blank on new claims. Enable only for practices that never bill a facility.</p>
               </div>
               <Switch
                 checked={form.excludeFacility}
@@ -1306,7 +1326,7 @@ function PayersTab() {
                     <div className="space-y-1.5">
                       <Label className="text-xs">Code *</Label>
                       <Input
-                        placeholder="e.g. G0299"
+                        placeholder="e.g. 99213"
                         value={addReqForm.code}
                         onChange={(e) => setAddReqForm({ ...addReqForm, code: e.target.value.toUpperCase() })}
                         data-testid="input-req-code"
@@ -2086,8 +2106,7 @@ function ClearinghouseTab() {
       <div>
         <h3 className="text-base font-semibold" data-testid="text-clearinghouse-title">Office Ally Integration <span className="text-xs font-normal text-muted-foreground">(fallback clearinghouse)</span></h3>
         <p className="text-sm text-muted-foreground mt-1">
-          Fallback clearinghouse when Stedi is not configured. Office Ally is free for VA Community Care
-          and Medicare claims.{" "}
+          Fallback clearinghouse when Stedi is not configured. Office Ally is free for Medicare and many commercial payers.{" "}
           <a
             href="https://cms.officeally.com"
             target="_blank"

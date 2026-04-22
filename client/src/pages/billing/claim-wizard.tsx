@@ -78,11 +78,19 @@ const ICD10_COMMON = [
 ];
 
 const POS_OPTIONS = [
-  { value: "12", label: "Home (12)" },
   { value: "11", label: "Office (11)" },
-  { value: "13", label: "Assisted Living Facility (13)" },
+  { value: "12", label: "Home (12)" },
   { value: "10", label: "Telehealth - Patient Home (10)" },
+  { value: "13", label: "Assisted Living Facility (13)" },
+  { value: "19", label: "Off Campus Outpatient Hospital (19)" },
+  { value: "21", label: "Inpatient Hospital (21)" },
   { value: "22", label: "Outpatient Hospital (22)" },
+  { value: "23", label: "Emergency Room (23)" },
+  { value: "24", label: "Ambulatory Surgical Center (24)" },
+  { value: "31", label: "Skilled Nursing Facility (31)" },
+  { value: "32", label: "Nursing Facility (32)" },
+  { value: "49", label: "Independent Clinic (49)" },
+  { value: "81", label: "Independent Laboratory (81)" },
   { value: "99", label: "Other (99)" },
 ];
 
@@ -531,7 +539,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
             <Input
               value={line.code}
               onChange={(e) => onChange(index, { code: e.target.value.toUpperCase() })}
-              placeholder="e.g. G0299"
+              placeholder="e.g. 99213"
               className="font-mono"
               data-testid={`input-line-code-${index}`}
               onFocus={() => { if (!line.code) setShowCodeSearch(true); }}
@@ -822,7 +830,7 @@ export default function ClaimWizard() {
 
   const [providerId, setProviderId] = useState("");
   const [serviceDate, setServiceDate] = useState(new Date().toISOString().split("T")[0]);
-  const [placeOfService, setPlaceOfService] = useState("12");
+  const [placeOfService, setPlaceOfService] = useState("11");
   const [serviceLines, setServiceLines] = useState<ServiceLine[]>([emptyLine()]);
   const [icd10Primary, setIcd10Primary] = useState<{ code: string; desc: string }>({ code: "", desc: "" });
   const [icd10Secondary, setIcd10Secondary] = useState<{ code: string; desc: string }[]>([
@@ -1581,7 +1589,7 @@ export default function ClaimWizard() {
                   <label htmlFor="homebound-indicator" className="text-sm font-medium cursor-pointer">
                     Patient is homebound (CLM10)
                   </label>
-                  <p className="text-xs text-muted-foreground">Required for VA home health and certain Medicare claims</p>
+                  <p className="text-xs text-muted-foreground">Required for Medicare home health (CLM10=Y) and VA CCN home-based claims</p>
                 </div>
               </div>
             </CardContent>
@@ -1937,9 +1945,9 @@ export default function ClaimWizard() {
       <Dialog open={showSubmitModal} onOpenChange={setShowSubmitModal}>
         <DialogContent data-testid="dialog-submit">
           <DialogHeader>
-            <DialogTitle>Submit via Office Ally</DialogTitle>
+            <DialogTitle>Electronic Submission</DialogTitle>
             <DialogDescription>
-              Connect Office Ally SFTP credentials in Settings → Clearinghouse to enable automated submission. Or add STEDI_API_KEY for instant electronic submission via Stedi.
+              Configure a clearinghouse in Settings → Clearinghouse to enable automated electronic submission. Stedi (recommended) or Office Ally SFTP are both supported.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
