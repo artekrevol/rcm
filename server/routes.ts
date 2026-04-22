@@ -718,10 +718,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS requested_by VARCHAR`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS expiration_date DATE`);
 
-    // ── Payers: stedi_payer_id + supported_transactions + updated_at ─────────
+    // ── Payers: stedi_payer_id + supported_transactions + updated_at + npi + tax_id ──
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_payer_id VARCHAR`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS supported_transactions JSONB DEFAULT '[]'`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS npi VARCHAR`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS tax_id VARCHAR`);
 
     // ── ITEM 1: Fix TriWest payer ID VACCN → TWVACCN (Stedi uses TWVACCN) ─────
     await pool.query(`
@@ -3196,9 +3198,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ? p.supportedTransactions.map((t: any) => (typeof t === "string" ? t : t.transactionSetName || t.name || ""))
         : [],
       enrollmentRequired: p.enrollmentRequired || {},
+      // Strategy C identifiers — Stedi may expose these
+      npi: p.npi || p.NPI || "",
+      taxId: p.taxId || p.tax_id || p.federalTaxId || p.federal_tax_id || "",
     }));
     _stediPayerCache = { payers, ts: now };
     return payers;
+  }
+
+  // Helper: timely filing days from payer name
+  function timelyFilingDaysForPayer(name: string): number {
+    const n = name.toLowerCase();
+    if (n.includes("medicare")) return 365;
+    if (n.includes("medicaid")) return 180;
+    if (n.includes("triwest") || n.includes("tri-west") || (n.includes("va ") || n === "va" || n.includes("veteran"))) return 180;
+    if (n.includes("tricare") || n.includes("tri-care")) return 180;
+    return 90; // commercial default
   }
 
   // POST /api/billing/payers/sync-stedi
@@ -3211,9 +3226,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       // Build lookup maps
       const byId = new Map<string, any>(stediPayers.map((p) => [p.payerId.toUpperCase(), p]));
+      const byNpi = new Map<string, any>();
+      const byTaxId = new Map<string, any>();
+      for (const p of stediPayers) {
+        if (p.npi) byNpi.set(p.npi.replace(/\D/g, ""), p);
+        if (p.taxId) byTaxId.set(p.taxId.replace(/\D/g, ""), p);
+      }
 
       const db = await import("./db").then(m => m.pool);
-      const { rows: ourPayers } = await db.query("SELECT id, name, payer_id, stedi_payer_id FROM payers ORDER BY name");
+      const { rows: ourPayers } = await db.query(
+        "SELECT id, name, payer_id, stedi_payer_id, npi, tax_id, timely_filing_days FROM payers ORDER BY name"
+      );
 
       const matched: any[] = [];
       const already_correct: any[] = [];
@@ -3221,17 +3244,36 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       for (const payer of ourPayers) {
         let stediMatch: any = null;
+        let matchStrategy = "";
 
-        // A: exact payer_id match
-        if (payer.payer_id) stediMatch = byId.get(payer.payer_id.toUpperCase()) || null;
+        // Strategy A: exact payer_id match
+        if (payer.payer_id) {
+          stediMatch = byId.get(payer.payer_id.toUpperCase()) || null;
+          if (stediMatch) matchStrategy = "payer_id";
+        }
 
-        // B: fuzzy name match (case-insensitive partial)
+        // Strategy B: fuzzy name match (case-insensitive partial)
         if (!stediMatch) {
           const lc = payer.name.toLowerCase();
           stediMatch = stediPayers.find((s) => {
             const sn = s.payerName.toLowerCase();
-            return sn.includes(lc) || lc.includes(sn) || sn.split(" ").filter((w: string) => w.length > 4).every((w: string) => lc.includes(w));
+            return sn.includes(lc) || lc.includes(sn) ||
+              sn.split(" ").filter((w: string) => w.length > 4).every((w: string) => lc.includes(w));
           }) || null;
+          if (stediMatch) matchStrategy = "name";
+        }
+
+        // Strategy C: NPI or Tax ID match
+        if (!stediMatch) {
+          const npiClean = (payer.npi || "").replace(/\D/g, "");
+          const taxClean = (payer.tax_id || "").replace(/\D/g, "");
+          if (npiClean && byNpi.has(npiClean)) {
+            stediMatch = byNpi.get(npiClean);
+            matchStrategy = "npi";
+          } else if (taxClean && byTaxId.has(taxClean)) {
+            stediMatch = byTaxId.get(taxClean);
+            matchStrategy = "tax_id";
+          }
         }
 
         if (!stediMatch) {
@@ -3243,8 +3285,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         const supportedTx: string[] = stediMatch.supportedTransactions;
 
         if (payer.payer_id === newId && payer.stedi_payer_id === newId) {
-          already_correct.push({ id: payer.id, name: payer.name, payer_id: newId });
-          // Still update supported_transactions in case they changed
+          already_correct.push({ id: payer.id, name: payer.name, payer_id: newId, match_strategy: matchStrategy });
           await db.query(
             "UPDATE payers SET supported_transactions = $1, updated_at = NOW() WHERE id = $2",
             [JSON.stringify(supportedTx), payer.id]
@@ -3257,10 +3298,37 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           "UPDATE payers SET payer_id = $1, stedi_payer_id = $2, supported_transactions = $3, updated_at = NOW() WHERE id = $4",
           [newId, newId, JSON.stringify(supportedTx), payer.id]
         );
-        matched.push({ id: payer.id, name: payer.name, old_payer_id: oldId, new_payer_id: newId });
+        matched.push({ id: payer.id, name: payer.name, old_payer_id: oldId, new_payer_id: newId, match_strategy: matchStrategy });
       }
 
-      res.json({ matched, already_correct, unmatched, total_stedi_payers: stediPayers.length });
+      // ── Timely filing defaults pass ────────────────────────────────────────
+      // Apply conservative industry-standard defaults to any payer where
+      // timely_filing_days is NULL or still at the system default of 365
+      // (unless it's Medicare, which genuinely uses 365).
+      const { rows: allPayers } = await db.query(
+        "SELECT id, name, timely_filing_days FROM payers WHERE timely_filing_days IS NULL OR timely_filing_days = 365"
+      );
+      const timelyUpdates: Array<{ name: string; days: number }> = [];
+      for (const p of allPayers) {
+        const days = timelyFilingDaysForPayer(p.name);
+        // Only update if the computed default differs from current value (avoids no-op writes)
+        if (days !== p.timely_filing_days) {
+          await db.query(
+            "UPDATE payers SET timely_filing_days = $1, updated_at = NOW() WHERE id = $2",
+            [days, p.id]
+          );
+          timelyUpdates.push({ name: p.name, days });
+        }
+      }
+
+      res.json({
+        matched,
+        already_correct,
+        unmatched,
+        total_stedi_payers: stediPayers.length,
+        timely_filing_updated: timelyUpdates.length,
+        timely_filing_updates: timelyUpdates,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

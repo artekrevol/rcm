@@ -1550,9 +1550,14 @@ function PayersTab() {
                 {syncResult.matched.length > 0 && (
                   <div className="rounded-md border divide-y text-sm">
                     {syncResult.matched.map((p: any) => (
-                      <div key={p.id} className="px-3 py-2 flex items-center justify-between" data-testid={`sync-matched-${p.id}`}>
-                        <span className="font-medium">{p.name}</span>
-                        <span className="text-muted-foreground font-mono text-xs">
+                      <div key={p.id} className="px-3 py-2 flex items-center justify-between gap-2" data-testid={`sync-matched-${p.id}`}>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-medium truncate">{p.name}</span>
+                          {p.match_strategy && p.match_strategy !== "payer_id" && p.match_strategy !== "name" && (
+                            <span className="shrink-0 text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded px-1.5 py-0.5">via {p.match_strategy.replace("_", " ").toUpperCase()}</span>
+                          )}
+                        </div>
+                        <span className="shrink-0 text-muted-foreground font-mono text-xs">
                           {p.old_payer_id || "—"} → <span className="text-green-700 dark:text-green-400 font-semibold">{p.new_payer_id}</span>
                         </span>
                       </div>
@@ -1586,6 +1591,25 @@ function PayersTab() {
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Timely filing updates */}
+              {syncResult.timely_filing_updated > 0 && (
+                <div className="space-y-1.5 border-t pt-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-blue-700 dark:text-blue-300">
+                    <CheckCheck className="h-4 w-4" />
+                    {syncResult.timely_filing_updated} payer{syncResult.timely_filing_updated !== 1 ? "s" : ""} updated with industry-standard timely filing limits
+                  </div>
+                  <div className="rounded-md border divide-y text-sm max-h-40 overflow-y-auto">
+                    {syncResult.timely_filing_updates.map((p: any, i: number) => (
+                      <div key={i} className="px-3 py-1.5 flex items-center justify-between">
+                        <span className="text-muted-foreground truncate">{p.name}</span>
+                        <span className="font-mono text-xs font-semibold">{p.days} days</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Billers can override per-payer in the Payers tab.</p>
                 </div>
               )}
             </div>
