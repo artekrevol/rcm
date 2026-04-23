@@ -1,0 +1,260 @@
+Four clear findings from the screenshots. Let me break them down:
+
+**Image 4 (5:20 PM):** G0299 selected, description populated correctly, "Rate from VA fee schedule" label shows in green — but the rate field is empty and shows "Rate not on file." The label is wired but the value isn't being passed. This is a one-line frontend bug.
+
+**Image 3 (5:21 PM):** Page goes completely blank when EDI download is triggered. This is a JavaScript crash on the download action — the page is breaking, not just navigating away. This may also be why Check 5 is impossible.
+
+**Image 2 (5:22 PM):** Test validation shows "Rejected. 0 validation issue(s) found." — this is contradictory messaging. Rejected but no issues? Something is wrong in how the result is interpreted.
+
+**Image 1 (5:24 PM):** Same raw Stedi schema error still appearing. `transactionSets` key is still being sent. Not fixed.
+
+Send this to Replit now:
+
+```
+Four bugs confirmed still broken from manual testing.
+Fix in this exact order — do not move to next until 
+verified.
+
+═══════════════════════════════════════════════════════
+BUG 1 — CRITICAL: EDI Download crashes the page (blank screen)
+═══════════════════════════════════════════════════════
+
+OBSERVED: Clicking "Download 837P EDI" on a draft 
+claim causes the entire page to go blank/white.
+The browser stays on the same URL but renders nothing.
+This is a JavaScript crash in the download handler.
+
+Find the EDI download handler in the frontend.
+It is likely doing something like:
+window.location.href = '/api/billing/claims/:id/edi'
+
+This causes the page to navigate away or crash 
+if the response is not handled correctly.
+
+Fix: Use fetch() to download the file as a blob, 
+not window.location.href:
+
+const handleDownloadEDI = async () => {
+  try {
+    const response = await fetch(
+      `/api/billing/claims/${claimId}/edi`,
+      { credentials: 'include' }
+    );
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status}`);
+    }
+    const text = await response.text();
+    // Create blob and trigger download
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `claim-${claimId}.837`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('EDI download error:', err);
+    toast.error('EDI download failed. Please try again.');
+  }
+};
+
+The backend GET /api/billing/claims/:id/edi endpoint 
+must return the EDI as plain text with headers:
+Content-Type: text/plain
+Content-Disposition: attachment; filename="claim-{id}.837"
+
+It must NOT redirect or navigate.
+It must NOT update claim status.
+
+Verify the backend endpoint:
+1. Returns 200 with EDI text content
+2. Does not UPDATE claims SET status anywhere
+3. Does not throw errors that crash the response
+
+After fixing: click Download EDI on a draft claim,
+confirm a .837 file downloads, confirm page stays 
+loaded, confirm claim status remains 'draft'.
+
+═══════════════════════════════════════════════════════
+BUG 2 — VA Rate label shows but value doesn't populate
+═══════════════════════════════════════════════════════
+
+OBSERVED: After selecting G0299:
+- Description populates correctly ✓
+- "Rate from VA fee schedule" label appears in green ✓
+- Rate field remains EMPTY ✗
+- Warning "Rate not on file — enter manually" shows ✗
+
+The va_rate value is being fetched (the label proves 
+the data exists) but is not being written to the 
+rate input field.
+
+Find the code selection handler in claim-wizard.tsx.
+Search for where va_rate or vaRate is used after 
+a code is selected.
+
+The bug is likely:
+// WRONG — displaying label but not setting field value:
+setRateSource('VA fee schedule');  // sets the label
+// but missing:
+setFieldValue('rate', selectedCode.va_rate);  // never called
+
+Fix: When a code is selected and va_rate exists,
+explicitly set the rate field value:
+
+const onCodeSelect = (code: HcpcsCode) => {
+  // Update code and description
+  updateLine(index, {
+    hcpcsCode: code.code,
+    description: code.description_plain || code.description,
+  });
+  
+  // Auto-populate rate if VA rate exists 
+  // and rate field is currently empty
+  if (code.va_rate && !currentLine.rate) {
+    updateLine(index, { 
+      rate: code.va_rate,
+      rateSource: 'VA fee schedule'
+    });
+  }
+  
+  // NEVER reset units/service_hours
+  // Only update empty fields
+};
+
+Also fix the HCPCS code search UX issue:
+OBSERVED: Typing "G0299" in the Code field shows 
+a search box underneath where you have to retype 
+the code. The user has to type it twice.
+
+Fix: When the user types in the Code field, 
+use that value directly as the search query.
+Do NOT show a separate search input.
+The Code field IS the search field.
+Show a dropdown of results below it as you type.
+Selecting a result populates the Code field 
+with the selected code.
+
+After fixing: type G0299 in code field, select 
+from dropdown, confirm $40.89 appears in rate 
+field without any additional steps.
+
+═══════════════════════════════════════════════════════
+BUG 3 — CRITICAL: Test validation still sends wrong 
+request body to Stedi API
+═══════════════════════════════════════════════════════
+
+OBSERVED: "Test This Claim First" still returns:
+"TransactionSets: unknown field 'transactionSets', 
+expected one of 'controlNumber', 
+'tradingPartnerServiceId'..."
+
+Also observed contradictory message:
+"Stedi test validation: Rejected. 0 validation 
+issue(s) found."
+Rejected means something failed — 0 issues is wrong.
+
+TWO problems to fix:
+
+PROBLEM A — Wrong request body format
+The test-stedi endpoint is sending:
+{ transactionSets: [ediContent] }
+
+Stedi's claim submission API expects EITHER:
+Option 1 — Raw X12 EDI as string directly in body
+Option 2 — JSON with specific fields matching 
+their professional claims API schema
+
+Read the existing submit-stedi endpoint (not test).
+Look at exactly what body it sends to Stedi 
+when submitting a real production claim.
+Copy that exact same body format for the test endpoint.
+The ONLY difference is ISA15='T' vs ISA15='P'.
+
+The submit-stedi endpoint works (or at least 
+doesn't get this error). The test endpoint 
+must use the exact same format.
+
+Find in routes.ts:
+POST /api/billing/claims/:id/submit-stedi 
+and compare its fetch() call body to:
+POST /api/billing/claims/:id/test-stedi
+
+Make them identical except for ISA15 value.
+
+PROBLEM B — Contradictory result message
+"Rejected. 0 validation issue(s) found" is impossible.
+If rejected, there must be at least one issue.
+
+Fix the result message logic:
+if (result.success) {
+  message = "✓ Accepted — claim passed Stedi validation";
+} else {
+  const errorCount = result.validationErrors?.length || 0;
+  if (errorCount === 0) {
+    // Rejected but no specific errors returned
+    // Show the raw rejection reason
+    message = `✗ Rejected — ${result.error || 
+      'Stedi returned a rejection without specific errors. 
+       Check the EDI format.'}`;
+  } else {
+    message = `✗ Rejected — ${errorCount} issue(s) found`;
+  }
+}
+
+Never show "Rejected. 0 issues found" — it's 
+contradictory and useless to a biller.
+
+After fixing:
+- Click "Test This Claim First" on any draft claim
+- Must NOT see "transactionSets" error
+- Must see either green "✓ Accepted" or red "✗ Rejected" 
+  with a meaningful reason
+
+═══════════════════════════════════════════════════════
+BUG 4 — NM1*DK cannot be verified (blocked by Bug 1)
+═══════════════════════════════════════════════════════
+
+Once Bug 1 (EDI download crash) is fixed, verify 
+the ordering provider qualifier was also fixed.
+
+After fixing Bug 1, download EDI for a claim that 
+has ordering provider James Walsh / NPI 1234567890.
+Search the downloaded .837 file for "Walsh".
+Confirm the segment reads: NM1*DK*1*Walsh*James
+NOT: NM1*DQ*1*Walsh*James
+
+DK = Ordering Provider (correct)
+DQ = Supervising Provider (wrong)
+
+If still showing DQ, find in edi-generator.ts:
+segments.push(`NM1*DQ*1*...`)
+Change DQ to DK.
+
+═══════════════════════════════════════════════════════
+VERIFICATION AFTER ALL 4 FIXES
+═══════════════════════════════════════════════════════
+
+Run in this order:
+
+1. Open a draft claim with G0299 and ordering provider
+2. In the service line: type G0299, select from dropdown
+   VERIFY: $40.89 appears in rate field automatically
+   VERIFY: units field not reset
+
+3. Click "Download 837P EDI"
+   VERIFY: .837 file downloads successfully
+   VERIFY: page does not go blank
+   VERIFY: claim status remains 'draft' in the list
+   VERIFY: downloaded EDI contains NM1*DK not NM1*DQ
+
+4. Navigate to claim Review step
+   Click "Test This Claim First — Free"
+   VERIFY: modal shows Accepted or meaningful error
+   VERIFY: no "transactionSets" schema error
+   VERIFY: no "Rejected. 0 issues" contradiction
+
+Report PASS/FAIL for each verification step.
+```
