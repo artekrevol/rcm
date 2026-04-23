@@ -472,7 +472,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
   }
 
   async function handleCodeSelect(result: any) {
-    const payerLower = patientPayer?.toLowerCase() || "";
+    const payerLower = (patientPayer || "").toLowerCase().replace(/\s+/g, "");
     const isVA = payerLower.includes("va") || payerLower.includes("triwest") || payerLower.includes("vaccn");
     let rate = "";
     let locationName: string | null = null;
