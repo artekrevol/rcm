@@ -118,6 +118,11 @@ function Router() {
           <BillingLayout><ClinicHome /></BillingLayout>
         </AuthGuard>
       </Route>
+      <Route path="/billing/practice">
+        <AuthGuard allowedRoles={["admin"]}>
+          <BillingLayout><ClinicHome /></BillingLayout>
+        </AuthGuard>
+      </Route>
       <Route path="/billing/dashboard">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><BillingDashboard /></BillingLayout>

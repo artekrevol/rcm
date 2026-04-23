@@ -94,8 +94,10 @@ export default function ClinicHome() {
   const { data: users = [] } = useQuery<any[]>({ queryKey: ["/api/admin/users"] });
   const { data: checklist } = useQuery<any>({ queryKey: ["/api/billing/onboarding-checklist"] });
   const { data: stats } = useQuery<any>({ queryKey: ["/api/billing/clinic/stats"] });
+  const { data: stediStatus } = useQuery<any>({ queryKey: ["/api/billing/stedi/status"] });
 
   const oaConnected = !!(ps?.oa_connected && ps?.oa_sftp_username);
+  const stediConnected = stediStatus?.configured === true;
 
   const steps = checklist?.steps ?? [];
   const SETUP_STEPS = [
@@ -144,13 +146,15 @@ export default function ClinicHome() {
             <Row label="Default Place of Service" value={ps?.default_pos || "—"} />
             <div className="flex items-center justify-between py-1">
               <span className="text-muted-foreground">Clearinghouse</span>
-              {oaConnected
-                ? <Badge className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">✓ Connected to Office Ally</Badge>
-                : (
-                  <Link href="/billing/settings?tab=clearinghouse">
-                    <Badge variant="destructive" className="text-xs cursor-pointer">⚠ Not Configured</Badge>
-                  </Link>
-                )
+              {stediConnected
+                ? <Badge className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">✓ Connected to Stedi</Badge>
+                : oaConnected
+                  ? <Badge className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">✓ Connected to Office Ally</Badge>
+                  : (
+                    <Link href="/billing/settings?tab=clearinghouse">
+                      <Badge variant="destructive" className="text-xs cursor-pointer">⚠ Not Configured</Badge>
+                    </Link>
+                  )
               }
             </div>
           </CardContent>

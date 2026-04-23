@@ -285,19 +285,21 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Secondary Payer Name</Label>
-              <Input
-                value={form.secondaryPayer}
-                onChange={(e) => set({ secondaryPayer: e.target.value })}
-                placeholder="e.g. Medicare, Medicaid, Blue Cross"
-                list="secondary-payer-list"
-                data-testid="input-secondary-payer"
-              />
-              <datalist id="secondary-payer-list">
-                {payers.filter((p: any) => p.is_active).map((p: any) => (
-                  <option key={p.id} value={p.name} />
-                ))}
-              </datalist>
+              <Label>Secondary Payer</Label>
+              <Select
+                value={form.secondaryPayer || "__none__"}
+                onValueChange={(v) => set({ secondaryPayer: v === "__none__" ? "" : v })}
+              >
+                <SelectTrigger data-testid="select-secondary-payer">
+                  <SelectValue placeholder="Select secondary payer…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {payers.filter((p: any) => p.is_active).map((p: any) => (
+                    <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label>Member ID</Label>

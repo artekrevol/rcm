@@ -592,6 +592,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ADD COLUMN IF NOT EXISTS orig_claim_number VARCHAR,
         ADD COLUMN IF NOT EXISTS homebound_indicator VARCHAR DEFAULT 'Y',
         ADD COLUMN IF NOT EXISTS ordering_provider_id VARCHAR,
+        ADD COLUMN IF NOT EXISTS external_ordering_provider_name VARCHAR,
+        ADD COLUMN IF NOT EXISTS external_ordering_provider_npi VARCHAR,
         ADD COLUMN IF NOT EXISTS delay_reason_code VARCHAR,
         ADD COLUMN IF NOT EXISTS follow_up_date DATE,
         ADD COLUMN IF NOT EXISTS follow_up_status VARCHAR
@@ -1024,9 +1026,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
+      const orgId = getOrgId(req);
       const showAll = req.query.all === "true";
-      const whereClause = showAll ? "" : "WHERE is_active = true";
-      const { rows } = await import("./db").then(m => m.pool.query(`SELECT * FROM providers ${whereClause} ORDER BY is_active DESC, last_name, first_name`));
+      const db = await import("./db").then(m => m.pool);
+      const whereClause = showAll
+        ? "WHERE organization_id = $1"
+        : "WHERE organization_id = $1 AND is_active = true";
+      const { rows } = await db.query(
+        `SELECT * FROM providers ${whereClause} ORDER BY is_active DESC, is_default DESC, last_name, first_name`,
+        [orgId]
+      );
       res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1035,6 +1044,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.post("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
+      const orgId = getOrgId(req);
       const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault } = req.body;
       if (!firstName?.trim() || !lastName?.trim() || !npi?.trim()) {
         return res.status(400).json({ error: "firstName, lastName, and npi are required" });
@@ -1048,12 +1058,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       try {
         await client.query("BEGIN");
         if (isDefault) {
-          await client.query("UPDATE providers SET is_default = false WHERE is_default = true");
+          await client.query("UPDATE providers SET is_default = false WHERE organization_id = $1 AND is_default = true", [orgId]);
         }
         const { rows } = await client.query(
-          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, license_number, is_default)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-          [firstName.trim(), lastName.trim(), credentials || null, npi, taxonomyCode || null, individualTaxId || null, licenseNumber || null, isDefault || false]
+          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, license_number, is_default, organization_id)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+          [firstName.trim(), lastName.trim(), credentials || null, npi, taxonomyCode || null, individualTaxId || null, licenseNumber || null, isDefault || false, orgId]
         );
         await client.query("COMMIT");
         res.json(rows[0]);
@@ -1084,8 +1094,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const client = await db.connect();
       try {
         await client.query("BEGIN");
+        const orgIdForPatch = ownerCheck.rows[0].organization_id;
         if (isDefault === true) {
-          await client.query("UPDATE providers SET is_default = false WHERE is_default = true");
+          await client.query("UPDATE providers SET is_default = false WHERE organization_id = $1 AND is_default = true", [orgIdForPatch]);
         }
         const fields: string[] = [];
         const values: any[] = [];
@@ -1725,9 +1736,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       ]);
 
       const ps = psResult.rows[0];
-      const addr = ps?.address && typeof ps.address === 'object' ? ps.address : {};
-      const hasAddr = !!(addr.street && addr.city);
-      const hasPractice = !!(ps?.practice_name && hasAddr);
+      const hasPractice = !!(ps?.practice_name && ps?.primary_npi);
       const hasProvider = (provResult.rows[0]?.cnt || 0) > 0;
       const hasPayer = (payerResult.rows[0]?.cnt || 0) > 0;
 
@@ -2148,6 +2157,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         chargeOverridden: "charge_overridden", reason: "reason", nextStep: "next_step",
         claimFrequencyCode: "claim_frequency_code", origClaimNumber: "orig_claim_number",
         homeboundIndicator: "homebound_indicator", orderingProviderId: "ordering_provider_id",
+        externalOrderingProviderName: "external_ordering_provider_name",
+        externalOrderingProviderNpi: "external_ordering_provider_npi",
         delayReasonCode: "delay_reason_code", followUpDate: "follow_up_date", followUpStatus: "follow_up_status",
       };
       const fields: string[] = [];
@@ -2292,6 +2303,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (claim.ordering_provider_id && claim.ordering_provider_id !== claim.provider_id) {
         const opResult = await db.query("SELECT first_name, last_name, npi FROM providers WHERE id = $1", [claim.ordering_provider_id]);
         orderingProvider = opResult.rows[0] || null;
+      } else if (claim.external_ordering_provider_name) {
+        const nameParts = claim.external_ordering_provider_name.split(" ");
+        orderingProvider = {
+          first_name: nameParts.slice(0, -1).join(" ") || nameParts[0],
+          last_name: nameParts.slice(-1)[0] || "",
+          npi: claim.external_ordering_provider_npi || "",
+        };
       }
 
       const orgId = getOrgId(req);
@@ -2579,11 +2597,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
       const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
-      // Fetch ordering provider if specified
+      // Fetch ordering provider if specified (internal or external)
       let orderingProv: { first_name: string; last_name: string; npi: string } | null = null;
       if (c.ordering_provider_id) {
         const opResult = await db.query("SELECT first_name, last_name, npi FROM providers WHERE id = $1", [c.ordering_provider_id]);
         if (opResult.rows.length) orderingProv = opResult.rows[0];
+      } else if (c.external_ordering_provider_name) {
+        const nameParts = c.external_ordering_provider_name.split(" ");
+        orderingProv = {
+          first_name: nameParts.slice(0, -1).join(" ") || nameParts[0],
+          last_name: nameParts.slice(-1)[0] || "",
+          npi: c.external_ordering_provider_npi || "",
+        };
       }
 
       const edi = generate837P({
@@ -3976,7 +4001,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       // Verify patient belongs to org
       const { rows: patRows } = await db.query(
-        `SELECT p.*, ps.npi as practice_npi, ps.name as practice_name
+        `SELECT p.*, ps.primary_npi as practice_npi, ps.practice_name as practice_name
          FROM patients p
          LEFT JOIN practice_settings ps ON ps.organization_id = p.organization_id
          WHERE p.id = $1`, [patientId]
@@ -4050,6 +4075,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ]
       );
 
+      if (result.status !== "error") {
+        await db.query("UPDATE patients SET vob_verified = true WHERE id = $1", [patientId]);
+      }
+
       res.json({ ...result, id: vobId });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -4096,6 +4125,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           payerNotes || null, userName, "billing", orgId,
         ]
       );
+
+      await db.query("UPDATE patients SET vob_verified = true WHERE id = $1", [patientId]);
 
       const { rows } = await db.query("SELECT * FROM vob_verifications WHERE id = $1", [vobId]);
       res.json(rows[0]);

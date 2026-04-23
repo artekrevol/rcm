@@ -1,0 +1,278 @@
+# ClaimShield Audit Report — Chajinel Clinic (Daniela Jonguitud)
+
+**Session context.** Logged in as djonguitud@chajinel.com. Draft claim created for test patient Robert Hernandez (TriWest). No claims submitted; no ERAs posted; no downloads triggered. Production safety rails honored throughout.
+
+---
+
+## STEP 1 — Dashboard (First Impressions)
+
+**Summary.** The dashboard greets Daniela with a "Get Started with ClaimShield" onboarding checklist (2/6 complete), KPI tiles all at zero ($0 Paid, 0 Drafts, 0 A/R Days, 0.0% Denial Rate, FPRR —%), and an empty "Recent Claims" section saying "No claims yet."
+
+- 🟢 **Onboarding checklist is clean and scannable.** The six steps (Add practice information, Add provider, Add payer ✓, Configure Office Ally SFTP, Set claim defaults ✓, Submit first test claim) are concrete.
+- 🟢 **Data isolation on dashboard looks correct.** All KPIs are zero/empty — no phantom claims or ghost revenue from another org.
+- 🟡 **Mismatch between dashboard checklist and reality.** "Add practice information" is shown un-checked even though Practice Name ("Chajinel Clinic") is already saved. She may not know what else it is asking for (NPI? EIN? address?). The checkbox is all-or-nothing with no list of missing sub-fields.
+- 🟡 **"Configure Office Ally SFTP credentials"** is on the checklist even though the system is supposed to be Stedi-based. This contradiction will confuse her: is this an Ability replacement or an Office Ally connector?
+- 🟡 **FPRR shown as "—%"** with no explanation. Non-technical billers won't know FPRR = First Pass Resolution Rate (the tooltip/caption does say so, but only on very careful reading).
+- 🟢 **Target thresholds shown** ("Target: <45 days" for A/R, "Target: <5%" for denials) — helpful framing.
+
+---
+
+## STEP 2 — My Practice / Practice Info
+
+**Summary.** The read-only "My Practice" page at `/billing/clinic` shows Chajinel's data almost entirely empty on first load. The editable form at `/billing/settings` → Practice Info lets her fill it in, and the save succeeded. Homebound default is correctly ON (found on the Claim Defaults tab). But the VA Fee Schedule Location list does not contain San Mateo County.
+
+| Field | Expected | Found | Status |
+|---|---|---|---|
+| Practice Name | Chajinel Clinic | Chajinel Clinic | ✓ |
+| Primary NPI | 1184288680 | ○ empty (I filled it in) | Was empty |
+| Tax ID / EIN | 47-1075172 | ○ empty (I filled it in) | Was empty |
+| Street | 208 Cypress Avenue | ○ empty (I filled it in) | Was empty |
+| City | South San Francisco | ○ empty | Was empty |
+| State / ZIP | CA / 94080 | ○ empty | Was empty |
+| Phone | (650) 741-6107 | ○ empty | Was empty |
+| Default POS | 12 (Home) | 12 (Home) | ✓ |
+| Homebound default | ON | ON (Claim Defaults tab) | ✓ |
+| Default taxonomy code | 163W00000X (or similar) | ○ empty, no helper text | Was empty |
+| VA Fee Schedule Location | San Mateo County / SF Bay | ✗ No option for San Mateo County | Wrong |
+| Clearinghouse | Stedi connected | ⚠ "Not Configured" red badge | Wrong |
+
+- 🔴 **Blocker: No San Mateo County VA locality.** Searching "mateo" in the VA Fee Schedule Location dropdown returns zero results. Searching "francisco" returns only two options: `SAN FRANCISCO-OAKLAND-BERKELEY (ALAMEDA/CONTRA COSTA)` and `SAN FRANCISCO-OAKLAND-BERKELEY (MARIN CNTY)`. Chajinel's clinic is in South San Francisco (San Mateo County), which sits in its own VA locality pair. Picking Alameda or Marin is objectively the wrong fee schedule for her address. A non-technical biller who cares about accurate pay will not trust a system that literally cannot model where her clinic is.
+- 🔴 **Clearinghouse "⚠ Not Configured"** red badge on the My Practice landing page. The task spec says Stedi should show as connected in production. Either (a) Stedi isn't wired up for her tenant or (b) the UI doesn't reflect the actual connection. Either way, she sees red.
+- 🟡 **All key practice fields are empty on first login** (NPI, EIN, address, phone). The onboarding says "Add practice information" — it should either prefill from signup data or tell her exactly which fields are missing.
+- 🟡 **"Taxonomy Code" field has no helper text or lookup.** A non-technical biller will not know what to put here.
+- 🟡 **"Homebound default" is on a different tab** ("Claim Defaults") from the main Practice Info tab. She has to hunt. And this is not linked from the "Add practice information" onboarding step.
+- 🟡 **404 at `/billing/practice`** (the URL one might guess). Only `/billing/clinic` works. Navigating through the sidebar is fine but the 404 body text reads "Did you forget to add the page to the router?" — developer lingo surfaced to the user.
+
+Screenshots captured: `ss_59049ekdd` (My Practice landing), `ss_26398qgbi` (Practice Profile with empty fields), `ss_6360t8iqh` (404 on /practice), `ss_85717wbeb` / `ss_9001ubvtg` (locality dropdown gap), `ss_63045mh5h` (empty form before I filled it).
+
+---
+
+## STEP 3 — Providers
+
+**Summary.** Two providers already exist in Chajinel's tenant named "Alice Valid" and "Diana Valid." NPIs 1234567893 and 1245319599, both RN, both taxonomy 163W00000X.
+
+- 🔴 **Demo / test data leaking into a production tenant.** Daniela has never hired an "Alice Valid" or "Diana Valid." Those NPIs are clearly placeholder/test NPIs (1234567893 is a textbook fake). Any claim submitted with those providers as rendering providers would be a fraudulent submission. This is the single most dangerous finding in the audit — she will distrust the whole platform the moment she sees it, because "who are these nurses on my account?" is an immediate data-integrity red flag.
+- 🟡 **Default provider is "Diana Valid, RN (Default)"** — meaning the claim wizard will auto-pick a fake provider unless she actively changes it.
+- 🟢 **Provider table is clear** (Name, Credentials, NPI, Taxonomy, Default, Status, Actions) and "Add Provider" button is present. I did not click into the Add Provider form to avoid polluting the tenant further, but the table UX itself is fine.
+
+Screenshots: `ss_6380zx6l5` (Alice Valid / Diana Valid listed).
+
+---
+
+## STEP 4 — Payers
+
+**Summary.** TriWest is present but misconfigured for VA CCN. BCBS variants are present but generic. A "Facility billing (UB-04) is not supported in this release" banner sits above the list.
+
+**TriWest Healthcare Alliance (Edit modal):**
+
+| Setting | Expected | Found | Status |
+|---|---|---|---|
+| EDI Payer ID | TWVACCN | **TRWST** | 🔴 Wrong |
+| Timely Filing | 180 days | **365 days** | 🔴 Wrong |
+| Auto Follow-Up After | 10 days | **30 days** | 🔴 Wrong |
+| Prior Auth Required | ON | ON | 🟢 ✓ |
+| ERA Auto-Post clean paid | expected ON | OFF | 🟡 |
+| ERA Auto-Post CO-45 | expected ON | OFF | 🟡 |
+| Stedi sync badge / 837P·835 transactions shown | Yes | Not visible in edit modal | 🟡 |
+
+- 🔴 **Wrong TriWest Payer ID.** Claims routed to TRWST will not reach TriWest VA CCN. TWVACCN is the canonical ID. This is the claim-level blocker — every submission will misroute.
+- 🔴 **Wrong timely filing window** (365 vs. 180). She could unknowingly miss filing deadlines and get permanently denied on older dates of service.
+- 🔴 **30-day auto follow-up is 3× too long** for a payer that pays in 10 days. Means she'd be chasing paid claims or not chasing unpaid ones in time.
+
+**BCBS:**
+- 🟢 Three BCBS variants exist (BCBS Federal, generic "Blue Cross Blue Shield," Florida Blue).
+- 🟡 No **California-specific** BCBS / Anthem Blue Cross of California is present. EDI ID for the generic BCBS entry is literally "BCBS" which is not a real payer ID.
+- 🟡 The 270/271 eligibility support badge is not surfaced in the list view.
+
+**Other payer concerns:**
+- 🟡 "**Facility billing (UB-04) is not supported in this release**" banner. Home health sometimes bills on UB-04 (especially Medicare home health / hospice). A biller evaluating a home-health-focused platform would not expect that caveat.
+- 🟡 No Medicare, Medi-Cal, or VA FMS present in the default payer list even though they're common companions to VA CCN for home health in California.
+
+Screenshots: `ss_389140v88` (TriWest row, 365 days), `ss_7829wgizo` (TRWST / 365 / 30 in edit modal), `ss_81175itc8` / `ss_6084fygxv` (BCBS entries).
+
+---
+
+## STEP 5 — Create a VA Patient
+
+**Summary.** First attempt (test patient "John Martinez") appeared to succeed with a "Patient created" toast but immediately showed "Patient not found" on the detail page, and the patient was absent from the patient list. Second attempt (Robert Hernandez) succeeded. The patient form is missing a street address field entirely.
+
+- 🔴 **Ghost-save bug on first attempt.** Toast said "Patient created" and URL contained a fresh UUID `/billing/patients/3957d345-…`, but the body rendered red "Patient not found" and the patient was not in the list. This happened on my first attempt with John Martinez. Subsequent attempt with Robert Hernandez succeeded. A biller who saw "created" but then couldn't find her patient would distrust every save in the system.
+- 🔴 **No street/city/ZIP fields on the New Patient form.** Only "Residential State" is captured ("TX" placeholder). CMS-1500 Box 5 requires patient's full street address, city, state, ZIP. Without it, claims will fail edits. The placeholder "TX" in a California clinic is also a minor tell that this form was built generically.
+- 🟡 **Demo providers show up in the Default Provider dropdown** (Alice Valid, Diana Valid) with `(Default)` appended to one of them — reinforcing the ghost-provider problem.
+- 🟡 **No VA-specific fields:** no VA file number, no branch of service, no referring VA facility, no episode-of-care start date. A VA biller with 8 years of experience will immediately notice these are missing.
+- 🟡 **"Insurance Carrier" is a free-text autocomplete** — I typed "TriWest" and no dropdown of configured payers surfaced. It accepted the string without linking it to the configured TriWest payer record. That uncoupling is a subtle data-integrity risk because the claim might not pick up TriWest's settings.
+- 🟡 **Authorization Number field is on the patient record** (duplicates the one on the claim). This is good for VA's "auth-from-payer" model, but the relationship between patient-level auth, VOB-level auth, and claim-level auth is not explained anywhere.
+- 🟢 Referral Source dropdown includes "VA Community Care" as an option — nice touch.
+- 🟢 Second save (Robert Hernandez) worked end-to-end: toast fired, detail page rendered Profile/Claims/Eligibility/Notes tabs with correct data.
+
+Screenshots: `ss_1378cuh6r` (missing address fields, TX placeholder), `ss_75783eqi3` ("Patient created" + "Patient not found" simultaneously), `ss_72306e7z2` (404-style patient-not-found), `ss_1979gtjfv` (Robert Hernandez successfully saved).
+
+---
+
+## STEP 6 — Eligibility / VOB
+
+**Summary.** Eligibility tab is clean. Real-time check throws a raw SQL error. Manual VOB entry works well.
+
+- 🔴 **Real-time eligibility check returns a raw SQL error to the user.** Clicking "Check Eligibility" for TriWest patient produced a red toast: `Check failed — 500: {"error":"column ps.npi does not exist"}`. Three problems in one finding:
+  1. The error is a raw Postgres column-missing error leaked to a non-technical user.
+  2. There is no amber "TriWest does not support 270/271" badge, so the button shouldn't even be offered for TriWest payers.
+  3. A 500 SQL error on day-one use destroys trust instantly.
+- 🟡 **Manual VOB modal defaults are PPO-shaped, not VA-shaped.** Coinsurance defaults to 20%, Deductible to $1,500, Out-of-Pocket Max to $5,000. For VA CCN the correct defaults are 0 / $0 / $0. A biller in a rush could save an inflated deductible and later post patient balance wrong.
+- 🟡 **Manual VOB modal lacks a homebound toggle and a dedicated Auth Number field.** Auth has to be stuffed into the free-text Notes box (I did: "Auth: VA-2026-CHJ-7734"). Homebound is tracked on the claim and on claim defaults but not on the VOB.
+- 🟢 **Manual VOB save was smooth and the saved record renders well** ("Active / Manual / TriWest / Copay: $0 / Deductible: $0 / Effective 2026-01-01 / Term 2026-12-31") with the notes visible inline. This is one of the genuinely strong pages.
+
+Screenshots: `ss_4432s54wn` (raw SQL error toast), `ss_9858vdtdl` (PPO-shaped defaults), `ss_2464rx0ta` (saved VOB rendering).
+
+---
+
+## STEP 7 — Create a VA Claim (stopped before Submit)
+
+**Summary.** 3-step wizard: Patient → Service → Review. I created a draft claim for Robert Hernandez / TriWest / G0299 / 4 units / I10 / auth VA-2026-CHJ-7734 and stopped at Review. **I did NOT click "Submit via Stedi"**, per safety rules.
+
+### 7A — Patient & Auth
+- 🟢 Patient search by "Robert" returned Robert Hernandez immediately.
+- 🟢 Selecting the patient populated Insurance (TriWest), Member ID, and pre-filled Auth # `VA-2026-CHJ-7734` from the patient record. This is exactly the VA-first behavior you want.
+
+### 7B — Service Info
+- 🔴 **Place of Service defaults to Office (11), not Home (12).** Even though Practice Info shows Default POS = 12 and Claim Defaults shows Default POS = 12, the wizard opens with "Office (11)" selected. This is the single most dangerous default for a home-health biller — POS 11 on a home health claim is an automatic denial and can be flagged as abusive billing. I manually changed it to 12. A rushed biller would not.
+- 🟢 Service Date defaulted to today (2026-04-22).
+
+### 7C — Service Lines (G0299)
+- 🟡 **"Rate not on file — enter manually"** shown on the service line even though the code catalog contains G0299 with VA rate $40.89. Selecting G0299 via the inline search *does* surface the VA rate in the search result preview (`VA: $40.89 · Time-based (15min)`), but the form does not auto-apply it — I had to type 40.89 myself. This negates one of the platform's biggest value propositions for Daniela.
+- 🟡 **Selecting the code from the search dropdown wiped my previously entered Quantity (4) and Rate (40.89).** The form switches from "Quantity/Rate/Total" to "Service hours / Units (15 min each) / Rate / unit / Total" after selection, and resets both. I had to re-enter.
+- 🟢 Once I entered 1 service hour and $40.89/unit, the form correctly computed `1 hrs × 4 units/hr = 4 units × $40.89 = $163.56`. The math and unit conversion are right.
+
+### 7D — Diagnosis
+- 🟢 I10 autocomplete works. Result shows "I10 Essential (primary) hypertension" and after selecting, the code is stored/displayed as `I10` with no decimal. EDI-safe.
+- 🟢 Three secondary diagnosis slots available.
+
+### 7E — Provider / Ordering Provider
+- 🔴 **No way to add an external Ordering Provider.** The Ordering Provider dropdown only offers "Same as rendering provider" plus the two existing (fake) providers Alice Valid and Diana Valid. A VA home health claim typically requires an external VA physician (e.g., "Dr. James Walsh, NPI 1234567890") in Box 17/17b. There is no free-text entry, no "add new" option, no CMS NPPES lookup. This is a blocker for VA home health compliance.
+- 🟢 **Homebound checkbox is pre-checked** with a good explanation: "Required for Medicare home health (CLM10=Y) and VA CCN home-based claims."
+
+### 7F — Review
+- 🟢 Review summary shows Patient, Insurance, Member ID, Provider (Diana Valid), Service Date, POS (Home 12), Auth # (VA-2026-CHJ-7734), Service Line G0299 / 4 units × $40.89 = $163.56, Diagnosis I10.
+- 🟢 "Claim Readiness: GREEN / Risk score: 10/100" reassuring banner.
+- 🔴 **Contradictory VOB warning.** Both the green readiness banner and a yellow Warnings box say "Patient VOB not verified" — even though I just saved an Active manual VOB 10 minutes earlier. So the VOB record is not linked to the claim readiness engine. Daniela will not trust the Green/Risk score if one of the warnings is visibly wrong.
+- 🟡 **No CMS-1500 visual preview is rendered inline.** There is a "Download PDF" option but no on-screen Box-by-Box preview. I could not verify Boxes 17/17b (ordering provider), 21 (dx), 23 (auth), 24B (POS), 24D (code), 24F (amount), 24G (units) without triggering a download. For an 8-year biller this is the moment of truth — she wants to see the form before she submits.
+- 🟢 "Save as Draft" saved the claim successfully and it appears in Claim Tracker.
+- 🟢 **"Submit via Stedi" appears active/blue** but I did NOT click it per the production-safety rule. "Back to Service," "Save as Draft," and "Download PDF" are all available. No Submit via Office Ally button was visible (despite the dashboard checklist referencing Office Ally SFTP).
+
+Screenshots: `ss_9043h0pto` (POS defaulted to Office 11), `ss_8424rzd4b` (Rate not on file warning), `ss_1333mmd0d` (correct math after manual entry), `ss_51382ye77` (ordering provider dropdown limited to in-house providers), `ss_4407au9ue` (Review with VOB warning contradicting Green badge), `ss_21057po0v` (Draft saved toast).
+
+---
+
+## STEP 8 — Claim Tracker
+
+- 🟢 **Draft claim visible.** 1 claim found: Claim # 82e0abed, Patient "Robert …", Payer TriWest, Billed $163.56, Status `draft`. Filters: Date range, Status dropdown, Payer dropdown, Patient search.
+- 🟢 **Data isolation appears correct** — only the one draft I created is shown, no other clinic's claims.
+- 🟡 **Status is just "draft"** — no timeline / history per claim is visible without clicking in. The sidebar promises acknowledgments (277CA), payer status codes, etc., but I could not verify the rendering without a submitted claim.
+- 🟡 **No "Refresh Status" button** visible on the list row (may be inside the detail view, untested).
+
+Screenshot: `ss_3830rl0c0`.
+
+---
+
+## STEP 9 — ERA Posting
+
+- 🔴 **No way to manually upload an 835.** The page says *"No ERA batches received yet. 835 remittance files from Stedi are polled every 6 hours and will appear here automatically."* Daniela's current workflow is downloading 835 files from Ability manually. Without manual upload, she cannot use ClaimShield for ERA posting for any payer that isn't routed through Stedi. This kills one of the top reasons she would switch.
+- 🟢 **Empty state language is clear** and tells her when to expect ERAs (every 6 hours).
+- 🟢 **No "Post" buttons visible** because no ERAs are present, so the production-safety constraint on "never click Post" is automatically honored.
+
+Screenshot: `ss_308000zwe`.
+
+---
+
+## STEP 10 — Follow-Up Queue
+
+- 🟢 Clear empty state: "No outstanding claims. Claims that are at insurance and not yet paid will appear here."
+- 🟡 **No visible aging buckets (0-30 / 31-60 / 61-90 / 90+)** in the empty state. Without buckets or sample data she can't tell whether the page will meet her month-end follow-up workflow.
+- 🟡 I could not verify "Add follow-up note" or "Mark resolved" actions — they are not visible in empty state.
+
+Screenshot: `ss_0904nre91`.
+
+---
+
+## STEP 11 — Prior Auth
+
+- 🔴 **No "New Prior Auth" / "Record Auth" button.** Empty state literally says *"Prior authorizations will appear here when created from claim details."* In the VA model, the auth comes FROM the VA on the referral — Daniela does not request auth. There is no path to record a VA referral auth as a first-class object here. The auth she typed (VA-2026-CHJ-7734) on patient + claim is stored on those records but does not surface in this module.
+- 🟡 The module semantics lean toward "requesting" auth (typical commercial-payer model), which is the wrong mental model for VA.
+- 🟡 Even claim-level auths are not surfaced here despite the hint text — my draft claim with an auth# is not listed.
+
+Screenshot: `ss_98004q0yx`.
+
+---
+
+## STEP 12 — Code Lookup
+
+- 🟢 G0299 returns 1 result: *"Direct skilled nursing services of a registered nurse (rn) in the home health or hospice setting, each 15 minutes."* Unit type: Time-based (15 min intervals). VA rate (2025): **$40.89 / unit**. Place of service: Home (12). This is exactly what Daniela wants to see.
+- 🟡 **Rate label says "VA rate (2025)" in a 2026 session.** Needs a 2026 update or needs to display effective-date explicitly.
+- 🟢 99213 returns correctly with `VA rate: N/A`, `POS: N/A` — appropriate for an office-visit code.
+- 🟡 **"skilled nursing" free-text search returns 20 results sorted by code ID**, first result is G0019 (Community Health Integration) which is not a home-health nurse visit. Ranking is not relevance-based. A biller typing "skilled nursing" would expect G0154 / G0299 / G0156 at the top.
+
+Screenshots: `ss_8729zafx0` (G0299 detail), `ss_14443n4jm` (99213 N/A), `ss_38979lobt` (skilled nursing ranking issue).
+
+---
+
+## STEP 13 — Denial Intelligence
+
+- 🟢 Page loads; shows "Denial Patterns by Root Cause — 0 patterns detected" and "Top Patterns" empty box. Expected with no submitted claims.
+- 🟡 **Nothing actionable today.** There is no seeded/benchmark denial content (e.g., "Top 10 VA denial codes and how to prevent them"). For a prospect evaluating the platform, the page looks like a placeholder.
+
+Screenshot: `ss_7549rf7g8`.
+
+---
+
+## STEP 14 — Rules
+
+- 🔴 **Zero rules ship by default.** "0/0 Active Rules, 0 Times Triggered, 0 Denials Prevented, $0 Revenue Protected." No VA-specific rules pre-seeded (e.g., auto-require auth # on TriWest, auto-force POS=12 for G0299, auto-check timely filing against 180-day window). Daniela has no dedicated biller — she will not author rules from scratch. This is a major missed value-prop: the platform should ship with a VA/home-health rule pack.
+- 🟡 No specialty filter visible; no "Install VA home health pack" or "Install Medicare home health pack" button.
+
+Screenshot: `ss_1159x4qtf`.
+
+---
+
+## STEP 15 — Reports
+
+- 🔴 **Reports is a stub.** The entire page is a single "Report Center" card with the tagline *"Aging reports, denial trends, and revenue analysis."* No reports, no export, no filters. For a clinic that bills monthly, the Reports page is THE page — and it doesn't exist.
+
+Screenshot: `ss_4269b0x3p`.
+
+---
+
+## OVERALL ASSESSMENT
+
+### 1. DATA ISOLATION — CRITICAL
+
+Yes, Daniela is seeing data that does not belong to her on multiple pages:
+
+- **Settings → Providers:** Two demo providers "Alice Valid, RN" (NPI 1234567893) and "Diana Valid, RN" (NPI 1245319599) appear in her tenant. "Diana Valid" is marked as the Default provider. These NPIs are obviously fake. Any claim submitted with them as rendering providers is fraudulent. 🔴
+- **Claim Wizard → Service step:** The "Rendering Provider" dropdown pre-selects "Diana Valid, RN — NPI: 1245319599 (Default)" and the "Ordering Provider" dropdown only offers the same two demo providers plus "Same as rendering." 🔴
+- **Patient → Default Provider dropdown** during patient creation lists only the two demo providers. 🔴
+
+These are the most serious finding in the audit. Any production tenant should ship with zero provider records.
+
+### 2. END-TO-END COMPLETENESS
+
+| Step | Works? |
+|---|---|
+| Create patient | ✗ (worked on 2nd attempt; no address capture; ghost-save on 1st attempt) |
+| Record VOB / auth | ✓ (manual VOB is solid; auth stuffed into notes) |
+| Create claim | ✗ (wrong POS default, rate doesn't auto-populate, no external ordering provider) |
+| Review claim | ✓ draft (but VOB warning is false-positive; no CMS-1500 preview) |
+| Submit | Not tested for safety reasons |
+| Track claim status | ✓ (draft visible) |
+| Post ERA payment | ✗ (no manual 835 upload; auto-poll only) |
+| Manage follow-up | ? (empty; couldn't verify functionality) |
+
+**Short answer: No, Daniela cannot complete a full billing cycle end-to-end today without calling for help.**
+
+### 3. TOP 3 BLOCKERS
+
+1. **Wrong TriWest Payer ID (TRWST instead of TWVACCN), 365-day timely filing, and 30-day follow-up.** Every VA CCN claim will misroute or miss filing windows out of the box.
+2. **Fake demo providers ("Alice Valid," "Diana Valid") pre-populated in the production tenant,** including as the default rendering/ordering provider. Any inadvertent submission is fraudulent billing. No way to record an external VA ordering physician.
+3. **Place of Service defaults to Office (11) in the claim wizard** despite both Practice Info and Claim Defaults being set to Home (12). POS 11 on a home health claim is an automatic denial.
+
+### 4. TOP 3 FRICTION POINTS
+
+1. **VA rate does not auto-populate into the claim** even though the code catalog stores it ($40.89 for G0299). She has to look

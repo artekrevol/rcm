@@ -51,12 +51,12 @@ export default function PatientCreate() {
 
   const [form, setForm] = useState({
     firstName: "", lastName: "", dob: "", sex: "",
-    insuranceCarrier: "", memberId: "", groupNumber: "",
+    payerId: "", insuranceCarrier: "", memberId: "", groupNumber: "",
     insuredName: "", relationshipToInsured: "", authorizationNumber: "",
     referringProviderName: "", referringProviderNpi: "",
     referralSource: "", referralPartnerName: "", otherReferralSource: "",
     defaultProviderId: "", serviceNeeded: "",
-    phone: "", email: "", state: "",
+    phone: "", email: "", street: "", city: "", state: "", zip: "",
   });
 
   const { data: providers = [] } = useQuery<any[]>({
@@ -121,7 +121,13 @@ export default function PatientCreate() {
       serviceNeeded: form.serviceNeeded || null,
       phone: form.phone || null,
       email: form.email || null,
+      payerId: form.payerId || null,
       state: form.state || null,
+      address: {
+        street: form.street || "",
+        city: form.city || "",
+        zip: form.zip || "",
+      },
     });
   }
 
@@ -171,15 +177,31 @@ export default function PatientCreate() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Residential State <span className="text-muted-foreground text-xs font-normal">(patient's home address — used in EDI)</span></Label>
-              <Input value={f.state} onChange={(e) => set({ state: e.target.value })} maxLength={2} placeholder="TX" data-testid="input-state" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
               <Label>Phone</Label>
               <Input value={f.phone} onChange={(e) => set({ phone: e.target.value })} data-testid="input-phone" />
             </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2 col-span-2">
+              <Label>Street Address <span className="text-muted-foreground text-xs font-normal">(used in EDI — CMS-1500 Box 5)</span></Label>
+              <Input value={f.street} onChange={(e) => set({ street: e.target.value })} placeholder="208 Cypress Avenue" data-testid="input-street" />
+            </div>
+          </div>
+          <div className="grid grid-cols-4 gap-4">
+            <div className="space-y-2 col-span-2">
+              <Label>City</Label>
+              <Input value={f.city} onChange={(e) => set({ city: e.target.value })} placeholder="South San Francisco" data-testid="input-city" />
+            </div>
+            <div className="space-y-2">
+              <Label>State</Label>
+              <Input value={f.state} onChange={(e) => set({ state: e.target.value })} maxLength={2} placeholder="CA" data-testid="input-state" />
+            </div>
+            <div className="space-y-2">
+              <Label>ZIP</Label>
+              <Input value={f.zip} onChange={(e) => set({ zip: e.target.value })} maxLength={10} placeholder="94080" data-testid="input-zip" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Email</Label>
               <Input value={f.email} onChange={(e) => set({ email: e.target.value })} type="email" data-testid="input-email" />
@@ -196,18 +218,35 @@ export default function PatientCreate() {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Insurance Carrier</Label>
-              <Input
-                value={f.insuranceCarrier}
-                onChange={(e) => set({ insuranceCarrier: e.target.value })}
-                placeholder="Enter carrier name or select from payers"
-                list="payer-list"
-                data-testid="input-insurance-carrier"
-              />
-              <datalist id="payer-list">
-                {payers.filter((p: any) => p.is_active).map((p: any) => (
-                  <option key={p.id} value={p.name} />
-                ))}
-              </datalist>
+              <Select
+                value={f.payerId || "__custom__"}
+                onValueChange={(v) => {
+                  if (v === "__custom__") {
+                    set({ payerId: "", insuranceCarrier: "" });
+                  } else {
+                    const payer = payers.find((p: any) => p.id === v);
+                    set({ payerId: v, insuranceCarrier: payer?.name || "" });
+                  }
+                }}
+              >
+                <SelectTrigger data-testid="select-insurance-carrier">
+                  <SelectValue placeholder="Select payer..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {payers.filter((p: any) => p.is_active).map((p: any) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                  <SelectItem value="__custom__">Other / Enter manually</SelectItem>
+                </SelectContent>
+              </Select>
+              {(f.payerId === "" || f.payerId === "__custom__") && (
+                <Input
+                  value={f.insuranceCarrier}
+                  onChange={(e) => set({ insuranceCarrier: e.target.value })}
+                  placeholder="Enter carrier name"
+                  data-testid="input-insurance-carrier"
+                />
+              )}
             </div>
             <div className="space-y-2">
               <Label>Member ID</Label>

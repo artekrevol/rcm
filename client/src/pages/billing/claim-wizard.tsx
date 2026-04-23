@@ -868,6 +868,8 @@ export default function ClaimWizard() {
   const [origClaimNumber, setOrigClaimNumber] = useState("");
   const [homeboundIndicator, setHomeboundIndicator] = useState(false);
   const [orderingProviderId, setOrderingProviderId] = useState("");
+  const [externalOrderingName, setExternalOrderingName] = useState("");
+  const [externalOrderingNpi, setExternalOrderingNpi] = useState("");
   const [delayReasonCode, setDelayReasonCode] = useState("none");
 
   const [riskResult, setRiskResult] = useState<{ riskScore: number; readinessStatus: string; factors: string[] } | null>(null);
@@ -942,6 +944,9 @@ export default function ClaimWizard() {
       }
       if (ps.default_ordering_provider_id) {
         setOrderingProviderId(ps.default_ordering_provider_id);
+      }
+      if (ps.default_pos) {
+        setPlaceOfService(ps.default_pos);
       }
       setDefaultsApplied(true);
     }
@@ -1147,7 +1152,9 @@ export default function ClaimWizard() {
       claimFrequencyCode: claimFrequencyCode || "1",
       origClaimNumber: origClaimNumber || null,
       homeboundIndicator,
-      orderingProviderId: orderingProviderId || null,
+      orderingProviderId: orderingProviderId === "__external__" ? null : (orderingProviderId || null),
+      externalOrderingProviderName: orderingProviderId === "__external__" ? (externalOrderingName || null) : null,
+      externalOrderingProviderNpi: orderingProviderId === "__external__" ? (externalOrderingNpi || null) : null,
       delayReasonCode: (delayReasonCode && delayReasonCode !== "none") ? delayReasonCode : null,
     };
   }
@@ -1591,13 +1598,14 @@ export default function ClaimWizard() {
                 </div>
               )}
               <div className="space-y-1.5">
-                <Label>Ordering Provider <span className="text-xs text-muted-foreground">(if different from rendering)</span></Label>
+                <Label>Ordering Provider <span className="text-xs text-muted-foreground">(CMS-1500 Box 17 — if different from rendering)</span></Label>
                 <Select value={orderingProviderId || "__none__"} onValueChange={(v) => setOrderingProviderId(v === "__none__" ? "" : v)}>
                   <SelectTrigger data-testid="select-ordering-provider">
                     <SelectValue placeholder="Same as rendering provider" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">Same as rendering provider</SelectItem>
+                    <SelectItem value="__external__">Enter external ordering provider (VA physician, etc.)</SelectItem>
                     {providers.map((p: any) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.first_name} {p.last_name}{p.credentials ? `, ${p.credentials}` : ""} — NPI: {p.npi}
@@ -1605,6 +1613,29 @@ export default function ClaimWizard() {
                     ))}
                   </SelectContent>
                 </Select>
+                {orderingProviderId === "__external__" && (
+                  <div className="grid grid-cols-2 gap-2 mt-2 p-3 border rounded-md bg-muted/30">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Provider Name</Label>
+                      <Input
+                        value={externalOrderingName}
+                        onChange={(e) => setExternalOrderingName(e.target.value)}
+                        placeholder="Dr. James Walsh"
+                        data-testid="input-external-ordering-name"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Provider NPI</Label>
+                      <Input
+                        value={externalOrderingNpi}
+                        onChange={(e) => setExternalOrderingNpi(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                        placeholder="1234567890"
+                        maxLength={10}
+                        data-testid="input-external-ordering-npi"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/30">
                 <Checkbox
@@ -1690,6 +1721,13 @@ export default function ClaimWizard() {
                 <div><span className="text-muted-foreground">DOB:</span> {patient?.dob || "—"}</div>
                 <div><span className="text-muted-foreground">Insurance:</span> {patient?.insurance_carrier || "—"}</div>
                 <div><span className="text-muted-foreground">Member ID:</span> {patient?.member_id || "—"}</div>
+                {patient?.secondary_payer_id && (
+                  <div className="col-span-2 border-t pt-2 mt-1">
+                    <span className="text-muted-foreground font-medium text-xs uppercase tracking-wide">Secondary (COB):</span>
+                    <span className="ml-2">{patient.secondary_payer_id}</span>
+                    {patient.secondary_member_id && <span className="ml-2 text-muted-foreground">#{patient.secondary_member_id}</span>}
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
