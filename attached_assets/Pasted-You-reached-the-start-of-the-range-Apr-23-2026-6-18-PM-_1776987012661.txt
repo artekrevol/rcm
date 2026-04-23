@@ -1,0 +1,89 @@
+You reached the start of the range
+Apr 23, 2026, 6:18 PM
+[⣟] Pulling schema from database...
+[⡿] Pulling schema from database...
+> drizzle-kit push
+No config path provided, using default 'drizzle.config.ts'
+Reading config file '/app/drizzle.config.ts'
+Using 'pg' driver for database querying
+[⣷] Pulling schema from database...
+[⣯] Pulling schema from database...
+> rest-express@1.0.0 db:push
+[⢿] Pulling schema from database...
+[⣻] Pulling schema from database...
+Starting Container
+[⣽] Pulling schema from database...
+[⣷] Pulling schema from database...
+[✓] Pulling schema from database...
+· You're about to delete era_batches table with 3 items
+· You're about to delete carc_posting_rules table with 21 items
+ Warning  Found data-loss statements:
+· You're about to delete cpt_codes table with 16645 items
+· You're about to delete role_permissions table with 32 items
+· You're about to delete va_location_rates table with 2160 items
+· You're about to delete icd10_codes table with 97584 items
+· You're about to delete last_active_at column in users table with 7 items
+· You're about to delete session table with 3 items
+· You're about to delete specialty_tags column in rules table with 43 items
+· You're about to delete pos_codes table with 53 items
+· You're about to delete era_lines table with 3 items
+· You're about to delete condition_type column in rules table with 43 items
+· You're about to delete carc_codes table with 264 items
+· You're about to delete condition_value column in rules table with 43 items
+· You're about to delete rarc_codes table with 229 items
+· You're about to delete action column in rules table with 43 items
+· You're about to delete is_active column in rules table with 43 items
+· You're about to delete taxonomy_codes table with 553 items
+· You're about to delete payer_auth_requirements table with 10 items
+· You're about to delete era_auto_post_secondary column in payers table with 234 items
+· You're about to delete era_auto_post_refunds column in payers table with 234 items
+· You're about to delete billing_location column in practice_settings table with 2 items
+· You're about to delete era_hold_if_mismatch column in payers table with 234 items
+· You're about to delete oa_submitter_id column in practice_settings table with 2 items
+· You're about to delete oa_sftp_username column in practice_settings table with 2 items
+· You're about to delete stedi_payer_id column in payers table with 234 items
+· You're about to delete default_tos column in practice_settings table with 2 items
+· You're about to delete oa_sftp_password column in practice_settings table with 2 items
+· You're about to delete default_ordering_provider_id column in practice_settings table with 2 items
+· You're about to delete oa_connected column in practice_settings table with 2 items
+· You're about to delete homebound_default column in practice_settings table with 2 items
+· You're about to delete exclude_facility column in practice_settings table with 2 items
+· You're about to delete auto_followup_days column in payers table with 234 items
+· You're about to delete era_auto_post_clean column in payers table with 234 items
+· You're about to delete era_auto_post_contractual column in payers table with 234 items
+· You're about to delete supported_transactions column in payers table with 234 items
+· You're about to delete updated_at column in payers table with 234 items
+· You're about to delete stedi_synced_at column in payers table with 234 items
+· You're about to delete enrollment_status_835 column in payers table with 234 items
+· You're about to delete enrollment_status_837 column in payers table with 234 items
+· You're about to delete enrollment_activated_at column in payers table with 234 items
+· You're about to delete onboarding_dismissed_at column in organizations table with 2 items
+· You're about to delete verification_method column in vob_verifications table with 2 items
+· You're about to delete stedi_transaction_id column in vob_verifications table with 2 items
+· You're about to delete verified_by column in vob_verifications table with 2 items
+· You're about to delete stedi_transaction_id column in claims table with 67 items
+· You're about to delete external_ordering_provider_name column in claims table with 67 items
+· You're about to delete external_ordering_provider_npi column in claims table with 67 items
+· You're about to delete last_test_status column in claims table with 67 items
+· You're about to delete last_test_at column in claims table with 67 items
+· You're about to delete last_test_errors column in claims table with 67 items
+· You're about to delete secondary_payer_id column in claims table with 67 items
+· You're about to delete secondary_member_id column in claims table with 67 items
+· You're about to delete secondary_group_number column in claims table with 67 items
+· You're about to delete cob_order column in claims table with 67 items
+· You're about to delete ordering_provider_first_name column in claims table with 67 items
+· You're about to delete ordering_provider_last_name column in claims table with 67 items
+· You're about to delete ordering_provider_npi column in claims table with 67 items
+· You're about to delete ordering_provider_org column in claims table with 67 items
+· You're about to delete secondary_payer_id column in patients table with 56 items
+· You're about to delete secondary_member_id column in patients table with 56 items
+· You're about to delete secondary_group_number column in patients table with 56 items
+· You're about to delete secondary_plan_name column in patients table with 56 items
+· You're about to delete secondary_relationship column in patients table with 56 items
+· You're about to delete street_address column in patients table with 56 items
+· You're about to delete city column in patients table with 56 items
+· You're about to delete zip_code column in patients table with 56 items
+THIS ACTION WILL CAUSE DATA LOSS AND CANNOT BE REVERTED
+Do you still want to push changes?
+❯ No, abort
+  Yes, I want to remove 13 tables, remove 54 columns, 
