@@ -2533,6 +2533,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         );
       }
 
+      // Auto-create prior_auth record when authorization_number is set on the claim
+      if (req.body.authorizationNumber && rows[0]?.patient_id) {
+        const authNum = req.body.authorizationNumber;
+        const existingAuth = await db.query(
+          `SELECT id FROM prior_authorizations WHERE patient_id = $1 AND auth_number = $2 LIMIT 1`,
+          [rows[0].patient_id, authNum]
+        ).catch(() => ({ rows: [] }));
+        if (!existingAuth.rows.length) {
+          await db.query(
+            `INSERT INTO prior_authorizations (id, patient_id, organization_id, auth_number, status, mode, source, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, 'approved', 'received', 'claim_wizard', NOW(), NOW())
+             ON CONFLICT DO NOTHING`,
+            [crypto.randomUUID(), rows[0].patient_id, rows[0].organization_id, authNum]
+          ).catch(() => {});
+        }
+      }
+
       res.json(rows[0]);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
@@ -3180,9 +3197,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [crypto.randomUUID(), req.params.id, c.patient_id, "edi_export", "837P EDI file generated", (req.user as any)?.id || null]
       );
 
-      // Set follow_up_date (30 days from today) and status = submitted on manual EDI download
+      // Set follow_up_date (30 days from today) on manual EDI download — do not auto-advance status
       await db.query(
-        `UPDATE claims SET status = CASE WHEN status = 'draft' THEN 'submitted' ELSE status END,
+        `UPDATE claims SET
          follow_up_date = COALESCE(follow_up_date, NOW() + INTERVAL '30 days'),
          follow_up_status = COALESCE(follow_up_status, 'pending'), updated_at = NOW()
          WHERE id = $1`,
@@ -4452,6 +4469,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         secondaryPayerId: "secondary_payer_id", secondaryMemberId: "secondary_member_id",
         secondaryGroupNumber: "secondary_group_number", secondaryPlanName: "secondary_plan_name",
         secondaryRelationship: "secondary_relationship",
+        streetAddress: "street_address", city: "city", zipCode: "zip_code",
       };
       if (req.body.referringProviderNpi) {
         const { validateNPI } = await import("../shared/npi-validation");
@@ -7659,6 +7677,7 @@ Warmly,
         users: users.rows,
         providerCount: providers.rows[0]?.cnt || 0,
         payerCount: payers.rows[0]?.cnt || 0,
+        stediConfigured: !!process.env.STEDI_API_KEY,
         featureUsage: {
           claimsCreated: claimsCreated.rows[0]?.cnt || 0,
           claimsSubmitted: claimsSubmitted.rows[0]?.cnt || 0,

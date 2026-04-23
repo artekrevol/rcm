@@ -65,9 +65,18 @@ export default function ClinicDetail() {
     );
   }
 
-  const { org, practiceSettings: ps, users, providerCount, payerCount, featureUsage: fu, frictionItems } = data;
+  const { org, practiceSettings: ps, users, providerCount, payerCount, featureUsage: fu, frictionItems, stediConfigured } = data;
 
   const oaConnected = !!(ps?.oa_connected && ps?.oa_sftp_username);
+  const clearinghouseConnected = oaConnected || !!stediConfigured;
+
+  function formatAddress(addr: any): string {
+    if (!addr) return "—";
+    if (typeof addr === "string") {
+      try { addr = JSON.parse(addr); } catch { return addr; }
+    }
+    return [addr.street || addr.address || addr.street1, addr.city, addr.state, addr.zip].filter(Boolean).join(", ") || "—";
+  }
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
@@ -109,13 +118,13 @@ export default function ClinicDetail() {
             <Row label="Practice Name" value={ps?.practice_name || "—"} />
             <Row label="Primary NPI" value={ps?.primary_npi || "—"} />
             <Row label="Tax ID" value={ps?.tax_id || "—"} />
-            <Row label="Address" value={ps?.address ? JSON.stringify(ps.address) : "—"} />
+            <Row label="Address" value={formatAddress(ps?.address)} />
             <Row label="Phone" value={ps?.phone || "—"} />
             <Row label="Providers" value={`${providerCount} configured`} />
             <Row label="Payers in System" value={`${payerCount} available`} />
             <div className="flex items-center justify-between py-1">
               <span className="text-muted-foreground">Clearinghouse</span>
-              {oaConnected
+              {clearinghouseConnected
                 ? <Badge className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">Connected</Badge>
                 : <Badge variant="secondary" className="text-xs">Not configured</Badge>
               }

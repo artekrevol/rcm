@@ -210,10 +210,10 @@ export function generate837P(input: EDI837PInput): string {
     segments.push(`REF*1C*${provider.license_number}`);
   }
 
-  // Loop 2310D: Ordering Provider (NM1*DQ) — only if different from rendering
+  // Loop 2310D: Ordering Provider (NM1*DK) — only if different from rendering
   if (ordering_provider && ordering_provider.npi !== provider.npi) {
     segments.push(
-      `NM1*DQ*1*${ordering_provider.last_name}*${ordering_provider.first_name}****XX*${ordering_provider.npi}`
+      `NM1*DK*1*${ordering_provider.last_name}*${ordering_provider.first_name}****XX*${ordering_provider.npi}`
     );
   }
 

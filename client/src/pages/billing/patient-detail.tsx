@@ -105,6 +105,9 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
         defaultProviderId: patient.default_provider_id || "",
         serviceNeeded: patient.service_needed || "",
         preferredName: patient.preferred_name || "",
+        streetAddress: patient.street_address || "",
+        city: patient.city || "",
+        zipCode: patient.zip_code || "",
         secondaryPayer: patient.secondary_payer_id || "",
         secondaryMemberId: patient.secondary_member_id || "",
         secondaryGroupNumber: patient.secondary_group_number || "",
@@ -155,6 +158,9 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
       defaultProviderId: form.defaultProviderId || null,
       serviceNeeded: form.serviceNeeded || null,
       preferredName: form.preferredName || null,
+      streetAddress: form.streetAddress || null,
+      city: form.city || null,
+      zipCode: form.zipCode || null,
       secondaryPayerId: form.secondaryPayer || null,
       secondaryMemberId: form.secondaryMemberId || null,
       secondaryGroupNumber: form.secondaryGroupNumber || null,
@@ -226,6 +232,20 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
             <div className="space-y-2">
               <Label>Email</Label>
               <Input value={form.email} onChange={(e) => set({ email: e.target.value })} data-testid="input-edit-email" />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="col-span-3 space-y-2">
+              <Label>Street Address</Label>
+              <Input value={form.streetAddress} onChange={(e) => set({ streetAddress: e.target.value })} placeholder="123 Main St" data-testid="input-edit-street-address" />
+            </div>
+            <div className="col-span-2 space-y-2">
+              <Label>City</Label>
+              <Input value={form.city} onChange={(e) => set({ city: e.target.value })} placeholder="City" data-testid="input-edit-city" />
+            </div>
+            <div className="space-y-2">
+              <Label>ZIP Code</Label>
+              <Input value={form.zipCode} onChange={(e) => set({ zipCode: e.target.value })} maxLength={10} placeholder="12345" data-testid="input-edit-zip-code" />
             </div>
           </div>
         </CardContent>

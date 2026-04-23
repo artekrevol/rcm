@@ -104,7 +104,7 @@ function ARAgingReport({ filters }: { filters: Filters }) {
     queryFn: () => fetch(`/api/billing/reports/ar-aging?${params}`, { credentials: "include" }).then(r => r.json()),
   });
 
-  const rows = data || [];
+  const rows = Array.isArray(data) ? data : [];
 
   const bucketSummary = useMemo(() => {
     const map: Record<string, { count: number; amount: number }> = {};

@@ -1,5 +1,5 @@
 import { useAuth } from "@/hooks/use-auth";
-import { Redirect, useLocation } from "wouter";
+import { Redirect, useLocation, Link } from "wouter";
 import { Loader2, ShieldOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -60,9 +60,11 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
           <p className="text-muted-foreground mb-6">
             This area requires elevated permissions. Your current role ({user.role?.replace(/_/g, " ")}) does not have access to this section. Contact your administrator to request access.
           </p>
-          <Button variant="outline" onClick={() => window.history.back()}>
-            Go Back
-          </Button>
+          <Link href="/billing/dashboard">
+            <Button variant="outline">
+              Back to Billing
+            </Button>
+          </Link>
         </div>
       </div>
     );

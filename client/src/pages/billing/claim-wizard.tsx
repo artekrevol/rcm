@@ -505,9 +505,10 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
       ratePerUnit: keepExistingRate ? line.ratePerUnit : (rate || ""),
       requiresModifier: result.requires_modifier || false,
       manualEntry: result.manual || false,
-      hours: "",
-      totalCharge: "",
-      chargeOverridden: false,
+      hours: line.hours || "",
+      units: line.units || (result.unit_type === "time_based" ? "" : "1"),
+      totalCharge: line.totalCharge || "",
+      chargeOverridden: line.chargeOverridden || false,
       locationName,
       isAverageRate,
     });
@@ -1768,6 +1769,18 @@ export default function ClaimWizard() {
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><span className="text-muted-foreground">Provider:</span> {selectedProvider ? `${selectedProvider.first_name} ${selectedProvider.last_name}` : "—"}</div>
                 <div><span className="text-muted-foreground">Service Date:</span> {serviceDate || "—"}</div>
+                {orderingProviderId && orderingProviderId !== "__none__" && (() => {
+                  if (orderingProviderId === "__external__") {
+                    const name = [externalOrderingFirstName, externalOrderingLastName].filter(Boolean).join(" ");
+                    return name || externalOrderingNpi ? (
+                      <div className="col-span-2"><span className="text-muted-foreground">Ordering Provider:</span> {name || "—"}{externalOrderingNpi ? ` (NPI: ${externalOrderingNpi})` : ""}</div>
+                    ) : null;
+                  }
+                  const op = providers.find((p: any) => p.id === orderingProviderId);
+                  return op ? (
+                    <div className="col-span-2"><span className="text-muted-foreground">Ordering Provider:</span> {op.first_name} {op.last_name}{op.npi ? ` (NPI: ${op.npi})` : ""}</div>
+                  ) : null;
+                })()}
                 <div><span className="text-muted-foreground">Place of Service:</span> {POS_OPTIONS.find((o) => o.value === placeOfService)?.label || placeOfService}</div>
                 <div><span className="text-muted-foreground">Auth #:</span> {authNumber || "—"}</div>
               </div>
