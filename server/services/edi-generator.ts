@@ -226,8 +226,11 @@ export function generate837P(input: EDI837PInput): string {
       ? line.modifier.split(",").map(m => m.trim()).filter(Boolean)
       : [];
     const composite = ["HC", line.hcpcs_code, ...modifiers].join(":");
+    const ptrMap: Record<string, string> = { 'A': '1', 'B': '2', 'C': '3', 'D': '4' };
+    const rawPtr = line.diagnosis_pointer || 'A';
+    const diagPtr = ptrMap[rawPtr?.toUpperCase()] || rawPtr || '1';
     segments.push(
-      `SV1*${composite}*${line.charge.toFixed(2)}*UN*${line.units}***${line.diagnosis_pointer}`
+      `SV1*${composite}*${line.charge.toFixed(2)}*UN*${line.units}***${diagPtr}`
     );
     segments.push(
       `DTP*472*D8*${formatDate8(lineServiceDate)}`

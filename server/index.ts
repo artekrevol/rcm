@@ -7,6 +7,14 @@ import { setupAuth, ensureSessionTable } from "./auth";
 const app = express();
 const httpServer = createServer(app);
 
+// Section 0 — Required environment variable check
+const requiredEnvVars = ['STEDI_API_KEY', 'STEDI_WEBHOOK_SECRET', 'SESSION_SECRET'];
+for (const key of requiredEnvVars) {
+  if (!process.env[key]) {
+    console.warn(`⚠ Missing environment variable: ${key}`);
+  }
+}
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;

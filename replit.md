@@ -69,3 +69,16 @@ The platform adopts an enterprise SaaS design aesthetic with shadcn/ui and Tailw
 ### EDI / Clearinghouse
 - **ssh2-sftp-client**: SFTP client for Office Ally.
 - **Stedi API**: For real-time eligibility (270/271) and EDI processing (277/835).
+  - Webhook endpoints: POST /api/webhooks/stedi (277CA + 835 with idempotency via webhook_events table); POST /api/webhooks/stedi/enrollment (enrollment status events)
+  - Polling: 277 every 4hr, 835 every 24hr (webhooks are primary delivery path)
+  - GET /api/billing/stedi-status (hyphen) returns configured/mode/label; GET /api/billing/stedi/status (slash) also exists for backward compat
+  - TriWest payer: payer_id=TWVACCN, timely_filing=180, enrollment_status_835/837=active
+  - `webhook_events` table stores event_id for idempotency
+  - `payers` table: enrollment_status_835, enrollment_status_837, enrollment_activated_at columns
+
+### Rules Engine (ClaimShield 2.0)
+- Universal rules seeded with `condition_type` schema (12 rules: missing NPI, diagnosis, charges, payer, service date, VA auth, timely filing, duplicate, etc.)
+- `rules` table new columns: condition_type, condition_value, action, is_active
+- EDI validate endpoint runs both legacy trigger_pattern rules AND new condition_type rules engine
+- VOB check filters by payer_id/payer_name to avoid false positives
+- HCPCS VA rate lookup uses `default_va_locality` from practice_settings (fallback: SF Bay Area locality)

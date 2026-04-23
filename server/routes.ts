@@ -978,6 +978,75 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       UPDATE patients SET sex = 'Female' WHERE member_id = 'VA651254344' AND (sex IS NULL OR sex = '')
     `);
 
+    // ── Section 1: webhook_events idempotency table ───────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS webhook_events (
+        event_id VARCHAR PRIMARY KEY,
+        event_type VARCHAR,
+        transaction_id VARCHAR,
+        transaction_set VARCHAR,
+        processed_at TIMESTAMP DEFAULT NOW(),
+        status VARCHAR DEFAULT 'processed'
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_webhook_events_event_id ON webhook_events(event_id)`);
+
+    // ── Section 1: payer enrollment status columns ────────────────────────────
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_status_835 VARCHAR DEFAULT 'not_enrolled'`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_status_837 VARCHAR DEFAULT 'not_enrolled'`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_activated_at TIMESTAMP`);
+
+    // Update TriWest to reflect known active enrollment status
+    await pool.query(`
+      UPDATE payers SET
+        payer_id = 'TWVACCN',
+        timely_filing_days = 180,
+        auto_followup_days = 10,
+        enrollment_status_835 = 'active',
+        enrollment_status_837 = 'active',
+        enrollment_activated_at = NOW()
+      WHERE name ILIKE '%triwest%' OR payer_id IN ('TRWST', 'VACCN', 'TWVACCN')
+    `).catch(() => {});
+
+    // ── Section 1: rules table — add condition_type schema columns ────────────
+    await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS condition_type VARCHAR`);
+    await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS condition_value VARCHAR`);
+    await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS action VARCHAR`);
+    await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true`);
+
+    // Populate new columns from existing ones for backward compat
+    await pool.query(`
+      UPDATE rules SET
+        condition_type = COALESCE(condition_type, trigger_pattern),
+        action = COALESCE(action, prevention_action),
+        is_active = COALESCE(is_active, enabled)
+      WHERE condition_type IS NULL
+    `).catch(() => {});
+
+    // Seed universal rules using condition_type schema — idempotent ON CONFLICT
+    await pool.query(`
+      INSERT INTO rules (id, name, description, trigger_pattern, prevention_action, enabled, condition_type, condition_value, action, is_active, specialty_tags, organization_id)
+      VALUES
+        (gen_random_uuid()::text,'Missing NPI','Rendering provider NPI is missing or not 10 digits','provider_npi_invalid','block',true,'provider_npi_invalid','true','block',true,ARRAY['Universal'],NULL),
+        (gen_random_uuid()::text,'Missing Diagnosis','No primary ICD-10 diagnosis code on claim','diagnosis_missing','block',true,'diagnosis_missing','true','block',true,ARRAY['Universal'],NULL),
+        (gen_random_uuid()::text,'Zero Charges','All service line charges total $0.00','total_charges_zero','block',true,'total_charges_zero','true','block',true,ARRAY['Universal'],NULL),
+        (gen_random_uuid()::text,'Missing Payer','No payer assigned to claim','payer_missing','block',true,'payer_missing','true','block',true,ARRAY['Universal'],NULL),
+        (gen_random_uuid()::text,'Future Service Date','Date of service is more than 1 day in the future','service_date_future','warn',true,'service_date_future','1','warn',true,ARRAY['Universal'],NULL),
+        (gen_random_uuid()::text,'Missing Service Date','Date of service is not set','service_date_missing','block',true,'service_date_missing','true','block',true,ARRAY['Universal'],NULL),
+        (gen_random_uuid()::text,'VA Missing Auth Number','TriWest/VA CCN claims require an authorization number','va_auth_missing','block',true,'va_auth_missing','TWVACCN','block',true,ARRAY['VA Community Care'],NULL),
+        (gen_random_uuid()::text,'VA Timely Filing Warning','Claim approaching 150-day VA filing deadline','days_since_service_gt','warn',true,'days_since_service_gt','150','warn',true,ARRAY['VA Community Care'],NULL),
+        (gen_random_uuid()::text,'VA Timely Filing Block','Claim past 180-day VA filing deadline','days_since_service_gt','block',true,'days_since_service_gt','180','block',true,ARRAY['VA Community Care'],NULL),
+        (gen_random_uuid()::text,'VA Wrong Place of Service','VA CCN home health claims require POS 12','va_wrong_pos','warn',true,'va_wrong_pos','12','warn',true,ARRAY['VA Community Care'],NULL),
+        (gen_random_uuid()::text,'VA G-Code Requires POS 12','Home health G-codes must be billed with POS 12','gcode_wrong_pos','block',true,'gcode_wrong_pos','12','block',true,ARRAY['VA Community Care','Home Health'],NULL),
+        (gen_random_uuid()::text,'Duplicate Claim','A claim with same patient, service date, and code exists','duplicate_claim','warn',true,'duplicate_claim','true','warn',true,ARRAY['Universal'],NULL)
+      ON CONFLICT DO NOTHING
+    `).catch(() => {});
+
+    // Remove demo providers from non-demo orgs
+    await pool.query(`
+      DELETE FROM providers WHERE npi IN ('1234567893','1245319599') AND organization_id != 'demo-org-001'
+    `).catch(() => {});
+
     // ── Seed demo VA home health claims (Chajinel workflow) ───────────────────
     const { rows: demoClaimsCheck } = await pool.query(`SELECT COUNT(*)::int as cnt FROM claims WHERE id LIKE 'demo-claim-va-%'`);
     if (demoClaimsCheck[0].cnt === 0) {
@@ -1364,6 +1433,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           [code, location]
         );
         if (rows.length > 0) return res.json(rows[0]);
+      }
+      // Section 9: use practice default locality if no location passed
+      const DEFAULT_LOCALITY = 'SAN FRANCISCO-OAKLAND-BERKELEY (ALAMEDA/CONTRA COSTA CNTY)';
+      const settingRow = await db.query(
+        `SELECT value FROM practice_settings WHERE key = 'default_va_locality' LIMIT 1`
+      ).catch(() => ({ rows: [] as any[] }));
+      const defaultLocality = (settingRow.rows[0]?.value || DEFAULT_LOCALITY).toUpperCase();
+      const { rows: locRows } = await db.query(
+        `SELECT facility_rate as rate_per_unit, location_name,
+                hc.unit_type, hc.unit_interval_minutes, hc.description_plain
+         FROM va_location_rates vlr
+         LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
+         WHERE vlr.hcpcs_code = $1 AND UPPER(vlr.location_name) = $2
+           AND vlr.is_non_reimbursable = false
+         LIMIT 1`,
+        [code, defaultLocality]
+      );
+      if (locRows.length > 0) {
+        return res.json({ ...locRows[0], is_default_locality: true });
       }
       const { rows: avgRows } = await db.query(
         `SELECT ROUND(AVG(facility_rate)::numeric, 2) as rate_per_unit
@@ -2635,19 +2723,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!pat.sex)
         warnings.push({ field: "patient.sex", message: "Patient sex is unknown — will default to 'U' in EDI", severity: "warning" });
 
-      // VOB (insurance eligibility) check — query vob_verifications table, not just the boolean flag
+      // VOB (insurance eligibility) check — Section 8: filter by payer to avoid false positives
       if (c.patient_id) {
         const serviceDate = c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+        const vobPayerName = (c.payer || "").toLowerCase();
         const vobResult = await db.query(
           `SELECT id FROM vob_verifications
            WHERE patient_id = $1
              AND status = 'active'
-             AND (coverage_end_date IS NULL OR coverage_end_date >= $2)
-           LIMIT 1`,
-          [c.patient_id, serviceDate]
+             AND (
+               payer_id = $2
+               OR LOWER(COALESCE(payer_name,'')) LIKE $3
+               OR ($2 = '' AND payer_id IS NULL)
+             )
+             AND (coverage_end_date IS NULL OR coverage_end_date >= $4::date)
+           ORDER BY created_at DESC LIMIT 1`,
+          [c.patient_id, c.payer_id || '', `%${vobPayerName}%`, serviceDate]
         );
         if (vobResult.rows.length === 0) {
-          warnings.push({ field: "patient.vob", message: "No active insurance eligibility verification (VOB) found for this patient. Run eligibility check before submitting.", severity: "warning" });
+          warnings.push({ field: "patient.vob", message: "No active VOB on file for this patient and payer. Add a manual VOB entry on the patient Eligibility tab.", severity: "warning" });
         }
       }
 
@@ -2850,6 +2944,86 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           const hasSecondary = c.secondary_payer_id || pat?.secondary_payer_id;
           if (hasSecondary && !c.cob_order) {
             warnings.push({ field: "claim.cob", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+          }
+        }
+      }
+
+      // ── Section 7: condition_type rules engine (universal rules) ─────────────
+      const newRulesOrgId = getOrgId(req);
+      const { rows: condRules } = await db.query(
+        `SELECT * FROM rules
+         WHERE is_active = true
+           AND condition_type IS NOT NULL
+           AND (organization_id = $1 OR organization_id IS NULL)`,
+        [newRulesOrgId || ""]
+      );
+
+      for (const rule of condRules) {
+        let violated = false;
+        const ct = rule.condition_type;
+
+        if (ct === 'provider_npi_invalid') {
+          if (provId) {
+            const npiRow = await db.query('SELECT npi FROM providers WHERE id=$1', [provId]);
+            violated = !npiRow.rows[0]?.npi || npiRow.rows[0].npi.replace(/\D/g, '').length !== 10;
+          } else {
+            violated = true;
+          }
+        } else if (ct === 'diagnosis_missing') {
+          violated = !c.icd10_primary;
+        } else if (ct === 'total_charges_zero') {
+          violated = rawLines.reduce((sum: number, sl: any) =>
+            sum + (Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0), 0) === 0;
+        } else if (ct === 'payer_missing') {
+          violated = !c.payer_id && !c.payer;
+        } else if (ct === 'service_date_missing') {
+          violated = !c.service_date;
+        } else if (ct === 'service_date_future') {
+          if (c.service_date) {
+            const daysAhead = Math.floor((new Date(c.service_date).getTime() - Date.now()) / 86400000);
+            violated = daysAhead > parseInt(rule.condition_value || '1');
+          }
+        } else if (ct === 'days_since_service_gt') {
+          if (c.service_date) {
+            const daysSince = Math.floor((Date.now() - new Date(c.service_date).getTime()) / 86400000);
+            violated = daysSince > parseInt(rule.condition_value || '180');
+          }
+        } else if (ct === 'va_auth_missing') {
+          const isVAPayer2 = payerInfo.payer_id === 'TWVACCN' ||
+            payerInfo.name?.toLowerCase().includes('triwest') ||
+            payerInfo.name?.toLowerCase().includes('va community');
+          violated = isVAPayer2 && !c.authorization_number;
+        } else if (ct === 'va_wrong_pos') {
+          const isVAPayer3 = payerInfo.payer_id === 'TWVACCN';
+          violated = isVAPayer3 && c.place_of_service !== rule.condition_value;
+        } else if (ct === 'gcode_wrong_pos') {
+          const hasGCode = rawLines.some((sl: any) => {
+            const code = sl.hcpcsCode || sl.hcpcs_code || '';
+            return code.match(/^G0[2-3]/i);
+          });
+          violated = hasGCode && c.place_of_service !== rule.condition_value;
+        } else if (ct === 'duplicate_claim') {
+          if (c.patient_id && c.service_date && rawLines.length > 0) {
+            const dupResult = await db.query(
+              `SELECT id FROM claims
+               WHERE patient_id=$1 AND service_date=$2 AND id != $3
+               AND status NOT IN ('draft','void')
+               AND (organization_id=$4 OR organization_id IS NULL)
+               LIMIT 1`,
+              [c.patient_id, c.service_date, req.params.id, newRulesOrgId || ""]
+            );
+            violated = dupResult.rows.length > 0;
+          }
+        }
+
+        if (violated) {
+          const alreadyReported = warnings.some(w => w.field.includes(rule.name) || w.message.includes(rule.description));
+          if (!alreadyReported) {
+            warnings.push({
+              field: rule.name,
+              message: rule.description,
+              severity: rule.action === 'block' ? 'error' : 'warning',
+            });
           }
         }
       }
@@ -7719,6 +7893,147 @@ Warmly,
     } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
+  // ── Section 11: /api/billing/stedi-status ──────────────────────────────────
+  app.get("/api/billing/stedi-status", requireRole("admin", "rcm_manager"), async (_req, res) => {
+    const isConfigured = !!process.env.STEDI_API_KEY;
+    res.json({
+      configured: isConfigured,
+      mode: isConfigured ? 'production' : 'not_configured',
+      label: isConfigured
+        ? '✓ Connected to Stedi — Production'
+        : '⚠ Stedi not configured'
+    });
+  });
+
+  // ── Section 3: Stedi main webhook — 277CA and 835 ERA ─────────────────────
+  app.post("/api/webhooks/stedi", async (req, res) => {
+    res.status(200).json({ received: true });
+
+    setImmediate(async () => {
+      try {
+        const db = await import("./db").then(m => m.pool);
+        const body = req.body;
+
+        const webhookSecret = process.env.STEDI_WEBHOOK_SECRET;
+        const authHeader = req.headers['authorization'];
+        if (webhookSecret && authHeader !== `Key ${webhookSecret}`) {
+          console.warn('[Webhook] Unauthorized — bad secret');
+          return;
+        }
+
+        const eventObj = body?.event || body;
+        const eventId = eventObj?.id || eventObj?.detail?.transactionId;
+        const detailType =
+          eventObj?.['detail-type'] ||
+          eventObj?.detailType ||
+          body?.type;
+        const detail = eventObj?.detail || body?.detail || body;
+        const transactionId = detail?.transactionId;
+        const direction = detail?.direction;
+        const transactionSetIdentifier =
+          detail?.x12?.metadata?.transaction?.transactionSetIdentifier ||
+          detail?.transactionSetIdentifier;
+
+        if (!eventId) {
+          console.error('[Webhook] No event ID:', JSON.stringify(body).slice(0, 300));
+          return;
+        }
+
+        const existing = await db.query(
+          'SELECT event_id FROM webhook_events WHERE event_id=$1',
+          [eventId]
+        );
+        if (existing.rows.length > 0) {
+          console.log(`[Webhook] Duplicate event ${eventId}, skip`);
+          return;
+        }
+
+        await db.query(
+          `INSERT INTO webhook_events (event_id, event_type, transaction_id, transaction_set)
+           VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+          [eventId, detailType, transactionId, transactionSetIdentifier]
+        );
+
+        if (detailType?.includes('file.failed') || detailType === 'file.failed.v2') {
+          const errors = detail?.errors || [];
+          const msg = errors.map((e: any) => e.message).join('; ');
+          console.error('[Webhook FileFailed]', msg);
+          await db.query(
+            `INSERT INTO system_settings (key, value, updated_at) VALUES ($1,$2,NOW())
+             ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=NOW()`,
+            [`file_failed_${Date.now()}`, JSON.stringify({ error: msg, fileExecutionId: detail?.fileExecutionId, time: new Date().toISOString() })]
+          );
+          return;
+        }
+
+        if (!detailType?.includes('transaction.processed')) {
+          console.log(`[Webhook] Ignoring event type: ${detailType}`);
+          return;
+        }
+        if (direction === 'OUTBOUND') {
+          console.log('[Webhook] Skipping OUTBOUND transaction');
+          return;
+        }
+
+        if (!transactionId) {
+          console.error('[Webhook] No transactionId in detail');
+          return;
+        }
+
+        const { fetchStediTransaction, process277CA, process835ERA } = await import('./services/stedi-webhooks');
+
+        if (transactionSetIdentifier === '277') {
+          const data = await fetchStediTransaction(transactionId, '277');
+          if (data) await process277CA(data, transactionId, db);
+        } else if (transactionSetIdentifier === '835') {
+          const data = await fetchStediTransaction(transactionId, '835');
+          if (data) await process835ERA(data, transactionId, db);
+        } else {
+          console.log('[Webhook] Unknown set:', transactionSetIdentifier);
+        }
+      } catch (err) {
+        console.error('[Webhook] Error:', err);
+      }
+    });
+  });
+
+  // ── Section 3: Enrollment event destination webhook ───────────────────────
+  app.post("/api/webhooks/stedi/enrollment", async (req, res) => {
+    res.status(200).json({ received: true });
+
+    setImmediate(async () => {
+      try {
+        const body = req.body;
+        console.log('[Enrollment Webhook]', JSON.stringify(body).slice(0, 500));
+
+        const db = await import("./db").then(m => m.pool);
+
+        const eventType = body?.detail?.type || body?.type;
+        const payerId = body?.detail?.payerId || body?.detail?.payer?.id || body?.payerId;
+        const transactionType = body?.detail?.transactionType || body?.transactionType;
+        const status = body?.detail?.status || body?.status;
+
+        console.log(`[Enrollment] ${transactionType} for payer ${payerId}: ${status}`);
+
+        if ((status === 'approved' || status === 'live') && payerId) {
+          const column = transactionType === '835' ? 'enrollment_status_835' : 'enrollment_status_837';
+          await db.query(
+            `UPDATE payers SET ${column} = 'active', enrollment_activated_at = NOW() WHERE payer_id = $1`,
+            [payerId]
+          ).catch(() => {});
+        }
+
+        await db.query(
+          `INSERT INTO system_settings (key, value, updated_at) VALUES ($1,$2,NOW())
+           ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=NOW()`,
+          [`enrollment_event_${Date.now()}`, JSON.stringify({ payerId, transactionType, status, timestamp: new Date().toISOString(), raw: body })]
+        );
+      } catch (err) {
+        console.error('[Enrollment Webhook] Error:', err);
+      }
+    });
+  });
+
 }
 
 // ── Stedi 277CA polling job ─────────────────────────────────────────────────
@@ -7842,9 +8157,9 @@ async function pollStedi835ERA() {
 // Start polling jobs (run immediately, then on schedule)
 setTimeout(() => {
   pollStedi277Acknowledgments();
-  setInterval(pollStedi277Acknowledgments, 15 * 60 * 1000); // Every 15 minutes
+  setInterval(pollStedi277Acknowledgments, 4 * 60 * 60 * 1000); // Every 4 hours (webhooks are primary)
   pollStedi835ERA();
-  setInterval(pollStedi835ERA, 6 * 60 * 60 * 1000); // Every 6 hours
+  setInterval(pollStedi835ERA, 24 * 60 * 60 * 1000); // Every 24 hours (webhooks are primary)
 }, 5000); // 5-second delay after startup to allow DB migrations to complete
 
 function generateIntakeTranscript(patientName: string): string {

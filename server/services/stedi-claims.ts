@@ -271,7 +271,7 @@ function mapStatusCode(code: string): string {
   return map[code] || `Status code: ${code}`;
 }
 
-function parseERAResponse(r: any) {
+export function parseERAResponse(r: any) {
   const paymentInfo = r.paymentInfo || r.financialInformation || {};
   const claims = r.claims || r.claimPaymentInfo || [];
 

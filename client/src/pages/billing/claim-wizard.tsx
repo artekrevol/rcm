@@ -494,17 +494,18 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
       } catch {}
     }
 
+    const newRate = rate || (result.va_rate ? String(result.va_rate) : null);
+    const keepExistingRate = !!(line.ratePerUnit && line.ratePerUnit !== "");
     onChange(index, {
       code: result.code,
       description: result.description_plain || result.description_official || "",
       unitType: result.unit_type || "per_visit",
       unitIntervalMinutes: result.unit_interval_minutes || null,
-      vaRate: rate || (result.va_rate ? String(result.va_rate) : null),
-      ratePerUnit: rate,
+      vaRate: keepExistingRate ? line.vaRate : newRate,
+      ratePerUnit: keepExistingRate ? line.ratePerUnit : (rate || ""),
       requiresModifier: result.requires_modifier || false,
       manualEntry: result.manual || false,
       hours: "",
-      units: result.unit_type === "time_based" ? "" : "1",
       totalCharge: "",
       chargeOverridden: false,
       locationName,
@@ -665,7 +666,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
                   <Input value={line.units} readOnly className="bg-muted" data-testid={`input-line-units-${index}`} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Rate / unit {line.vaRate ? "" : <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
+                  <Label>Rate / unit {line.vaRate ? <span className="text-green-600 text-xs ml-1">Rate from VA fee schedule</span> : <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
                   <div className="relative">
                     <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                     <Input
@@ -713,7 +714,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Rate {!line.ratePerUnit && <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
+                <Label>Rate {line.vaRate ? <span className="text-green-600 text-xs ml-1">VA fee schedule</span> : !line.ratePerUnit ? <span className="text-amber-600 text-xs">(enter manually)</span> : null}</Label>
                 <div className="relative">
                   <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input type="number" step="0.01" value={line.ratePerUnit} onChange={(e) => handleRateChange(e.target.value)} className="pl-7" data-testid={`input-line-rate-${index}`} />

@@ -1,0 +1,566 @@
+
+A live QA audit just identified 8 critical issues.
+Fix them in priority order. Do not move to the next
+item until the current one is verified fixed.
+
+
+
+
+
+═══════════════════════════════════════════════════════
+PRIORITY 1 — FRAUDULENT BILLING / DATA INTEGRITY RISK
+═══════════════════════════════════════════════════════
+
+### FIX 1A — Claim silently becomes "submitted" without 
+Submit button being clicked
+
+OBSERVED: Clicking "Download 837P EDI file" or 
+"Download PDF" on a draft claim changes its status 
+to "submitted" in the database. No Stedi transmission 
+occurred. Clinics will see "submitted" and believe 
+the claim went to the payer when it did not.
+
+Find the PDF download and EDI download endpoints:
+GET /api/billing/claims/:id/pdf-data
+GET /api/billing/claims/:id/edi
+
+Verify neither endpoint updates claim status.
+Search for any UPDATE claims SET status = 'submitted'
+or status = 'exported' in these endpoints.
+
+The current code likely has:
+UPDATE claims SET status = CASE 
+  WHEN status IN ('draft','created') THEN 'exported' 
+  ELSE status END
+
+This is wrong. Downloading a file must NEVER change 
+claim status to submitted or exported.
+
+Fix: Remove all status updates from download endpoints.
+Status must only change to 'submitted' when:
+POST /api/billing/claims/:id/submit-stedi succeeds
+OR
+POST /api/billing/claims/:id/submit-oa succeeds
+
+Add a status allowed-values check in submit endpoints:
+If claim.status is already 'submitted': 
+  return 400 "Claim already submitted"
+If claim.status is 'paid':
+  return 400 "Claim already paid — cannot resubmit"
+
+After fixing: verify by downloading EDI and PDF for 
+a draft claim and confirming status remains 'draft'.
+
+### FIX 1B — VA Rate does not auto-populate in wizard
+
+OBSERVED: G0299 search shows "VA: $40.89" in the 
+dropdown label but after selecting the code, the 
+rate field remains empty with "Rate not on file" 
+warning. User must type the rate manually.
+
+The HCPCS search endpoint returns va_rate in the 
+search results. The frontend displays it in the 
+dropdown label. But the rate is not being applied 
+to the rate field on selection.
+
+Find the code selection handler in claim-wizard.tsx.
+When a HCPCS code is selected from the search dropdown:
+
+const handleCodeSelect = (selectedCode: HcpcsCode) => {
+  // Update the service line with selected code
+  updateServiceLine(index, {
+    hcpcsCode: selectedCode.code,
+    description: selectedCode.description_plain,
+    // AUTO-POPULATE RATE if va_rate exists and 
+    // rate field is currently empty:
+    rate: (!currentLine.rate && selectedCode.va_rate)
+      ? selectedCode.va_rate
+      : currentLine.rate,
+    // DO NOT reset quantity/units — preserve existing value
+    // units: currentLine.units  ← keep unchanged
+  });
+  
+  // Show rate source indicator if auto-filled
+  if (!currentLine.rate && selectedCode.va_rate) {
+    setRateSource(index, 'VA fee schedule');
+  }
+};
+
+Critical: do NOT reset the quantity/units/service-hours 
+field when a code is selected. Only update empty fields.
+
+After fixing: select G0299, verify $40.89 appears 
+in rate field automatically without resetting units.
+
+### FIX 1C — Wrong EDI qualifier for ordering provider
+
+OBSERVED: The 837P EDI outputs NM1*DQ for ordering 
+provider. DQ = Supervising Provider. The correct 
+qualifier for ordering provider is DK (Ordering Provider).
+
+Find in edi-generator.ts where Loop 2420D is built.
+Change:
+segments.push(`NM1*DQ*1*...`)
+To:
+segments.push(`NM1*DK*1*...`)
+
+DK is the correct X12 qualifier for ordering/referring 
+provider in Loop 2420D of the 837P.
+
+This is a compliance issue — VA CCN and Medicare claims 
+with the wrong qualifier may be rejected or misattributed.
+
+After fixing: generate EDI for a claim with ordering 
+provider set and verify NM1*DK appears not NM1*DQ.
+
+═══════════════════════════════════════════════════════
+PRIORITY 2 — BLOCKS FIRST REAL CLAIM SUBMISSION
+═══════════════════════════════════════════════════════
+
+### FIX 2A — "Test This Claim First" returns schema error
+
+OBSERVED: Clicking "Test This Claim First — Free" 
+returns raw Stedi API error:
+"TransactionSets: unknown field `transactionSets`, 
+expected one of `controlNumber`, `tradingPartnerServiceId`..."
+
+This means the test-stedi endpoint is sending the 
+wrong request body structure to Stedi. The JSON 
+payload keys are wrong or the endpoint is being 
+called incorrectly.
+
+Find POST /api/billing/claims/:id/test-stedi in routes.ts.
+
+The issue is likely the request body sent to Stedi.
+The Stedi professional claims endpoint expects X12 EDI 
+as a raw string, not a JSON wrapper with 
+"transactionSets" key.
+
+Check the current request body being sent:
+Option A (correct — raw EDI string):
+body: JSON.stringify({ 
+  controlNumber: '...',
+  tradingPartnerServiceId: '...',
+  // ... claim data fields
+})
+
+Option B (WRONG — what's happening):
+body: JSON.stringify({ 
+  transactionSets: [ediContent]  // ← wrong key
+})
+
+The Stedi 837P submission endpoint accepts EITHER:
+1. Raw X12 EDI string submitted directly
+2. JSON with specific field names per their API spec
+
+Read the existing submit-stedi endpoint to see what 
+format works for production submission, then use 
+the EXACT same format for test submission.
+
+The only difference between test and production 
+submission should be ISA15 = 'T' vs 'P'.
+The request structure must be identical.
+
+Fix the test-stedi endpoint to use the same exact 
+request body format as submit-stedi, only changing 
+ISA15 from 'P' to 'T'.
+
+After fixing: click "Test This Claim First" on any 
+draft claim and verify the modal shows either 
+"✓ Passed" or specific EDI validation errors in 
+plain English — not a raw schema error.
+
+### FIX 2B — Reports page crashes with TypeError
+
+OBSERVED: /billing/reports renders blank white page.
+Console: "TypeError: a is not iterable at index-_1fI9JzZ.js"
+Error originates in a useMemo hook.
+
+Find reports.tsx. The error "a is not iterable" means 
+a variable expected to be an array is null or undefined.
+
+Common causes:
+1. API returns null instead of empty array
+2. useMemo processes data before it loads
+3. Destructuring fails on undefined response
+
+Fix all four report queries to return empty arrays 
+on no data, never null:
+
+// In routes.ts, all report endpoints must return:
+res.json({
+  data: rows || [],        // never null
+  summary: summary || {},  // never null
+  filters: { ... }
+});
+
+// In reports.tsx, add null safety to all useMemo:
+const chartData = useMemo(() => {
+  if (!data?.data || !Array.isArray(data.data)) return [];
+  return data.data.map(row => ({ ... }));
+}, [data]);
+
+// Check every .map(), .filter(), .reduce() call
+// and add Array.isArray() guard before each
+
+Find the specific useMemo that crashes by reading 
+reports.tsx and identifying every array operation 
+that lacks a null check.
+
+After fixing: navigate to /billing/reports and verify 
+all 4 tabs load without errors even with zero data.
+Each tab must show a helpful empty state, not a crash.
+
+═══════════════════════════════════════════════════════
+PRIORITY 3 — USER CONFUSION
+═══════════════════════════════════════════════════════
+
+### FIX 3A — Patient detail page missing address display
+
+OBSERVED: Patient detail page only shows "State" 
+in Demographics. Street Address and City are saved 
+(confirmed in EDI output) but not displayed in UI.
+
+Find patient-detail.tsx Demographics section.
+Add the missing address fields to the display:
+
+// In the Demographics card, add after existing fields:
+{patient.street_address && (
+  <div>
+    <label>Street Address</label>
+    <span>{patient.street_address}</span>
+  </div>
+)}
+{patient.city && (
+  <div>
+    <label>City</label>
+    <span>{patient.city}</span>
+  </div>
+)}
+{patient.zip_code && (
+  <div>
+    <label>ZIP Code</label>
+    <span>{patient.zip_code}</span>
+  </div>
+)}
+
+Also verify GET /api/billing/patients/:id returns 
+street_address, city, zip_code in the response.
+If not, add them to the SELECT query.
+
+### FIX 3B — Review step missing ordering provider display
+
+OBSERVED: Ordering provider (James Walsh / 1234567890) 
+is correctly written to EDI (NM1*DK loop) but does 
+NOT appear on the claim Review step. Biller cannot 
+verify it before submitting.
+
+Find the Review step in claim-wizard.tsx.
+Add ordering provider display in the Provider section:
+
+{claim.ordering_provider_npi && (
+  <div className="review-field">
+    <label>Ordering Provider</label>
+    <span>
+      {[claim.ordering_provider_last_name,
+        claim.ordering_provider_first_name]
+        .filter(Boolean).join(', ')}
+    </span>
+    <span className="npi-label">
+      NPI: {claim.ordering_provider_npi}
+    </span>
+  </div>
+)}
+
+This is a compliance verification step — the biller 
+must be able to confirm the ordering provider is 
+correct before submitting, since it goes on the claim.
+
+### FIX 3C — Admin panel silent redirect for non-admins
+
+OBSERVED: Daniela navigating to /admin gets silently 
+redirected to / with no explanation.
+
+Find the auth guard for /admin routes in the frontend.
+Replace the silent redirect with a proper page:
+
+// In the router or AdminGuard component:
+if (user.role !== 'super_admin') {
+  return (
+    <div className="access-restricted">
+      <h1>Platform Administration</h1>
+      <p>
+        This area is restricted to ClaimShield 
+        platform administrators. If you need access, 
+        contact your administrator.
+      </p>
+      <button onClick={() => navigate('/billing/dashboard')}>
+        ← Back to Billing
+      </button>
+    </div>
+  );
+}
+
+Do not redirect silently. Show the message.
+
+### FIX 3D — Admin view data inconsistencies
+
+OBSERVED THREE issues in /admin/clinics/chajinel-org-001:
+
+Issue 1: Address renders as raw JSON string:
+{"zip":"94080","city":"South San Francisco",...}
+
+Fix: In the admin clinic detail view, parse the 
+address object before displaying:
+const addr = typeof clinic.address === 'object' 
+  ? clinic.address 
+  : JSON.parse(clinic.address || '{}');
+const displayAddress = [
+  addr.street, addr.city, addr.state, addr.zip
+].filter(Boolean).join(', ');
+
+Issue 2: Providers shows "0 configured" but 
+Alice Valid and Diana Valid exist in that org.
+
+Note: Alice Valid and Diana Valid should have been 
+DELETED from chajinel-org-001 (they are demo providers 
+with fake NPIs). Run:
+DELETE FROM providers 
+WHERE npi IN ('1234567893','1245319599')
+AND organization_id = 'chajinel-org-001';
+
+After deletion, providers count will correctly show 0.
+The admin view is likely correct — the claim wizard 
+showing them is the bug. Verify the claim wizard 
+no longer shows Alice/Diana as options for Chajinel.
+
+Issue 3: Clearinghouse shows "Not configured" in 
+admin view while clinic view shows "✓ Connected to Stedi"
+
+The admin clinic detail view is likely checking 
+practice_settings.stedi_connected (database field)
+while the clinic view calls GET /api/billing/stedi-status
+(checks environment variable).
+
+Fix the admin clinic detail view to also call 
+/api/billing/stedi-status for clearinghouse status
+OR check process.env.STEDI_API_KEY server-side
+and return stedi_configured: true in the 
+admin clinic detail API response.
+
+═══════════════════════════════════════════════════════
+PRIORITY 4 — COSMETIC / MINOR
+═══════════════════════════════════════════════════════
+
+### FIX 4A — ERA upload file type expansion
+
+OBSERVED: Upload dialog only accepts .835 and .txt.
+Spec requires .edi and .x12 as well.
+
+Find the file input in the ERA upload dialog:
+Change accept=".835,.txt" 
+To accept=".835,.edi,.x12,.txt"
+
+### FIX 4B — Auth numbers from claims not in Prior Auth list
+
+OBSERVED: Auth VA-2026-TEST-001 entered on a claim 
+does not appear in the Prior Auth module.
+
+When a claim is saved with an authorization_number:
+Check if a prior_auth record exists for this 
+patient + payer + auth_number combination.
+If not: create one automatically with mode='record':
+
+INSERT INTO prior_authorizations 
+  (id, patient_id, payer_id, auth_number, 
+   organization_id, mode, status, created_at)
+VALUES (...)
+ON CONFLICT DO NOTHING;
+
+This creates the cross-reference automatically 
+so billers can manage all auths in one place.
+
+═══════════════════════════════════════════════════════
+VERIFICATION AFTER ALL FIXES
+═══════════════════════════════════════════════════════
+
+Run these tests after implementing all fixes:
+
+TEST A: Download EDI from draft claim → status 
+  must remain 'draft' (not change to 'submitted')
+
+TEST B: Select G0299 in claim wizard → rate field 
+  must show $40.89 automatically → units must 
+  not reset
+
+TEST C: Generate EDI with ordering provider set → 
+  verify NM1*DK (not NM1*DQ) in output
+
+TEST D: Click "Test This Claim First" → must show 
+  Accepted or specific validation errors, 
+  never a schema error
+
+TEST E: Navigate to /billing/reports → all 4 tabs 
+  must load without errors
+
+TEST F: Navigate to /admin as Daniela → must see 
+  Access Restricted page, not silent redirect
+
+TEST G: View patient Robert Hernandez detail page → 
+  must show street address, city, zip
+
+TEST H: View claim Review step with ordering provider 
+  → must display provider name and NPI
+
+TEST I: Check providers for chajinel-org-001 → 
+  Alice Valid and Diana Valid must be deleted
+
+TEST J: Admin view Chajinel clinic → address must 
+  be formatted, clearinghouse must show configured
+
+Report PASS/FAIL for each test after fixing.  ADDITIONAL FIX — Test Claim Feature Enhancement
+Based on official Stedi test claims documentation
+
+The current "Test This Claim First" feature only does 
+EDI validation (ISA15=T with real payer). This is 
+Mode 1. We need to add Mode 2 for full end-to-end 
+testing including 835 ERA response.
+
+STEP 1 — Enroll Chajinel with Stedi Test Payer
+
+The Stedi Test Payer payer ID is: FRCPB
+Enrollment activates automatically within 1 minute.
+
+Add this to startup or run once manually:
+POST to Stedi enrollment API to enroll 
+Chajinel (NPI: 1184288680) with payer FRCPB 
+for transaction type 835.
+
+OR: Direct the user to do this in the Stedi portal:
+Enrollments → New Enrollment → Search "StediTest" 
+or payer ID "FRCPB" → Select Chajinel provider 
+→ Transaction: 835 Claim payment → Submit.
+Enrollment is live within 1 minute.
+
+Add FRCPB to the payers table as a special test payer:
+INSERT INTO payers (id, name, payer_id, is_active)
+VALUES (gen_random_uuid()::text, 
+        'Stedi Test Payer', 'FRCPB', true)
+ON CONFLICT DO NOTHING;
+
+STEP 2 — Update test-stedi endpoint with two modes
+
+The endpoint POST /api/billing/claims/:id/test-stedi
+should accept a query parameter:
+?mode=validate (default) — EDI validation only
+?mode=full — Full end-to-end with test 835 ERA
+
+Mode 1 — EDI Validation (existing behavior):
+- Generate 837P EDI as normal
+- Set ISA15 = 'T'
+- Keep real payer ID (e.g., TWVACCN)
+- Submit to Stedi production endpoint
+- Returns 277CA only
+- Used to catch EDI format errors before live submission
+
+Mode 2 — Full End-to-End Test:
+- Generate 837P EDI as normal  
+- Set ISA15 = 'T'
+- Replace payer ID with 'FRCPB' (Stedi Test Payer)
+  in the NM109 field of Loop 2010BB
+- Ensure CLM01 (Patient Control Number) = claim ID
+  so Stedi can match 277CA and 835 back to this claim
+- Submit to Stedi production endpoint
+- Stedi returns 277CA AND 835 ERA within minutes
+- The 835 will show all lines paid at submitted amounts
+- Used to test the full webhook → ERA posting loop
+
+STEP 3 — Update the test modal UI
+
+On the claim Review step, update the test button 
+to offer two options:
+
+Primary test button (default):
+"Test This Claim First — Free"
+Subtitle: "Validates EDI structure against Stedi"
+Calls: POST /api/billing/claims/:id/test-stedi?mode=validate
+
+Secondary test button (expandable, below primary):
+"Full End-to-End Test — Free"  
+Subtitle: "Sends to Stedi Test Payer — returns 
+           test payment (277CA + 835 ERA) in minutes"
+Calls: POST /api/billing/claims/:id/test-stedi?mode=full
+
+Add a note under the full test button:
+"Uses Stedi Test Payer (FRCPB). Test 835 ERA will 
+ show all lines paid at submitted amounts. 
+ Real payer not contacted."
+
+STEP 4 — Handle full test 835 ERA response
+
+When mode=full is used and the test 835 ERA arrives 
+via webhook (it will arrive within minutes):
+
+The webhook will fire with transaction type 835
+and the claimControlNumber will match the test claim ID.
+
+In the webhook handler, when processing a test 835:
+- Check if era source is Stedi Test Payer (FRCPB)
+- Mark era_batch with source='stedi_test'
+- Do NOT auto-post test ERAs to real claim balances
+- Show a separate "Test ERA" indicator in ERA Posting page
+- Display: "Test ERA received — all lines shown as paid. 
+  This is a test result, not a real payment."
+
+STEP 5 — Patient Control Number verification
+
+The docs confirm Stedi uses CLM01 (Patient Control 
+Number) to match 277CA and 835 back to the original 
+claim. Verify the EDI generator sets CLM01 to the 
+claim ID (our internal UUID):
+
+In edi-generator.ts, find the CLM segment:
+CLM*{claimId}*{totalCharge}***...
+
+Confirm claimId is the claim's database UUID.
+This is what the webhook handler uses to look up 
+the claim when a 277CA or 835 arrives.
+
+If CLM01 is set to anything else (sequential number, 
+patient account, etc.), the webhook handler will 
+fail to match the response to the claim.
+
+STEP 6 — Add test payer notice in Settings
+
+In Settings → Payers, add a note for the Stedi 
+Test Payer (FRCPB):
+
+"Stedi Test Payer — Used for end-to-end claim 
+ testing. Not a real payer. Claims sent to FRCPB 
+ return test 277CA and 835 ERA responses within 
+ minutes. Use only with Test mode claims."
+
+Mark it with a "Test Only" badge so it cannot 
+be accidentally selected for real claims.
+
+In the claim wizard payer selection:
+Filter out payer_id = 'FRCPB' from the regular 
+payer dropdown. It should never appear as an option 
+for real claims — only used internally by the 
+test-stedi endpoint in mode=full.
+
+VERIFICATION:
+
+After implementing:
+1. Click "Full End-to-End Test" on a complete draft claim
+2. Verify the request goes to FRCPB not TWVACCN
+3. Within 2-3 minutes, check:
+   - Stedi portal → Transactions: test 837 appears 
+     with Test badge
+   - Related transactions tab shows 277CA and 835 ERA
+4. Check ClaimShield webhook logs — 277CA webhook 
+   should fire and update claim to 'acknowledged'
+5. Check ClaimShield ERA Posting — test 835 should 
+   appear with 'stedi_test' source label
+6. Verify claim status did NOT change to 'submitted'
+   (test submissions must never change claim status)
