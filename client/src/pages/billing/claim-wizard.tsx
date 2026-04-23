@@ -472,7 +472,8 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
   }
 
   async function handleCodeSelect(result: any) {
-    const isVA = patientPayer?.toLowerCase().includes("va");
+    const payerLower = patientPayer?.toLowerCase() || "";
+    const isVA = payerLower.includes("va") || payerLower.includes("triwest") || payerLower.includes("vaccn");
     let rate = "";
     let locationName: string | null = null;
     let isAverageRate = false;
@@ -502,7 +503,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
       unitType: result.unit_type || "per_visit",
       unitIntervalMinutes: result.unit_interval_minutes || null,
       vaRate: keepExistingRate ? line.vaRate : newRate,
-      ratePerUnit: keepExistingRate ? line.ratePerUnit : (rate || ""),
+      ratePerUnit: keepExistingRate ? line.ratePerUnit : (newRate || ""),
       requiresModifier: result.requires_modifier || false,
       manualEntry: result.manual || false,
       hours: line.hours || "",

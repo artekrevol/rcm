@@ -3703,7 +3703,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const summary = result.success
         ? `Claim passed Stedi EDI validation. It is ready to submit to ${payerInfo.name}.`
-        : `Claim failed Stedi EDI validation. ${errCount} issue(s) must be fixed before submission.`;
+        : errCount > 0
+          ? `Claim failed Stedi EDI validation. ${errCount} issue(s) must be fixed before submission.`
+          : result.error
+            ? `Claim was rejected by Stedi: ${result.error}`
+            : `Claim was rejected by Stedi. Check the raw response for details.`;
 
       res.json({
         success: result.success,

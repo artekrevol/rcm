@@ -369,8 +369,12 @@ export default function ClaimDetailPage() {
                   setEdiValidating(true);
                   try {
                     const res = await fetch(`/api/billing/claims/${id}/edi-validate`, { credentials: "include" });
-                    const data: EdiValidation = await res.json();
-                    setEdiValidation(data);
+                    const data = await res.json();
+                    setEdiValidation({
+                      ready: data.ready ?? false,
+                      summary: data.summary || data.error || "Validation check failed",
+                      warnings: Array.isArray(data.warnings) ? data.warnings : [],
+                    });
                   } catch {
                     setEdiValidation({ ready: false, summary: "Validation check failed", warnings: [] });
                   } finally {

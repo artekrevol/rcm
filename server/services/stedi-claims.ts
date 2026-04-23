@@ -48,12 +48,10 @@ export async function submitClaim(
     method: "POST",
     headers: {
       Authorization: `Key ${STEDI_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "text/plain",
       "Idempotency-Key": params.claimId,
     },
-    body: JSON.stringify({
-      transactionSets: [edi],
-    }),
+    body: edi,
   });
 
   const data = await response.json().catch(() => ({}));
@@ -109,12 +107,10 @@ export async function testClaim(
     method: "POST",
     headers: {
       Authorization: `Key ${STEDI_API_KEY}`,
-      "Content-Type": "application/json",
+      "Content-Type": "text/plain",
       "Idempotency-Key": `test-${params.claimId}-${Date.now()}`,
     },
-    body: JSON.stringify({
-      transactionSets: [edi],
-    }),
+    body: edi,
   });
 
   const data = await response.json().catch(() => ({}));
