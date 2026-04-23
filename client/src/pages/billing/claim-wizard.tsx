@@ -868,7 +868,9 @@ export default function ClaimWizard() {
   const [origClaimNumber, setOrigClaimNumber] = useState("");
   const [homeboundIndicator, setHomeboundIndicator] = useState(false);
   const [orderingProviderId, setOrderingProviderId] = useState("");
-  const [externalOrderingName, setExternalOrderingName] = useState("");
+  const [externalOrderingFirstName, setExternalOrderingFirstName] = useState("");
+  const [externalOrderingLastName, setExternalOrderingLastName] = useState("");
+  const [externalOrderingOrg, setExternalOrderingOrg] = useState("");
   const [externalOrderingNpi, setExternalOrderingNpi] = useState("");
   const [delayReasonCode, setDelayReasonCode] = useState("none");
 
@@ -1153,8 +1155,12 @@ export default function ClaimWizard() {
       origClaimNumber: origClaimNumber || null,
       homeboundIndicator,
       orderingProviderId: orderingProviderId === "__external__" ? null : (orderingProviderId || null),
-      externalOrderingProviderName: orderingProviderId === "__external__" ? (externalOrderingName || null) : null,
+      externalOrderingProviderName: orderingProviderId === "__external__" ? ([externalOrderingFirstName, externalOrderingLastName].filter(Boolean).join(" ") || null) : null,
       externalOrderingProviderNpi: orderingProviderId === "__external__" ? (externalOrderingNpi || null) : null,
+      orderingProviderFirstName: orderingProviderId === "__external__" ? (externalOrderingFirstName || null) : null,
+      orderingProviderLastName: orderingProviderId === "__external__" ? (externalOrderingLastName || null) : null,
+      orderingProviderNpi: orderingProviderId === "__external__" ? (externalOrderingNpi || null) : null,
+      orderingProviderOrg: orderingProviderId === "__external__" ? (externalOrderingOrg || null) : null,
       delayReasonCode: (delayReasonCode && delayReasonCode !== "none") ? delayReasonCode : null,
     };
   }
@@ -1616,12 +1622,30 @@ export default function ClaimWizard() {
                 {orderingProviderId === "__external__" && (
                   <div className="grid grid-cols-2 gap-2 mt-2 p-3 border rounded-md bg-muted/30">
                     <div className="space-y-1">
-                      <Label className="text-xs">Provider Name</Label>
+                      <Label className="text-xs">First Name</Label>
                       <Input
-                        value={externalOrderingName}
-                        onChange={(e) => setExternalOrderingName(e.target.value)}
-                        placeholder="Dr. James Walsh"
-                        data-testid="input-external-ordering-name"
+                        value={externalOrderingFirstName}
+                        onChange={(e) => setExternalOrderingFirstName(e.target.value)}
+                        placeholder="James"
+                        data-testid="input-external-ordering-first-name"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Last Name</Label>
+                      <Input
+                        value={externalOrderingLastName}
+                        onChange={(e) => setExternalOrderingLastName(e.target.value)}
+                        placeholder="Walsh"
+                        data-testid="input-external-ordering-last-name"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Organization / Group (optional)</Label>
+                      <Input
+                        value={externalOrderingOrg}
+                        onChange={(e) => setExternalOrderingOrg(e.target.value)}
+                        placeholder="VA Medical Center"
+                        data-testid="input-external-ordering-org"
                       />
                     </div>
                     <div className="space-y-1">

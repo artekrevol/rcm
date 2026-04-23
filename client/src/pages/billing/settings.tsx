@@ -1790,6 +1790,17 @@ function RateTablesTab() {
     },
   });
 
+  const { data: vaRatesData } = useQuery<{ rows: any[]; localityCode: string | null }>({
+    queryKey: ["/api/billing/va-rates"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/va-rates");
+      if (!res.ok) return { rows: [], localityCode: null };
+      return res.json();
+    },
+  });
+  const vaRates = vaRatesData?.rows || [];
+  const vaLocalityCode = vaRatesData?.localityCode || null;
+
   const saveMutation = useMutation({
     mutationFn: async (data: any) => {
       if (data.id) {
@@ -1855,9 +1866,49 @@ function RateTablesTab() {
   if (isLoading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {vaRates.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold">VA Community Care Rates</h3>
+              <p className="text-xs text-muted-foreground">
+                Federal fee schedule — read-only{vaLocalityCode ? ` (Locality ${vaLocalityCode})` : ""}. Configure your billing location in Practice Info to see locality-specific rates.
+              </p>
+            </div>
+          </div>
+          <Card>
+            <CardContent className="pt-0 p-0">
+              <div className="border rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>HCPCS</TableHead>
+                      <TableHead>Description</TableHead>
+                      <TableHead>Facility Rate</TableHead>
+                      <TableHead>Non-Facility Rate</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {vaRates.map((r: any) => (
+                      <TableRow key={`${r.locality_code}-${r.hcpcs_code}`} data-testid={`row-va-rate-${r.hcpcs_code}`}>
+                        <TableCell className="font-mono font-medium">{r.hcpcs_code}</TableCell>
+                        <TableCell className="text-sm max-w-[260px] truncate">{r.description_plain || r.description_official || "—"}</TableCell>
+                        <TableCell className="font-medium">{r.facility_rate ? `$${Number(r.facility_rate).toFixed(2)}` : "—"}</TableCell>
+                        <TableCell className="font-medium">{r.non_facility_rate ? `$${Number(r.non_facility_rate).toFixed(2)}` : "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-medium">Rate Tables</h3>
+        <h3 className="text-lg font-medium">Custom Rate Tables</h3>
         <Button onClick={openAdd} data-testid="button-add-rate">
           <Plus className="h-4 w-4 mr-2" />
           Add Rate
@@ -2004,6 +2055,7 @@ function RateTablesTab() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </div>
     </div>
   );
 }

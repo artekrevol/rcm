@@ -809,6 +809,108 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS authorized_visits INTEGER`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS appeal_deadline DATE`);
 
+    // ── Sprint-4 / Audit gap fixes ────────────────────────────────────────────
+    // GAP 1: ordering_provider flat columns on claims table
+    await pool.query(`
+      ALTER TABLE claims
+        ADD COLUMN IF NOT EXISTS ordering_provider_first_name VARCHAR,
+        ADD COLUMN IF NOT EXISTS ordering_provider_last_name VARCHAR,
+        ADD COLUMN IF NOT EXISTS ordering_provider_npi VARCHAR,
+        ADD COLUMN IF NOT EXISTS ordering_provider_org VARCHAR
+    `);
+    await pool.query(`
+      UPDATE claims SET
+        ordering_provider_npi = external_ordering_provider_npi,
+        ordering_provider_first_name = SPLIT_PART(COALESCE(external_ordering_provider_name,''), ' ', 1),
+        ordering_provider_last_name = CASE
+          WHEN POSITION(' ' IN COALESCE(external_ordering_provider_name,'')) > 0
+          THEN SUBSTRING(COALESCE(external_ordering_provider_name,'') FROM POSITION(' ' IN COALESCE(external_ordering_provider_name,'')) + 1)
+          ELSE NULL
+        END
+      WHERE external_ordering_provider_npi IS NOT NULL
+        AND ordering_provider_npi IS NULL
+    `);
+
+    // GAP 2: patient address flat columns
+    await pool.query(`
+      ALTER TABLE patients
+        ADD COLUMN IF NOT EXISTS street_address VARCHAR,
+        ADD COLUMN IF NOT EXISTS city VARCHAR,
+        ADD COLUMN IF NOT EXISTS zip_code VARCHAR
+    `);
+    await pool.query(`
+      UPDATE patients SET
+        street_address = COALESCE(address->>'street', address->>'street1'),
+        city = address->>'city',
+        zip_code = address->>'zip'
+      WHERE address IS NOT NULL AND street_address IS NULL
+    `);
+
+    // REMAINING 3: DB-backed login attempts for persistent rate limiting
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS login_attempts (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        ip VARCHAR NOT NULL,
+        attempted_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip, attempted_at)`);
+
+    // REMAINING 5: Missing performance indexes
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_service_date ON claims(service_date)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claim_events_claim_id ON claim_events(claim_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vob_patient_id ON vob_verifications(patient_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_prior_auth_patient_id ON prior_authorizations(patient_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_denials_claim_id ON denials(claim_id)`);
+
+    // REMAINING 7: Role permissions table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS role_permissions (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        role VARCHAR NOT NULL,
+        resource VARCHAR NOT NULL,
+        actions TEXT[] NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(role, resource)
+      )
+    `);
+    await pool.query(`
+      INSERT INTO role_permissions (role, resource, actions) VALUES
+        ('admin', 'patients', ARRAY['read','create','update','delete']),
+        ('admin', 'claims', ARRAY['read','create','update','delete','submit']),
+        ('admin', 'reports', ARRAY['read','export']),
+        ('admin', 'users', ARRAY['read','create','update','delete']),
+        ('rcm_manager', 'patients', ARRAY['read','create','update']),
+        ('rcm_manager', 'claims', ARRAY['read','create','update','submit']),
+        ('rcm_manager', 'reports', ARRAY['read','export']),
+        ('rcm_manager', 'users', ARRAY['read']),
+        ('biller', 'patients', ARRAY['read','update']),
+        ('biller', 'claims', ARRAY['read','create','update']),
+        ('biller', 'reports', ARRAY['read']),
+        ('biller', 'users', ARRAY[]::text[]),
+        ('coder', 'patients', ARRAY['read']),
+        ('coder', 'claims', ARRAY['read','update']),
+        ('coder', 'reports', ARRAY['read']),
+        ('coder', 'users', ARRAY[]::text[]),
+        ('front_desk', 'patients', ARRAY['read','create']),
+        ('front_desk', 'claims', ARRAY['read']),
+        ('front_desk', 'reports', ARRAY[]::text[]),
+        ('front_desk', 'users', ARRAY[]::text[]),
+        ('auditor', 'patients', ARRAY['read']),
+        ('auditor', 'claims', ARRAY['read']),
+        ('auditor', 'reports', ARRAY['read','export']),
+        ('auditor', 'users', ARRAY[]::text[]),
+        ('appeals_specialist', 'patients', ARRAY['read']),
+        ('appeals_specialist', 'claims', ARRAY['read','update']),
+        ('appeals_specialist', 'reports', ARRAY['read']),
+        ('appeals_specialist', 'users', ARRAY[]::text[]),
+        ('intake', 'patients', ARRAY['read','create']),
+        ('intake', 'claims', ARRAY[]::text[]),
+        ('intake', 'reports', ARRAY[]::text[]),
+        ('intake', 'users', ARRAY[]::text[])
+      ON CONFLICT (role, resource) DO NOTHING
+    `);
+
     // ── carc_posting_rules table ─────────────────────────────────────────────
     await pool.query(`
       CREATE TABLE IF NOT EXISTS carc_posting_rules (
@@ -2278,6 +2380,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         homeboundIndicator: "homebound_indicator", orderingProviderId: "ordering_provider_id",
         externalOrderingProviderName: "external_ordering_provider_name",
         externalOrderingProviderNpi: "external_ordering_provider_npi",
+        orderingProviderFirstName: "ordering_provider_first_name",
+        orderingProviderLastName: "ordering_provider_last_name",
+        orderingProviderNpi: "ordering_provider_npi",
+        orderingProviderOrg: "ordering_provider_org",
         delayReasonCode: "delay_reason_code", followUpDate: "follow_up_date", followUpStatus: "follow_up_status",
       };
       const fields: string[] = [];
@@ -2422,6 +2528,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (claim.ordering_provider_id && claim.ordering_provider_id !== claim.provider_id) {
         const opResult = await db.query("SELECT first_name, last_name, npi FROM providers WHERE id = $1", [claim.ordering_provider_id]);
         orderingProvider = opResult.rows[0] || null;
+      } else if (claim.ordering_provider_npi || claim.ordering_provider_first_name) {
+        orderingProvider = {
+          first_name: claim.ordering_provider_first_name || "",
+          last_name: claim.ordering_provider_last_name || "",
+          npi: claim.ordering_provider_npi || "",
+          org: claim.ordering_provider_org || "",
+        };
       } else if (claim.external_ordering_provider_name) {
         const nameParts = claim.external_ordering_provider_name.split(" ");
         orderingProvider = {
@@ -2538,8 +2651,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         }
       }
 
+      // Future service date check
+      if (c.service_date) {
+        const svcDate = new Date(c.service_date);
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        if (svcDate > today) {
+          warnings.push({ field: "claim.service_date", message: "Service date is in the future — verify date before submitting", severity: "error" });
+        }
+      }
+
       // Ordering provider check (warn if VA claim has no ordering provider)
-      const hasOrderingProv = c.ordering_provider_id || c.external_ordering_provider_npi;
+      const hasOrderingProv = c.ordering_provider_id || c.external_ordering_provider_npi || c.ordering_provider_npi;
       if (!hasOrderingProv) {
         const payerNameForOP = (c.payer || "").toLowerCase();
         if (payerNameForOP.includes("va") || payerNameForOP.includes("triwest") || payerNameForOP.includes("vaccn")) {
@@ -2665,6 +2787,70 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           if (!c.icd10_primary || (Array.isArray(c.service_lines) ? c.service_lines : []).length === 0) {
             warnings.push({ field: "claim", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
           }
+        } else if (tp === "duplicate_claim" || tp.includes("payer=current.payer")) {
+          if (c.patient_id && c.service_date) {
+            const slCodes = (Array.isArray(c.service_lines) ? c.service_lines : []).map((sl: any) => sl.hcpcsCode || sl.hcpcs_code || sl.code || "").filter(Boolean);
+            if (slCodes.length > 0) {
+              const { rows: dupRows } = await db.query(
+                `SELECT id FROM claims
+                 WHERE patient_id = $1
+                   AND service_date = $2
+                   AND status NOT IN ('rejected','voided')
+                   AND id != $3
+                   AND service_lines::text ILIKE ANY(ARRAY[${slCodes.map((_: any, i: number) => `$${i + 4}`).join(",")}])
+                 LIMIT 1`,
+                [c.patient_id, c.service_date, c.id, ...slCodes.map((code: string) => `%${code}%`)]
+              );
+              if (dupRows.length > 0) {
+                warnings.push({ field: "claim.duplicate", message: `[Rule] ${rule.name}: A claim for this patient, date, and service code may already exist (ID: ${dupRows[0].id.slice(0, 8)}…)`, severity });
+              }
+            }
+          }
+        } else if (tp === "authorization_format" && isVA && c.authorization_number) {
+          const authNum = String(c.authorization_number).trim();
+          if (authNum.length < 10 || authNum.length > 20 || !/^[A-Z0-9]/i.test(authNum)) {
+            warnings.push({ field: "claim.authorization_number", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+          }
+        } else if (tp === "procedure_code_validity") {
+          const rawLinesPC = Array.isArray(c.service_lines) ? c.service_lines : [];
+          const claimCodes = [...new Set(rawLinesPC.map((sl: any) => sl.hcpcsCode || sl.hcpcs_code || sl.code || "").filter(Boolean))];
+          if (claimCodes.length > 0) {
+            const { rows: validCodes } = await db.query(
+              `SELECT code FROM hcpcs_codes WHERE code = ANY($1)`,
+              [claimCodes]
+            );
+            const validSet = new Set(validCodes.map((r: any) => r.code));
+            const invalid = claimCodes.filter((code: string) => !validSet.has(code));
+            if (invalid.length > 0) {
+              warnings.push({ field: "claim.service_lines", message: `[Rule] ${rule.name}: Unrecognized code(s): ${invalid.join(", ")}`, severity });
+            }
+          }
+        } else if (tp === "modifier_required") {
+          const rawLinesMR = Array.isArray(c.service_lines) ? c.service_lines : [];
+          const missingMod = rawLinesMR.some((sl: any) => !sl.modifier);
+          if (missingMod) {
+            warnings.push({ field: "claim.service_lines", message: `[Rule] ${rule.name}: ${rule.description}`, severity: "warning" });
+          }
+        } else if (tp === "va_unit_authorization_check" && isVA) {
+          const g0299Lines = (Array.isArray(c.service_lines) ? c.service_lines : [])
+            .filter((sl: any) => (sl.hcpcsCode || sl.hcpcs_code || sl.code || "") === "G0299");
+          if (g0299Lines.length > 0 && c.patient_id) {
+            const totalUnits = g0299Lines.reduce((sum: number, sl: any) => sum + (Number(sl.units) || 1), 0);
+            const { rows: paRows } = await db.query(
+              `SELECT authorized_units FROM prior_authorizations WHERE patient_id = $1 AND status = 'approved' AND (expiration_date IS NULL OR expiration_date >= $2) LIMIT 1`,
+              [c.patient_id, c.service_date || new Date().toISOString().slice(0, 10)]
+            );
+            if (paRows.length > 0 && paRows[0].authorized_units) {
+              if (totalUnits > paRows[0].authorized_units) {
+                warnings.push({ field: "claim.service_lines", message: `[Rule] ${rule.name}: ${totalUnits} units billed exceeds authorized ${paRows[0].authorized_units}`, severity });
+              }
+            }
+          }
+        } else if (tp === "cob_primary_eob_required") {
+          const hasSecondary = c.secondary_payer_id || pat?.secondary_payer_id;
+          if (hasSecondary && !c.cob_order) {
+            warnings.push({ field: "claim.cob", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
+          }
         }
       }
 
@@ -2746,6 +2932,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (c.ordering_provider_id) {
         const opResult = await db.query("SELECT first_name, last_name, npi FROM providers WHERE id = $1", [c.ordering_provider_id]);
         if (opResult.rows.length) orderingProv = opResult.rows[0];
+      } else if (c.ordering_provider_npi || c.ordering_provider_first_name) {
+        orderingProv = {
+          first_name: c.ordering_provider_first_name || "",
+          last_name: c.ordering_provider_last_name || "",
+          npi: c.ordering_provider_npi || "",
+        };
       } else if (c.external_ordering_provider_name) {
         const nameParts = c.external_ordering_provider_name.split(" ");
         orderingProv = {
@@ -3863,6 +4055,43 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  app.get("/api/billing/va-rates", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      let localityCode: string | null = null;
+      if (orgId) {
+        const psResult = await db.query("SELECT billing_location FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]);
+        const billingLocation = psResult.rows[0]?.billing_location || null;
+        if (billingLocation) {
+          const locResult = await db.query(
+            "SELECT locality_code FROM va_location_rates WHERE LOWER(location_name) = LOWER($1) LIMIT 1",
+            [billingLocation]
+          );
+          localityCode = locResult.rows[0]?.locality_code || null;
+        }
+      }
+      let rows: any[];
+      if (localityCode) {
+        ({ rows } = await db.query(
+          `SELECT v.*, h.description_plain, h.description_official
+           FROM va_location_rates v LEFT JOIN hcpcs_codes h ON v.hcpcs_code = h.code
+           WHERE v.locality_code = $1 ORDER BY v.hcpcs_code`,
+          [localityCode]
+        ));
+      } else {
+        ({ rows } = await db.query(
+          `SELECT DISTINCT ON (v.hcpcs_code) v.*, h.description_plain, h.description_official
+           FROM va_location_rates v LEFT JOIN hcpcs_codes h ON v.hcpcs_code = h.code
+           ORDER BY v.hcpcs_code, v.locality_code`
+        ));
+      }
+      res.json({ rows, localityCode });
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
   app.post("/api/billing/rates", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { hcpcsCode, payerId, payerName, ratePerUnit, unitIntervalMinutes, effectiveDate, endDate } = req.body;
@@ -3998,12 +4227,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           referring_provider_npi, referral_source, referral_partner_name, default_provider_id,
           service_needed, phone, email, preferred_name, state, plan_type, address, payer_id,
           secondary_payer_id, secondary_member_id, secondary_group_number, secondary_plan_name, secondary_relationship,
+          street_address, city, zip_code,
           created_at
         ) VALUES (
           gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
           $17, $18, $19, $20, $21, $22, $23, $24,
           $25, $26, $27, $28, $29,
+          $30, $31, $32,
           NOW()
         ) RETURNING *`,
         [
@@ -4015,7 +4246,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           serviceNeeded || null, phone || null, email || null, preferredName || null,
           state || null, planType || null, address ? JSON.stringify(address) : null, payerId || null,
           secondaryPayerId || null, secondaryMemberId || null, secondaryGroupNumber || null,
-          secondaryPlanName || null, secondaryRelationship || null
+          secondaryPlanName || null, secondaryRelationship || null,
+          address?.street || address?.street1 || null, address?.city || null, address?.zip || null
         ]
       );
       res.json(rows[0]);
@@ -4062,6 +4294,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (req.body.address !== undefined) {
         fields.push(`address = $${idx++}`);
         values.push(JSON.stringify(req.body.address));
+        const addr = req.body.address || {};
+        if (addr.street || addr.street1) { fields.push(`street_address = $${idx++}`); values.push(addr.street || addr.street1); }
+        if (addr.city) { fields.push(`city = $${idx++}`); values.push(addr.city); }
+        if (addr.zip) { fields.push(`zip_code = $${idx++}`); values.push(addr.zip); }
       }
       if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
       fields.push(`updated_at = NOW()`);

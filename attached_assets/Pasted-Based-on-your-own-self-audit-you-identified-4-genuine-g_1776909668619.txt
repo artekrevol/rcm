@@ -1,0 +1,546 @@
+Based on your own self-audit, you identified 4 genuine gaps 
+plus there are several items from the comprehensive QA prompt 
+that were not addressed. Work through all of them now.
+
+═══════════════════════════════════════════════════════
+GENUINE GAPS YOU FLAGGED YOURSELF
+═══════════════════════════════════════════════════════
+
+### GAP 1 — Ordering Provider Column Name Mismatch
+
+Your audit found that ordering provider data is stored as:
+- external_ordering_provider_name
+- external_ordering_provider_npi
+
+But the system was built expecting:
+- ordering_provider_first_name
+- ordering_provider_last_name
+- ordering_provider_npi
+- ordering_provider_org
+
+This is not just a naming preference — it is a functional 
+problem because:
+
+1. The EDI generator looks for ordering_provider_npi 
+   to build Loop 2420D (Ordering Provider Name segment).
+   If it's stored as external_ordering_provider_npi,
+   the loop never fires and the ordering provider 
+   is absent from every 837P submission.
+
+2. The CMS-1500 PDF generator looks for specific field 
+   names to populate Box 17 (Referring Provider Name) 
+   and Box 17b (NPI). If field names don't match, 
+   Box 17 is blank on every generated PDF.
+
+3. The claim Review step displays ordering provider 
+   using specific field names. If wrong, it shows blank.
+
+Fix:
+Add the correct columns alongside existing ones:
+ALTER TABLE claims 
+  ADD COLUMN IF NOT EXISTS ordering_provider_first_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS ordering_provider_last_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS ordering_provider_npi VARCHAR,
+  ADD COLUMN IF NOT EXISTS ordering_provider_org VARCHAR;
+
+Migrate existing data:
+UPDATE claims SET
+  ordering_provider_npi = external_ordering_provider_npi,
+  ordering_provider_first_name = SPLIT_PART(
+    external_ordering_provider_name, ' ', 1),
+  ordering_provider_last_name = SPLIT_PART(
+    external_ordering_provider_name, ' ', 2)
+WHERE external_ordering_provider_npi IS NOT NULL;
+
+Update ALL references in:
+- routes.ts (claim wizard save, claim detail GET)
+- edi-generator.ts (Loop 2420D)
+- generate-cms1500.ts (Box 17/17b)
+- claim-wizard.tsx (ordering provider fields)
+- claim-detail.tsx (ordering provider display)
+
+Verify end to end:
+1. Enter ordering provider NPI in claim wizard
+2. Generate EDI — confirm Loop 2420D appears
+3. Generate CMS-1500 PDF — confirm Box 17/17b populated
+4. View claim detail — confirm ordering provider visible
+
+### GAP 2 — Patient Address JSONB vs Flat Columns
+
+Patient address is stored as a JSONB object in the 
+address column instead of flat columns street_address,
+city, zip_code.
+
+This causes two problems:
+
+1. The CMS-1500 generator must parse JSONB to get 
+   patient address for Box 5. If the JSON structure 
+   varies (street vs street1 vs address), parsing fails 
+   silently and Box 5 is blank.
+
+2. The New Patient form currently only has a State field
+   with placeholder "TX". No street, city, or ZIP fields
+   exist. CMS-1500 Box 5 requires all four components.
+
+Fix both:
+a) Add flat columns to patients table:
+ALTER TABLE patients
+  ADD COLUMN IF NOT EXISTS street_address VARCHAR,
+  ADD COLUMN IF NOT EXISTS city VARCHAR,
+  ADD COLUMN IF NOT EXISTS zip_code VARCHAR;
+
+b) Migrate existing JSONB address data:
+UPDATE patients SET
+  street_address = address->>'street',
+  city = address->>'city',
+  zip_code = address->>'zip'
+WHERE address IS NOT NULL;
+
+c) Update New Patient form to include:
+- Street Address (text, required)
+- City (text, required)
+- State (dropdown, 50 states, required)
+- ZIP Code (text, 5-digit validation, required)
+
+d) Update POST /api/billing/patients to save 
+   flat columns in addition to JSONB address for 
+   backwards compatibility.
+
+e) Update GET /api/billing/patients/:id to return 
+   flat address fields.
+
+f) Update CMS-1500 generator to use flat columns:
+   patientAddress: {
+     street: patient.street_address,
+     city: patient.city,
+     state: patient.state,
+     zip: patient.zip_code
+   }
+
+g) Verify CMS-1500 Box 5 populates correctly 
+   after fix.
+
+### GAP 3 — Rate Tables Tab Not Locality-Filtered
+
+The Rate Tables settings tab shows custom HCPCS rates 
+only. The va_location_rates table has 2,180 rows but 
+none are displayed filtered by org locality.
+
+This means:
+- A clinic cannot see what VA will pay for any code 
+  in their geographic area
+- The rate auto-population in the claim wizard 
+  queries va_location_rates but the settings tab 
+  doesn't show what rates are available
+- Admins cannot verify which locality is being used
+
+Fix the Rate Tables settings tab:
+
+1. Add a "VA Community Care Rates" section that:
+   - Shows the org's current default_va_locality 
+     from practice_settings
+   - Displays rates from va_location_rates filtered 
+     by that locality
+   - Has a search/filter by HCPCS code
+   - Shows columns: HCPCS Code | Description | 
+     Rate/Unit | Interval | Effective Date
+   - Has a "Change Locality" button that opens 
+     the locality selector
+
+2. Add locality auto-detection from ZIP:
+   When practice address ZIP is saved:
+   - Query va_location_rates for rates where 
+     the locality matches the ZIP's geographic area
+   - Store as practice_settings.default_va_locality
+   - Display as "Auto-detected: SAN FRANCISCO-
+     OAKLAND-BERKELEY (from ZIP 94080)"
+   - Show "Change" link for manual override
+
+3. For San Mateo County / ZIP 94080 specifically:
+   Run this query and document the result:
+   SELECT DISTINCT locality_name 
+   FROM va_location_rates 
+   WHERE locality_name ILIKE '%san mateo%'
+   OR locality_name ILIKE '%san francisco%'
+   ORDER BY locality_name;
+   
+   The correct locality for South San Francisco 
+   must be identified and set for Chajinel.
+
+### GAP 4 — Rules Engine Only Partially Executes
+
+Your audit noted: "the evaluation coverage for 
+complex conditions is partial — the basic checks 
+fire, but not every rule's trigger pattern is 
+parsed programmatically."
+
+This means the rules table has 30 rules seeded 
+but the edi-validate endpoint only checks a 
+subset of basic conditions, not the actual 
+rule definitions stored in the database.
+
+Fix the rules execution engine:
+
+1. Read the rules table structure:
+   SELECT id, name, condition_type, condition_value, 
+   action, specialty_tags FROM rules LIMIT 5;
+   
+   Understand what condition_type and condition_value 
+   look like for existing rules.
+
+2. Build a rule evaluator that:
+   For each active rule in the org:
+   - Parse the condition (e.g., "payer_id = TWVACCN 
+     AND auth_number IS NULL")
+   - Evaluate against claim data
+   - If violated: add to errors (if action=block) 
+     or warnings (if action=warn)
+
+3. At minimum, ensure these 12 rules execute:
+   
+   Universal rules:
+   - NPI missing or not 10 digits → BLOCK
+   - No diagnosis code → BLOCK
+   - No service date → BLOCK
+   - Future service date → WARN
+   - Zero total charges → BLOCK
+   - No payer assigned → BLOCK
+   - No place of service → WARN
+   
+   VA Community Care rules:
+   - TriWest claim missing auth number → BLOCK
+   - Service date > 150 days ago → WARN (at 180 = BLOCK)
+   - TriWest claim with POS != 12 → WARN
+   - G-code on non-POS-12 claim → BLOCK
+   - Duplicate claim (same patient + date + code) → WARN
+
+4. The rule evaluation must run BEFORE the 
+   edi-validate returns. Results must appear in 
+   the pre-submission dialog in the claim wizard.
+
+5. Verify by creating a claim that violates a 
+   VA rule (e.g., TriWest payer, no auth number)
+   and confirming the block appears in validation.
+
+═══════════════════════════════════════════════════════
+ITEMS FROM COMPREHENSIVE QA PROMPT NOT YET ADDRESSED
+═══════════════════════════════════════════════════════
+
+### REMAINING 1 — Session Secret Hardcoded Fallback
+
+Your QA prompt included Section 6.1:
+Verify auth.ts does NOT have:
+secret: process.env.SESSION_SECRET || 'hardcoded-value'
+
+Read auth.ts now and check this.
+If a hardcoded fallback exists: throw an error 
+if SESSION_SECRET is missing in production 
+instead of using a predictable fallback.
+
+### REMAINING 2 — Plaintext Password Comparison
+
+Section 6.2 of your QA prompt:
+Search auth.ts for:
+if (password === hash)
+This is plaintext comparison — a security hole.
+If found: remove the plaintext fallback entirely.
+All passwords must go through bcrypt comparison.
+
+### REMAINING 3 — In-Memory Rate Limiter
+
+Section 6.3:
+The login rate limiter uses a Map() in memory.
+It resets on every server restart/deploy.
+Find it in auth.ts and verify whether it's 
+in-memory or database-backed.
+If in-memory: move to a database-backed approach:
+Store login attempts in a login_attempts table:
+CREATE TABLE IF NOT EXISTS login_attempts (
+  ip VARCHAR NOT NULL,
+  attempted_at TIMESTAMP DEFAULT NOW()
+);
+Query COUNT(*) WHERE ip = $ip 
+AND attempted_at > NOW() - INTERVAL '15 minutes'
+Block if count > 10.
+Clean up old records on each check.
+
+### REMAINING 4 — N+1 Query Problems
+
+Section 7.1 of your QA prompt.
+Search routes.ts for any loop that queries inside:
+
+for (const claim of claims) {
+  const patient = await db.query(...)
+}
+
+Common locations to check:
+- Claims list endpoint (patient name join)
+- ERA posting (claim lookup per line)
+- Reports endpoints (per-claim calculations)
+- Dashboard stats (multiple sequential queries)
+
+For each N+1 found: replace with a JOIN or 
+batch IN() query.
+
+Example fix:
+// Instead of:
+for (const claim of claims) {
+  const p = await db.query(
+    'SELECT * FROM patients WHERE id = $1', 
+    [claim.patient_id]);
+}
+
+// Use:
+const patientIds = claims.map(c => c.patient_id);
+const patients = await db.query(
+  'SELECT * FROM patients WHERE id = ANY($1)',
+  [patientIds]);
+const patientMap = Object.fromEntries(
+  patients.rows.map(p => [p.id, p]));
+
+### REMAINING 5 — Missing Database Indexes
+
+Section 7.2 of your QA prompt.
+Run these and add any missing:
+
+CREATE INDEX IF NOT EXISTS idx_claims_org_id 
+  ON claims(organization_id);
+CREATE INDEX IF NOT EXISTS idx_claims_status 
+  ON claims(status);
+CREATE INDEX IF NOT EXISTS idx_claims_patient_id 
+  ON claims(patient_id);
+CREATE INDEX IF NOT EXISTS idx_claims_service_date 
+  ON claims(service_date);
+CREATE INDEX IF NOT EXISTS idx_claims_payer_id 
+  ON claims(payer_id);
+CREATE INDEX IF NOT EXISTS idx_patients_org_id 
+  ON patients(organization_id);
+CREATE INDEX IF NOT EXISTS idx_claim_events_claim_id 
+  ON claim_events(claim_id);
+CREATE INDEX IF NOT EXISTS idx_vob_patient_id 
+  ON vob_verifications(patient_id);
+CREATE INDEX IF NOT EXISTS idx_prior_auth_patient_id 
+  ON prior_authorizations(patient_id);
+CREATE INDEX IF NOT EXISTS idx_era_batches_org_id 
+  ON era_batches(organization_id);
+CREATE INDEX IF NOT EXISTS idx_denials_claim_id 
+  ON denials(claim_id);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_claim_id 
+  ON activity_logs(claim_id);
+CREATE INDEX IF NOT EXISTS idx_activity_logs_org_id 
+  ON activity_logs(organization_id);
+
+Run EXPLAIN ANALYZE on the claims list query 
+and the follow-up queue query before and after 
+to confirm performance improvement.
+
+### REMAINING 6 — Admin Panel Silent Redirect
+
+The audit found /admin silently redirects 
+non-super-admin users to the module picker 
+with no explanation.
+
+Fix:
+In the auth guard for /admin routes:
+If user role !== 'super_admin':
+  Show a proper page instead of silent redirect:
+  
+  "Platform Administration
+   This area is restricted to ClaimShield 
+   platform administrators.
+   
+   If you believe you need access, contact 
+   your account administrator.
+   
+   [← Back to Billing]"
+
+This is important for clinic admins who 
+accidentally navigate to /admin.
+
+### REMAINING 7 — User Roles Expansion
+
+Current roles: Admin, Billing Manager, 
+Intake Coordinator
+
+These are insufficient for any real clinic.
+Add these roles to the user management system:
+
+Roles to add:
+- Biller: create/submit claims, no settings access
+- Coder: assign codes to claims, cannot submit
+- Front Desk: create patients, cannot access billing
+- Auditor: read-only access to everything
+- Appeals Specialist: work denials only, can resubmit
+
+Add to role enum in database:
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'biller';
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'coder';
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'front_desk';
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'auditor';
+ALTER TYPE user_role ADD VALUE IF NOT EXISTS 
+  'appeals_specialist';
+
+If role is stored as VARCHAR (not enum):
+Just update the dropdown in user management UI
+and add role checks in middleware.
+
+Create role_permissions table:
+CREATE TABLE IF NOT EXISTS role_permissions (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  role VARCHAR NOT NULL,
+  resource VARCHAR NOT NULL,
+  actions TEXT[] NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(role, resource)
+);
+
+Seed permissions matrix:
+INSERT INTO role_permissions 
+  (role, resource, actions) VALUES
+('admin', 'patients', 
+  ARRAY['read','create','update','delete']),
+('admin', 'claims', 
+  ARRAY['read','create','update','submit','delete']),
+('admin', 'era', 
+  ARRAY['read','post','upload']),
+('admin', 'settings', 
+  ARRAY['read','update']),
+('admin', 'users', 
+  ARRAY['read','create','update','delete']),
+('biller', 'patients', 
+  ARRAY['read','create','update']),
+('biller', 'claims', 
+  ARRAY['read','create','update','submit']),
+('biller', 'era', 
+  ARRAY['read','post','upload']),
+('coder', 'patients', ARRAY['read']),
+('coder', 'claims', ARRAY['read','update']),
+('front_desk', 'patients', 
+  ARRAY['read','create','update']),
+('auditor', 'patients', ARRAY['read']),
+('auditor', 'claims', ARRAY['read']),
+('auditor', 'era', ARRAY['read']),
+('auditor', 'settings', ARRAY['read']),
+('appeals_specialist', 'patients', ARRAY['read']),
+('appeals_specialist', 'claims', 
+  ARRAY['read','update','submit']),
+ON CONFLICT (role, resource) DO NOTHING;
+
+Update the user management dropdown to show 
+all role options with a brief description:
+- Admin: Full access to all features
+- Billing Manager: Manage claims and billing
+- Biller: Create and submit claims
+- Coder: Assign diagnosis and procedure codes
+- Front Desk: Manage patients only
+- Auditor: Read-only access to all data
+- Appeals Specialist: Work denials and appeals
+- Intake Coordinator: Patient intake module
+
+### REMAINING 8 — Clearinghouse Status Badge
+
+Audit found: Settings → My Practice shows 
+"⚠ Not Configured" red badge for clearinghouse 
+even though STEDI_API_KEY is set.
+
+Find where the clearinghouse status badge is 
+computed in the frontend.
+If it checks a database field (stedi_connected):
+Change to call GET /api/billing/stedi-status 
+which checks process.env.STEDI_API_KEY server-side.
+Show green "✓ Connected to Stedi — Production" 
+when API key is present.
+
+### REMAINING 9 — Insurance Carrier Payer Linkage
+
+Audit found: New Patient form insurance carrier 
+is free text. Typing "TriWest" stores a string 
+without linking to the TriWest payer record.
+
+This breaks:
+- Eligibility button visibility 
+  (can't check supported_transactions)
+- Auto follow-up day inheritance from payer record
+- Timely filing rule evaluation
+- Auth requirement detection
+
+Fix:
+Replace insurance carrier free-text field with 
+a searchable Select dropdown that queries:
+GET /api/billing/payers?search={query}
+
+When a payer is selected:
+- Store payer_id (FK) on the patient record
+- Display name is the payer's name from payers table
+
+Update patient creation form to use this dropdown.
+Keep insurance_carrier text field for backwards 
+compatibility but also save payer_id.
+
+When the claim wizard loads a patient:
+Use patient.payer_id to look up payer settings
+(timely filing, auth requirements, 270 support).
+
+═══════════════════════════════════════════════════════
+VERIFICATION AFTER ALL FIXES
+═══════════════════════════════════════════════════════
+
+After completing all items above, run these 
+end-to-end verification tests:
+
+TEST 1 — Full VA Claim Flow
+1. Create patient Robert Hernandez with:
+   - Street: 45 Oak Street
+   - City: South San Francisco
+   - State: CA
+   - ZIP: 94080
+   - Payer: TriWest (selected from dropdown, not typed)
+2. Save and verify patient detail shows address
+3. Add manual VOB with auth VA-2026-TEST-001
+4. Create new claim for this patient
+5. Verify POS defaults to 12 (Home)
+6. Add G0299 — verify $40.89 auto-populates
+7. Add ordering provider: Dr. James Walsh, NPI 1234567890
+8. Add diagnosis I10 — verify no decimal stored
+9. Navigate to Review
+10. Verify no false VOB warning
+11. Verify ordering provider visible on review
+12. Click "Test This Claim First"
+13. Verify test result modal appears
+14. Check claim has last_test_status set
+15. Do NOT submit
+
+TEST 2 — Rules Execution
+1. Create a claim for a TriWest patient
+2. Leave authorization_number blank
+3. Navigate to Review
+4. Verify "Missing VA authorization number" 
+   appears as a BLOCK in validation
+5. Enter an auth number
+6. Verify block clears
+
+TEST 3 — ERA Upload
+1. Go to ERA Posting
+2. Click "Upload 835 File"
+3. Upload any .835 or .edi file
+4. Verify parse preview appears
+5. Verify correct fields shown
+
+TEST 4 — Reports
+1. Go to Reports
+2. Click each of the 4 report tabs
+3. Verify they load (even if empty)
+4. Verify filters work
+5. Verify Export CSV works
+
+TEST 5 — Security
+1. Log in as daniela@chajinel.com
+2. Navigate to /admin
+3. Verify you see proper "Restricted" page
+   not silent redirect
+
+Produce a report of:
+- Every item fixed with verification method
+- Every item that could not be completed with reason
+- Current state of all 9 remaining items
+- Any new issues discovered during fixes

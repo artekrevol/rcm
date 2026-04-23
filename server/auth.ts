@@ -168,36 +168,37 @@ export function setupAuth(app: Express) {
     }
   });
 
-  const loginAttempts = new Map<string, { count: number; resetAt: number }>();
   const LOGIN_LIMIT = 10;
   const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
-  app.post("/api/auth/login", (req, res, next) => {
+  app.post("/api/auth/login", async (req, res, next) => {
     const ip = req.ip || req.socket.remoteAddress || "unknown";
-    const now = Date.now();
-    const record = loginAttempts.get(ip);
+    const windowStart = new Date(Date.now() - LOGIN_WINDOW_MS);
 
-    if (record && now < record.resetAt) {
-      if (record.count >= LOGIN_LIMIT) {
+    try {
+      const { rows: attemptRows } = await pool.query(
+        `SELECT COUNT(*) as count FROM login_attempts WHERE ip = $1 AND attempted_at > $2`,
+        [ip, windowStart]
+      );
+      const attemptCount = parseInt(attemptRows[0]?.count || "0");
+      if (attemptCount >= LOGIN_LIMIT) {
         console.warn(`Login rate limit exceeded for IP: ${ip}`);
         return res.status(429).json({ error: "Too many login attempts. Please try again later." });
       }
-    } else if (record && now >= record.resetAt) {
-      loginAttempts.delete(ip);
+    } catch {
+      // If login_attempts table doesn't exist yet, allow the request through
     }
 
     passport.authenticate("local", (err: any, user: any, info: any) => {
       if (err) return next(err);
       if (!user) {
-        const entry = loginAttempts.get(ip);
-        if (entry && now < entry.resetAt) {
-          entry.count++;
-        } else {
-          loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
-        }
+        pool.query(
+          `INSERT INTO login_attempts (id, ip, attempted_at) VALUES (gen_random_uuid()::text, $1, NOW())`,
+          [ip]
+        ).catch(() => {});
         return res.status(401).json({ error: info?.message || "Login failed" });
       }
-      loginAttempts.delete(ip);
+      pool.query(`DELETE FROM login_attempts WHERE ip = $1`, [ip]).catch(() => {});
       req.logIn(user, (err) => {
         if (err) return next(err);
         pool.query("UPDATE users SET last_active_at = NOW() WHERE id = $1", [user.id]).catch(() => {});

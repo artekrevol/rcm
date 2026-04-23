@@ -267,6 +267,11 @@ export default function UserManagement() {
                 <SelectContent>
                   <SelectItem value="admin">Admin</SelectItem>
                   <SelectItem value="rcm_manager">Billing Manager</SelectItem>
+                  <SelectItem value="biller">Biller</SelectItem>
+                  <SelectItem value="coder">Coder</SelectItem>
+                  <SelectItem value="front_desk">Front Desk</SelectItem>
+                  <SelectItem value="auditor">Auditor</SelectItem>
+                  <SelectItem value="appeals_specialist">Appeals Specialist</SelectItem>
                   <SelectItem value="intake">Intake Coordinator</SelectItem>
                 </SelectContent>
               </Select>
@@ -323,6 +328,11 @@ export default function UserManagement() {
                 <SelectContent>
                   <SelectItem value="admin">Admin</SelectItem>
                   <SelectItem value="rcm_manager">Billing Manager</SelectItem>
+                  <SelectItem value="biller">Biller</SelectItem>
+                  <SelectItem value="coder">Coder</SelectItem>
+                  <SelectItem value="front_desk">Front Desk</SelectItem>
+                  <SelectItem value="auditor">Auditor</SelectItem>
+                  <SelectItem value="appeals_specialist">Appeals Specialist</SelectItem>
                   <SelectItem value="intake">Intake Coordinator</SelectItem>
                 </SelectContent>
               </Select>
