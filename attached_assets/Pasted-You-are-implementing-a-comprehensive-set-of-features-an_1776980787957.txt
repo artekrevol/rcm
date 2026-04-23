@@ -1,0 +1,1502 @@
+You are implementing a comprehensive set of features and fixes 
+for ClaimShield 2.0. This is a single consolidated sprint 
+covering webhook infrastructure, previously incomplete items, 
+and verified gaps from recent audits.
+
+Read ALL sections before writing any code. Understand the 
+full scope, then implement in the order specified.
+
+Do not skip any section. Confirm each section complete 
+before moving to the next.
+
+═══════════════════════════════════════════════════════
+SECTION 0 — ENVIRONMENT VARIABLES REQUIRED
+═══════════════════════════════════════════════════════
+
+Verify these exist in Railway environment variables.
+If missing, log a warning on startup:
+
+Required:
+- STEDI_API_KEY (production key — already set)
+- STEDI_WEBHOOK_SECRET = cs-wh-9f4a2b8e1d7c3f6a0e5b9d2c7f4a1e8b3d6c9f2a5e0b7d4c1f8a3e6b9d2c5f
+- STEDI_EVENT_DESTINATION_SECRET (set after creating 
+  event destination in Stedi portal — placeholder for now)
+- SESSION_SECRET (verify not hardcoded fallback)
+
+Add startup check:
+const required = [
+  'STEDI_API_KEY', 
+  'STEDI_WEBHOOK_SECRET',
+  'SESSION_SECRET'
+];
+for (const key of required) {
+  if (!process.env[key]) {
+    console.warn(`⚠ Missing environment variable: ${key}`);
+  }
+}
+
+═══════════════════════════════════════════════════════
+SECTION 1 — DATABASE MIGRATIONS
+Run all at startup, idempotent (IF NOT EXISTS)
+═══════════════════════════════════════════════════════
+
+-- Webhook idempotency table
+CREATE TABLE IF NOT EXISTS webhook_events (
+  event_id VARCHAR PRIMARY KEY,
+  event_type VARCHAR,
+  transaction_id VARCHAR,
+  transaction_set VARCHAR,
+  processed_at TIMESTAMP DEFAULT NOW(),
+  status VARCHAR DEFAULT 'processed'
+);
+
+-- Claims columns
+ALTER TABLE claims 
+  ADD COLUMN IF NOT EXISTS stedi_transaction_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS last_test_status VARCHAR,
+  ADD COLUMN IF NOT EXISTS last_test_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS last_test_errors JSONB,
+  ADD COLUMN IF NOT EXISTS ordering_provider_first_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS ordering_provider_last_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS ordering_provider_npi VARCHAR,
+  ADD COLUMN IF NOT EXISTS ordering_provider_org VARCHAR,
+  ADD COLUMN IF NOT EXISTS secondary_payer_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS secondary_member_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS secondary_group_number VARCHAR,
+  ADD COLUMN IF NOT EXISTS cob_order VARCHAR DEFAULT 'primary';
+
+-- Migrate existing ordering provider data if columns existed 
+-- under different names
+UPDATE claims SET
+  ordering_provider_npi = external_ordering_provider_npi,
+  ordering_provider_first_name = SPLIT_PART(
+    COALESCE(external_ordering_provider_name,''), ' ', 1),
+  ordering_provider_last_name = SPLIT_PART(
+    COALESCE(external_ordering_provider_name,''), ' ', 2)
+WHERE external_ordering_provider_npi IS NOT NULL
+  AND ordering_provider_npi IS NULL;
+
+-- Patients columns
+ALTER TABLE patients
+  ADD COLUMN IF NOT EXISTS street_address VARCHAR,
+  ADD COLUMN IF NOT EXISTS city VARCHAR,
+  ADD COLUMN IF NOT EXISTS zip_code VARCHAR,
+  ADD COLUMN IF NOT EXISTS payer_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS secondary_payer_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS secondary_member_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS secondary_group_number VARCHAR,
+  ADD COLUMN IF NOT EXISTS secondary_plan_name VARCHAR,
+  ADD COLUMN IF NOT EXISTS secondary_relationship 
+    VARCHAR DEFAULT 'self';
+
+-- Migrate existing JSONB address to flat columns
+UPDATE patients SET
+  street_address = address->>'street',
+  city = address->>'city',
+  zip_code = address->>'zip'
+WHERE address IS NOT NULL
+  AND street_address IS NULL;
+
+-- ERA tables
+ALTER TABLE era_batches
+  ADD COLUMN IF NOT EXISTS stedi_era_id VARCHAR,
+  ADD COLUMN IF NOT EXISTS raw_data JSONB,
+  ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'stedi';
+
+CREATE TABLE IF NOT EXISTS era_claim_lines (
+  id VARCHAR PRIMARY KEY,
+  era_batch_id VARCHAR NOT NULL,
+  claim_control_number VARCHAR,
+  patient_name VARCHAR,
+  billed_amount DECIMAL(10,2),
+  allowed_amount DECIMAL(10,2),
+  paid_amount DECIMAL(10,2),
+  adjustment_codes JSONB DEFAULT '[]',
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Payers enrollment status
+ALTER TABLE payers
+  ADD COLUMN IF NOT EXISTS enrollment_status_835 
+    VARCHAR DEFAULT 'not_enrolled',
+  ADD COLUMN IF NOT EXISTS enrollment_status_837 
+    VARCHAR DEFAULT 'not_enrolled',
+  ADD COLUMN IF NOT EXISTS enrollment_activated_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS supported_transactions TEXT[],
+  ADD COLUMN IF NOT EXISTS stedi_synced_at TIMESTAMP;
+
+-- Update TriWest to reflect known enrollment status
+UPDATE payers SET
+  payer_id = 'TWVACCN',
+  timely_filing_days = 180,
+  auto_followup_days = 10,
+  enrollment_status_835 = 'active',
+  enrollment_status_837 = 'active',
+  enrollment_activated_at = NOW()
+WHERE name ILIKE '%triwest%' 
+   OR payer_id IN ('TRWST', 'VACCN', 'TWVACCN');
+
+-- Rules specialty tags
+ALTER TABLE rules 
+  ADD COLUMN IF NOT EXISTS specialty_tags TEXT[] DEFAULT '{}';
+
+-- Prior auth columns
+ALTER TABLE prior_authorizations
+  ADD COLUMN IF NOT EXISTS mode VARCHAR DEFAULT 'record',
+  ADD COLUMN IF NOT EXISTS source VARCHAR,
+  ADD COLUMN IF NOT EXISTS authorized_units INTEGER,
+  ADD COLUMN IF NOT EXISTS authorized_visits INTEGER,
+  ADD COLUMN IF NOT EXISTS units_used INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS appeal_deadline DATE,
+  ADD COLUMN IF NOT EXISTS request_method VARCHAR,
+  ADD COLUMN IF NOT EXISTS denial_reason TEXT;
+
+-- Role permissions
+CREATE TABLE IF NOT EXISTS role_permissions (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  role VARCHAR NOT NULL,
+  resource VARCHAR NOT NULL,
+  actions TEXT[] NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(role, resource)
+);
+
+INSERT INTO role_permissions (role, resource, actions) VALUES
+('admin','patients',ARRAY['read','create','update','delete']),
+('admin','claims',ARRAY['read','create','update','submit','delete']),
+('admin','era',ARRAY['read','post','upload']),
+('admin','settings',ARRAY['read','update']),
+('admin','users',ARRAY['read','create','update','delete']),
+('biller','patients',ARRAY['read','create','update']),
+('biller','claims',ARRAY['read','create','update','submit']),
+('biller','era',ARRAY['read','post','upload']),
+('coder','patients',ARRAY['read']),
+('coder','claims',ARRAY['read','update']),
+('front_desk','patients',ARRAY['read','create','update']),
+('auditor','patients',ARRAY['read']),
+('auditor','claims',ARRAY['read']),
+('auditor','era',ARRAY['read']),
+('auditor','settings',ARRAY['read']),
+('appeals_specialist','patients',ARRAY['read']),
+('appeals_specialist','claims',ARRAY['read','update','submit'])
+ON CONFLICT (role, resource) DO NOTHING;
+
+-- System settings
+CREATE TABLE IF NOT EXISTS system_settings (
+  key VARCHAR PRIMARY KEY,
+  value TEXT,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Performance indexes
+CREATE INDEX IF NOT EXISTS idx_claims_org_id 
+  ON claims(organization_id);
+CREATE INDEX IF NOT EXISTS idx_claims_status 
+  ON claims(status);
+CREATE INDEX IF NOT EXISTS idx_claims_patient_id 
+  ON claims(patient_id);
+CREATE INDEX IF NOT EXISTS idx_claims_service_date 
+  ON claims(service_date);
+CREATE INDEX IF NOT EXISTS idx_claims_payer_id 
+  ON claims(payer_id);
+CREATE INDEX IF NOT EXISTS idx_patients_org_id 
+  ON patients(organization_id);
+CREATE INDEX IF NOT EXISTS idx_claim_events_claim_id 
+  ON claim_events(claim_id);
+CREATE INDEX IF NOT EXISTS idx_vob_patient_id 
+  ON vob_verifications(patient_id);
+CREATE INDEX IF NOT EXISTS idx_prior_auth_patient_id 
+  ON prior_authorizations(patient_id);
+CREATE INDEX IF NOT EXISTS idx_era_batches_org_id 
+  ON era_batches(organization_id);
+CREATE INDEX IF NOT EXISTS idx_webhook_events_event_id
+  ON webhook_events(event_id);
+
+-- CARC posting rules seed
+INSERT INTO carc_posting_rules 
+  (id, carc_code, group_code, default_action, 
+   requires_review, appeal_eligible, patient_billable, 
+   description)
+VALUES
+('carc-co45','45','CO','auto_writeoff',false,false,false,
+  'Contractual adjustment — write off per contract'),
+('carc-co96','96','CO','flag_review',true,false,false,
+  'Non-covered charge — write off or bill patient'),
+('carc-co50','50','CO','flag_appeal',true,true,false,
+  'Not medically necessary — appeal with clinical docs'),
+('carc-co16','16','CO','flag_review',true,false,false,
+  'Missing or invalid information — fix and resubmit'),
+('carc-co29','29','CO','flag_review',true,false,false,
+  'Timely filing — appeal with proof of timely filing'),
+('carc-co4','4','CO','flag_review',true,true,false,
+  'Service inconsistent with modifier — fix modifier'),
+('carc-co97','97','CO','flag_review',true,true,false,
+  'Bundled service — appeal with unbundling docs'),
+('carc-pr1','1','PR','patient_responsibility',false,false,true,
+  'Deductible — transfer to patient balance'),
+('carc-pr2','2','PR','patient_responsibility',false,false,true,
+  'Coinsurance — transfer to patient balance'),
+('carc-pr3','3','PR','patient_responsibility',false,false,true,
+  'Copay — transfer to patient balance'),
+('carc-oa23','23','OA','route_secondary',false,false,false,
+  'Coordinate of benefits — forward to secondary payer'),
+('carc-oa18','18','OA','flag_review',true,false,false,
+  'Duplicate claim — investigate before action')
+ON CONFLICT DO NOTHING;
+
+-- Universal rules seed
+INSERT INTO rules 
+  (id, name, description, condition_type, condition_value,
+   action, is_active, specialty_tags, organization_id)
+VALUES
+(gen_random_uuid()::text,'Missing NPI',
+  'Rendering provider NPI is missing or not 10 digits',
+  'provider_npi_invalid','true','block',true,
+  ARRAY['Universal'],NULL),
+(gen_random_uuid()::text,'Missing Diagnosis',
+  'No primary ICD-10 diagnosis code on claim',
+  'diagnosis_missing','true','block',true,
+  ARRAY['Universal'],NULL),
+(gen_random_uuid()::text,'Zero Charges',
+  'All service line charges total $0.00',
+  'total_charges_zero','true','block',true,
+  ARRAY['Universal'],NULL),
+(gen_random_uuid()::text,'Missing Payer',
+  'No payer assigned to claim',
+  'payer_missing','true','block',true,
+  ARRAY['Universal'],NULL),
+(gen_random_uuid()::text,'Future Service Date',
+  'Date of service is more than 1 day in the future',
+  'service_date_future','1','warn',true,
+  ARRAY['Universal'],NULL),
+(gen_random_uuid()::text,'Missing Service Date',
+  'Date of service is not set',
+  'service_date_missing','true','block',true,
+  ARRAY['Universal'],NULL),
+(gen_random_uuid()::text,'VA Missing Auth Number',
+  'TriWest/VA CCN claims require an authorization number',
+  'va_auth_missing','TWVACCN','block',true,
+  ARRAY['VA Community Care'],NULL),
+(gen_random_uuid()::text,'VA Timely Filing Warning',
+  'Claim approaching 150-day VA filing deadline',
+  'days_since_service_gt','150','warn',true,
+  ARRAY['VA Community Care'],NULL),
+(gen_random_uuid()::text,'VA Timely Filing Block',
+  'Claim past 180-day VA filing deadline',
+  'days_since_service_gt','180','block',true,
+  ARRAY['VA Community Care'],NULL),
+(gen_random_uuid()::text,'VA Wrong Place of Service',
+  'VA CCN home health claims require POS 12',
+  'va_wrong_pos','12','warn',true,
+  ARRAY['VA Community Care'],NULL),
+(gen_random_uuid()::text,'VA G-Code Requires POS 12',
+  'Home health G-codes must be billed with POS 12',
+  'gcode_wrong_pos','12','block',true,
+  ARRAY['VA Community Care','Home Health'],NULL),
+(gen_random_uuid()::text,'Duplicate Claim',
+  'A claim with same patient, service date, and code exists',
+  'duplicate_claim','true','warn',true,
+  ARRAY['Universal'],NULL)
+ON CONFLICT DO NOTHING;
+
+-- Remove demo providers from non-demo orgs
+DELETE FROM providers
+WHERE npi IN ('1234567893','1245319599')
+AND organization_id != 'demo-org-001';
+
+═══════════════════════════════════════════════════════
+SECTION 2 — STEDI WEBHOOK SERVICE
+Create server/services/stedi-webhooks.ts
+═══════════════════════════════════════════════════════
+
+This service handles all Stedi webhook processing.
+
+import crypto from 'crypto';
+
+const STEDI_API_KEY = process.env.STEDI_API_KEY;
+
+// Fetch full transaction data from Stedi API
+// Webhooks only deliver a transactionId — 
+// full data must be fetched separately
+export async function fetchStediTransaction(
+  transactionId: string,
+  transactionType: '277' | '835'
+): Promise<any | null> {
+  if (!STEDI_API_KEY) {
+    console.error('[Stedi] No API key configured');
+    return null;
+  }
+
+  // Both 277 and 835 use the reports endpoint
+  // differentiated by the transaction type in the response
+  const url = `https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/claims/reports/${transactionId}`;
+
+  try {
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Key ${STEDI_API_KEY}` }
+    });
+
+    if (!response.ok) {
+      console.error(`[Stedi] Fetch ${transactionType} failed:`, 
+        response.status, await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    
+    // Log first 10 webhook responses for field verification
+    const db = await import('../db').then(m => m.pool);
+    const countResult = await db.query(
+      "SELECT COUNT(*) FROM webhook_events WHERE event_type LIKE '%transaction.processed%'"
+    );
+    if (parseInt(countResult.rows[0].count) < 10) {
+      console.log(`[Stedi] ${transactionType} raw response sample:`,
+        JSON.stringify(data).slice(0, 1000));
+    }
+
+    return data;
+  } catch (err) {
+    console.error(`[Stedi] Error fetching ${transactionType}:`, err);
+    return null;
+  }
+}
+
+// Process 277CA acknowledgment
+export async function process277CA(
+  data: any, 
+  transactionId: string,
+  db: any
+): Promise<void> {
+  // Extract claim control number from 277CA response
+  // Field paths based on Stedi 277CA report API response
+  // Adjust after first real webhook fires if fields differ
+  const claimStatuses = 
+    data?.claimStatuses || 
+    data?.claims ||
+    data?.claimStatusDetails ||
+    [];
+
+  for (const claimStatus of claimStatuses) {
+    const claimControlNumber = 
+      claimStatus?.claimReference?.patientControlNumber ||
+      claimStatus?.patientControlNumber ||
+      claimStatus?.claimControlNumber ||
+      data?.claimReference?.patientControlNumber;
+
+    const statusCategoryCode =
+      claimStatus?.statusInformation?.[0]?.statusCategoryCode ||
+      claimStatus?.statusCategoryCode ||
+      claimStatus?.status?.categoryCode ||
+      data?.statusCategoryCode;
+
+    const payerName =
+      data?.payer?.name ||
+      data?.payerName ||
+      'Unknown Payer';
+
+    if (!claimControlNumber) {
+      console.warn('[277CA] No claim control number in:', 
+        JSON.stringify(claimStatus).slice(0, 200));
+      continue;
+    }
+
+    // Map 277 status category codes to claim statuses
+    // A1=Acknowledged, A2=Not Found, A3=Rejected, 
+    // A4=Accepted, A6=Accepted, A7=Pending
+    const statusMap: Record<string, string> = {
+      'A1': 'acknowledged',
+      'A2': 'rejected',
+      'A3': 'rejected',
+      'A4': 'acknowledged',
+      'A6': 'acknowledged',
+      'A7': 'acknowledged',
+      'A8': 'acknowledged',
+    };
+    const newStatus = statusMap[statusCategoryCode] || 
+      'acknowledged';
+
+    // Find matching claim
+    const claimResult = await db.query(
+      `SELECT id, status, organization_id FROM claims 
+       WHERE id = $1 OR stedi_transaction_id = $2 
+       LIMIT 1`,
+      [claimControlNumber, transactionId]
+    );
+
+    if (!claimResult.rows.length) {
+      console.warn('[277CA] No claim found for:', 
+        claimControlNumber);
+      continue;
+    }
+
+    const claim = claimResult.rows[0];
+    if (claim.status !== 'submitted') continue;
+
+    await db.query(
+      `UPDATE claims SET status=$1, updated_at=NOW() 
+       WHERE id=$2`,
+      [newStatus, claim.id]
+    );
+
+    await db.query(
+      `INSERT INTO claim_events 
+       (id, claim_id, type, notes, timestamp, organization_id)
+       VALUES ($1,$2,$3,$4,NOW(),$5)`,
+      [
+        crypto.randomUUID(),
+        claim.id,
+        '277CA Received',
+        `Payer acknowledgment via webhook. ` +
+        `Status: ${newStatus}. ` +
+        `Code: ${statusCategoryCode}. ` +
+        `Payer: ${payerName}`,
+        claim.organization_id
+      ]
+    );
+
+    console.log(`[277CA] Claim ${claim.id} → ${newStatus}`);
+  }
+
+  // If no claim statuses found in expected structure
+  // log full response for debugging
+  if (!claimStatuses.length) {
+    console.warn('[277CA] Unexpected response structure:', 
+      JSON.stringify(data).slice(0, 500));
+  }
+}
+
+// Process 835 ERA payment remittance
+export async function process835ERA(
+  data: any,
+  transactionId: string,
+  db: any
+): Promise<void> {
+  // Extract ERA data from Stedi 835 report response
+  const paymentInfo = 
+    data?.financialInformation ||
+    data?.paymentInfo ||
+    data?.payment ||
+    {};
+
+  const checkNumber = 
+    paymentInfo?.checkNumber ||
+    paymentInfo?.traceNumber ||
+    paymentInfo?.referenceNumber ||
+    data?.checkNumber ||
+    transactionId; // fallback to transaction ID
+
+  const checkDate =
+    paymentInfo?.checkDate ||
+    paymentInfo?.effectiveDate ||
+    data?.checkDate ||
+    new Date().toISOString().slice(0, 10);
+
+  const payerName =
+    data?.payer?.name ||
+    data?.payerName ||
+    'Unknown Payer';
+
+  const totalPayment = parseFloat(
+    paymentInfo?.totalActualProviderPaymentAmount ||
+    paymentInfo?.amount ||
+    paymentInfo?.totalPayment ||
+    data?.totalPayment ||
+    '0'
+  );
+
+  const claimLines = 
+    data?.claimPaymentInformation ||
+    data?.claims ||
+    data?.claimPayments ||
+    [];
+
+  // Deduplicate by check number
+  const existing = await db.query(
+    'SELECT id FROM era_batches WHERE check_number = $1',
+    [checkNumber]
+  );
+  if (existing.rows.length) {
+    console.log(`[835] ERA ${checkNumber} already imported`);
+    return;
+  }
+
+  // Find org from first matching claim
+  let orgId: string | null = null;
+  for (const line of claimLines) {
+    const controlNum =
+      line?.claimPaymentInfo?.patientControlNumber ||
+      line?.patientControlNumber ||
+      line?.claimControlNumber;
+    if (!controlNum) continue;
+    const match = await db.query(
+      'SELECT organization_id FROM claims WHERE id=$1 LIMIT 1',
+      [controlNum]
+    );
+    if (match.rows[0]?.organization_id) {
+      orgId = match.rows[0].organization_id;
+      break;
+    }
+  }
+
+  // Import ERA batch
+  const eraId = crypto.randomUUID();
+  await db.query(
+    `INSERT INTO era_batches 
+     (id, organization_id, payer_name, check_number,
+      check_date, total_amount, status, stedi_era_id,
+      raw_data, source, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,'unposted',$7,$8,
+             'stedi_webhook',NOW())`,
+    [eraId, orgId, payerName, checkNumber, checkDate,
+     totalPayment, transactionId, JSON.stringify(data)]
+  );
+
+  // Import ERA claim lines
+  for (const line of claimLines) {
+    const controlNum =
+      line?.claimPaymentInfo?.patientControlNumber ||
+      line?.patientControlNumber ||
+      line?.claimControlNumber || '';
+
+    const patientName = [
+      line?.patient?.firstName || line?.patientFirstName,
+      line?.patient?.lastName || line?.patientLastName
+    ].filter(Boolean).join(' ') || 'Unknown';
+
+    const billedAmount = parseFloat(
+      line?.claimPaymentInfo?.totalClaimChargeAmount ||
+      line?.billedAmount || '0'
+    );
+    const paidAmount = parseFloat(
+      line?.claimPaymentInfo?.claimPaymentAmount ||
+      line?.paidAmount || '0'
+    );
+
+    const adjustments = 
+      line?.claimAdjustments ||
+      line?.adjustments ||
+      [];
+
+    await db.query(
+      `INSERT INTO era_claim_lines
+       (id, era_batch_id, claim_control_number,
+        patient_name, billed_amount, allowed_amount,
+        paid_amount, adjustment_codes, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+      [
+        crypto.randomUUID(), eraId, controlNum, patientName,
+        billedAmount, paidAmount, paidAmount,
+        JSON.stringify(adjustments.map((adj: any) => ({
+          code: `${adj.claimAdjustmentGroupCode || adj.groupCode}-${adj.claimAdjustmentReasonCode || adj.reasonCode}`,
+          amount: parseFloat(adj.claimAdjustmentAmount || adj.amount || '0'),
+          reason: adj.reasonDescription || adj.claimAdjustmentReasonCode || ''
+        })))
+      ]
+    );
+
+    // Apply CARC rules to update claim status
+    if (controlNum && adjustments.length > 0) {
+      await applyCARCRules(controlNum, adjustments, db);
+    }
+  }
+
+  console.log(`[835] Imported ERA ${checkNumber}, ` +
+    `${claimLines.length} lines, org: ${orgId}`);
+}
+
+// Apply CARC posting rules to claim
+async function applyCARCRules(
+  claimControlNumber: string,
+  adjustments: any[],
+  db: any
+): Promise<void> {
+  const claimResult = await db.query(
+    'SELECT id, organization_id FROM claims WHERE id=$1 LIMIT 1',
+    [claimControlNumber]
+  );
+  if (!claimResult.rows.length) return;
+  const claim = claimResult.rows[0];
+
+  for (const adj of adjustments) {
+    const carcCode = 
+      adj.claimAdjustmentReasonCode || 
+      adj.reasonCode || '';
+    
+    const ruleResult = await db.query(
+      'SELECT * FROM carc_posting_rules WHERE carc_code=$1',
+      [carcCode]
+    );
+    
+    if (!ruleResult.rows.length) continue;
+    const rule = ruleResult.rows[0];
+
+    switch (rule.default_action) {
+      case 'auto_writeoff':
+        // CO-45 type — standard contractual write-off
+        await db.query(
+          `UPDATE claims SET status='paid', updated_at=NOW() 
+           WHERE id=$1`,
+          [claim.id]
+        );
+        break;
+      case 'flag_appeal':
+        await db.query(
+          `UPDATE claims SET status='appeal_needed', 
+           updated_at=NOW() WHERE id=$1`,
+          [claim.id]
+        );
+        break;
+      case 'flag_review':
+        await db.query(
+          `UPDATE claims SET status='review_needed',
+           updated_at=NOW() WHERE id=$1`,
+          [claim.id]
+        );
+        break;
+      case 'patient_responsibility':
+        // PR-1/2/3 — flag for patient billing
+        await db.query(
+          `UPDATE claims SET status='patient_responsibility',
+           updated_at=NOW() WHERE id=$1`,
+          [claim.id]
+        );
+        break;
+    }
+
+    // Create claim event for each CARC
+    await db.query(
+      `INSERT INTO claim_events
+       (id, claim_id, type, notes, timestamp, organization_id)
+       VALUES ($1,$2,$3,$4,NOW(),$5)`,
+      [
+        crypto.randomUUID(),
+        claim.id,
+        'ERA Adjustment',
+        `CARC ${carcCode}: ${rule.description}. ` +
+        `Action: ${rule.default_action}`,
+        claim.organization_id
+      ]
+    );
+  }
+}
+
+═══════════════════════════════════════════════════════
+SECTION 3 — WEBHOOK ENDPOINTS
+Add to routes.ts inside registerRoutes()
+═══════════════════════════════════════════════════════
+
+// ── STEDI MAIN WEBHOOK ──────────────────────────────
+// Receives transaction.processed and file.failed events
+// for 277CA and 835 ERA transactions
+app.post('/api/webhooks/stedi', async (req, res) => {
+  // ALWAYS return 200 immediately
+  // Stedi retries on non-2xx — causes duplicate processing
+  res.status(200).json({ received: true });
+
+  setImmediate(async () => {
+    try {
+      const db = await import('./db').then(m => m.pool);
+      const body = req.body;
+
+      // Verify request is from Stedi
+      const webhookSecret = process.env.STEDI_WEBHOOK_SECRET;
+      const authHeader = req.headers['authorization'];
+      if (webhookSecret && 
+          authHeader !== `Key ${webhookSecret}`) {
+        console.warn('[Webhook] Unauthorized — bad secret');
+        return;
+      }
+
+      // Extract event metadata
+      // Official Stedi payload: body.event.id, 
+      // body.event['detail-type'], body.event.detail
+      const eventObj = body?.event || body;
+      const eventId = eventObj?.id || eventObj?.detail?.transactionId;
+      const detailType = 
+        eventObj?.['detail-type'] ||
+        eventObj?.detailType ||
+        body?.type;
+      const detail = eventObj?.detail || body?.detail || body;
+      const transactionId = detail?.transactionId;
+      const direction = detail?.direction;
+      const transactionSetIdentifier =
+        detail?.x12?.metadata?.transaction
+          ?.transactionSetIdentifier ||
+        detail?.transactionSetIdentifier;
+
+      if (!eventId) {
+        console.error('[Webhook] No event ID:', 
+          JSON.stringify(body).slice(0, 300));
+        return;
+      }
+
+      // IDEMPOTENCY — prevent duplicate processing
+      const existing = await db.query(
+        'SELECT event_id FROM webhook_events WHERE event_id=$1',
+        [eventId]
+      );
+      if (existing.rows.length > 0) {
+        console.log(`[Webhook] Duplicate event ${eventId}, skip`);
+        return;
+      }
+
+      // Record event before processing
+      await db.query(
+        `INSERT INTO webhook_events 
+         (event_id, event_type, transaction_id, transaction_set)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT DO NOTHING`,
+        [eventId, detailType, transactionId, 
+         transactionSetIdentifier]
+      );
+
+      // Handle file.failed — EDI delivery failure
+      if (detailType?.includes('file.failed') || 
+          detailType === 'file.failed.v2') {
+        const errors = detail?.errors || [];
+        const msg = errors.map((e: any) => e.message).join('; ');
+        console.error('[Webhook FileFailed]', msg);
+        await db.query(
+          `INSERT INTO system_settings (key, value, updated_at)
+           VALUES ($1,$2,NOW())
+           ON CONFLICT (key) DO UPDATE 
+           SET value=$2, updated_at=NOW()`,
+          [
+            `file_failed_${Date.now()}`,
+            JSON.stringify({
+              error: msg,
+              fileExecutionId: detail?.fileExecutionId,
+              time: new Date().toISOString()
+            })
+          ]
+        );
+        return;
+      }
+
+      // Only process INBOUND transaction.processed events
+      if (!detailType?.includes('transaction.processed')) {
+        console.log(`[Webhook] Ignoring event type: ${detailType}`);
+        return;
+      }
+      if (direction === 'OUTBOUND') {
+        console.log('[Webhook] Skipping OUTBOUND transaction');
+        return;
+      }
+
+      if (!transactionId) {
+        console.error('[Webhook] No transactionId in detail');
+        return;
+      }
+
+      // Import webhook service
+      const { 
+        fetchStediTransaction, 
+        process277CA, 
+        process835ERA 
+      } = await import('./services/stedi-webhooks');
+
+      if (transactionSetIdentifier === '277') {
+        const data = await fetchStediTransaction(
+          transactionId, '277');
+        if (data) await process277CA(data, transactionId, db);
+      } else if (transactionSetIdentifier === '835') {
+        const data = await fetchStediTransaction(
+          transactionId, '835');
+        if (data) await process835ERA(data, transactionId, db);
+      } else {
+        console.log('[Webhook] Unknown set:', 
+          transactionSetIdentifier);
+      }
+
+    } catch (err) {
+      console.error('[Webhook] Error:', err);
+    }
+  });
+});
+
+// ── ENROLLMENT EVENT DESTINATION ────────────────────
+// Receives enrollment status change events from Stedi
+// Configured under Developer Settings → Event Destinations
+// (different auth mechanism — Stedi signs with HMAC)
+app.post('/api/webhooks/stedi/enrollment', 
+  async (req, res) => {
+  res.status(200).json({ received: true });
+
+  setImmediate(async () => {
+    try {
+      const body = req.body;
+      console.log('[Enrollment Webhook]', 
+        JSON.stringify(body).slice(0, 500));
+
+      const db = await import('./db').then(m => m.pool);
+
+      // Extract enrollment event data
+      const eventType = body?.detail?.type || body?.type;
+      const payerId = 
+        body?.detail?.payerId || 
+        body?.detail?.payer?.id ||
+        body?.payerId;
+      const transactionType = 
+        body?.detail?.transactionType ||
+        body?.transactionType;
+      const status = 
+        body?.detail?.status ||
+        body?.status;
+
+      console.log(`[Enrollment] ${transactionType} ` +
+        `for payer ${payerId}: ${status}`);
+
+      // Update payer enrollment status if approved
+      if (status === 'approved' || status === 'live') {
+        if (payerId) {
+          const column = transactionType === '835' 
+            ? 'enrollment_status_835'
+            : 'enrollment_status_837';
+          
+          await db.query(
+            `UPDATE payers SET 
+             ${column} = 'active',
+             enrollment_activated_at = NOW()
+             WHERE payer_id = $1`,
+            [payerId]
+          );
+        }
+      }
+
+      // Store all enrollment events for audit trail
+      await db.query(
+        `INSERT INTO system_settings (key, value, updated_at)
+         VALUES ($1,$2,NOW())
+         ON CONFLICT (key) DO UPDATE 
+         SET value=$2, updated_at=NOW()`,
+        [
+          `enrollment_event_${Date.now()}`,
+          JSON.stringify({
+            payerId, transactionType, status,
+            timestamp: new Date().toISOString(),
+            raw: body
+          })
+        ]
+      );
+
+    } catch (err) {
+      console.error('[Enrollment Webhook] Error:', err);
+    }
+  });
+});
+
+═══════════════════════════════════════════════════════
+SECTION 4 — STEDI CLAIMS SERVICE UPDATES
+Update server/services/stedi-claims.ts
+═══════════════════════════════════════════════════════
+
+Verify these functions exist and are correct.
+Add or fix as needed.
+
+4.1 — submitClaim() for production (ISA15='P')
+Already implemented — verify ISA15 is set to 'P'.
+
+4.2 — testClaim() for validation (ISA15='T')
+Already implemented — verify:
+- Sets ISA15 to 'T' in EDI before sending
+- Uses timestamp in idempotency key to allow 
+  multiple tests of same claim
+- Returns validation errors in user-readable format
+
+4.3 — Export parseERAResponse() function
+The webhook service imports this function.
+Make sure it is exported from stedi-claims.ts:
+
+export function parseERAResponse(data: any) {
+  // Parse Stedi 835 report API response
+  // into our internal ERA format
+  const paymentInfo = 
+    data?.financialInformation || 
+    data?.paymentInfo || {};
+  const claims = 
+    data?.claimPaymentInformation || 
+    data?.claims || [];
+
+  return {
+    eraId: data?.transactionId || data?.id,
+    checkNumber: 
+      paymentInfo?.checkNumber ||
+      paymentInfo?.traceNumber ||
+      data?.transactionId,
+    checkDate: 
+      paymentInfo?.checkDate ||
+      data?.checkDate ||
+      new Date().toISOString().slice(0,10),
+    payerName: data?.payer?.name || 'Unknown',
+    totalPayment: parseFloat(
+      paymentInfo?.totalActualProviderPaymentAmount || '0'
+    ),
+    claimLines: claims.map((c: any) => ({
+      claimControlNumber:
+        c?.claimPaymentInfo?.patientControlNumber ||
+        c?.patientControlNumber || '',
+      patientName: [
+        c?.patient?.firstName, 
+        c?.patient?.lastName
+      ].filter(Boolean).join(' ') || 'Unknown',
+      billedAmount: parseFloat(
+        c?.claimPaymentInfo?.totalClaimChargeAmount || '0'
+      ),
+      allowedAmount: parseFloat(
+        c?.claimPaymentInfo?.claimPaymentAmount || '0'
+      ),
+      paidAmount: parseFloat(
+        c?.claimPaymentInfo?.claimPaymentAmount || '0'
+      ),
+      adjustments: (c?.claimAdjustments || []).map(
+        (adj: any) => ({
+          code: `${adj.claimAdjustmentGroupCode}-${adj.claimAdjustmentReasonCode}`,
+          amount: parseFloat(adj.claimAdjustmentAmount || '0'),
+          reason: adj.reasonDescription || 
+            adj.claimAdjustmentReasonCode || ''
+        })
+      )
+    })),
+    rawData: data
+  };
+}
+
+═══════════════════════════════════════════════════════
+SECTION 5 — POLLING JOBS (reduce frequency)
+Webhooks are now primary — polling is backup only
+═══════════════════════════════════════════════════════
+
+Find the existing pollStedi277Acknowledgments and 
+pollStedi835ERA polling jobs.
+
+Change intervals:
+- 277CA polling: from every 15 minutes to every 4 hours
+  setInterval(pollStedi277Acknowledgments, 4 * 60 * 60 * 1000)
+- 835 ERA polling: from every 6 hours to every 24 hours
+  setInterval(pollStedi835ERA, 24 * 60 * 60 * 1000)
+
+Keep both running as safety nets for missed webhooks.
+Do not remove them.
+
+Add deduplication to polling jobs using the same
+check_number and stedi_era_id checks already in place.
+
+═══════════════════════════════════════════════════════
+SECTION 6 — EDI GENERATOR VERIFICATION AND FIXES
+server/services/edi-generator.ts
+═══════════════════════════════════════════════════════
+
+Read edi-generator.ts and verify ALL of these.
+Fix any that are missing or wrong.
+
+6.1 — ICD-10 decimal stripping
+Every ICD-10 code written to HI segment must have 
+periods removed:
+const cleanCode = code.replace(/\./g, '');
+Verify this exists. If not, add it.
+
+6.2 — Diagnosis pointer A→1 mapping
+SV1-07 must use numeric pointers (1,2,3,4) not 
+alphabetic (A,B,C,D):
+const ptrMap: Record<string,string> = {
+  'A':'1','B':'2','C':'3','D':'4'
+};
+const ptr = ptrMap[rawPtr?.toUpperCase()] || rawPtr || '1';
+Verify this mapping exists in the service line builder.
+If not, add it.
+
+6.3 — ISA15 production flag
+For real claim submissions ISA15 must be 'P':
+Verify the generate837P function outputs ISA15='P'.
+
+6.4 — Ordering provider Loop 2420D
+When ordering_provider_npi is set on a claim and 
+differs from the rendering provider NPI, output 
+Loop 2420D in the 837P:
+
+if (claim.ordering_provider_npi && 
+    claim.ordering_provider_npi !== provider.npi) {
+  segments.push(
+    `NM1*DQ*1*${claim.ordering_provider_last_name || 'UNKNOWN'}*${claim.ordering_provider_first_name || ''}****XX*${claim.ordering_provider_npi}`
+  );
+}
+
+Add this after the rendering provider NM1 loop.
+
+6.5 — SE segment count
+The SE segment count must include all segments 
+from ST through SE inclusive.
+Verify the formula counts correctly.
+Common correct formula:
+const stIndex = segments.findIndex(s => s.startsWith('ST*'));
+const segCount = segments.length - stIndex + 1; // +1 for SE itself
+segments.push(`SE*${segCount}*0001`);
+
+6.6 — Homebound indicator
+Verify the homebound NTE segment only fires when 
+homebound_indicator is exactly 'Y' or true:
+const isHomebound = claim.homebound_indicator === 'Y' || 
+                    claim.homebound_indicator === true;
+if (isHomebound) {
+  segments.push('NTE*ADD*PATIENT IS HOMEBOUND');
+}
+Make sure 'N' does NOT trigger the homebound segment.
+
+═══════════════════════════════════════════════════════
+SECTION 7 — CLAIM VALIDATION (RULES ENGINE)
+Fix edi-validate endpoint to execute rules from DB
+═══════════════════════════════════════════════════════
+
+Find GET /api/billing/claims/:id/edi-validate in routes.ts.
+
+After existing hardcoded checks, add rules engine execution:
+
+// Execute rules from rules table
+const orgId = getOrgId(req);
+const { rows: rules } = await db.query(
+  `SELECT * FROM rules 
+   WHERE is_active = true
+   AND (organization_id = $1 OR organization_id IS NULL)`,
+  [orgId]
+);
+
+for (const rule of rules) {
+  let violated = false;
+  
+  switch (rule.condition_type) {
+    case 'provider_npi_invalid':
+      violated = !provId || 
+        (await db.query(
+          'SELECT npi FROM providers WHERE id=$1', 
+          [provId]
+        )).rows[0]?.npi?.replace(/\D/g,'')?.length !== 10;
+      break;
+    
+    case 'diagnosis_missing':
+      violated = !c.icd10_primary;
+      break;
+    
+    case 'total_charges_zero':
+      violated = rawLines.reduce((sum: number, sl: any) =>
+        sum + (Number(sl.charge) || 
+               Number(sl.amount) || 
+               Number(sl.total_charge) || 0), 0) === 0;
+      break;
+    
+    case 'payer_missing':
+      violated = !c.payer_id && !c.payer;
+      break;
+    
+    case 'service_date_missing':
+      violated = !c.service_date;
+      break;
+    
+    case 'service_date_future':
+      if (c.service_date) {
+        const daysAhead = Math.floor(
+          (new Date(c.service_date).getTime() - Date.now()) 
+          / 86400000
+        );
+        violated = daysAhead > parseInt(rule.condition_value || '1');
+      }
+      break;
+    
+    case 'days_since_service_gt':
+      if (c.service_date) {
+        const daysSince = Math.floor(
+          (Date.now() - new Date(c.service_date).getTime()) 
+          / 86400000
+        );
+        violated = daysSince > parseInt(rule.condition_value || '180');
+      }
+      break;
+    
+    case 'va_auth_missing':
+      const isVAPayer = payerInfo.payer_id === 'TWVACCN' ||
+        payerInfo.name?.toLowerCase().includes('triwest') ||
+        payerInfo.name?.toLowerCase().includes('va community');
+      violated = isVAPayer && !c.authorization_number;
+      break;
+    
+    case 'va_wrong_pos':
+      const isVA = payerInfo.payer_id === 'TWVACCN';
+      violated = isVA && 
+        c.place_of_service !== rule.condition_value;
+      break;
+    
+    case 'gcode_wrong_pos':
+      const hasGCode = rawLines.some((sl: any) => {
+        const code = sl.hcpcsCode || sl.hcpcs_code || '';
+        return code.match(/^G0[2-3]/i);
+      });
+      violated = hasGCode && 
+        c.place_of_service !== rule.condition_value;
+      break;
+    
+    case 'duplicate_claim':
+      if (c.patient_id && c.service_date && 
+          rawLines.length > 0) {
+        const firstCode = rawLines[0]?.hcpcsCode || 
+          rawLines[0]?.hcpcs_code || '';
+        const dupResult = await db.query(
+          `SELECT id FROM claims 
+           WHERE patient_id=$1 
+           AND service_date=$2 
+           AND id != $3
+           AND status NOT IN ('draft','void')
+           AND (organization_id=$4 OR organization_id IS NULL)
+           LIMIT 1`,
+          [c.patient_id, c.service_date, 
+           req.params.id, orgId]
+        );
+        violated = dupResult.rows.length > 0;
+      }
+      break;
+  }
+  
+  if (violated) {
+    warnings.push({
+      field: rule.name,
+      message: rule.description,
+      severity: rule.action === 'block' ? 'error' : 'warning',
+      ruleId: rule.id
+    });
+  }
+}
+
+═══════════════════════════════════════════════════════
+SECTION 8 — VOB VERIFICATION FIX
+Fix false-positive "VOB not verified" warning
+═══════════════════════════════════════════════════════
+
+In the edi-validate endpoint, find where it checks 
+for VOB verification.
+
+Replace any check of patients.vob_verified boolean with:
+
+// Check vob_verifications table for active VOB
+const vobCheck = await db.query(
+  `SELECT id FROM vob_verifications
+   WHERE patient_id = $1
+   AND status = 'active'
+   AND (
+     payer_id = $2 
+     OR payer_name ILIKE $3
+   )
+   AND (
+     coverage_end_date IS NULL 
+     OR coverage_end_date >= $4::date
+   )
+   ORDER BY created_at DESC LIMIT 1`,
+  [
+    c.patient_id,
+    c.payer_id || '',
+    `%${payerInfo.name || ''}%`,
+    c.service_date || new Date().toISOString().slice(0,10)
+  ]
+);
+
+const hasActiveVOB = vobCheck.rows.length > 0;
+
+if (!hasActiveVOB) {
+  warnings.push({
+    field: 'vob',
+    message: 'No active VOB on file for this patient ' +
+             'and payer. Add a manual VOB entry on the ' +
+             'patient Eligibility tab.',
+    severity: 'warning'
+  });
+}
+// If hasActiveVOB: do NOT add any VOB warning
+
+═══════════════════════════════════════════════════════
+SECTION 9 — VA RATE AUTO-POPULATION FIX
+Fix claim wizard service line rate lookup
+═══════════════════════════════════════════════════════
+
+Find the HCPCS search endpoint:
+GET /api/billing/hcpcs/search
+
+Verify it returns va_rate from va_location_rates 
+filtered by the org's default_va_locality.
+
+The query should include:
+SELECT h.*, 
+  (SELECT ROUND(AVG(vlr.facility_rate)::numeric, 2)
+   FROM va_location_rates vlr
+   WHERE vlr.hcpcs_code = h.code
+   AND vlr.locality_name = $locality
+   AND vlr.is_non_reimbursable = false
+  ) as va_rate
+FROM hcpcs_codes h
+WHERE h.code ILIKE $search
+
+Where $locality comes from:
+SELECT default_va_locality FROM practice_settings 
+WHERE organization_id = $orgId LIMIT 1
+
+If default_va_locality is null, use the most common 
+California VA locality as fallback for Chajinel:
+'SAN FRANCISCO-OAKLAND-BERKELEY (ALAMEDA/CONTRA COSTA CNTY)'
+
+In the claim wizard frontend (claim-wizard.tsx):
+When a HCPCS code is selected from the dropdown:
+1. The code's va_rate value from the search result 
+   should auto-populate the rate field
+2. The rate field should show a subtle indicator:
+   "Rate from VA fee schedule"
+3. The quantity/units field must NOT be reset 
+   when a code is selected
+4. Only populate EMPTY rate fields — 
+   never overwrite a rate the biller already entered
+
+Find the code selection handler in the wizard and 
+verify it does these four things. Fix if not.
+
+═══════════════════════════════════════════════════════
+SECTION 10 — PATIENT FORM FIXES
+Fix patient creation with full address and payer link
+═══════════════════════════════════════════════════════
+
+10.1 — New Patient form address fields
+Add to patient-create.tsx if not present:
+- Street Address (text input, label "Street Address")
+- City (text input)
+- State (dropdown, all 50 US states)
+- ZIP Code (text input, 5-digit)
+
+Save to flat columns: street_address, city, state, zip_code
+Also update the address JSONB for backwards compatibility:
+address: { street: streetAddress, city, state, zip: zipCode }
+
+10.2 — Insurance carrier as payer dropdown
+Replace free-text insurance_carrier field with 
+a searchable Select that queries:
+GET /api/billing/payers?search={query}
+
+On selection, store both:
+- payer_id (FK to payers.id)
+- insurance_carrier (display name)
+
+If payer not found: allow typing the name 
+and show "Payer not in system — will save as text"
+
+10.3 — POST /api/billing/patients
+Accept and save:
+- street_address, city, zip_code (flat columns)
+- payer_id (FK)
+- secondary_payer_id, secondary_member_id, 
+  secondary_group_number, secondary_plan_name,
+  secondary_relationship
+
+Never return success toast if INSERT failed.
+After INSERT, verify the record exists before 
+navigating to detail page:
+const verify = await db.query(
+  'SELECT id FROM patients WHERE id=$1', [newId]);
+if (!verify.rows.length) {
+  return res.status(500).json({
+    error: 'Patient was not saved. Please try again.'
+  });
+}
+
+═══════════════════════════════════════════════════════
+SECTION 11 — CLEARINGHOUSE STATUS BADGE FIX
+═══════════════════════════════════════════════════════
+
+Find where the clearinghouse status badge is rendered
+on My Practice page (/billing/clinic) and in 
+Settings → Clearinghouse tab.
+
+The badge must show green "✓ Connected to Stedi" when
+STEDI_API_KEY is configured.
+
+Fix the status check endpoint:
+GET /api/billing/stedi-status
+
+app.get('/api/billing/stedi-status', 
+  requireRole('admin','rcm_manager'), 
+  async (req, res) => {
+  const isConfigured = !!process.env.STEDI_API_KEY;
+  res.json({
+    configured: isConfigured,
+    mode: isConfigured ? 'production' : 'not_configured',
+    label: isConfigured 
+      ? '✓ Connected to Stedi — Production'
+      : '⚠ Stedi not configured'
+  });
+});
+
+In the frontend, use this endpoint to determine 
+badge color and text. Do NOT check a database field
+for Stedi connection status — check the API.
+
+Also fix the onboarding checklist step 4:
+- Label: "Configure a clearinghouse" 
+  (not "Configure Office Ally SFTP")
+- Completion check: 
+  process.env.STEDI_API_KEY is set 
+  OR practice_settings.oa_connected = true
+
+═══════════════════════════════════════════════════════
+SECTION 12 — SECURITY FIXES
+═══════════════════════════════════════════════════════
+
+12.1 — Session secret
+Find in auth.ts:
+secret: process.env.SESSION_SECRET || 'hardcoded-value'
+Replace with:
+const sessionSecret = process.env.SESSION_SECRET;
+if (!sessionSecret) {
+  console.error('FATAL: SESSION_SECRET not set');
+  process.exit(1);
+}
+// then use sessionSecret
+
+12.2 — Remove plaintext password fallback
+Find in auth.ts any comparison like:
+if (password === hash) { return true; }
+Remove it. All password verification must use bcrypt.
+
+12.3 — DB-backed rate limiting
+Find the in-memory login attempts Map.
+Replace with database-backed approach:
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  ip VARCHAR NOT NULL,
+  attempted_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_ip 
+  ON login_attempts(ip, attempted_at);
+
+On each login attempt:
+1. INSERT INTO login_attempts (ip) VALUES ($ip)
+2. SELECT COUNT(*) FROM login_attempts 
+   WHERE ip=$ip 
+   AND attempted_at > NOW() - INTERVAL '15 minutes'
+3. If count > 10: return 429 Too Many Requests
+4. Clean up old records: 
+   DELETE FROM login_attempts 
+   WHERE attempted_at < NOW() - INTERVAL '1 hour'
+
+12.4 — Admin panel proper 403
+Find the auth guard for /admin routes.
+For non-super-admin users navigating to /admin:
+Show this page instead of silent redirect:
+
+Return a proper React page at /admin that shows 
+for unauthorized users:
+- Title: "Platform Administration"
+- Message: "This area is restricted to ClaimShield 
+  platform administrators. If you need access, 
+  contact your administrator."
+- Button: "← Back to Billing" → navigates to /billing/dashboard
+
+Do not redirect silently. Show the message.
+
+═══════════════════════════════════════════════════════
+SECTION 13 — ORDERING PROVIDER CMS-1500 FIX
+Update generate-cms1500.ts
+═══════════════════════════════════════════════════════
+
+Find where ordering provider is populated in the 
+CMS-1500 generator.
+
+Update to use the flat columns:
+
+// Box 17 — Ordering/Referring Provider Name
+const orderingProviderName = claim.ordering_provider_npi
+  ? [claim.ordering_provider_last_name, 
+     claim.ordering_provider_first_name]
+    .filter(Boolean).join(', ')
+  : undefined;
+
+// Box 17b — Ordering Provider NPI
+const orderingProviderNPI = claim.ordering_provider_npi || undefined;
+
+Map these to the correct CMS-1500 boxes:
+Box 17: orderingProviderName
+Box 17b: orderingProviderNPI
+
+If claim.ordering_provider_npi is null:
+Leave Box 17 and 17b blank (do not put rendering 
+provider there — those go in Box 31/33).
+
+═══════════════════════════════════════════════════════
+SECTION 14 — FINAL VERIFICATION
+After all sections complete, run these checks
+═══════════════════════════════════════════════════════
+
+14.1 — Database verification
+Run these queries and confirm expected results:
+
+SELECT COUNT(*) FROM webhook_events;
+-- Expected: table exists (count 0 initially)
+
+SELECT name, payer_id, timely_filing_days, 
+  enrollment_status_835, enrollment_status_837 
+FROM payers WHERE name ILIKE '%triwest%';
+-- Expected: TWVACCN, 180, active, active
+
+SELECT COUNT(*) FROM rules;
+-- Expected: >= 12
+
+SELECT COUNT(*) FROM carc_posting_rules;
+-- Expected: >= 12
+
+SELECT COUNT(*) FROM providers 
+WHERE npi IN ('1234567893','1245319599')
+AND organization_id != 'demo-org-001';
+-- Expected: 0
+
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'claims'
+AND column_name IN (
+  'ordering_provider_npi',
+  'stedi_transaction_id',
+  'last_test_status'
+);
+-- Expected: 3 rows
+
+14.2 — Endpoint verification
+Verify these endpoints respond correctly:
+
+POST /api/webhooks/stedi 
+  with no auth header → should return 200 
+  (always 200, but log unauthorized)
+
+GET /api/billing/stedi-status 
+  → should return { configured: true }
+
+GET /api/billing/claims/:id/edi-validate 
+  → should include rule violations in warnings array
+
+14.3 — Server startup check
+Verify server starts with no errors.
+Verify all migrations run successfully.
+Verify no TypeScript compilation errors.
+
+═══════════════════════════════════════════════════════
+DELIVERABLE
+═══════════════════════════════════════════════════════
+
+After completing all 14 sections, produce a report:
+
+COMPLETED:
+- List every section with what was built/fixed
+
+VERIFIED:
+- Results of Section 14 database queries
+- Endpoint test results
+
+OUTSTANDING:
+- Anything that could not be completed with reason
+
+NEXT STEPS:
+- Register webhook URL in Stedi portal if not done
+- Add STEDI_WEBHOOK_SECRET to Railway
+- Set up Event Destination for enrollments in 
+  Stedi portal → Settings → Developer → Event Destinations
+- Test webhook by submitting a test claim via ISA15=T
+  and verifying the webhook fires and processes correctly
