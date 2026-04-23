@@ -791,6 +791,63 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_era_claim_lines_batch ON era_claim_lines(era_batch_id)`);
 
+    // ── Claims: test validation columns (moved to startup so they exist before first use) ──
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_status VARCHAR`);
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_at TIMESTAMP`);
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_errors JSONB`);
+
+    // ── Claims: COB / secondary insurance columns ────────────────────────────
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS secondary_payer_id VARCHAR`);
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS secondary_member_id VARCHAR`);
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS secondary_group_number VARCHAR`);
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS cob_order VARCHAR`);
+
+    // ── Payers: stedi sync timestamp ─────────────────────────────────────────
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_synced_at TIMESTAMP`);
+
+    // ── Prior authorizations: additional tracking columns ────────────────────
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS authorized_visits INTEGER`);
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS appeal_deadline DATE`);
+
+    // ── carc_posting_rules table ─────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS carc_posting_rules (
+        id SERIAL PRIMARY KEY,
+        carc_code VARCHAR NOT NULL UNIQUE,
+        description TEXT,
+        default_action VARCHAR NOT NULL,
+        group_code VARCHAR,
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    // Seed CARC posting rules — idempotent via ON CONFLICT
+    await pool.query(`
+      INSERT INTO carc_posting_rules (carc_code, description, default_action, group_code) VALUES
+        ('45',  'Charge exceeds fee schedule / maximum allowable',          'auto_writeoff',          'CO'),
+        ('97',  'Payment included in allowance for another service/procedure', 'auto_writeoff',        'CO'),
+        ('94',  'Processed in excess of charges',                           'auto_writeoff',          'CO'),
+        ('59',  'Processed based on multiple-procedure rules',              'auto_writeoff',          'CO'),
+        ('1',   'Deductible amount',                                        'patient_responsibility', 'PR'),
+        ('2',   'Coinsurance amount',                                       'patient_responsibility', 'PR'),
+        ('3',   'Co-payment amount',                                        'patient_responsibility', 'PR'),
+        ('96',  'Non-covered charge(s)',                                    'flag_review',            'CO'),
+        ('50',  'These are non-covered services because this is not deemed a medical necessity', 'flag_appeal', 'CO'),
+        ('4',   'Service/equipment is not covered',                         'flag_review',            'CO'),
+        ('16',  'Claim/service lacks information or has submission/billing error(s)', 'flag_review',  'CO'),
+        ('29',  'Timely filing limitation has expired',                     'flag_review',            'CO'),
+        ('167', 'This (these) diagnosis(es) is (are) not covered',          'flag_review',            'CO'),
+        ('109', 'Claim not covered by this payer',                          'flag_review',            'CO'),
+        ('22',  'This care may be covered by another payer',                'flag_review',            'OA'),
+        ('23',  'Impact of prior payer(s) adjudication',                    'flag_review',            'OA'),
+        ('19',  'Claim denied because this is a work-related injury',       'flag_review',            'CO'),
+        ('26',  'Expenses incurred prior to coverage',                      'flag_review',            'CO'),
+        ('27',  'Expenses incurred after coverage terminated',              'flag_review',            'CO'),
+        ('B7',  'This provider was not certified/eligible on the DOS',      'flag_appeal',            'CO'),
+        ('B8',  'Alternative services were available',                      'flag_review',            'CO')
+      ON CONFLICT (carc_code) DO NOTHING
+    `);
+
     // ── system_settings table (for poll timestamps) ──────────────────────────
     await pool.query(`
       CREATE TABLE IF NOT EXISTS system_settings (
@@ -952,7 +1009,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         phone: addr.telephone_number || "",
       });
     } catch (err: any) {
-      res.status(500).json({ error: "NPI registry lookup failed: " + err.message });
+      console.error('[NPI Lookup] Error:', err);
+      res.status(500).json({ error: "NPI registry lookup failed. Please check the NPI number and try again." });
     }
   });
 
@@ -1020,7 +1078,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM payers ORDER BY is_active DESC, name"));
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1038,7 +1096,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1074,7 +1132,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         client.release();
       }
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1126,7 +1184,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         client.release();
       }
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1138,7 +1196,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         : await import("./db").then(m => m.pool.query("SELECT * FROM practice_settings LIMIT 1"));
       res.json(rows[0] || null);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1172,7 +1230,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         res.json(rows[0]);
       }
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1182,7 +1240,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await db.query("SELECT DISTINCT location_name FROM va_location_rates ORDER BY location_name");
       res.json(rows.map((r: any) => r.location_name));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1217,7 +1275,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         is_average: true,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1229,7 +1287,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json({ lastUpdated: rows[0]?.oldest_update || null });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1286,7 +1344,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         events: eventsByClaimId[c.id] || [],
       })));
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1312,7 +1370,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1329,7 +1387,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await db.query(query, params);
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1351,7 +1409,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       res.json({ id: eraId });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1367,7 +1425,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json({ ...era, lines });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1381,15 +1439,72 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       if (action === "post") {
         const { rows: lines } = await db.query(`SELECT * FROM era_lines WHERE era_id = $1`, [req.params.id]);
+        // Load all CARC posting rules for efficient in-memory lookup
+        const { rows: carcRules } = await db.query(`SELECT carc_code, default_action FROM carc_posting_rules WHERE is_active = true`);
+        const carcActionMap: Record<string, string> = {};
+        for (const r of carcRules) carcActionMap[r.carc_code] = r.default_action;
+
         const today = new Date().toISOString().slice(0, 10);
         for (const line of lines) {
-          if (line.claim_id && line.paid_amount > 0) {
-            await db.query(`UPDATE claims SET status = 'paid', updated_at = NOW() WHERE id = $1`, [line.claim_id]);
-            await db.query(
-              `INSERT INTO claim_events (id, claim_id, type, notes) VALUES ($1, $2, 'Payment', $3)`,
-              [crypto.randomUUID(), line.claim_id, `ERA payment posted: $${line.paid_amount} from ${era.check_number} on ${today}`]
-            );
+          if (!line.claim_id) {
+            await db.query(`UPDATE era_lines SET status = 'posted' WHERE id = $1`, [line.id]);
+            continue;
           }
+
+          // Determine primary action from CARC adjustment codes
+          // era_lines.service_lines stores adjustments as [{code, amount, reason}]
+          const adjustments: Array<{ code: string; amount: number; reason: string }> =
+            (() => { try { return Array.isArray(line.service_lines) ? line.service_lines : JSON.parse(line.service_lines || "[]"); } catch { return []; } })();
+
+          // Derive CARC codes: format is "CO-45" → strip prefix to get "45"
+          const carcCodes = adjustments.map((a: any) => {
+            const raw = String(a.code || a.reason || "");
+            return raw.replace(/^[A-Z]+-/, ""); // strip "CO-", "PR-", "OA-" prefix
+          }).filter(Boolean);
+
+          // Determine dominant action by priority: flag_appeal > flag_review > patient_responsibility > auto_writeoff > post_payment
+          const priority: Record<string, number> = { flag_appeal: 4, flag_review: 3, patient_responsibility: 2, auto_writeoff: 1 };
+          let dominantAction = "post_payment";
+          let dominantPriority = 0;
+          for (const code of carcCodes) {
+            const action = carcActionMap[code];
+            if (action && (priority[action] || 0) > dominantPriority) {
+              dominantAction = action;
+              dominantPriority = priority[action] || 0;
+            }
+          }
+
+          let newStatus: string;
+          let eventType: string;
+          let eventNotes: string;
+
+          if (dominantAction === "flag_appeal") {
+            newStatus = "appeal_needed";
+            eventType = "Denial";
+            eventNotes = `ERA ${era.check_number}: Claim flagged for appeal. CARC: ${carcCodes.join(", ")}. Paid: $${line.paid_amount}`;
+          } else if (dominantAction === "flag_review") {
+            newStatus = "review_needed";
+            eventType = "StatusChange";
+            eventNotes = `ERA ${era.check_number}: Claim flagged for review. CARC: ${carcCodes.join(", ")}. Paid: $${line.paid_amount}`;
+          } else if (dominantAction === "patient_responsibility") {
+            newStatus = line.paid_amount > 0 ? "paid" : "patient_balance";
+            eventType = "Payment";
+            eventNotes = `ERA ${era.check_number}: Patient responsibility applied. CARC: ${carcCodes.join(", ")}. Paid: $${line.paid_amount}, Patient balance: $${adjustments.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0).toFixed(2)}`;
+          } else if (dominantAction === "auto_writeoff" || line.paid_amount >= 0) {
+            newStatus = line.paid_amount > 0 ? "paid" : "written_off";
+            eventType = "Payment";
+            eventNotes = `ERA payment posted: $${line.paid_amount} from ${era.check_number} on ${today}${carcCodes.length ? `. CARC: ${carcCodes.join(", ")}` : ""}`;
+          } else {
+            newStatus = line.paid_amount > 0 ? "paid" : "denied";
+            eventType = line.paid_amount > 0 ? "Payment" : "Denial";
+            eventNotes = `ERA ${era.check_number}: $${line.paid_amount} posted on ${today}`;
+          }
+
+          await db.query(`UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2`, [newStatus, line.claim_id]);
+          await db.query(
+            `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1, $2, $3, $4, $5)`,
+            [crypto.randomUUID(), line.claim_id, eventType, eventNotes, era.org_id]
+          );
           await db.query(`UPDATE era_lines SET status = 'posted' WHERE id = $1`, [line.id]);
         }
         await db.query(`UPDATE era_batches SET status = 'posted' WHERE id = $1`, [req.params.id]);
@@ -1432,7 +1547,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1464,7 +1579,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await db.query(query, params);
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1481,7 +1596,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(note);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1494,7 +1609,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1522,7 +1637,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       res.json({ copied: count });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1564,7 +1679,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         denialDescription: denial?.carc_desc || denial?.denial_reason_text || null,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1599,7 +1714,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         recentChats: chatsResult.rows,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1711,7 +1826,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         recentClaims: recentClaimsResult.rows,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1723,8 +1838,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const [psResult, provResult, payerResult, claimResult] = await Promise.all([
         orgId
-          ? db.query(`SELECT practice_name, address, primary_npi, default_pos FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
-          : db.query(`SELECT practice_name, address, primary_npi, default_pos FROM practice_settings LIMIT 1`),
+          ? db.query(`SELECT practice_name, address, primary_npi, tax_id, default_pos FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+          : db.query(`SELECT practice_name, address, primary_npi, tax_id, default_pos FROM practice_settings LIMIT 1`),
         orgId
           ? db.query(`SELECT COUNT(*)::int as cnt FROM providers WHERE is_active = true AND organization_id = $1`, [orgId])
           : db.query(`SELECT COUNT(*)::int as cnt FROM providers WHERE is_active = true`),
@@ -1736,7 +1851,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       ]);
 
       const ps = psResult.rows[0];
-      const hasPractice = !!(ps?.practice_name && ps?.primary_npi);
+      const hasPractice = !!(ps?.practice_name && ps?.primary_npi && ps?.tax_id);
       const hasProvider = (provResult.rows[0]?.cnt || 0) > 0;
       const hasPayer = (payerResult.rows[0]?.cnt || 0) > 0;
 
@@ -1783,7 +1898,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json({ steps, completedCount, total: steps.length, allDone, dismissed, dismissedAt });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1796,7 +1911,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1859,7 +1974,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json({ claim, denials: claimDenials, eraLines, carcDetails, recoveryActions });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1938,7 +2053,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json({ ...results, message: `Processed ${results.processed} response(s) from Office Ally` });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1957,7 +2072,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       `);
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -1981,7 +2096,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await db.query(query, params);
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2014,7 +2129,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await db.query(query, params);
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2024,7 +2139,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const users = await listUsers(getOrgId(req));
       res.json(users);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2034,8 +2149,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const user = await createUser({ ...req.body, organizationId: getOrgId(req) });
       res.json(user);
     } catch (err: any) {
-      const status = err.message.includes("already exists") ? 409 : 400;
-      res.status(status).json({ error: err.message });
+      console.error('[Create User] Error:', err);
+      const status = err.message?.includes("already exists") ? 409 : 400;
+      const message = err.message?.includes("already exists") ? "A user with this email already exists." : "Failed to create user. Please check the details and try again.";
+      res.status(status).json({ error: message });
     }
   });
 
@@ -2048,8 +2165,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const user = await updateUser(req.params.id, { name, role });
       res.json(user);
     } catch (err: any) {
-      const status = err.message.includes("not found") ? 404 : 400;
-      res.status(status).json({ error: err.message });
+      console.error('[Update User] Error:', err);
+      const status = err.message?.includes("not found") ? 404 : 400;
+      res.status(status).json({ error: err.message?.includes("not found") ? "User not found." : "Failed to update user. Please try again." });
     }
   });
 
@@ -2061,8 +2179,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await updatePassword(req.params.id, req.body.password);
       res.json({ success: true });
     } catch (err: any) {
-      const status = err.message.includes("not found") ? 404 : 400;
-      res.status(status).json({ error: err.message });
+      console.error('[Password Update] Error:', err);
+      res.status(400).json({ error: "Failed to update password. Please try again." });
     }
   });
 
@@ -2075,8 +2193,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await deleteUser(req.params.id, currentUser.id);
       res.json({ success: true });
     } catch (err: any) {
-      const status = err.message.includes("not found") ? 404 : 400;
-      res.status(status).json({ error: err.message });
+      console.error('[Delete User] Error:', err);
+      const status = err.message?.includes("not found") ? 404 : 400;
+      res.status(status).json({ error: err.message?.includes("not found") ? "User not found." : "Failed to delete user. Please try again." });
     }
   });
 
@@ -2096,7 +2215,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         practiceSettings: settings.rows[0] || null,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2138,7 +2257,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.status(201).json({ claimId, encounterId });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2222,7 +2341,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2275,7 +2394,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json({ riskScore, readinessStatus, factors });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2326,7 +2445,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json({ claim, patient, provider, orderingProvider, practice, payerName });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2351,7 +2470,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json({ success: true, pdfUrl: `generated:${timestamp}` });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2402,6 +2521,31 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         warnings.push({ field: "patient.member_id", message: "Patient insurance member ID is missing — will appear blank in EDI", severity: "warning" });
       if (!pat.sex)
         warnings.push({ field: "patient.sex", message: "Patient sex is unknown — will default to 'U' in EDI", severity: "warning" });
+
+      // VOB (insurance eligibility) check — query vob_verifications table, not just the boolean flag
+      if (c.patient_id) {
+        const serviceDate = c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+        const vobResult = await db.query(
+          `SELECT id FROM vob_verifications
+           WHERE patient_id = $1
+             AND status = 'active'
+             AND (coverage_end_date IS NULL OR coverage_end_date >= $2)
+           LIMIT 1`,
+          [c.patient_id, serviceDate]
+        );
+        if (vobResult.rows.length === 0) {
+          warnings.push({ field: "patient.vob", message: "No active insurance eligibility verification (VOB) found for this patient. Run eligibility check before submitting.", severity: "warning" });
+        }
+      }
+
+      // Ordering provider check (warn if VA claim has no ordering provider)
+      const hasOrderingProv = c.ordering_provider_id || c.external_ordering_provider_npi;
+      if (!hasOrderingProv) {
+        const payerNameForOP = (c.payer || "").toLowerCase();
+        if (payerNameForOP.includes("va") || payerNameForOP.includes("triwest") || payerNameForOP.includes("vaccn")) {
+          warnings.push({ field: "claim.ordering_provider", message: "VA claims typically require an ordering/referring provider. Consider adding one.", severity: "warning" });
+        }
+      }
 
       // Claim checks
       const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
@@ -2533,7 +2677,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           : `${errors.length} error(s) must be resolved before submission`,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2684,7 +2828,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       res.send(edi);
     } catch (err: any) {
       console.error("EDI generation error:", err);
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2705,7 +2849,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       res.json(result);
     } catch (err: any) {
-      res.json({ success: false, message: err.message });
+      console.error('[Risk Score] Error:', err);
+      res.json({ success: false, message: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -2852,7 +2997,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       res.json(result);
     } catch (err: any) {
       console.error("OA submit error:", err);
-      res.status(500).json({ success: false, error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ success: false, error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3028,7 +3173,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       });
     } catch (err: any) {
       console.error("Stedi submit error:", err);
-      res.status(500).json({ success: false, error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ success: false, error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3188,7 +3333,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       });
     } catch (err: any) {
       console.error("Stedi test error:", err);
-      res.status(500).json({ success: false, error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ success: false, error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3226,7 +3371,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         res.json({ found: false, status: claimResult.rows[0].status, message: "No 277CA acknowledgment found yet. Check back in 30 minutes." });
       }
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3235,7 +3380,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM hcpcs_codes WHERE is_active = true ORDER BY code"));
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3287,7 +3432,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3305,7 +3450,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json({ ...codeRows[0], rates });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3317,7 +3462,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       ));
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3342,7 +3487,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3357,7 +3502,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3389,7 +3534,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (rows.length === 0) return res.status(404).json({ error: "Payer not found" });
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3531,7 +3676,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         timely_filing_updates: timelyUpdates,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3563,7 +3708,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await db.query(query, params);
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3622,7 +3767,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3660,7 +3805,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3691,7 +3836,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!rows.length) return res.status(404).json({ error: "Not found" });
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3701,7 +3846,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await db.query(`DELETE FROM payer_auth_requirements WHERE id = $1`, [req.params.id]);
       res.json({ ok: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3714,7 +3859,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       ));
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3729,7 +3874,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3754,7 +3899,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (rows.length === 0) return res.status(404).json({ error: "Rate not found" });
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3765,7 +3910,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (rowCount === 0) return res.status(404).json({ error: "Rate not found" });
       res.json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3801,7 +3946,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await db.query(query, params);
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3823,7 +3968,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!patient.email && patient.lead_email) patient.email = patient.lead_email;
       res.json(patient);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3833,7 +3978,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         firstName, lastName, dob, sex, insuranceCarrier, memberId, groupNumber,
         insuredName, relationshipToInsured, authorizationNumber, referringProviderName,
         referringProviderNpi, referralSource, referralPartnerName, defaultProviderId,
-        serviceNeeded, phone, email, preferredName, state, planType, address, payerId
+        serviceNeeded, phone, email, preferredName, state, planType, address, payerId,
+        secondaryPayerId, secondaryMemberId, secondaryGroupNumber, secondaryPlanName, secondaryRelationship
       } = req.body;
       if (!firstName?.trim() || !lastName?.trim() || !dob?.trim()) {
         return res.status(400).json({ error: "firstName, lastName, and dob are required" });
@@ -3850,11 +3996,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           id, organization_id, first_name, last_name, dob, sex, insurance_carrier, member_id, group_number,
           insured_name, relationship_to_insured, authorization_number, referring_provider_name,
           referring_provider_npi, referral_source, referral_partner_name, default_provider_id,
-          service_needed, phone, email, preferred_name, state, plan_type, address, payer_id, created_at
+          service_needed, phone, email, preferred_name, state, plan_type, address, payer_id,
+          secondary_payer_id, secondary_member_id, secondary_group_number, secondary_plan_name, secondary_relationship,
+          created_at
         ) VALUES (
           gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8,
           $9, $10, $11, $12, $13, $14, $15, $16,
-          $17, $18, $19, $20, $21, $22, $23, $24, NOW()
+          $17, $18, $19, $20, $21, $22, $23, $24,
+          $25, $26, $27, $28, $29,
+          NOW()
         ) RETURNING *`,
         [
           getOrgId(req), firstName.trim(), lastName.trim(), dob, sex || null, insuranceCarrier || null,
@@ -3863,12 +4013,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           referringProviderName || null, referringProviderNpi || null,
           referralSource || null, referralPartnerName || null, defaultProviderId || null,
           serviceNeeded || null, phone || null, email || null, preferredName || null,
-          state || null, planType || null, address ? JSON.stringify(address) : null, payerId || null
+          state || null, planType || null, address ? JSON.stringify(address) : null, payerId || null,
+          secondaryPayerId || null, secondaryMemberId || null, secondaryGroupNumber || null,
+          secondaryPlanName || null, secondaryRelationship || null
         ]
       );
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3922,7 +4074,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (rows.length === 0) return res.status(404).json({ error: "Patient not found" });
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3937,7 +4089,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3964,7 +4116,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json({ notes: rows[0].notes });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -3982,7 +4134,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.json(rows);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -4081,7 +4233,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json({ ...result, id: vobId });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -4131,7 +4283,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { rows } = await db.query("SELECT * FROM vob_verifications WHERE id = $1", [vobId]);
       res.json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -4645,7 +4797,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json({ patient: rows[0], alreadyExisted: false });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -5502,7 +5654,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       res.status(201).json(rows[0]);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -6985,7 +7137,7 @@ Warmly,
         claimsLast7Days: recentClaims.rows[0].cnt,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -7032,7 +7184,7 @@ Warmly,
       }));
       res.json(result);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -7107,7 +7259,7 @@ Warmly,
         frictionItems,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -7125,7 +7277,7 @@ Warmly,
         res.json({ success: true, orgId, orgName: org.rows[0].name });
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -7159,7 +7311,7 @@ Warmly,
         openDenials: openDenials.rows[0]?.cnt || 0,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
@@ -7191,7 +7343,7 @@ Warmly,
         ${where} ORDER BY days_outstanding DESC NULLS LAST LIMIT 500
       `, params);
       res.json(result.rows);
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
   app.get("/api/billing/reports/denial-analysis", requireAuth, async (req, res) => {
@@ -7234,7 +7386,7 @@ Warmly,
         GROUP BY d.denial_category, d.denial_reason_text ORDER BY count DESC LIMIT 20
       `, [...denialParams, totalCount]);
       res.json({ byPayer: byPayer.rows, byReason: byReason.rows });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
   app.get("/api/billing/reports/collections", requireAuth, async (req, res) => {
@@ -7269,7 +7421,7 @@ Warmly,
         ORDER BY month_sort ASC LIMIT 13
       `, params);
       res.json({ summary: summaryQ.rows[0] || {}, monthly: monthlyQ.rows });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
   app.get("/api/billing/reports/clean-claim-rate", requireAuth, async (req, res) => {
@@ -7299,7 +7451,7 @@ Warmly,
         FROM claims c ${cw}
       `, params);
       res.json({ rows: byPayer.rows, overall: overallQ.rows[0] || {} });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
   app.post("/api/billing/eras/upload", requireAuth, async (req, res) => {
@@ -7328,7 +7480,7 @@ Warmly,
         );
       }
       res.json({ eraId, parsed });
-    } catch (err: any) { res.status(500).json({ error: err.message }); }
+    } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
 }

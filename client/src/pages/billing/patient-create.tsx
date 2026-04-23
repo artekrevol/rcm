@@ -57,6 +57,8 @@ export default function PatientCreate() {
     referralSource: "", referralPartnerName: "", otherReferralSource: "",
     defaultProviderId: "", serviceNeeded: "",
     phone: "", email: "", street: "", city: "", state: "", zip: "",
+    secondaryPayerId: "", secondaryMemberId: "", secondaryGroupNumber: "",
+    secondaryPlanName: "", secondaryRelationship: "Self",
   });
 
   const { data: providers = [] } = useQuery<any[]>({
@@ -128,6 +130,11 @@ export default function PatientCreate() {
         city: form.city || "",
         zip: form.zip || "",
       },
+      secondaryPayerId: form.secondaryPayerId || null,
+      secondaryMemberId: form.secondaryMemberId || null,
+      secondaryGroupNumber: form.secondaryGroupNumber || null,
+      secondaryPlanName: form.secondaryPlanName || null,
+      secondaryRelationship: form.secondaryRelationship || null,
     });
   }
 
@@ -275,6 +282,59 @@ export default function PatientCreate() {
           <div className="space-y-2">
             <Label>Authorization Number</Label>
             <Input value={f.authorizationNumber} onChange={(e) => set({ authorizationNumber: e.target.value })} data-testid="input-auth-number" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Secondary Insurance (COB)
+            <span className="text-xs font-normal text-muted-foreground ml-1">Coordination of Benefits — optional</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Secondary Payer</Label>
+              <Select
+                value={f.secondaryPayerId || "__none__"}
+                onValueChange={(v) => set({ secondaryPayerId: v === "__none__" ? "" : v })}
+              >
+                <SelectTrigger data-testid="select-secondary-payer">
+                  <SelectValue placeholder="Select secondary payer…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None</SelectItem>
+                  {payers.filter((p: any) => p.is_active).map((p: any) => (
+                    <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Member ID</Label>
+              <Input value={f.secondaryMemberId} onChange={(e) => set({ secondaryMemberId: e.target.value })} placeholder="Secondary member ID" data-testid="input-secondary-member-id" />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label>Group Number</Label>
+              <Input value={f.secondaryGroupNumber} onChange={(e) => set({ secondaryGroupNumber: e.target.value })} placeholder="Group #" data-testid="input-secondary-group" />
+            </div>
+            <div className="space-y-2">
+              <Label>Plan Name</Label>
+              <Input value={f.secondaryPlanName} onChange={(e) => set({ secondaryPlanName: e.target.value })} placeholder="Plan name (optional)" data-testid="input-secondary-plan-name" />
+            </div>
+            <div className="space-y-2">
+              <Label>Relationship</Label>
+              <Select value={f.secondaryRelationship} onValueChange={(v) => set({ secondaryRelationship: v })}>
+                <SelectTrigger data-testid="select-secondary-relationship"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectContent>
+                  {["Self", "Spouse", "Child", "Other"].map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </CardContent>
       </Card>

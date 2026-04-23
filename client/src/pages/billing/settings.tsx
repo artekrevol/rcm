@@ -1196,10 +1196,6 @@ function PayersTab() {
         </div>
       </div>
 
-      <p className="text-sm text-muted-foreground bg-muted/50 border rounded-md p-3">
-        Facility billing (UB-04) is not supported in this release. Select Professional for all payers.
-      </p>
-
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input

@@ -1,0 +1,1072 @@
+```
+You are performing a comprehensive self-QA audit and technical 
+debt remediation of ClaimShield 2.0.
+
+This is not a feature sprint. This is a quality and integrity 
+sprint. Your job is to systematically verify that every feature 
+ever built actually works end-to-end — from database to API 
+endpoint to frontend UI. Fix everything that is broken, 
+incomplete, or implemented in one layer but not wired to another.
+
+Assume nothing works until you verify it yourself.
+Test every endpoint. Test every UI component. Test every 
+database query. Test every data flow.
+
+Work through each section in order. For each item:
+1. Read the relevant code
+2. Test it (query the DB, call the endpoint, check the UI)
+3. Document what you find: PASS / FAIL / PARTIAL
+4. Fix everything that is not PASS
+5. Retest after fixing
+6. Move to next item only after confirmation
+
+Do not batch fixes speculatively. Read the code first, 
+understand what is actually there, then fix.
+
+═══════════════════════════════════════════════════════
+SECTION 0 — TECHNICAL DEBT INVENTORY
+═══════════════════════════════════════════════════════
+
+Before fixing anything, run this inventory to understand 
+the full scope of what was built vs what actually works.
+
+0.1 — Read routes.ts completely and list every endpoint:
+- Method + path
+- What it is supposed to do
+- Whether it has org scoping
+- Whether it has error handling
+- Whether the frontend actually calls it
+
+0.2 — Read the database schema completely:
+List every table, every column, and whether:
+- It was added by migration (ALTER TABLE)
+- It has a corresponding API endpoint
+- It has a corresponding UI component
+- It is actually being queried anywhere
+
+0.3 — Read every frontend page component:
+List every page and whether:
+- It has a corresponding API endpoint
+- It handles loading states
+- It handles empty states
+- It handles error states
+- It is accessible via sidebar navigation
+
+0.4 — Cross-reference backend vs frontend:
+Find every case where:
+- A database column exists but no API returns it
+- An API endpoint exists but no UI calls it
+- A UI component exists but the API it calls is broken
+- A feature was built in backend only (no UI)
+- A feature was built in frontend only (no backend)
+
+Document this as a matrix. This is your technical debt map.
+
+═══════════════════════════════════════════════════════
+SECTION 1 — DATABASE INTEGRITY
+═══════════════════════════════════════════════════════
+
+Run every query below. Document PASS or FAIL.
+Fix all FAILs before continuing.
+
+1.1 — Demo provider contamination
+Query:
+SELECT organization_id, name, npi FROM providers 
+WHERE npi IN ('1234567893', '1245319599')
+AND organization_id != 'demo-org-001';
+Expected: 0 rows
+Fix if failed:
+DELETE FROM providers
+WHERE npi IN ('1234567893', '1245319599')
+AND organization_id != 'demo-org-001';
+Then verify the chajinel-org-001 providers table is empty.
+Verify the claim wizard no longer shows Alice Valid 
+or Diana Valid in any payer dropdown.
+
+1.2 — TriWest payer ID
+Query:
+SELECT name, payer_id, timely_filing_days, 
+auto_followup_days FROM payers 
+WHERE name ILIKE '%triwest%';
+Expected: payer_id='TWVACCN', timely_filing_days=180, 
+auto_followup_days=10
+Fix if failed:
+UPDATE payers SET 
+  payer_id = 'TWVACCN',
+  timely_filing_days = 180,
+  auto_followup_days = 10
+WHERE name ILIKE '%triwest%';
+
+1.3 — NULL organization_id contamination
+Run these and fix any non-demo records with NULL org:
+SELECT 'claims' as tbl, COUNT(*) as null_orgs 
+FROM claims WHERE organization_id IS NULL
+UNION ALL
+SELECT 'patients', COUNT(*) FROM patients 
+WHERE organization_id IS NULL
+UNION ALL
+SELECT 'providers', COUNT(*) FROM providers 
+WHERE organization_id IS NULL
+UNION ALL
+SELECT 'claim_events', COUNT(*) FROM claim_events 
+WHERE organization_id IS NULL;
+
+If any non-demo records have NULL org_id:
+Fix the insert endpoints that are missing org_id.
+Do NOT backfill NULL records to demo-org — 
+investigate why they were created without org_id.
+
+1.4 — Required tables existence check
+Verify each table exists. Create if missing.
+
+Tables that must exist:
+- organizations
+- users
+- patients
+- claims
+- claim_events
+- providers
+- payers
+- practice_settings
+- vob_verifications
+- prior_authorizations
+- era_batches
+- era_claim_lines
+- denials
+- rules
+- activity_logs
+- carc_posting_rules
+- payer_carc_overrides
+- system_settings
+- hcpcs_codes
+- va_location_rates
+- role_permissions
+
+For each missing table: create it with the correct schema.
+
+1.5 — Required columns existence check
+Run information_schema.columns queries for each table
+to verify all columns added by migrations actually exist.
+
+Claims table — verify these columns exist:
+stedi_transaction_id, last_test_status, last_test_at,
+last_test_errors, secondary_payer_id, 
+secondary_member_id, secondary_group_number,
+cob_order, ordering_provider_first_name,
+ordering_provider_last_name, ordering_provider_npi,
+ordering_provider_org, submission_method,
+follow_up_date, risk_score, readiness_status
+
+Patients table — verify these columns exist:
+street_address, city, zip_code, secondary_payer_id,
+secondary_member_id, secondary_group_number,
+secondary_plan_name, secondary_relationship,
+payer_id (FK to payers), insurance_carrier
+
+Rules table — verify:
+specialty_tags (TEXT[])
+
+Prior_authorizations table — verify:
+mode, source, authorized_units, authorized_visits,
+units_used, appeal_deadline, request_method,
+status, denial_reason
+
+Era_batches table — verify:
+stedi_era_id, raw_data (JSONB), source
+
+Payers table — verify:
+timely_filing_days, auto_followup_days,
+prior_auth_required, era_auto_post_clean,
+era_auto_post_contractual, supported_transactions,
+stedi_synced_at
+
+For any missing column: add it with ALTER TABLE 
+ADD COLUMN IF NOT EXISTS.
+
+1.6 — Seeded data integrity
+Verify rules are seeded:
+SELECT COUNT(*) FROM rules;
+Expected: > 15 rules including universal rules
+If 0: seed the universal and VA CCN rule packs now.
+
+Verify CARC rules are seeded:
+SELECT COUNT(*) FROM carc_posting_rules;
+Expected: > 20 rows covering CO, PR, OA, PI, CR groups
+If 0: seed the CARC posting rules now.
+
+Verify HCPCS codes exist:
+SELECT COUNT(*) FROM hcpcs_codes;
+Expected: > 100 codes
+If low: investigate what happened to the HCPCS seed.
+
+Verify VA location rates exist:
+SELECT COUNT(*) FROM va_location_rates;
+Expected: > 2000 rows
+If low: the VA fee schedule import failed or was partial.
+
+1.7 — Orphaned records check
+Find claims with no matching patient:
+SELECT c.id FROM claims c
+LEFT JOIN patients p ON p.id = c.patient_id
+WHERE p.id IS NULL AND c.organization_id != 'demo-org-001';
+
+Find claim_events with no matching claim:
+SELECT ce.id FROM claim_events ce
+LEFT JOIN claims c ON c.id = ce.claim_id
+WHERE c.id IS NULL;
+
+Find era_claim_lines with no matching era_batch:
+SELECT ecl.id FROM era_claim_lines ecl
+LEFT JOIN era_batches eb ON eb.id = ecl.era_batch_id
+WHERE eb.id IS NULL;
+
+Document counts. Fix orphaned records.
+
+═══════════════════════════════════════════════════════
+SECTION 2 — API ENDPOINT VERIFICATION
+═══════════════════════════════════════════════════════
+
+For each endpoint group below:
+1. Find the endpoint in routes.ts
+2. Verify it exists
+3. Verify it has org scoping
+4. Verify it has error handling (try/catch)
+5. Verify it returns the correct shape
+6. Fix any issues
+
+2.1 — Patient endpoints
+GET /api/billing/patients
+- Has WHERE organization_id = $orgId? 
+- Returns street_address, city, zip_code?
+- Returns payer_id (FK) not just insurance_carrier string?
+
+GET /api/billing/patients/:id
+- Has org verification?
+- Returns all patient fields including address?
+- Returns secondary insurance fields?
+
+POST /api/billing/patients
+- Includes organization_id in INSERT?
+- Saves street_address, city, state, zip_code?
+- Saves payer_id as FK when payer is selected?
+- Returns the created patient with all fields?
+- NEVER returns 200 if INSERT failed?
+
+PATCH /api/billing/patients/:id
+- Allows updating address fields?
+- Allows updating secondary insurance?
+- Has org verification?
+
+2.2 — Claim endpoints
+GET /api/billing/claims
+- Has WHERE organization_id filter?
+- Returns service_date (not null for submitted claims)?
+- Returns payer name (joined from payers table)?
+
+GET /api/billing/claims/:id
+- Has org verification?
+- Returns ordering provider fields?
+- Returns last_test_status, last_test_at?
+- Returns secondary insurance fields?
+
+POST /api/billing/claims (draft creation)
+- Includes organization_id in INSERT?
+- NEVER returns 200/201 if INSERT failed?
+
+PATCH /api/billing/claims/:id
+- Saves ordering_provider_npi and related fields?
+- Saves secondary_payer_id?
+- Has org verification?
+- Does NOT reset to null any existing fields?
+
+POST /api/billing/claims/:id/submit-stedi
+- Sets submission_method = 'stedi'?
+- Sets follow_up_date based on payer auto_followup_days?
+- Creates claim_event with correct type?
+- Updates stedi_transaction_id?
+
+POST /api/billing/claims/:id/test-stedi
+- Does NOT update claim status?
+- Does NOT set follow_up_date?
+- Creates claim_event with type='Test Validation'?
+- Updates last_test_status, last_test_at, last_test_errors?
+- Returns validation errors in user-readable format?
+
+2.3 — Eligibility endpoints
+POST /api/billing/patients/:id/vob/check
+- Does NOT call Stedi for payers where 
+  270/271 is not in supported_transactions?
+- Returns user-friendly error (not raw SQL)?
+- References ps.primary_npi not ps.npi?
+
+POST /api/billing/patients/:id/vob/manual
+- Saves all fields including auth_number?
+- Saves homebound status?
+- Sets vob_verified=true on patient?
+
+GET /api/billing/patients/:id/vob
+- Returns all VOB history for patient?
+- Returns active VOB status correctly?
+
+2.4 — Claim readiness / validation endpoint
+GET /api/billing/claims/:id/edi-validate
+- Checks for active VOB in vob_verifications table?
+  (Not just vob_verified boolean on patient)
+- Executes rules from rules table?
+  (Not just hardcoded checks)
+- Returns warnings for ordering provider missing?
+- Returns warning if POS doesn't match payer type?
+
+2.5 — EDI generation endpoint
+GET /api/billing/claims/:id/edi
+- Strips decimal from ICD-10 codes?
+  (I10 not I1.0, Z87.39 becomes Z8739)
+- Maps diagnosis pointer A→1, B→2, C→3, D→4?
+- Includes ordering provider in Loop 2420D 
+  when ordering_provider_npi is set?
+- Sets ISA15 to 'P' for production?
+- SE segment count is correct?
+- Homebound indicator only fires when 
+  homebound_indicator = 'Y' (not 'N')?
+
+2.6 — ERA endpoints
+GET /api/billing/eras
+- Has org scoping?
+- Returns source field (stedi vs manual_upload)?
+
+POST /api/billing/eras/upload
+- Parses 835 file correctly?
+- Shows preview before posting?
+- Stores source = 'manual_upload'?
+- Handles parse errors gracefully?
+
+POST /api/billing/eras/:id/post
+- Applies carc_posting_rules?
+- Handles CO-45 as auto write-off?
+- Handles PR-1/2/3 as patient responsibility?
+- Handles CO-50 as flag for appeal?
+- Updates claim status correctly?
+- Creates claim_event for each posted line?
+
+2.7 — Rules endpoints
+GET /api/rules
+- Returns specialty_tags for each rule?
+- Returns is_active status?
+- Is org-scoped (org rules + universal rules)?
+
+POST /api/rules
+- Saves specialty_tags?
+- Creates as org-specific rule?
+
+Rule execution — does ANY code actually execute 
+rules against a claim before submission?
+Search routes.ts for WHERE rules are evaluated.
+If the rules table exists but no code queries it 
+during claim validation: this is the most 
+critical technical debt item.
+Fix: the edi-validate endpoint MUST query the 
+rules table and evaluate each enabled rule 
+against the claim being validated.
+
+2.8 — Prior auth endpoints
+GET /api/billing/prior-auth
+- Returns auths for current org?
+- Returns mode field (record vs request)?
+- Returns utilization (units_used vs authorized_units)?
+
+POST /api/billing/prior-auth
+- Saves mode field?
+- Saves all new fields from redesign?
+
+Does a claim's auth_number appear in Prior Auth?
+When a claim has authorization_number set, does 
+that auth appear in the Prior Auth list?
+If not: fix the link between claim auth and 
+prior_authorizations table.
+
+2.9 — Reports endpoints
+GET /api/billing/reports/aging
+- Does this endpoint exist?
+- Returns data grouped by aging buckets?
+- Is org-scoped?
+
+GET /api/billing/reports/denials
+- Does this endpoint exist?
+- Returns denial counts by payer?
+- Returns top denial reasons?
+
+GET /api/billing/reports/collections
+- Does this endpoint exist?
+- Returns monthly billed vs paid?
+
+GET /api/billing/reports/fprr
+- Does this endpoint exist?
+- Uses correct formula (paid without denial event)?
+- NOT counting pending claims as resolved?
+
+If any of these endpoints don't exist: create them.
+
+2.10 — Stedi sync endpoint
+POST /api/billing/payers/sync-stedi
+- Does this endpoint exist?
+- Calls Stedi payer network API?
+- Updates payer_id to Stedi canonical values?
+- Updates supported_transactions?
+- Returns sync results (matched/unmatched)?
+
+2.11 — Dashboard stats endpoint
+GET /api/billing/dashboard/stats
+- Is fully org-scoped (no cross-org data)?
+- FPRR formula is correct?
+- A/R days calculation is correct?
+- Returns data specific to current org only?
+
+2.12 — Follow-up queue endpoint
+GET /api/billing/follow-up
+- Returns service_date (not null)?
+- Calculates days_out correctly?
+- Is org-scoped?
+- Orders by days_out descending?
+
+═══════════════════════════════════════════════════════
+SECTION 3 — FRONTEND VERIFICATION
+═══════════════════════════════════════════════════════
+
+For each page below, navigate to it and verify:
+1. Page loads without errors
+2. Data displays correctly
+3. Empty states are user-friendly
+4. Error states don't show raw errors
+5. All buttons do something
+6. All forms save correctly
+7. All API calls are wired up
+
+3.1 — Dashboard (/billing/dashboard)
+□ Onboarding checklist step 4 says "Configure a 
+  clearinghouse" (not "Configure Office Ally SFTP")
+□ Step 4 shows complete when STEDI_API_KEY is set
+□ Step 1 "Add practice information" checks for 
+  NPI + Tax ID + address, not just practice name
+□ KPI tiles show correct data for current org only
+□ A/R Days uses correct calculation
+□ FPRR shows explanation tooltip
+□ No cross-org data visible
+
+3.2 — My Practice (/billing/clinic)
+□ Page loads (not 404)
+□ /billing/my-practice also works (redirect)
+□ Shows Chajinel practice name
+□ Clearinghouse shows green "Connected to Stedi" 
+  when STEDI_API_KEY is set (not red "Not Configured")
+□ Team section shows real users (not demo users)
+□ Setup Health checklist reflects actual state
+
+3.3 — Practice Settings (/billing/settings)
+□ All tabs navigate correctly
+□ Practice Info tab: NPI, Tax ID, address fields present
+□ Practice Info tab: VA locality auto-detects from ZIP
+□ Practice Info tab: San Mateo County / ZIP 94080 
+  resolves to correct locality
+□ Providers tab: credential dropdown has MD, DO, NP, 
+  PA, PT, OT, SLP, PsyD, LCSW, DC, DDS, etc.
+□ Providers tab: taxonomy auto-suggest works on 
+  credential selection
+□ Payers tab: TriWest shows TWVACCN payer ID
+□ Payers tab: Sync from Stedi button exists and works
+□ Payers tab: UB-04 banner removed or replaced with 
+  tooltip
+□ Claim Defaults tab: Homebound default is OFF 
+  for new orgs
+□ Claim Defaults tab: Exclude Facility is OFF 
+  for new orgs
+□ Rate Tables tab: shows rates from va_location_rates 
+  filtered by org locality (not just 9 hardcoded rows)
+□ Clearinghouse tab: shows dynamic payer enrollment 
+  list (not hardcoded rows)
+
+3.4 — Patients (/billing/patients)
+□ Patient list loads with correct org's patients only
+□ New Patient form has street, city, state, zip fields
+□ New Patient form: Insurance Carrier is a payer 
+  dropdown (not free text)
+□ New Patient form: Referral Source dropdown does 
+  not default to VA Community Care
+□ Patient creation NEVER shows success toast if 
+  save failed
+□ Patient detail page loads correctly after creation
+□ Patient detail: Eligibility tab exists
+□ Patient detail: Secondary Insurance section exists
+□ Patient detail: address fields displayed
+
+3.5 — Claims (/billing/claims)
+□ Claims list is org-scoped
+□ New Claim wizard loads
+□ Wizard Step 1: Patient search works
+□ Wizard Step 1: Selecting patient populates 
+  payer and member ID
+□ Wizard Step 1: Auth number pre-fills from 
+  patient record
+□ Wizard Step 2: POS defaults to practice default 
+  (not hardcoded to Office 11)
+□ Wizard Step 2: Service date defaults to today
+□ Wizard Step 3: HCPCS search works
+□ Wizard Step 3: Selecting G0299 auto-populates 
+  VA rate ($40.89) without resetting other fields
+□ Wizard Step 3: Rate field shows correct amount
+□ Wizard Step 3: Selecting code does NOT reset 
+  already-entered quantity or rate
+□ Wizard Step 3: Diagnosis ICD-10 search works
+□ Wizard Step 3: ICD-10 codes stored without decimal
+□ Wizard Step 3: Ordering Provider has "Enter manually" 
+  option with NPI free-text entry
+□ Wizard Step 4 (Review): loads without 404 error
+□ Wizard Step 4: VOB warning only shows if no 
+  active VOB exists (not false positive)
+□ Wizard Step 4: CMS-1500 preview panel available
+□ Wizard Step 4: "Test This Claim First" button exists
+□ Wizard Step 4: Test result modal shows correctly
+□ Wizard Step 4: "Submit via Stedi" button present
+□ Draft saves correctly and appears in claim list
+
+3.6 — Claim Detail (/billing/claims/:id)
+□ Page loads for any claim
+□ Validation status badge shows correctly
+□ "Run Test Validation" button appears for drafts
+□ Claim events timeline shows chronologically
+□ Test validation events shown in grey
+□ Real submission events shown in blue
+□ Ordering provider fields displayed if set
+
+3.7 — Claim Tracker (/billing/claim-tracker)
+□ Shows only current org's claims
+□ DOS column shows actual dates (not "—")
+□ Days Outstanding calculates correctly
+□ Validation column shows for draft/created claims
+□ Status labels are user-friendly (not raw codes)
+□ Clicking a claim navigates to claim detail
+
+3.8 — Follow-Up Queue (/billing/follow-up)
+□ Shows claims with follow_up_date set
+□ DOS column shows real service dates
+□ Days Outstanding shows real numbers (not "0d")
+□ Color coding by aging bucket visible
+□ Add follow-up note functionality works
+□ Payer filter works
+
+3.9 — Prior Auth (/billing/claims/prior-auth)
+□ "New Authorization" button exists and opens modal
+□ Two modes present: Record Received / Track Request
+□ Mode A (Record Received) form fields all present:
+  patient, payer, auth number, authorized codes,
+  units, dates, source
+□ Mode B (Track Request) has additional fields:
+  status, submission date, method, appeal deadline
+□ Existing auths list with utilization bars
+□ Auth expiry warnings within 14 days
+□ Claim-linked auths appear here (if claim has auth#)
+
+3.10 — ERA Posting (/billing/era)
+□ "Upload ERA File" button exists
+□ Clicking opens file picker
+□ Parse preview shows before posting
+□ Empty state explains auto-poll frequency
+□ No ERA post action available without file/data
+
+3.11 — Code Lookup (/billing/codes)
+□ Empty state uses generic language (no G0299 reference)
+□ Search for G0299 returns result with VA rate
+□ Search for 99213 returns result with "VA rate: N/A"
+□ Search for "skilled nursing" returns G-codes first
+□ Code detail shows three rate columns:
+  VA Community Care | Medicare MPFS | Custom Rate
+□ Rate label shows year of fee schedule
+□ Search placeholder uses generic example
+
+3.12 — Rules (/billing/rules)
+□ Rules exist (not 0/0)
+□ Universal rules visible and tagged
+□ VA Community Care rules visible and tagged
+□ Specialty filter pills work
+□ Clicking "VA Community Care" filters correctly
+□ Clicking "Universal" shows only universal rules
+□ Create new rule form has specialty tag selector
+□ Rules show trigger count and revenue protected
+
+3.13 — Reports (/billing/reports)
+□ Page has actual reports (not just placeholder tile)
+□ A/R Aging report exists with aging buckets
+□ Denial Analysis report exists with payer breakdown
+□ Collections Summary report exists with monthly data
+□ FPRR report exists with correct formula
+□ Each report has date range filter
+□ Each report has payer filter
+□ Each report has CSV export
+□ Empty states are user-friendly
+
+3.14 — Intelligence / Denial Intelligence
+□ Page loads
+□ Shows denial patterns when data exists
+□ Shows actionable insights (not just empty state)
+
+3.15 — Activity Log (/billing/intelligence/logs)
+□ Shows org-scoped activity
+□ Timestamps display correctly
+□ Action types are user-friendly
+
+3.16 — User Management (/billing/settings/users)
+□ Role dropdown includes all roles:
+  Admin, Billing Manager, Biller, Coder, 
+  Clinician, Front Desk, Auditor, 
+  Appeals Specialist, Intake Coordinator
+□ Invite flow works
+□ Role changes save
+
+3.17 — Admin Panel (/admin)
+□ Loads for super_admin (abeer@tekrevol.com)
+□ Shows 403/unauthorized for non-super-admin 
+  (not silent redirect)
+□ Platform Overview shows all orgs
+□ Clinic detail shows per-org data
+□ Friction feed shows issues per clinic
+□ "Run Test Validation" available for any claim
+
+═══════════════════════════════════════════════════════
+SECTION 4 — CRITICAL LOGIC VERIFICATION
+═══════════════════════════════════════════════════════
+
+These are the most common sources of technical debt —
+features built but not actually executing.
+
+4.1 — Rules actually execute at claim submission
+Search routes.ts for the edi-validate endpoint.
+Find where it checks the rules table.
+If it does NOT query SELECT * FROM rules WHERE 
+is_active = true: the rules engine is broken.
+Rules display in the UI but never fire.
+
+Fix: Add rules execution to the edi-validate endpoint:
+For each active rule for this org:
+  Evaluate the rule condition against the claim data
+  If violated: add to warnings/errors array
+  If blocking: add to blockers array
+
+At minimum implement these rule evaluations:
+- Missing NPI: check provider.npi length == 10
+- Missing diagnosis: check icd10_primary is not null
+- Zero charges: check sum of service line charges > 0
+- Missing payer: check payer_id is not null
+- VA auth required: if payer is TWVACCN, 
+  check authorization_number is not null
+- VA timely filing: if payer is TWVACCN,
+  check service_date is within 180 days
+- VA POS: if payer is TWVACCN,
+  check place_of_service == '12'
+
+4.2 — CARC rules actually execute at ERA posting
+Search routes.ts for the ERA posting endpoint.
+Find where it applies carc_posting_rules.
+If it just does UPDATE claims SET status='paid':
+the CARC rules engine is built but not connected.
+
+Fix: When posting an ERA line with adjustment codes:
+For each CARC code in the adjustment:
+  Query carc_posting_rules WHERE carc_code = $code
+  Apply the default_action:
+    auto_writeoff → create adjustment record
+    patient_responsibility → create patient balance
+    flag_appeal → set claim status='appeal_needed'
+    flag_review → set claim status='review_needed'
+
+4.3 — Stedi 277CA polling actually running
+Verify the 277CA polling job is set up with setInterval.
+Search routes.ts for pollStedi277Acknowledgments.
+If it exists but setInterval is not called: fix.
+Verify system_settings has stedi_last_277_poll key 
+after server runs for a few minutes.
+
+4.4 — Stedi 835 ERA polling actually running
+Same check for pollStedi835ERA.
+Verify system_settings has stedi_last_835_poll key.
+
+4.5 — VA rate auto-population in claim wizard
+In the claim wizard, when a HCPCS code is selected:
+Does the frontend call an endpoint to get the rate?
+If yes: does that endpoint query va_location_rates?
+Does it use the org's default_va_locality?
+Does it return the rate to the frontend?
+Does the frontend populate the rate field?
+
+Trace the full chain:
+User selects G0299 → frontend sends what request? 
+→ what endpoint responds? → what does it query?
+→ what does it return? → how does frontend use it?
+
+Fix any broken link in this chain.
+
+4.6 — VOB verification linked to claim readiness
+In the edi-validate endpoint:
+Does it query vob_verifications table?
+Or does it just check patients.vob_verified boolean?
+
+If it checks the boolean only:
+Fix to query:
+SELECT * FROM vob_verifications 
+WHERE patient_id = $patientId
+AND status = 'active'
+AND (coverage_end_date IS NULL 
+     OR coverage_end_date >= $serviceDate)
+LIMIT 1;
+Only warn "VOB not verified" if this returns 0 rows.
+
+4.7 — ICD-10 decimal stripping in EDI generator
+Open server/services/edi-generator.ts
+Find where ICD-10 codes are written to HI segment.
+Verify this line exists before writing:
+const cleanCode = code.replace(/\./g, '');
+If missing: add it. Every ICD-10 with a decimal 
+will cause payer rejection.
+
+4.8 — Diagnosis pointer A→1 mapping in EDI
+In the EDI generator, find SV1-07 (diagnosis pointer).
+Verify this mapping exists:
+const ptrMap = {A:'1',B:'2',C:'3',D:'4'};
+const ptr = ptrMap[rawPtr] || rawPtr;
+If missing: add it. This was found as a critical 
+bug in a previous audit.
+
+4.9 — ISA15 correctly set to P for production
+In the submit-stedi route and generate837P function:
+Verify ISA15 is set to 'P' (Production) for real claims.
+Verify ISA15 is set to 'T' (Test) only for test-stedi.
+If ISA15 is hardcoded to 'T' anywhere in production 
+submission: fix immediately. Test claims would never 
+reach real payers.
+
+4.10 — SE segment count correct
+In edi-generator.ts, find where SE segment is built.
+The count must include all segments from ST to SE 
+inclusive. Verify the formula is correct.
+A wrong SE count causes clearinghouse rejection.
+
+4.11 — Multi-tenancy verifyOrg not bypassable
+In routes.ts, find verifyOrg function.
+Verify it does NOT have:
+return !entityOrgId || entityOrgId === orgId;
+The !entityOrgId part allows NULL org entities 
+to pass through — this was a critical bug.
+Should be:
+return entityOrgId === orgId || isSuperAdmin;
+
+4.12 — Patient list org scoping
+Find GET /api/billing/patients endpoint.
+Verify the SQL has:
+WHERE organization_id = $orgId
+NOT:
+WHERE organization_id = $orgId OR organization_id IS NULL
+
+The IS NULL escape hatch was a security hole.
+
+4.13 — Dashboard stats org scoping
+Find GET /api/billing/dashboard/stats.
+Verify EVERY subquery has WHERE organization_id = $orgId.
+Count the number of queries in this endpoint.
+Verify each one has org scoping.
+Fix any that don't.
+
+═══════════════════════════════════════════════════════
+SECTION 5 — ERROR HANDLING AUDIT
+═══════════════════════════════════════════════════════
+
+Find every endpoint that could expose raw errors to users.
+
+5.1 — Search for all res.status(500).json({error: err.message})
+This pattern exposes raw database errors to users.
+Replace with:
+console.error('[endpoint name] error:', err);
+res.status(500).json({
+  error: 'An unexpected error occurred. Please try again.'
+});
+
+5.2 — Search for Postgres-specific error messages
+Find any endpoint that might expose:
+- "column X does not exist"
+- "relation X does not exist" 
+- "violates foreign key constraint"
+- "duplicate key value violates"
+
+These must never reach the frontend.
+Add proper error handling to all affected endpoints.
+
+5.3 — Frontend error handling
+Search every frontend page for:
+- Unhandled promise rejections
+- Missing .catch() on fetch calls
+- Missing error states in components
+- Places where error.message is displayed directly
+
+Replace all instances of displaying raw error messages
+with user-friendly alternatives.
+
+5.4 — Loading states
+Every data-fetching component must show a loading state.
+Search for components that render data without a 
+loading check — they will show blank content 
+while fetching and error states if fetch fails.
+Add loading spinners/skeletons where missing.
+
+5.5 — Empty states
+Every list/table must have an empty state.
+Search for components that render empty tables 
+with no explanation.
+Add helpful empty states everywhere:
+- What the section is for
+- Why it might be empty
+- What action to take to populate it
+
+═══════════════════════════════════════════════════════
+SECTION 6 — SECURITY AUDIT
+═══════════════════════════════════════════════════════
+
+6.1 — Session secret
+Verify SESSION_SECRET is set in environment.
+Verify auth.ts does NOT have a hardcoded fallback:
+secret: process.env.SESSION_SECRET || 'hardcoded-value'
+Should throw if SESSION_SECRET is missing in production.
+
+6.2 — Password hashing
+Verify all passwords are bcrypt hashed.
+Verify no plaintext password comparison exists:
+if (password === hash) — this is a plaintext check.
+Remove any plaintext fallback in verifyPassword.
+
+6.3 — Rate limiting
+Verify login rate limiting exists.
+Verify it uses database or Redis (not in-memory Map).
+In-memory rate limiting resets on every deploy.
+
+6.4 — API key exposure
+Search all frontend code for any hardcoded API keys.
+Search all .env files for any keys that should be 
+in Railway secrets instead.
+Verify STEDI_API_KEY is only accessed server-side.
+Verify no API keys appear in browser network requests.
+
+6.5 — SQL injection
+Verify all database queries use parameterized queries:
+pool.query('SELECT * FROM X WHERE id = $1', [id])
+NOT:
+pool.query(`SELECT * FROM X WHERE id = '${id}'`)
+Search for template literals inside SQL queries 
+that include user input — these are injection risks.
+
+6.6 — Super admin access control
+Verify /admin routes require super_admin role.
+Verify non-super-admin gets proper 403 (not redirect).
+Verify super_admin cannot be created via API 
+(only via environment seed).
+
+═══════════════════════════════════════════════════════
+SECTION 7 — PERFORMANCE AND RELIABILITY
+═══════════════════════════════════════════════════════
+
+7.1 — N+1 query problems
+Find any endpoint that loops and queries inside the loop:
+for (const claim of claims) {
+  const patient = await db.query('SELECT...', [claim.patient_id]);
+}
+This is an N+1 query — extremely slow at scale.
+Replace with JOIN queries or batch lookups.
+Common locations: claims list, ERA posting, reports.
+
+7.2 — Missing database indexes
+Verify indexes exist on high-query columns:
+CREATE INDEX IF NOT EXISTS idx_claims_org 
+  ON claims(organization_id);
+CREATE INDEX IF NOT EXISTS idx_claims_status 
+  ON claims(status);
+CREATE INDEX IF NOT EXISTS idx_claims_patient 
+  ON claims(patient_id);
+CREATE INDEX IF NOT EXISTS idx_patients_org 
+  ON patients(organization_id);
+CREATE INDEX IF NOT EXISTS idx_claim_events_claim 
+  ON claim_events(claim_id);
+CREATE INDEX IF NOT EXISTS idx_vob_patient 
+  ON vob_verifications(patient_id);
+CREATE INDEX IF NOT EXISTS idx_prior_auth_patient 
+  ON prior_authorizations(patient_id);
+
+Add any missing indexes.
+
+7.3 — Polling job memory leaks
+Verify the 277CA and 835 polling jobs:
+- Use try/catch around all async operations
+- Don't accumulate data in memory between runs
+- Log errors without crashing the server
+- Handle empty responses gracefully
+
+7.4 — Unhandled promise rejections
+Search for async functions without try/catch.
+Search for .then() without .catch().
+Every async operation must have error handling.
+
+═══════════════════════════════════════════════════════
+SECTION 8 — UX CONSISTENCY AUDIT
+═══════════════════════════════════════════════════════
+
+8.1 — Language consistency
+Search all UI text for:
+- "G0299" as placeholder → replace with "99213 or G0299"
+- "skilled nursing" as only example → add other specialties
+- "VA" or "TriWest" in generic field labels
+- "Office Ally" in onboarding steps
+- "home health" as assumed default
+- "163W00000X" as default taxonomy placeholder
+
+Replace all instances with specialty-agnostic language.
+
+8.2 — Navigation consistency
+Verify sidebar label matches the route it navigates to:
+- "My Practice" → /billing/clinic (inconsistent)
+- "Compliance" → /billing/intelligence/reports (inconsistent)
+- "Activity Log" → /billing/intelligence/logs (inconsistent)
+
+Either fix the routes or fix the sidebar labels.
+Pick one and be consistent throughout.
+
+8.3 — Toast messages
+Verify ALL success toasts only fire on actual success.
+Verify ALL error toasts show user-friendly messages.
+Verify toasts auto-dismiss after appropriate time.
+Verify no toast appears for background operations 
+the user didn't trigger.
+
+8.4 — Form validation
+Verify required fields show error on empty submit.
+Verify NPI fields validate as exactly 10 digits.
+Verify date fields validate as real dates.
+Verify amount fields validate as positive numbers.
+Verify all validation errors show inline (not just toast).
+
+8.5 — Responsive behavior
+Verify pages are readable on tablet-sized screens.
+Verify tables have horizontal scroll on small screens.
+Verify modals don't overflow on small screens.
+
+═══════════════════════════════════════════════════════
+SECTION 9 — INTEGRATION VERIFICATION
+═══════════════════════════════════════════════════════
+
+9.1 — Stedi eligibility integration
+Verify the eligibility service:
+- Uses process.env.STEDI_API_KEY
+- References ps.primary_npi (not ps.npi)
+- Uses serviceTypeCode '42' (Home Health) as default
+- Returns user-friendly errors on failure
+- Does NOT call Stedi for payers without 270/271 support
+
+9.2 — Stedi claim submission
+Verify submit-stedi endpoint:
+- Generates valid 837P EDI
+- Sets ISA15 = 'P'
+- Sends to correct Stedi endpoint
+- Handles Stedi API errors gracefully
+- Updates claim correctly on success and failure
+
+9.3 — Stedi test submission
+Verify test-stedi endpoint:
+- Sets ISA15 = 'T'
+- Uses timestamp in idempotency key
+- Does NOT update claim status
+- Returns validation errors in user-readable format
+
+9.4 — ERA polling
+Verify polling runs without error:
+Check server logs for "[277 Poll]" and "[835 Poll]" 
+entries after server has been running 15+ minutes.
+If absent: polling is not running. Fix setInterval setup.
+
+9.5 — Stedi payer sync
+Verify /api/billing/payers/sync-stedi:
+- Calls correct Stedi endpoint
+- Returns sync results with matched/unmatched lists
+- Actually updates payer_id in database
+- Updates supported_transactions
+
+═══════════════════════════════════════════════════════
+SECTION 10 — FINAL VERIFICATION CHECKLIST
+═══════════════════════════════════════════════════════
+
+After all fixes are complete, run this final checklist:
+
+□ Demo providers removed from all non-demo orgs
+□ TriWest payer_id = 'TWVACCN' in all orgs
+□ TriWest timely_filing_days = 180
+□ TriWest auto_followup_days = 10
+□ Patient creation succeeds on first attempt
+□ Patient creation shows real success/failure
+□ Patient address fields save and display
+□ Patient insurance links to payer record (not free text)
+□ Claim wizard POS inherits from practice settings
+□ Claim wizard VA rate auto-populates for G-codes
+□ Claim wizard code selection does not reset fields
+□ Claim wizard ordering provider has manual entry
+□ Claim wizard VOB check uses vob_verifications table
+□ Claim wizard rules actually execute from rules table
+□ ICD-10 codes stripped of decimals in EDI
+□ Diagnosis pointers mapped A→1 B→2 C→3 D→4 in EDI
+□ ISA15 = 'P' for production, 'T' for test submissions
+□ SE segment count is correct
+□ Test claim does not change claim status
+□ 277CA polling job is running (check logs)
+□ 835 ERA polling job is running (check logs)
+□ Manual 835 upload exists on ERA page
+□ Reports page has 4 real reports
+□ Rules page has seeded rules (not 0/0)
+□ CARC rules apply during ERA posting
+□ Eligibility button hidden for TriWest/unsupported payers
+□ Raw SQL errors never shown to users
+□ All pages have loading states
+□ All lists have empty states
+□ Session secret is set (not hardcoded fallback)
+□ No API keys in frontend code
+□ All SQL queries use parameterized inputs
+□ /admin shows 403 for non-super-admin
+□ All org-scoped queries have WHERE organization_id
+□ No IS NULL escape hatches in org scoping
+
+═══════════════════════════════════════════════════════
+DELIVERABLE
+═══════════════════════════════════════════════════════
+
+After completing all sections, produce a report:
+
+1. TECHNICAL DEBT RESOLVED
+   List every issue found and fixed with:
+   - What was broken
+   - Root cause
+   - How it was fixed
+   - Verification method
+
+2. STILL OUTSTANDING
+   List anything that could not be fixed in this 
+   sprint with explanation of why and what is needed.
+
+3. ARCHITECTURE RISKS
+   List any patterns in the codebase that will 
+   cause future problems if not addressed:
+   - N+1 queries
+   - Missing indexes
+   - Unhandled errors
+   - Security vulnerabilities
+   - Data integrity risks
+
+4. RECOMMENDED NEXT SPRINT
+   Based on what you found, what are the 5 most 
+   important things to build or fix next?
+
+Work systematically. Do not skip sections.
+Every fix must be verified before moving on.
+The goal is a platform with zero known 
+technical debt that can be trusted with 
+real patient billing data.
+```
