@@ -3685,7 +3685,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const result = await stediTestClaim({ ediContent: ediString, claimId: c.id });
 
       const errCount = (result.validationErrors || []).length;
-      const eventNotes = `Stedi test validation: ${result.status || (result.success ? "Accepted" : "Rejected")}. ${errCount} validation issue(s) found.${result.transactionId ? ` Transaction ID: ${result.transactionId}` : ""}`;
+      const statusLabel = result.status || (result.success ? "Accepted" : "Rejected");
+      const issuesPart = !result.success && errCount === 0 && result.error
+        ? result.error
+        : `${errCount} validation issue(s) found`;
+      const eventNotes = `Stedi test validation: ${statusLabel}. ${issuesPart}.${result.transactionId ? ` Transaction ID: ${result.transactionId}` : ""}`;
 
       await db.query(
         `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
