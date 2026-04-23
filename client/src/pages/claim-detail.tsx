@@ -964,9 +964,9 @@ export default function ClaimDetailPage() {
             <DialogDescription>{ediValidation?.summary}</DialogDescription>
           </DialogHeader>
 
-          {ediValidation && ediValidation.warnings.length > 0 && (
+          {ediValidation && (ediValidation.warnings || []).length > 0 && (
             <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-              {ediValidation.warnings.map((w, i) => (
+              {(ediValidation.warnings || []).map((w, i) => (
                 <div
                   key={i}
                   className={`flex items-start gap-2 rounded-md px-3 py-2 text-sm ${
@@ -985,7 +985,7 @@ export default function ClaimDetailPage() {
             </div>
           )}
 
-          {ediValidation?.ready && ediValidation.warnings.length === 0 && (
+          {ediValidation?.ready && (ediValidation.warnings || []).length === 0 && (
             <p className="text-sm text-green-700 dark:text-green-400">
               All required fields are complete. This claim is ready to submit.
             </p>

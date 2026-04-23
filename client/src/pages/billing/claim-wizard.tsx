@@ -591,7 +591,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
           This code commonly requires a modifier — verify with your payer.
         </div>
       )}
-      {line.code && isVACode(line.code) && patientPayer?.toLowerCase().includes("va") && (
+      {line.code && isVACode(line.code) && (() => { const p = (patientPayer || "").toLowerCase().replace(/\s+/g, ""); return p.includes("va") || p.includes("triwest") || p.includes("vaccn"); })() && (
         <div className="flex items-center gap-3 bg-muted/50 rounded px-3 py-2" data-testid={`section-va-locality-${index}`}>
           <span className="text-xs text-muted-foreground whitespace-nowrap">VA locality:</span>
           <Select
