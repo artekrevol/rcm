@@ -225,8 +225,10 @@ export function generate837P(input: EDI837PInput): string {
     segments.push(`LX*${index + 1}`);
     // Build composite procedure identifier - components are ALWAYS colon-separated
     // per X12 spec. Never use * (element separator) inside a composite.
+    // X12 modifiers must be exactly 2 characters. Filter out any longer values
+    // (e.g. HCPCS codes mistakenly stored in the modifier field).
     const modifiers = line.modifier
-      ? line.modifier.split(",").map(m => m.trim()).filter(Boolean)
+      ? line.modifier.split(",").map(m => m.trim()).filter(m => m.length === 2)
       : [];
     const composite = ["HC", line.hcpcs_code, ...modifiers].join(":");
     const ptrMap: Record<string, string> = { 'A': '1', 'B': '2', 'C': '3', 'D': '4' };

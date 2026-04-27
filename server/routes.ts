@@ -3705,6 +3705,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_status VARCHAR`).catch(() => {});
       await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_at TIMESTAMP`).catch(() => {});
       await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_errors JSONB`).catch(() => {});
+      await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_correlation_id VARCHAR`).catch(() => {});
 
       const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
       if (!claimResult.rows.length) return res.status(404).json({ success: false, error: "Claim not found" });
@@ -3831,10 +3832,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
 
       await db.query(
-        `UPDATE claims SET last_test_status = $1, last_test_at = NOW(), last_test_errors = $2, updated_at = NOW() WHERE id = $3`,
+        `UPDATE claims SET last_test_status = $1, last_test_at = NOW(), last_test_errors = $2, last_test_correlation_id = $3, updated_at = NOW() WHERE id = $4`,
         [
           result.success ? "Accepted" : "Rejected",
           JSON.stringify(result.validationErrors || []),
+          result.transactionId || null,
           c.id,
         ]
       );

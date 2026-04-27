@@ -666,6 +666,7 @@ export default function ClaimDetailPage() {
           {(() => {
             const testStatus = (claim as any).last_test_status || (claim as any).lastTestStatus;
             const testAt = (claim as any).last_test_at || (claim as any).lastTestAt;
+            const testCorrelationId = (claim as any).last_test_correlation_id || (claim as any).lastTestCorrelationId;
             const testErrors: any[] = (() => {
               const raw = (claim as any).last_test_errors || (claim as any).lastTestErrors;
               if (!raw) return [];
@@ -710,6 +711,11 @@ export default function ClaimDetailPage() {
                           }
                         </div>
                         {relativeTime && <p className="text-xs text-muted-foreground">Last tested {relativeTime}</p>}
+                        {passed && testCorrelationId && (
+                          <p className="text-xs text-muted-foreground font-mono mt-0.5" data-testid="text-stedi-correlation-id">
+                            Ref: {testCorrelationId}
+                          </p>
+                        )}
                       </div>
                     </div>
                     {!passed && testErrors.length > 0 && (
