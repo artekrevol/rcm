@@ -1,6 +1,9 @@
 const STEDI_API_KEY = process.env.STEDI_API_KEY;
+// Raw X12 endpoint — accepts a single { x12: "ISA*..." } body field.
+// The structured-JSON /v3/submission endpoint does NOT accept raw EDI and
+// rejects the 'x12' key with HTTP 500 "unknown field 'x12'".
 const STEDI_CLAIMS_URL =
-  "https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/professionalclaims/v3/submission";
+  "https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/professionalclaims/v3/raw-x12-submission";
 const STEDI_POLL_URL =
   "https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/claims/reports";
 
@@ -51,7 +54,9 @@ export async function submitClaim(
       "Content-Type": "application/json",
       "Idempotency-Key": params.claimId,
     },
-    body: JSON.stringify({ controlNumber: extractControlNumber(edi), tradingPartnerServiceId: extractPayerId(edi), x12: edi }),
+    // Raw X12 endpoint only accepts { x12 }. Payer routing info is
+    // already embedded in the ISA/NM1 segments of the EDI content.
+    body: JSON.stringify({ x12: edi }),
   });
 
   const rawText = await response.text();
@@ -70,22 +75,20 @@ export async function submitClaim(
     };
   }
 
-  const txn = (data as any).transactionSets?.[0] || data;
-  const accepted =
-    txn.status === "Accepted" ||
-    (data as any).status === "Accepted" ||
-    response.status === 200;
+  // /v3/raw-x12-submission success response shape:
+  // { claimReference: { correlationId, customerClaimNumber, patientControlNumber, rhclaimNumber, payerId, ... }, meta: { ... } }
+  const ref = (data as any).claimReference || {};
+  const transactionId = ref.correlationId || ref.rhclaimNumber || (data as any).transactionId;
+  const accepted = response.status === 200;
 
   return {
     success: accepted,
-    transactionId: txn.transactionId || (data as any).transactionId,
-    controlNumber: txn.controlNumber || (data as any).controlNumber,
-    status: txn.status || (accepted ? "Accepted" : "Rejected"),
-    validationErrors: txn.errors || (data as any).errors || [],
+    transactionId,
+    controlNumber: ref.customerClaimNumber || ref.patientControlNumber || (data as any).controlNumber,
+    status: accepted ? "Accepted" : "Rejected",
+    validationErrors: (data as any).errors || [],
     rawResponse: data as Record<string, unknown>,
-    error: accepted
-      ? undefined
-      : txn.errors?.[0]?.message || "Claim rejected by Stedi",
+    error: accepted ? undefined : (data.message || "Claim rejected by Stedi"),
   };
 }
 
@@ -111,9 +114,12 @@ export async function testClaim(
     headers: {
       Authorization: `Key ${STEDI_API_KEY}`,
       "Content-Type": "application/json",
+      // Use a unique idempotency key per test run so retests aren't deduplicated
       "Idempotency-Key": `test-${params.claimId}-${Date.now()}`,
     },
-    body: JSON.stringify({ controlNumber: extractControlNumber(edi), tradingPartnerServiceId: extractPayerId(edi), x12: edi }),
+    // Raw X12 endpoint only accepts { x12 }. ISA15 is already forced to 'T'
+    // above, which tells Stedi/payer this is a test transmission.
+    body: JSON.stringify({ x12: edi }),
   });
 
   const rawText = await response.text();
@@ -140,13 +146,13 @@ export async function testClaim(
     };
   }
 
-  const txn = (data as any).transactionSets?.[0] || data;
-  const accepted =
-    txn.status === "Accepted" ||
-    (data as any).status === "Accepted" ||
-    response.status === 200;
+  // /v3/raw-x12-submission success response shape:
+  // { claimReference: { correlationId, customerClaimNumber, patientControlNumber, ... }, meta: { ... } }
+  const ref = (data as any).claimReference || {};
+  const transactionId = ref.correlationId || ref.rhclaimNumber || (data as any).transactionId;
+  const accepted = response.status === 200;
 
-  const rawErrors: any[] = txn.errors || (data as any).errors || [];
+  const rawErrors: any[] = (data as any).errors || [];
   const structuredErrors: StediValidationError[] = rawErrors.map((e: any) => ({
     code: e.code || e.errorCode || "UNKNOWN",
     message: e.message || e.description || String(e),
@@ -156,13 +162,13 @@ export async function testClaim(
 
   return {
     success: accepted,
-    transactionId: txn.transactionId || (data as any).transactionId,
-    status: txn.status || (accepted ? "Accepted" : "Rejected"),
+    transactionId,
+    status: accepted ? "Accepted" : "Rejected",
     validationErrors: structuredErrors.length > 0 ? structuredErrors : [],
     rawResponse: data as Record<string, unknown>,
     error: accepted
       ? undefined
-      : rawErrors[0]?.message || "Claim failed Stedi validation",
+      : rawErrors[0]?.message || (data as any).message || "Claim failed Stedi validation",
   };
 }
 
@@ -268,18 +274,6 @@ export async function poll835ERA(since?: string): Promise<{
     eras: reports.map((r: any) => parseERAResponse(r)),
     lastCheckTimestamp: new Date().toISOString(),
   };
-}
-
-function extractControlNumber(edi: string): string {
-  // ISA13 is the interchange control number — index 13 in ISA segment (1-based in X12 spec)
-  const parts = edi.match(/^ISA\*([^~]+)/m)?.[1]?.split("*") || [];
-  return (parts[12] || "000000001").trim().replace(/\D/g, "").padStart(9, "0");
-}
-
-function extractPayerId(edi: string): string {
-  // NM1*PR segment — NM109 (index 8 after NM1*PR*2*) is the payer EDI ID
-  const match = edi.match(/NM1\*PR\*2\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*([^*~\r\n]+)/);
-  return match?.[1]?.trim() || "UNKNOWN";
 }
 
 function mapStatusCode(code: string): string {
