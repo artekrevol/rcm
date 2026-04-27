@@ -1285,7 +1285,7 @@ export default function ClaimWizard() {
     try {
       await saveMutation.mutateAsync(payload);
       if (saveAuthToPatient && authNumber && patient?.id) {
-        await apiRequest("PATCH", `/api/billing/patients/${patient.id}`, { authorization_number: authNumber });
+        await apiRequest("PATCH", `/api/billing/patients/${patient.id}`, { authorizationNumber: authNumber });
       }
       queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patient?.id] });
       toast({ title: "Draft saved successfully" });
