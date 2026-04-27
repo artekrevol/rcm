@@ -183,11 +183,15 @@ export async function poll277Acknowledgments(since?: string): Promise<{
     headers: { Authorization: `Key ${STEDI_API_KEY}` },
   });
 
+  if (response.status === 404) {
+    console.log("[277 Poll] No new 277CA reports found");
+    return { acknowledgments: [], lastCheckTimestamp: new Date().toISOString() };
+  }
+
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error(
-      (err as any).message || `277 poll failed: ${response.status}`
-    );
+    console.warn("[277 Poll] Poll failed:", response.status, (err as any).message || "");
+    return { acknowledgments: [], lastCheckTimestamp: new Date().toISOString() };
   }
 
   const data = await response.json().catch(() => ({}));
@@ -241,11 +245,15 @@ export async function poll835ERA(since?: string): Promise<{
     headers: { Authorization: `Key ${STEDI_API_KEY}` },
   });
 
+  if (response.status === 404) {
+    console.log("[835 Poll] No new 835 ERA reports found");
+    return { eras: [], lastCheckTimestamp: new Date().toISOString() };
+  }
+
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error(
-      (err as any).message || `835 poll failed: ${response.status}`
-    );
+    console.warn("[835 Poll] Poll failed:", response.status, (err as any).message || "");
+    return { eras: [], lastCheckTimestamp: new Date().toISOString() };
   }
 
   const data = await response.json().catch(() => ({}));

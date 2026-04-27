@@ -8098,7 +8098,7 @@ async function pollStedi277Acknowledgments() {
       [lastCheckTimestamp]
     );
   } catch (err) {
-    console.error("[277 Poll] Error:", err);
+    console.warn("[277 Poll] Unexpected error:", err);
   }
 }
 
@@ -8179,7 +8179,7 @@ async function pollStedi835ERA() {
       [lastCheckTimestamp]
     );
   } catch (err) {
-    console.error("[835 Poll] Error:", err);
+    console.warn("[835 Poll] Unexpected error:", err);
   }
 }
 
