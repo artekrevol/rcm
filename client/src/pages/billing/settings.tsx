@@ -163,6 +163,8 @@ function ProvidersTab() {
   const [showDeactivated, setShowDeactivated] = useState(false);
   const [editingProvider, setEditingProvider] = useState<any>(null);
   const [form, setForm] = useState({
+    entityType: "individual" as "individual" | "organization",
+    organizationName: "",
     firstName: "",
     lastName: "",
     credentials: "",
@@ -265,7 +267,7 @@ function ProvidersTab() {
   });
 
   function resetForm() {
-    setForm({ firstName: "", lastName: "", credentials: "", customCredentials: "", npi: "", taxonomyCode: "", individualTaxId: "", licenseNumber: "", isDefault: false });
+    setForm({ entityType: "individual", organizationName: "", firstName: "", lastName: "", credentials: "", customCredentials: "", npi: "", taxonomyCode: "", individualTaxId: "", licenseNumber: "", isDefault: false });
     setNpiError("");
     setNpiLookup({ loading: false, result: null });
     setTaxonomySearch("");
@@ -278,16 +280,19 @@ function ProvidersTab() {
   }
 
   function openEdit(provider: any) {
+    const isOrg = provider.entity_type === 'organization';
     const cred = CREDENTIAL_OPTIONS.includes(provider.credentials) ? provider.credentials : provider.credentials ? "Other" : "";
     setForm({
-      firstName: provider.first_name,
-      lastName: provider.last_name,
-      credentials: cred,
+      entityType: isOrg ? "organization" : "individual",
+      organizationName: isOrg ? provider.first_name : "",
+      firstName: isOrg ? "" : (provider.first_name || ""),
+      lastName: isOrg ? "" : (provider.last_name || ""),
+      credentials: isOrg ? "" : cred,
       customCredentials: cred === "Other" ? provider.credentials : "",
       npi: provider.npi,
       taxonomyCode: provider.taxonomy_code || "",
       individualTaxId: provider.individual_tax_id || "",
-      licenseNumber: provider.license_number || "",
+      licenseNumber: isOrg ? "" : (provider.license_number || ""),
       isDefault: provider.is_default,
     });
     setNpiError("");
@@ -296,25 +301,38 @@ function ProvidersTab() {
   }
 
   function handleSubmit() {
-    if (!form.firstName.trim() || !form.lastName.trim()) {
-      toast({ title: "First and last name are required", variant: "destructive" });
-      return;
+    const isOrg = form.entityType === "organization";
+    if (isOrg) {
+      if (!form.organizationName.trim()) {
+        toast({ title: "Organization name is required", variant: "destructive" });
+        return;
+      }
+    } else {
+      if (!form.firstName.trim() || !form.lastName.trim()) {
+        toast({ title: "First and last name are required", variant: "destructive" });
+        return;
+      }
     }
     if (!validateNPI(form.npi)) {
       setNpiError("Invalid NPI — must be 10 digits and pass the NPI checksum");
       return;
     }
     const credentials = form.credentials === "Other" ? form.customCredentials : form.credentials;
-    const payload = {
-      firstName: form.firstName.trim(),
-      lastName: form.lastName.trim(),
-      credentials: credentials || null,
+    const payload: any = {
+      entityType: form.entityType,
       npi: form.npi,
       taxonomyCode: form.taxonomyCode || null,
       individualTaxId: form.individualTaxId || null,
-      licenseNumber: form.licenseNumber || null,
       isDefault: form.isDefault,
     };
+    if (isOrg) {
+      payload.organizationName = form.organizationName.trim();
+    } else {
+      payload.firstName = form.firstName.trim();
+      payload.lastName = form.lastName.trim();
+      payload.credentials = credentials || null;
+      payload.licenseNumber = form.licenseNumber || null;
+    }
     if (editingProvider) {
       updateMutation.mutate({ id: editingProvider.id, ...payload });
     } else {
@@ -429,16 +447,55 @@ function ProvidersTab() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-2">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="prov-first">First Name *</Label>
-                <Input id="prov-first" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} data-testid="input-provider-first-name" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="prov-last">Last Name *</Label>
-                <Input id="prov-last" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} data-testid="input-provider-last-name" />
+            {/* Entity type — Type 1 (Individual) or Type 2 (Organization) */}
+            <div className="space-y-2">
+              <Label>Provider Type</Label>
+              <div className="flex gap-3">
+                {(["individual", "organization"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    data-testid={`button-entity-type-${t}`}
+                    onClick={() => setForm({ ...form, entityType: t, organizationName: "", firstName: "", lastName: "" })}
+                    className={`flex-1 rounded-md border px-3 py-2 text-sm text-left transition-colors ${
+                      form.entityType === t
+                        ? "border-primary bg-primary/5 text-primary font-medium"
+                        : "border-border bg-background hover:border-primary/50"
+                    }`}
+                  >
+                    <span className="font-semibold">{t === "individual" ? "Type 1 — Individual" : "Type 2 — Organization"}</span>
+                    <span className="block text-xs text-muted-foreground mt-0.5">
+                      {t === "individual" ? "Solo practitioner or employee provider" : "Group practice, clinic, or facility NPI"}
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
+            {form.entityType === "organization" ? (
+              <div className="space-y-2">
+                <Label htmlFor="prov-org-name">Organization Name *</Label>
+                <Input
+                  id="prov-org-name"
+                  value={form.organizationName}
+                  onChange={(e) => setForm({ ...form, organizationName: e.target.value })}
+                  placeholder="e.g. Sunrise Medical Group LLC"
+                  data-testid="input-provider-org-name"
+                />
+                <p className="text-xs text-muted-foreground">Type 2 NPI — used as billing entity name on claims.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="prov-first">First Name *</Label>
+                  <Input id="prov-first" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} data-testid="input-provider-first-name" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="prov-last">Last Name *</Label>
+                  <Input id="prov-last" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} data-testid="input-provider-last-name" />
+                </div>
+              </div>
+            )}
+            {form.entityType === "individual" && (
             <div className="space-y-2">
               <Label>Credentials</Label>
               <Select value={form.credentials} onValueChange={(v) => {
@@ -482,6 +539,7 @@ function ProvidersTab() {
                 </div>
               )}
             </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="prov-npi">NPI * (10 digits)</Label>
               <div className="flex gap-2">
@@ -600,10 +658,12 @@ function ProvidersTab() {
                 <Label htmlFor="prov-taxid">Individual Tax ID</Label>
                 <Input id="prov-taxid" value={form.individualTaxId} onChange={(e) => setForm({ ...form, individualTaxId: e.target.value })} placeholder="9 digits" data-testid="input-provider-tax-id" />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="prov-license">State License Number <span className="text-muted-foreground text-xs">(included as REF*1C in EDI — required by many payers)</span></Label>
-                <Input id="prov-license" value={form.licenseNumber} onChange={(e) => setForm({ ...form, licenseNumber: e.target.value })} placeholder="e.g. TX-12345678" data-testid="input-provider-license" />
-              </div>
+              {form.entityType === "individual" && (
+                <div className="space-y-2">
+                  <Label htmlFor="prov-license">State License Number <span className="text-muted-foreground text-xs">(included as REF*1C in EDI — required by many payers)</span></Label>
+                  <Input id="prov-license" value={form.licenseNumber} onChange={(e) => setForm({ ...form, licenseNumber: e.target.value })} placeholder="e.g. TX-12345678" data-testid="input-provider-license" />
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-3 pt-1">
               <Switch checked={form.isDefault} onCheckedChange={(v) => setForm({ ...form, isDefault: v })} data-testid="toggle-provider-default" />
@@ -1046,6 +1106,8 @@ function PayersTab() {
     autoFollowupDays: "30",
     eraAutoPostClean: false, eraAutoPostContractual: false,
     eraAutoPostSecondary: true, eraAutoPostRefunds: true, eraHoldIfMismatch: true,
+    payerClassification: "" as string,
+    claimFilingIndicator: "" as string,
   });
   const [payerSearch, setPayerSearch] = useState("");
   const [payerDialogTab, setPayerDialogTab] = useState("settings");
@@ -1278,6 +1340,8 @@ function PayersTab() {
                           eraAutoPostSecondary: p.era_auto_post_secondary !== false,
                           eraAutoPostRefunds: p.era_auto_post_refunds !== false,
                           eraHoldIfMismatch: p.era_hold_if_mismatch !== false,
+                          payerClassification: p.payer_classification || "",
+                          claimFilingIndicator: p.claim_filing_indicator || "",
                         });
                       }}
                       data-testid={`button-edit-payer-${p.id}`}
@@ -1330,6 +1394,50 @@ function PayersTab() {
                     data-testid="input-edit-payer-id"
                   />
                   <p className="text-xs text-muted-foreground">This ID is used in the ISA/GS segments of 837P EDI submissions.</p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Payer Classification</Label>
+                    <Select value={editForm.payerClassification} onValueChange={(v) => setEditForm({ ...editForm, payerClassification: v })}>
+                      <SelectTrigger data-testid="select-payer-classification">
+                        <SelectValue placeholder="Select classification" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">— Unclassified —</SelectItem>
+                        <SelectItem value="va_community_care">VA Community Care</SelectItem>
+                        <SelectItem value="medicare_part_b">Medicare Part B</SelectItem>
+                        <SelectItem value="medicare_advantage">Medicare Advantage</SelectItem>
+                        <SelectItem value="medicaid">Medicaid</SelectItem>
+                        <SelectItem value="commercial">Commercial / Private</SelectItem>
+                        <SelectItem value="tricare">TRICARE</SelectItem>
+                        <SelectItem value="workers_comp">Workers' Comp</SelectItem>
+                        <SelectItem value="auto">Auto / Liability</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Drives VA/Medicare rules engine logic — replaces name-based heuristics.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Claim Filing Indicator (SBR09)</Label>
+                    <Select value={editForm.claimFilingIndicator} onValueChange={(v) => setEditForm({ ...editForm, claimFilingIndicator: v })}>
+                      <SelectTrigger data-testid="select-claim-filing-indicator">
+                        <SelectValue placeholder="Select code" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">— Use default (CI) —</SelectItem>
+                        <SelectItem value="CI">CI — Commercial Insurance</SelectItem>
+                        <SelectItem value="VA">VA — Veterans Affairs Plan</SelectItem>
+                        <SelectItem value="MB">MB — Medicare Part B</SelectItem>
+                        <SelectItem value="MC">MC — Medicaid</SelectItem>
+                        <SelectItem value="CH">CH — CHAMPUS/TRICARE</SelectItem>
+                        <SelectItem value="WC">WC — Workers' Comp</SelectItem>
+                        <SelectItem value="AM">AM — Automobile Medical</SelectItem>
+                        <SelectItem value="OF">OF — Other Federal Program</SelectItem>
+                        <SelectItem value="BL">BL — Blue Cross / Blue Shield</SelectItem>
+                        <SelectItem value="HM">HM — HMO Medicare Risk</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Written into SBR09 of the 837P EDI transaction.</p>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -1410,6 +1518,8 @@ function PayersTab() {
                     eraAutoPostSecondary: editForm.eraAutoPostSecondary,
                     eraAutoPostRefunds: editForm.eraAutoPostRefunds,
                     eraHoldIfMismatch: editForm.eraHoldIfMismatch,
+                    payerClassification: editForm.payerClassification || null,
+                    claimFilingIndicator: editForm.claimFilingIndicator || null,
                   })}
                   disabled={updateMutation.isPending}
                   data-testid="button-save-edit-payer"

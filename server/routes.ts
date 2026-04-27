@@ -216,6 +216,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_hold_if_mismatch BOOLEAN DEFAULT true`);
     await pool.query(`UPDATE payers SET era_auto_post_clean = true, era_auto_post_contractual = true WHERE payer_id IN ('VACCN', 'TWVACCN') AND (era_auto_post_clean = false OR era_auto_post_clean IS NULL)`);
 
+    // Class A: Explicit payer classification columns (replaces name-string heuristics)
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS payer_classification VARCHAR(32)`);
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS claim_filing_indicator VARCHAR(2)`);
+    // Backfill: explicit payer_id first (most reliable), then name-based one-time migration
+    await pool.query(`UPDATE payers SET payer_classification='va_community_care', claim_filing_indicator='CH' WHERE payer_id='TWVACCN' AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='tricare', claim_filing_indicator='CH' WHERE (LOWER(name) LIKE '%tricare%' OR LOWER(name) LIKE '%champva%') AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='medicare_advantage', claim_filing_indicator='16' WHERE (LOWER(name) LIKE '%medicare advantage%' OR LOWER(name) LIKE '%aarp medicare%' OR LOWER(name) LIKE '%medicare complete%') AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='medicare_part_b', claim_filing_indicator='MB' WHERE LOWER(name) LIKE '%medicare%' AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='medicaid_state', claim_filing_indicator='MC' WHERE LOWER(name) LIKE '%medicaid%' AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='bcbs', claim_filing_indicator='BL' WHERE (LOWER(name) LIKE '%blue cross%' OR LOWER(name) LIKE '%blue shield%' OR LOWER(name) LIKE '%bcbs%') AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='commercial_ppo', claim_filing_indicator='CI' WHERE payer_classification IS NULL`);
+
+    // Class C: FK constraints for tenant-scoped tables (orphan-safe — verified 0 orphans in prod)
+    await pool.query(`DO $$ BEGIN ALTER TABLE providers ADD CONSTRAINT providers_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+    await pool.query(`DO $$ BEGIN ALTER TABLE claims ADD CONSTRAINT claims_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+    await pool.query(`DO $$ BEGIN ALTER TABLE patients ADD CONSTRAINT patients_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+    await pool.query(`DO $$ BEGIN ALTER TABLE practice_settings ADD CONSTRAINT practice_settings_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+    await pool.query(`DO $$ BEGIN ALTER TABLE users ADD CONSTRAINT users_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+
     // Sprint-3 schema additions
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP`);
     // Secondary insurance / COB
@@ -1315,8 +1334,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault } = req.body;
-      if (!firstName?.trim() || !lastName?.trim() || !npi?.trim()) {
+      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault, entityType, organizationName } = req.body;
+      const isOrg = entityType === 'organization';
+      const effectiveFirst = isOrg ? (organizationName || '').trim() : (firstName || '').trim();
+      const effectiveLast = isOrg ? '' : (lastName || '').trim();
+      if (!effectiveFirst || !npi?.trim()) {
+        return res.status(400).json({ error: isOrg ? "organizationName and npi are required" : "firstName, lastName, and npi are required" });
+      }
+      if (!isOrg && !effectiveLast) {
         return res.status(400).json({ error: "firstName, lastName, and npi are required" });
       }
       const { validateNPI } = await import("../shared/npi-validation");
@@ -1331,9 +1356,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           await client.query("UPDATE providers SET is_default = false WHERE organization_id = $1 AND is_default = true", [orgId]);
         }
         const { rows } = await client.query(
-          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, license_number, is_default, organization_id)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-          [firstName.trim(), lastName.trim(), credentials || null, npi, taxonomyCode || null, individualTaxId || null, licenseNumber || null, isDefault || false, orgId]
+          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, license_number, is_default, organization_id, entity_type)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+          [effectiveFirst, effectiveLast, isOrg ? null : (credentials || null), npi, taxonomyCode || null, individualTaxId || null, isOrg ? null : (licenseNumber || null), isDefault || false, orgId, isOrg ? 'organization' : 'individual']
         );
         await client.query("COMMIT");
         res.json(rows[0]);
@@ -1354,7 +1379,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const db = await import("./db").then(m => m.pool);
       const ownerCheck = await db.query("SELECT organization_id FROM providers WHERE id = $1", [id]);
       if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Provider not found" });
-      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault, isActive } = req.body;
+      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault, isActive, entityType, organizationName } = req.body;
       if (npi !== undefined) {
         const { validateNPI } = await import("../shared/npi-validation");
         if (!validateNPI(npi)) {
@@ -1371,7 +1396,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         const fields: string[] = [];
         const values: any[] = [];
         let idx = 1;
-        if (firstName !== undefined) { fields.push(`first_name = $${idx++}`); values.push(firstName); }
+        if (entityType !== undefined) { fields.push(`entity_type = $${idx++}`); values.push(entityType); }
+        if (organizationName !== undefined) { fields.push(`first_name = $${idx++}`); values.push(organizationName); }
+        if (firstName !== undefined && entityType !== 'organization') { fields.push(`first_name = $${idx++}`); values.push(firstName); }
         if (lastName !== undefined) { fields.push(`last_name = $${idx++}`); values.push(lastName); }
         if (credentials !== undefined) { fields.push(`credentials = $${idx++}`); values.push(credentials); }
         if (npi !== undefined) { fields.push(`npi = $${idx++}`); values.push(npi); }
@@ -1395,6 +1422,40 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       } finally {
         client.release();
       }
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  // Org readiness check — used by claim wizard and dashboard banner
+  app.get("/api/billing/org-readiness", requireRole("admin", "rcm_manager", "biller", "coder", "front_desk"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const missing: string[] = [];
+
+      const ps = orgId
+        ? (await db.query("SELECT primary_npi, tax_id, practice_name FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])).rows[0]
+        : (await db.query("SELECT primary_npi, tax_id, practice_name FROM practice_settings LIMIT 1")).rows[0];
+      if (!ps) { missing.push("practice_settings"); }
+      else {
+        if (!ps.primary_npi || ps.primary_npi.replace(/\D/g, "").length !== 10) missing.push("npi");
+        if (!ps.tax_id) missing.push("tax_id");
+        if (!ps.practice_name) missing.push("practice_name");
+      }
+
+      const provResult = orgId
+        ? await db.query("SELECT COUNT(*) FROM providers WHERE organization_id = $1 AND is_active = true", [orgId])
+        : await db.query("SELECT COUNT(*) FROM providers WHERE is_active = true");
+      if (parseInt(provResult.rows[0].count) === 0) missing.push("provider");
+
+      const payerResult = orgId
+        ? await db.query("SELECT COUNT(*) FROM payers WHERE (organization_id = $1 OR organization_id IS NULL) AND is_active = true AND payer_id IS NOT NULL AND payer_id != ''", [orgId])
+        : await db.query("SELECT COUNT(*) FROM payers WHERE is_active = true AND payer_id IS NOT NULL AND payer_id != ''");
+      if (parseInt(payerResult.rows[0].count) === 0) missing.push("payer");
+
+      const ready = missing.length === 0;
+      res.json({ ready, missing });
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
@@ -2773,6 +2834,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         : await db.query("SELECT * FROM practice_settings LIMIT 1");
       const ps = settingsResult.rows[0];
 
+      // Payer lookup — fetched early so payer_classification drives all downstream logic
+      let payerInfo: { name: string; payer_id: string; payer_classification: string | null; claim_filing_indicator: string | null } =
+        { name: c.payer || "Unknown", payer_id: "UNKNOWN", payer_classification: null, claim_filing_indicator: null };
+      if (c.payer_id) {
+        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator FROM payers WHERE id = $1", [c.payer_id]);
+        if (pr.rows.length) payerInfo = pr.rows[0];
+      } else if (c.payer) {
+        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        if (pr.rows.length) payerInfo = pr.rows[0];
+      }
+
       const warnings: { field: string; message: string; severity: "error" | "warning" }[] = [];
 
       // Practice settings checks
@@ -2837,11 +2909,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       // Ordering provider check (warn if VA claim has no ordering provider)
       const hasOrderingProv = c.ordering_provider_id || c.external_ordering_provider_npi || c.ordering_provider_npi;
-      if (!hasOrderingProv) {
-        const payerNameForOP = (c.payer || "").toLowerCase();
-        if (payerNameForOP.includes("va") || payerNameForOP.includes("triwest") || payerNameForOP.includes("vaccn")) {
-          warnings.push({ field: "claim.ordering_provider", message: "VA claims typically require an ordering/referring provider. Consider adding one.", severity: "warning" });
-        }
+      if (!hasOrderingProv && payerInfo.payer_classification === 'va_community_care') {
+        warnings.push({ field: "claim.ordering_provider", message: "VA Community Care claims require an ordering/referring provider. Add one before submitting.", severity: "warning" });
       }
 
       // Claim checks
@@ -2868,22 +2937,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!c.place_of_service)
         warnings.push({ field: "claim.pos", message: "Place of service code is missing", severity: "warning" });
 
-      // Payer checks
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
-      if (c.payer_id) {
-        const pr = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
-        if (pr.rows.length) payerInfo = pr.rows[0];
-      } else if (c.payer) {
-        const pr = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
-        if (pr.rows.length) payerInfo = pr.rows[0];
-      }
+      // Payer checks (payerInfo fetched above)
       if (!payerInfo.payer_id || payerInfo.payer_id === "UNKNOWN")
         warnings.push({ field: "payer.payer_id", message: `Payer "${payerInfo.name}" has no EDI Payer ID configured`, severity: "error" });
 
       // Rendering provider checks
       let provId = c.provider_id;
       if (!provId) {
-        const dp = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        const dp = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
         if (dp.rows.length) provId = dp.rows[0].id;
       }
       if (!provId)
@@ -2902,9 +2963,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [ediOrgId2 || ""]
       );
 
-      const payerNameLower = (payerInfo.name || c.payer || "").toLowerCase();
-      const isVA = payerNameLower.includes("va") || payerNameLower.includes("veterans") || payerNameLower.includes("triwest") || payerNameLower.includes("vaccn");
-      const isMedicare = payerNameLower.includes("medicare");
+      const isVA = payerInfo.payer_classification === 'va_community_care';
+      const isMedicare = payerInfo.payer_classification === 'medicare_part_b' || payerInfo.payer_classification === 'medicare_advantage';
 
       for (const rule of activeRules) {
         const ruleForPayer = rule.payer === "All" || (isVA && rule.payer === "VA Community Care") || (isMedicare && rule.payer === "Medicare");
@@ -3070,12 +3130,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             violated = daysSince > parseInt(rule.condition_value || '180');
           }
         } else if (ct === 'va_auth_missing') {
-          const isVAPayer2 = payerInfo.payer_id === 'TWVACCN' ||
-            payerInfo.name?.toLowerCase().includes('triwest') ||
-            payerInfo.name?.toLowerCase().includes('va community');
+          const isVAPayer2 = payerInfo.payer_classification === 'va_community_care' || payerInfo.payer_id === 'TWVACCN';
           violated = isVAPayer2 && !c.authorization_number;
         } else if (ct === 'va_wrong_pos') {
-          const isVAPayer3 = payerInfo.payer_id === 'TWVACCN';
+          const isVAPayer3 = payerInfo.payer_classification === 'va_community_care' || payerInfo.payer_id === 'TWVACCN';
           violated = isVAPayer3 && c.place_of_service !== rule.condition_value;
         } else if (ct === 'gcode_wrong_pos') {
           const hasGCode = rawLines.some((sl: any) => {
@@ -3144,7 +3202,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let provId = c.provider_id;
       if (!provId) {
-        const defaultProv = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        const defaultProv = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
         if (defaultProv.rows.length) provId = defaultProv.rows[0].id;
       }
       let prov = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
@@ -3155,10 +3213,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -3321,7 +3379,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let provId2 = c.provider_id;
       if (!provId2) {
-        const defaultProv = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        const defaultProv = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
         if (defaultProv.rows.length) provId2 = defaultProv.rows[0].id;
       }
       let prov = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
@@ -3332,10 +3390,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -3474,7 +3532,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let provId = c.provider_id;
       if (!provId) {
-        const defaultProv = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        const defaultProv = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
         if (defaultProv.rows.length) provId = defaultProv.rows[0].id;
       }
       let prov: any = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
@@ -3485,10 +3543,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -3657,7 +3715,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let provId = c.provider_id;
       if (!provId) {
-        const defaultProv = await db.query("SELECT id FROM providers WHERE is_default = true AND is_active = true LIMIT 1");
+        const defaultProv = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
         if (defaultProv.rows.length) provId = defaultProv.rows[0].id;
       }
       let prov: any = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
@@ -3668,10 +3726,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -3970,7 +4028,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.patch("/api/billing/payers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { id } = req.params;
-      const { isActive, name, payerId, timelyFilingDays, authRequired, autoFollowupDays, eraAutoPostClean, eraAutoPostContractual, eraAutoPostSecondary, eraAutoPostRefunds, eraHoldIfMismatch } = req.body;
+      const { isActive, name, payerId, timelyFilingDays, authRequired, autoFollowupDays, eraAutoPostClean, eraAutoPostContractual, eraAutoPostSecondary, eraAutoPostRefunds, eraHoldIfMismatch, payerClassification, claimFilingIndicator } = req.body;
       const db = await import("./db").then(m => m.pool);
       const fields: string[] = [];
       const values: any[] = [];
@@ -3986,6 +4044,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (eraAutoPostSecondary !== undefined) { fields.push(`era_auto_post_secondary = $${idx++}`); values.push(eraAutoPostSecondary); }
       if (eraAutoPostRefunds !== undefined) { fields.push(`era_auto_post_refunds = $${idx++}`); values.push(eraAutoPostRefunds); }
       if (eraHoldIfMismatch !== undefined) { fields.push(`era_hold_if_mismatch = $${idx++}`); values.push(eraHoldIfMismatch); }
+      if (payerClassification !== undefined) { fields.push(`payer_classification = $${idx++}`); values.push(payerClassification); }
+      if (claimFilingIndicator !== undefined) { fields.push(`claim_filing_indicator = $${idx++}`); values.push(claimFilingIndicator); }
       if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
       values.push(id);
       const { rows } = await db.query(

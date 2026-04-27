@@ -566,6 +566,8 @@ export const payers = pgTable("payers", {
   billingType: varchar("billing_type").default("professional"),
   isActive: boolean("is_active").default(true),
   isCustom: boolean("is_custom").default(false),
+  payerClassification: varchar("payer_classification", { length: 32 }),
+  claimFilingIndicator: varchar("claim_filing_indicator", { length: 2 }),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

@@ -60,16 +60,8 @@ export interface EDI837PInput {
   payer: {
     name: string;
     payer_id: string;
+    claim_filing_indicator?: string | null;
   };
-}
-
-function getPayerTypeCode(payerName: string): string {
-  const name = payerName.toLowerCase();
-  if (name.includes("medicare")) return "MB";
-  if (name.includes("medicaid")) return "MC";
-  if (name.includes("va") || name.includes("tricare") || name.includes("champva")) return "CH";
-  if (name.includes("bcbs") || name.includes("blue cross")) return "BL";
-  return "CI";
 }
 
 function formatDate8(dateStr: string): string {
@@ -146,7 +138,7 @@ export function generate837P(input: EDI837PInput): string {
 
   segments.push(`HL*2*1*22*0`);
 
-  segments.push(`SBR*P*18*******${getPayerTypeCode(payer.name)}`);
+  segments.push(`SBR*P*18*******${payer.claim_filing_indicator || "CI"}`);
 
   segments.push(
     `NM1*IL*1*${patient.last_name}*${patient.first_name}****MI*${patient.member_id}`

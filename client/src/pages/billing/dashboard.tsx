@@ -21,6 +21,7 @@ import {
   CheckCircle2,
   Circle,
 } from "lucide-react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { MetricCard } from "@/components/metric-card";
@@ -135,6 +136,49 @@ function OnboardingChecklist() {
   );
 }
 
+const READINESS_LABELS: Record<string, string> = {
+  practice_settings: "Practice settings",
+  npi: "Valid 10-digit NPI",
+  tax_id: "Tax ID (EIN)",
+  practice_name: "Practice name",
+  provider: "At least one active provider",
+  payer: "At least one payer with EDI Payer ID",
+};
+
+function ReadinessBanner() {
+  const [, setLocation] = useLocation();
+  const [dismissed, setDismissed] = useState(false);
+  const { data } = useQuery<{ ready: boolean; missing: string[] }>({
+    queryKey: ["/api/billing/org-readiness"],
+    queryFn: async () => {
+      const r = await fetch("/api/billing/org-readiness");
+      if (!r.ok) throw new Error("Failed to fetch readiness");
+      return r.json();
+    },
+    staleTime: 60_000,
+  });
+  if (!data || data.ready || dismissed) return null;
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3 flex items-start gap-3" data-testid="banner-org-readiness">
+      <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-amber-800 dark:text-amber-300">Setup incomplete — claim creation is limited</p>
+        <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+          Missing: {data.missing.map((k) => READINESS_LABELS[k] || k).join(", ")}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <Button variant="ghost" size="sm" className="h-7 text-xs text-amber-700 dark:text-amber-400 hover:text-amber-900" onClick={() => setLocation("/billing/settings")} data-testid="button-readiness-go-settings">
+          Go to Settings
+        </Button>
+        <button onClick={() => setDismissed(true)} className="text-amber-500 hover:text-amber-700 dark:text-amber-400" data-testid="button-readiness-dismiss">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function BillingDashboard() {
   const { data: stats, isLoading } = useQuery<any>({
     queryKey: ["/api/billing/dashboard/stats"],
@@ -167,6 +211,7 @@ export default function BillingDashboard() {
         <p className="text-muted-foreground">Claims overview and revenue cycle metrics</p>
       </div>
 
+      <ReadinessBanner />
       <OnboardingChecklist />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-pipeline">

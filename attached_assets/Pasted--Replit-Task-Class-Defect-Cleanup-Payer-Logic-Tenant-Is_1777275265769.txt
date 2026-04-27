@@ -1,0 +1,485 @@
+# Replit Task — Class Defect Cleanup (Payer Logic, Tenant Isolation, Provisioning)
+
+## What this task is
+
+This is a **structural cleanup** task. Three classes of defect have been identified in the codebase that all share the same shape: behavior is being inferred from heuristics or fallbacks instead of being explicitly configured and tenant-scoped. We are fixing all three classes at the root, plus closing two related gaps in provisioning and UI surface area.
+
+These are not isolated bugs. They are categories of defect that will keep producing new symptoms every time we add a payer, onboard an org, or rename something. We are killing the categories, not patching the latest symptom.
+
+## Meta-instructions
+
+1. **Diagnose before patching.** Each section requires audit and write-up before any code change.
+2. **Use the right database connection for the right thing.**
+   - `PRODUCTION_READONLY_DATABASE_URL` — read-only connection to Railway production. Use for verification queries and audit work. Cannot write.
+   - `DATABASE_URL` — local heliumdb dev database. Use for migrations, schema changes, and write operations during development.
+   - Code changes deploy to Railway via git as normal. Do not attempt to write to production directly.
+3. **Fix the class, not the instance.** If you find one example of a defect, search for all instances of the same pattern and fix every one.
+4. **Surface what you find.** If diagnosis reveals more bugs than scoped here, document them in the output. Do not silently expand scope; do not silently ignore findings.
+5. **No bandaids, no string-matching fixes, no partial migrations.** If a fix needs to ship in two stages, document the staging plan; do not just do half.
+
+---
+
+## DEFECT CLASS A — Payer behavior derived from name strings
+
+### Evidence
+
+After renaming the TriWest payer record from "VA Community Care" to "TriWest Healthcare Alliance" in production, a generated 837P emitted `SBR*P*18*******CI~` instead of `SBR*P*18*******CH~`. The Claim Filing Indicator flipped from Champus (correct for VA Community Care) to Commercial Insurance Co. The only thing that changed was the payer's name.
+
+This means the EDI generator (or some upstream logic) is deriving the filing indicator by string-matching against the payer name instead of reading an explicit configuration value.
+
+### Root cause hypothesis
+
+There is a code path that takes `payer.name` as input and produces a filing indicator (`CH`, `CI`, `MB`, `MC`, `BL`, etc.) by pattern-matching keywords. Possibly other behaviors are derived the same way.
+
+### Universal fix
+
+**A1. Audit the codebase for every payer name heuristic.**
+
+Grep for all the following in the codebase:
+- `payer.name` and `payer_name` accessed in any conditional or string operation
+- Regex or string operations checking for substrings like `'VA'`, `'TRICARE'`, `'CHAMPUS'`, `'MEDICARE'`, `'MEDICAID'`, `'BLUE'`, `'BCBS'`, `'COMMERCIAL'`
+- `.includes(`, `.match(`, `LIKE`, `ILIKE` against payer name fields
+- Switch/case or if/else chains keyed on payer name
+
+For each hit, document:
+- File and line
+- What behavior is being derived
+- Default value when no pattern matches
+
+Output the full list before writing any fix.
+
+**A2. Add explicit configuration columns to the payers table.**
+
+Required new columns:
+
+```sql
+ALTER TABLE payers ADD COLUMN payer_classification VARCHAR(32);
+-- enum-like values: 'va_community_care', 'medicare_part_b', 'medicare_advantage',
+-- 'medicaid_state', 'tricare', 'commercial_ppo', 'commercial_hmo', 'bcbs',
+-- 'workers_comp', 'self_pay', 'other'
+
+ALTER TABLE payers ADD COLUMN claim_filing_indicator VARCHAR(2);
+-- X12 5010 valid values per spec: '09', '11', '12', '13', '14', '15', '16',
+-- 'AM', 'BL', 'CH', 'CI', 'DS', 'FI', 'HM', 'LM', 'MA', 'MB', 'MC', 'OF',
+-- 'TV', 'VA', 'WC', 'ZZ'
+```
+
+Add additional columns for any other behaviors discovered in A1's audit. Examples that may need explicit columns:
+- `requires_authorization_segment` — whether REF*G1 is required
+- `default_modifiers` — payer-specific default modifiers per HCPCS
+- `electronic_submission_supported` — whether 837 is accepted
+- `era_matching_payer_ids` — array of payer IDs that route to this record (some payers have multiple Stedi/clearinghouse IDs)
+
+Add only the columns that A1's audit shows are actually being heuristically derived today.
+
+**A3. Backfill the new columns for all existing payer records.**
+
+For each seeded payer in the system, populate `payer_classification` and `claim_filing_indicator` with correct explicit values:
+
+```
+VA Community Care (TWVACCN)         → va_community_care, CH
+TRICARE                              → tricare, CH
+Medicare (Traditional)               → medicare_part_b, MB
+Medicare Advantage UHC               → medicare_advantage, 16
+Medicaid Texas                       → medicaid_state, MC
+Medicaid California                  → medicaid_state, MC
+Medicaid Florida                     → medicaid_state, MC
+BCBS                                 → bcbs, BL
+Aetna                                → commercial_ppo, CI
+UnitedHealthcare                     → commercial_ppo, CI
+Humana                               → commercial_ppo, CI
+Cigna                                → commercial_ppo, CI
+Other/Custom                         → other, ZZ (default — admin can override)
+```
+
+The seeded values for any custom payers added by orgs should be set per the seed reasonably; admins can edit them via Settings → Payers UI.
+
+**A4. Replace heuristic code paths with explicit lookups.**
+
+In the EDI generator, change every place that derives filing indicator (or other behavior) from payer name to instead read the explicit column. The SBR generator should look like:
+
+```
+SBR*<seq>*<rel>*<grp>*<gname>*<inscode>****<filing_indicator>~
+
+where filing_indicator = payer.claim_filing_indicator
+```
+
+Remove the dead heuristic code after the explicit lookups are wired. Do not leave it as a fallback "in case the column is null" — if the column is null, that's a configuration error and should fail loudly.
+
+**A5. Add UI surface for these fields.**
+
+Settings → Payers → edit/add payer form should expose:
+- `payer_classification` as a dropdown (enum values)
+- `claim_filing_indicator` as a dropdown (X12 valid values, with help text explaining which is which)
+- Any other new columns from A2
+
+When `payer_classification` is set, the form may suggest a default `claim_filing_indicator` and other field values, but the admin can always override.
+
+### Acceptance criteria for Class A
+
+- Audit output lists every place payer behavior was being derived from name
+- New columns exist on payers table with valid enum-style values
+- All seeded payers backfilled with correct values
+- EDI generator reads explicit columns, no name string-matching remains
+- Settings UI exposes the new fields
+- Generating an 837P for the TriWest payer (now classified `va_community_care` with filing indicator `CH`) produces `SBR*P*18*******CH~` regardless of what the payer's name is set to
+- Renaming a payer in the UI no longer changes any EDI behavior
+
+---
+
+## DEFECT CLASS B — Tenant isolation failures in fallback queries
+
+### Evidence
+
+A test 837P generated under the demo-org-001 scope emitted `NM1*82*1*Valid*Diana****XX*1245319599~` for the rendering provider. Diana Valid is a test fixture in demo-org-001. Chajinel's actual provider record exists (NPI 1184288680) but is scoped to chajinel-org-001. The EDI generator's "fallback to default rendering provider" query is not scoped to the claim's organization, so it grabs whatever default exists in the system regardless of tenant.
+
+This is a HIPAA-relevant tenant data leak in production. Chajinel's claims could potentially emit demo data; the demo's claims could emit Chajinel's data. The leakage direction depends on which org the claim was created under.
+
+### Root cause hypothesis
+
+There is at least one query that reads:
+```sql
+SELECT * FROM providers WHERE is_default = true AND is_active = true LIMIT 1
+```
+…without a `WHERE organization_id = $1` clause scoped to the current claim or session. There may be other similar queries elsewhere.
+
+### Universal fix
+
+**B1. Audit the codebase for every fallback query missing tenant scope.**
+
+Grep for queries that:
+- Use `LIMIT 1` without an `organization_id` filter
+- Use `is_default = true` without an `organization_id` filter
+- Have a comment or variable name suggesting "default" or "fallback"
+- Read from any table that has an `organization_id` column
+
+Output the full list. For each, document:
+- File and line
+- What table is queried
+- What the fallback represents
+- Whether it currently scopes to organization_id
+
+**B2. Make every multi-tenant table query respect organization_id.**
+
+For every query found in B1:
+- Add `WHERE organization_id = $1` (or appropriate parameter passing) using the claim's organization_id, the user's organization_id, or whatever scope is correct for the operation.
+- If no record is found within that org's scope, **hard-fail** with a clear error message. Do not silently fall back to another org's data.
+
+The EDI generator's rendering provider fallback should look like:
+
+```
+1. SELECT * FROM providers WHERE id = claim.rendering_provider_id  
+   (if claim has explicit rendering_provider_id)
+2. If no explicit rendering provider on the claim:
+   SELECT * FROM providers 
+   WHERE organization_id = claim.organization_id 
+     AND is_default = true 
+     AND is_active = true 
+   LIMIT 1
+3. If still no result:
+   THROW ERROR: "No default rendering provider configured for this 
+   organization. Configure one in Settings → Providers before 
+   generating claims."
+```
+
+The error must surface in the wizard's risk panel as RED with a Fix link to the providers settings page. Submission and EDI generation must be blocked.
+
+**B3. Add a database-level constraint where possible.**
+
+Consider whether any RLS (row-level security) policies should exist on the providers table to enforce tenant isolation at the DB layer. This is belt-and-suspenders — if Postgres itself refuses to return rows from another org, the application layer's queries cannot leak data even if a future bug introduces an unscoped query.
+
+If implementing RLS is too invasive for this task, document it as a Phase 3 follow-up. At minimum, add the FK constraint specified in Class C below.
+
+### Acceptance criteria for Class B
+
+- Audit output lists every fallback query in the codebase that reads from a multi-tenant table
+- Every such query now includes `organization_id` scoping
+- Hard-fail behavior is implemented for missing-record cases (no silent cross-tenant fallback)
+- A test claim built under chajinel-org-001 emits Chajinel's rendering provider in NM1*82, never demo-org-001's data
+- A test claim built under an org with no default rendering provider configured cannot be submitted; risk panel shows the configuration error
+- No "no provider found" path silently emits another org's data
+
+---
+
+## DEFECT CLASS C — Missing referential integrity
+
+### Evidence
+
+The Replit diagnostic against production confirmed that `providers.organization_id` is a `VARCHAR` with no foreign key constraint to `organizations.id`. This is how Chajinel's provider record was created with `organization_id = 'demo-org-001'` instead of `'chajinel-org-001'` and persisted without the database raising any objection.
+
+### Root cause hypothesis
+
+When the providers table was created, FK constraints were either intentionally omitted (perhaps due to migration ordering) or never added. Other tables likely have the same pattern.
+
+### Universal fix
+
+**C1. Audit every table for missing FK constraints on `organization_id` and other foreign-key-like columns.**
+
+Run the inventory across every table in the schema. For each table, check:
+- Does it have a column named `organization_id`, `practice_id`, `payer_id`, `patient_id`, `provider_id`, `claim_id`, `user_id`, etc.?
+- Is the column declared with a FK constraint to the referenced table?
+
+Output the full list of missing FK constraints.
+
+**C2. Add the missing constraints.**
+
+For each missing FK, add it via migration:
+
+```sql
+ALTER TABLE providers
+ADD CONSTRAINT providers_organization_id_fkey
+FOREIGN KEY (organization_id) REFERENCES organizations(id)
+ON DELETE RESTRICT;  -- or CASCADE depending on intended behavior
+```
+
+Choose `ON DELETE` behavior carefully:
+- `RESTRICT` — most conservative, prevents deleting an org if providers exist
+- `CASCADE` — deletes all providers if the org is deleted (only if intentional)
+- `SET NULL` — orphans the providers (almost never correct for tenant scoping)
+
+For organization_id columns specifically, `RESTRICT` is the right default — orgs shouldn't be deleted while they own data.
+
+**C3. Verify no orphaned rows exist before adding constraints.**
+
+For each table, before applying the FK constraint, verify there are no rows where the foreign key value doesn't exist in the parent table:
+
+```sql
+SELECT id, organization_id 
+FROM providers 
+WHERE organization_id NOT IN (SELECT id FROM organizations);
+```
+
+Output any orphaned rows found. Decide case-by-case whether to fix the data, delete the orphan, or skip the FK addition until the data is cleaned. Do not silently delete data — surface for review.
+
+### Acceptance criteria for Class C
+
+- Audit output lists every missing FK constraint
+- Every multi-tenant table has FK on its `organization_id` column
+- No orphaned rows exist (or are documented and resolved)
+- Future code that tries to insert a provider with a non-existent `organization_id` will fail at the DB layer
+
+---
+
+## DEFECT CLASS D — Org provisioning is incomplete
+
+### Evidence
+
+When `chajinel-org-001` was created, the seed inserted records into `organizations`, `practice_settings` (with mostly NULL values), and `users`. It did NOT insert a corresponding `providers` record for Chajinel. So Chajinel had zero rendering providers from the moment it was provisioned, which forced the cross-tenant fallback bug to surface.
+
+Beyond Chajinel: this means **every new org provisioned through the same flow has the same gap**. They get created, can log in, can't actually generate valid claims because there's no rendering provider.
+
+### Root cause hypothesis
+
+The org provisioning code path (likely in `server/routes.ts` around the seed/onboarding endpoint) creates partial records and assumes admins will fill in the rest manually. There is no guard preventing claim generation until the org is fully configured.
+
+### Universal fix
+
+**D1. Audit the org provisioning flow.**
+
+Find the code path that creates a new organization. Document:
+- What records are created in what order
+- What fields are required vs. optional
+- What downstream behavior assumes those records exist
+
+**D2. Fix the provisioning to either complete the setup or block claim generation.**
+
+Two acceptable approaches:
+
+**Option D2a — Provisioning creates skeletal records:** When a new org is provisioned, create the organization, practice_settings (with required fields validated), and prompt the admin via UI to add at least one rendering provider before any claim wizard is accessible. The wizard's "New Claim" button is disabled with a clear message until setup is complete.
+
+**Option D2b — Provisioning requires inputs upfront:** When a new org signs up, require NPI, Tax ID, taxonomy, address, AND at least one rendering provider before the org is marked "active" and users can access the wizard.
+
+Either is acceptable. D2a has lower friction at signup; D2b has higher data quality. Pick one and implement.
+
+**D3. Add a "is configured for billing" check that gates claim creation.**
+
+Whichever approach is picked in D2, add an explicit check that runs before the wizard loads:
+
+```
+isOrgReadyForBilling(organization_id) =
+  practice_settings exists for org AND
+  practice_settings.primary_npi IS NOT NULL AND
+  practice_settings.tax_id IS NOT NULL AND
+  practice_settings.taxonomy_code IS NOT NULL AND
+  practice_settings.address has all required fields AND
+  at least one active provider exists for this org
+```
+
+If false, the wizard shows a setup screen with links to fix each missing piece. No claim can be created until this returns true.
+
+### Acceptance criteria for Class D
+
+- Provisioning flow audit documented
+- Fixed flow ensures every new org has the data needed to generate valid EDI before users can attempt claim creation
+- `isOrgReadyForBilling` check exists and gates the wizard
+- Existing under-configured orgs (like Chajinel was before manual updates) surface the missing-config screen instead of letting users create claims that will fail
+
+---
+
+## DEFECT CLASS E — Add Provider UI doesn't support organization-type entities
+
+### Evidence
+
+The current Add Provider form requires `firstName` and `lastName` as not-nullable fields, has no `entity_type` selector, and no org-name field. The only way to create an organization-type provider is direct DB insert. This is why Chajinel's record had `first_name = 'CHAJINEL HOME CARE SERVICE'` and `last_name = 'LLC'` (a workaround forced by the form).
+
+### Universal fix
+
+**E1. Add entity type selector to the Add Provider form.**
+
+The form gets a leading "Provider Type" radio or dropdown:
+- `Individual` (a person — RN, PT, HHA, MD, etc.)
+- `Organization` (a billing/rendering entity — agency, group practice, facility)
+
+Default to `Individual` since that's the more common case.
+
+**E2. Make name fields conditional on entity type.**
+
+When `Individual` is selected:
+- Show `First Name`, `Last Name`, `Middle Initial` (optional), `Credentials` (optional)
+- All required as today
+
+When `Organization` is selected:
+- Hide first/last/middle/credentials
+- Show single `Organization Name` field (required)
+- Field maps to whatever underlying column the EDI generator reads when entity_type = 'organization'
+
+**E3. NPI Type validation aligned with entity type.**
+
+NPIs have a Type 1 / Type 2 distinction (Type 1 = individual, Type 2 = organization). The first digit after the prefix indicates type:
+- NPIs starting with prefix `80840` followed by `1` or `2` indicate Type 1 (individuals)
+- Same prefix followed by `3` indicates Type 2 (organizations)
+
+When the user enters an NPI:
+- If `entity_type = 'individual'` and the NPI is Type 2, show a warning: "This NPI is registered as an organization, not an individual. Did you mean to select Organization?"
+- If `entity_type = 'organization'` and the NPI is Type 1, show a warning: "This NPI is registered as an individual, not an organization. Did you mean to select Individual?"
+
+Don't block save on the warning — admins may have legitimate reasons. But surface the mismatch.
+
+**E4. License fields only apply to individuals.**
+
+When `Organization` is selected, hide `License Number`, `License State`, `License Type`. Organizations don't have these.
+
+### Acceptance criteria for Class E
+
+- Provider Type selector exists at the top of the Add Provider form
+- Name fields switch between individual and organization variants based on selection
+- NPI Type warnings appear when there's a mismatch
+- License fields only show for individuals
+- Saving an organization-type provider populates the `entity_type` column correctly and stores the org name in the appropriate field
+- The Chajinel provider record can now be edited via the UI without raw SQL
+
+---
+
+## DEFECT CLASS F — practice_settings doesn't enforce required fields
+
+### Evidence
+
+Chajinel's practice_settings row was created with `primary_npi = NULL`, `tax_id = NULL`, `taxonomy_code = NULL`. The system allowed the row to exist and allowed users to be created and (in principle) attempt to generate claims. EDI generation would have produced `NM1*85*2*Chajinel Clinic*****XX*~` with a blank NPI — guaranteed clearinghouse rejection.
+
+### Universal fix
+
+**F1. Define required fields for electronic billing readiness.**
+
+A practice_settings record cannot generate valid EDI without:
+- `primary_npi` (10 digits, valid Luhn checksum)
+- `tax_id` (9 digits, EIN format)
+- `taxonomy_code` (10 characters, valid taxonomy from NUCC list)
+- `practice_name` (non-empty)
+- `address` (street, city, state, zip all populated in the JSONB)
+- `phone` (10 digits)
+- `billing_location` (CBSA code, required for VA fee schedule lookup if billing VA)
+
+**F2. Add validation at save time AND at claim generation time.**
+
+At save time in Settings → Practice Info: surface field-level validation errors before allowing save. Show which fields are missing or malformed.
+
+At claim generation time (the `isOrgReadyForBilling` check from Class D): refuse to generate EDI if any of these fields are missing.
+
+**F3. Add a "billing setup status" indicator to the dashboard.**
+
+When an admin loads the billing dashboard, show a banner if their practice_settings is incomplete: "Your practice setup is incomplete. [N] required fields are missing. Complete setup to enable claim submission. [Fix Now]"
+
+Banner disappears when all required fields are populated.
+
+### Acceptance criteria for Class F
+
+- Save validation in Settings → Practice Info catches missing/malformed required fields with clear messages
+- The `isOrgReadyForBilling` check evaluates these fields
+- Claim wizard is gated until practice_settings is complete
+- Dashboard banner surfaces incomplete configuration
+- Chajinel's practice_settings (now populated) passes the check; an empty practice_settings does not
+
+---
+
+## VERIFICATION
+
+After all six classes are fixed, run end-to-end verification using the production read-only connection and a fresh test claim.
+
+**Verification 1 — Audit findings written up:**
+For each defect class A–F, produce the audit output as described in the diagnose step. This is the documentation of what was found, not just what was fixed.
+
+**Verification 2 — Schema state in production:**
+Query `PRODUCTION_READONLY_DATABASE_URL` to confirm:
+- `payer_classification` and `claim_filing_indicator` columns exist on payers
+- All seeded payers have non-null values
+- FK constraints exist on `providers.organization_id` and other identified columns
+- No orphaned rows in any tenant-scoped table
+
+**Verification 3 — End-to-end claim generation:**
+
+Generate three test EDIs from a fresh QA claim built under chajinel-org-001:
+
+3a. Standard claim with the seeded TriWest payer:
+- Expected NM1*82: Chajinel's rendering provider (NPI 1184288680, Type 2)
+- Expected SBR: ends in `CH`
+- Expected NM1*85: Chajinel's billing data
+- Stedi inspector: 0 errors
+
+3b. Claim with payer renamed mid-flight:
+- Rename the TriWest payer to a totally unrelated string like "Test Payer Foo"
+- Generate a new EDI for a new claim
+- Expected SBR: still ends in `CH` (because filing indicator is now an explicit column, not derived from name)
+- Stedi inspector: 0 errors
+
+3c. Claim under an org with no provider configured:
+- Create a new org via the provisioning flow (or simulate one with a SQL insert into a test schema)
+- Attempt to generate a claim
+- Expected: hard-fail with clear error before EDI generation. No silent cross-tenant fallback.
+
+**Verification 4 — UI flows:**
+
+- Add Provider form supports both individual and organization entity types
+- NPI Type warnings appear when entity_type and NPI mismatch
+- Settings → Practice Info validation catches missing fields
+- Wizard is gated when org isn't ready for billing
+- Dashboard banner surfaces incomplete setup
+
+---
+
+## OUTPUT
+
+When the work is complete, return:
+
+1. **Audit findings** for each defect class (A through F): what was found, with file/line references
+2. **List of files modified**, grouped by defect class
+3. **Schema migrations** with rollback scripts
+4. **Three sample 837P EDI files** from the verification scenarios above, with screenshots or pasted Stedi inspector output showing 0 errors on each
+5. **Confirmation queries** run against `PRODUCTION_READONLY_DATABASE_URL` showing schema additions deployed and seed data backfilled correctly
+6. **Anything unexpected** found during diagnosis — extra defects of the same class, related bugs that surfaced, etc.
+
+---
+
+## What "done" looks like
+
+- No code path derives payer behavior from string-matching the payer name — every behavior is an explicit column with an explicit value
+- No fallback query reads from a tenant-scoped table without organization_id filtering — cross-tenant data leakage is impossible
+- Every multi-tenant table has FK constraints; orphaned rows cannot exist
+- Org provisioning either completes setup fully or blocks claim creation until setup is complete
+- Provider creation UI supports both individuals and organizations cleanly
+- Practice settings validation catches missing required fields at save time and at claim generation time
+- Generating a Chajinel test EDI produces structurally clean output with Chajinel's data only
+- Renaming any record in the system does not change EDI behavior
+
+The goal is that after this task ships, no future bug in any of these six classes can occur silently. Either the code prevents it, the database prevents it, or the user is surfaced an explicit error.
+
+Begin with the diagnosis phase. Do not start writing fixes until all six audit outputs are documented.
