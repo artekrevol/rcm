@@ -5599,7 +5599,20 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         `SELECT *, COALESCE(specialty_tags, '{}') as specialty_tags FROM rules WHERE organization_id = $1 OR organization_id IS NULL ORDER BY created_at DESC`,
         [orgId]
       );
-      res.json(rows);
+      const mapped = rows.map((r: any) => ({
+        ...r,
+        impactCount: r.impact_count ?? r.impactCount ?? 0,
+        triggeredCount: r.triggered_count ?? r.triggeredCount ?? 0,
+        preventedCount: r.prevented_count ?? r.preventedCount ?? 0,
+        protectedAmount: r.protected_amount ?? r.protectedAmount ?? 0,
+        createdAt: r.created_at ?? r.createdAt,
+        organizationId: r.organization_id ?? r.organizationId,
+        cptCode: r.cpt_code ?? r.cptCode,
+        triggerPattern: r.trigger_pattern ?? r.triggerPattern,
+        preventionAction: r.prevention_action ?? r.preventionAction,
+        specialtyTags: r.specialty_tags ?? [],
+      }));
+      res.json(mapped);
     } catch {
       const rules = await storage.getRules(getOrgId(req));
       res.json(rules);

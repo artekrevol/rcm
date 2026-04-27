@@ -462,7 +462,7 @@ export default function RulesPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {format(new Date(rule.createdAt), "MMM d, yyyy")}
+                      {rule.createdAt ? format(new Date(rule.createdAt), "MMM d, yyyy") : "—"}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
