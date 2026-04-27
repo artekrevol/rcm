@@ -48,21 +48,24 @@ export async function submitClaim(
     method: "POST",
     headers: {
       Authorization: `Key ${STEDI_API_KEY}`,
-      "Content-Type": "text/plain",
+      "Content-Type": "application/json",
       "Idempotency-Key": params.claimId,
     },
-    body: edi,
+    body: JSON.stringify({ controlNumber: extractControlNumber(edi), tradingPartnerServiceId: extractPayerId(edi), x12: edi }),
   });
 
-  const data = await response.json().catch(() => ({}));
+  const rawText = await response.text();
+  let data: any = {};
+  try { data = JSON.parse(rawText); } catch { data = { message: rawText || `Stedi API error: ${response.status}` }; }
 
   if (!response.ok) {
     return {
       success: false,
       rawResponse: data,
       error:
-        (data as any).message ||
-        (data as any).errors?.[0]?.description ||
+        data.message ||
+        data.errors?.[0]?.description ||
+        data.errors?.[0]?.message ||
         `Stedi API error: ${response.status}`,
     };
   }
@@ -107,16 +110,18 @@ export async function testClaim(
     method: "POST",
     headers: {
       Authorization: `Key ${STEDI_API_KEY}`,
-      "Content-Type": "text/plain",
+      "Content-Type": "application/json",
       "Idempotency-Key": `test-${params.claimId}-${Date.now()}`,
     },
-    body: edi,
+    body: JSON.stringify({ controlNumber: extractControlNumber(edi), tradingPartnerServiceId: extractPayerId(edi), x12: edi }),
   });
 
-  const data = await response.json().catch(() => ({}));
+  const rawText = await response.text();
+  let data: any = {};
+  try { data = JSON.parse(rawText); } catch { data = { message: rawText || `Stedi test validation error: ${response.status}` }; }
 
   if (!response.ok) {
-    const rawErrors: any[] = (data as any).errors || [];
+    const rawErrors: any[] = data.errors || [];
     const structuredErrors: StediValidationError[] = rawErrors.map((e: any) => ({
       code: e.code || e.errorCode || "UNKNOWN",
       message: e.message || e.description || String(e),
@@ -263,6 +268,18 @@ export async function poll835ERA(since?: string): Promise<{
     eras: reports.map((r: any) => parseERAResponse(r)),
     lastCheckTimestamp: new Date().toISOString(),
   };
+}
+
+function extractControlNumber(edi: string): string {
+  // ISA13 is the interchange control number — index 13 in ISA segment (1-based in X12 spec)
+  const parts = edi.match(/^ISA\*([^~]+)/m)?.[1]?.split("*") || [];
+  return (parts[12] || "000000001").trim().replace(/\D/g, "").padStart(9, "0");
+}
+
+function extractPayerId(edi: string): string {
+  // NM1*PR segment — NM109 (index 8 after NM1*PR*2*) is the payer EDI ID
+  const match = edi.match(/NM1\*PR\*2\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*([^*~\r\n]+)/);
+  return match?.[1]?.trim() || "UNKNOWN";
 }
 
 function mapStatusCode(code: string): string {
