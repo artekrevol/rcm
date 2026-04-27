@@ -354,14 +354,21 @@ function ManualInlineForm({ code, onSelect }: { code: string; onSelect: (result:
   );
 }
 
-function InlineCodeSearch({ onSelect }: { onSelect: (result: any) => void }) {
-  const [q, setQ] = useState("");
-  const [dq, setDq] = useState("");
+function InlineCodeSearch({ onSelect, initialQuery = "" }: { onSelect: (result: any) => void; initialQuery?: string }) {
+  const [q, setQ] = useState(initialQuery);
+  const [dq, setDq] = useState(initialQuery.trim());
   const [timer, setTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [manualCode, setManualCode] = useState("");
   const [manualDesc, setManualDesc] = useState("");
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (initialQuery) {
+      setQ(initialQuery);
+      setDq(initialQuery.trim());
+    }
+  }, [initialQuery]);
 
   function handleChange(val: string) {
     setQ(val);
@@ -496,20 +503,24 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
     }
 
     const newRate = rate || (result.va_rate ? String(result.va_rate) : null);
-    const keepExistingRate = !!(line.ratePerUnit && line.ratePerUnit !== "");
+    const finalRate = newRate || "";
+    const existingUnits = line.units || (result.unit_type === "time_based" ? "" : "1");
+    const unitsNum = parseInt(existingUnits) || 0;
+    const rateNum = parseFloat(finalRate) || 0;
+    const computedTotal = unitsNum > 0 && rateNum > 0 ? (unitsNum * rateNum).toFixed(2) : "";
     onChange(index, {
       code: result.code,
       description: result.description_plain || result.description_official || "",
       unitType: result.unit_type || "per_visit",
       unitIntervalMinutes: result.unit_interval_minutes || null,
-      vaRate: keepExistingRate ? line.vaRate : newRate,
-      ratePerUnit: keepExistingRate ? line.ratePerUnit : (newRate || ""),
+      vaRate: newRate,
+      ratePerUnit: finalRate,
       requiresModifier: result.requires_modifier || false,
       manualEntry: result.manual || false,
       hours: line.hours || "",
-      units: line.units || (result.unit_type === "time_based" ? "" : "1"),
-      totalCharge: line.totalCharge || "",
-      chargeOverridden: line.chargeOverridden || false,
+      units: existingUnits,
+      totalCharge: computedTotal || (line.chargeOverridden ? line.totalCharge : ""),
+      chargeOverridden: computedTotal ? false : (line.chargeOverridden || false),
       locationName,
       isAverageRate,
     });
@@ -566,11 +577,15 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
           <div className="flex gap-1">
             <Input
               value={line.code}
-              onChange={(e) => onChange(index, { code: e.target.value.toUpperCase() })}
+              onChange={(e) => {
+                const val = e.target.value.toUpperCase();
+                onChange(index, { code: val });
+                if (val) setShowCodeSearch(true);
+              }}
               placeholder="e.g. 99213"
               className="font-mono"
               data-testid={`input-line-code-${index}`}
-              onFocus={() => { if (!line.code) setShowCodeSearch(true); }}
+              onFocus={() => setShowCodeSearch(true)}
             />
             <Button variant="outline" size="icon" className="shrink-0" onClick={() => setShowCodeSearch(!showCodeSearch)} data-testid={`button-search-code-${index}`}>
               <Search className="h-4 w-4" />
@@ -583,7 +598,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
         </div>
       </div>
 
-      {showCodeSearch && <InlineCodeSearch onSelect={handleCodeSelect} />}
+      {showCodeSearch && <InlineCodeSearch onSelect={handleCodeSelect} initialQuery={line.code} />}
 
       {line.requiresModifier && (
         <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 dark:bg-amber-950/20 p-2 rounded">
