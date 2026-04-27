@@ -1,0 +1,434 @@
+    Line 5
+    Element NM1-08 must equal '46'; value found was 'XX'
+    Line 30
+    Element SV1-07-01 must use N0 number format; value found was 'AB'
+
+Authorization Information Qualifier
+00No Authorization Information Present (No Meaningful Information in I02)
+01
+Authorization Information
+02
+Security Information Qualifier
+00No Security Information Present (No Meaningful Information in I04)
+03
+Security Information
+04
+Interchange ID Qualifier
+ZZMutually Defined
+05
+Interchange Sender ID
+1234567893
+06
+Interchange ID Qualifier
+ZZMutually Defined
+07
+Interchange Receiver ID
+TWVACCN
+08
+Interchange Date
+2026-04-27
+09
+Interchange Time
+05:33
+10
+Repetition Separator
+^
+11
+Interchange Control Version Number
+00501Standards Approved for Publication by ASC X12 Procedures Review Board through October 2003
+12
+Interchange Control Number
+268030329
+13
+Acknowledgment Requested
+0No Interchange Acknowledgment Requested
+14
+Interchange Usage Indicator
+PProduction Data
+15
+Component Element Separator
+:
+16
+Functional Identifier Code
+HCHealth Care Claim (837)
+01
+Application Sender's Code
+1234567893
+02
+Application Receiver's Code
+TWVACCN
+03
+Date
+2026-04-27
+04
+Time
+05:33
+05
+Group Control Number
+1
+06
+Responsible Agency Code
+XAccredited Standards Committee X12
+07
+Version / Release / Industry Identifier Code
+005010X222A1HIPAA release 005010X222A1
+08
+heading
+Transaction Set Identifier Code
+837Health Care Claim
+01
+Transaction Set Control Number
+1
+02
+Implementation Guide Version Name
+005010X222A1
+03
+Hierarchical Structure Code
+0019Information Source, Subscriber, Dependent
+01
+Transaction Set Purpose Code
+00Original
+02
+Originator Application Transaction Identifier
+b7d60b686cf3469c87ca
+03
+Transaction Set Creation Date
+2026-04-27
+04
+Transaction Set Creation Time
+05:33
+05
+Claim or Encounter Identifier
+CHChargeable
+06
+Entity Identifier Code
+41Submitter
+01
+Entity Type Qualifier
+2Non-Person Entity
+02
+Submitter Last or Organization Name
+ClaimShield Demo Practice
+03
+Identification Code Qualifier
+XX
+08
+Submitter Identifier
+1234567893
+09
+Contact Function Code
+ICInformation Contact
+01
+Submitter Contact Name
+Billing Contact
+02
+Communication Number Qualifier
+TETelephone
+03
+Communication Number
+5125550100
+04
+Entity Identifier Code
+40Receiver
+01
+Entity Type Qualifier
+2Non-Person Entity
+02
+Receiver Name
+VA Community Care
+03
+Identification Code Qualifier
+46Electronic Transmitter Identification Number (ETIN)
+08
+Receiver Primary Identifier
+TWVACCN
+09
+detail
+Provider Code
+BIBilling
+01
+Reference Identification Qualifier
+PXCHealth Care Provider Taxonomy Code
+02
+Provider Taxonomy Code
+251B00000X
+03
+Entity Identifier Code
+85Billing Provider
+01
+Entity Type Qualifier
+2Non-Person Entity
+02
+Billing Provider Last or Organizational Name
+ClaimShield Demo Practice
+03
+Identification Code Qualifier
+XXCenters for Medicare and Medicaid Services National Provider Identifier
+08
+Billing Provider Identifier
+1234567893
+09
+Billing Provider Address Line
+4200 Monterey Oaks Blvd Ste 200
+01
+Billing Provider City Name
+Austin
+01
+Billing Provider State or Province Code
+TX
+02
+Billing Provider Postal Zone or ZIP Code
+78749
+03
+Reference Identification Qualifier
+EIEmployer's Identification Number
+01
+Billing Provider Tax Identification Number
+123456789
+02
+Payer Responsibility Sequence Number Code
+PPrimary
+01
+Individual Relationship Code
+18Self
+02
+Claim Filing Indicator Code
+CHChampus
+09
+Entity Identifier Code
+ILInsured or Subscriber
+01
+Entity Type Qualifier
+1Person
+02
+Subscriber Last Name
+Patient
+03
+Subscriber First Name
+QA Test
+04
+Identification Code Qualifier
+MIMember Identification Number
+08
+Subscriber Primary Identifier
+ZZZ123456789
+09
+Subscriber Address Line
+4200 Monterey Oaks Blvd Ste 200
+01
+Subscriber City Name
+Austin
+01
+Subscriber State Code
+TX
+02
+Subscriber Postal Zone or ZIP Code
+78749
+03
+Date Time Period Format Qualifier
+D8Date Expressed in Format CCYYMMDD
+01
+Subscriber Birth Date
+19700101
+02
+Subscriber Gender Code
+MMale
+03
+Entity Identifier Code
+PRPayer
+01
+Entity Type Qualifier
+2Non-Person Entity
+02
+Payer Name
+VA Community Care
+03
+Identification Code Qualifier
+PIPayor Identification
+08
+Payer Identifier
+TWVACCN
+09
+Patient Control Number
+b7d60b686cf3469c87ca
+01
+Total Claim Charge Amount
+2026.64
+02
+Place of Service Code
+12
+01
+Facility Code Qualifier
+BPlace of Service Codes for Professional or Dental Services
+02
+Claim Frequency Code
+1
+03
+Provider or Supplier Signature Indicator
+YYes
+06
+Assignment or Plan Participation Code
+AAssigned
+07
+Benefits Assignment Certification Indicator
+YYes
+08
+Release of Information Code
+YYes, Provider has a Signed Statement Permitting Release of Medical Billing Data Related to a Claim
+09
+Reference Identification Qualifier
+G1Prior Authorization Number
+01
+Prior Authorization Number
+VA-2026-001234
+02
+Diagnosis Type Code
+ABKInternational Classification of Diseases Clinical Modification (ICD-10-CM) Principal Diagnosis
+01
+Diagnosis Code
+I10
+02
+Diagnosis Type Code
+ABFInternational Classification of Diseases Clinical Modification (ICD-10-CM) Diagnosis
+01
+Diagnosis Code
+E119
+02
+Entity Identifier Code
+82Rendering Provider
+01
+Entity Type Qualifier
+1Person
+02
+Rendering Provider Last or Organization Name
+LLC
+03
+Rendering Provider First Name
+CHAJINEL HOME CARE SERVICE
+04
+Identification Code Qualifier
+XXCenters for Medicare and Medicaid Services National Provider Identifier
+08
+Rendering Provider Identifier
+1184288680
+09
+Provider Code
+PEPerforming
+01
+Reference Identification Qualifier
+PXCHealth Care Provider Taxonomy Code
+02
+Provider Taxonomy Code
+253Z00000X
+03
+Assigned Number
+1
+01
+Product or Service ID Qualifier
+HCHealth Care Financing Administration Common Procedural Coding System (HCPCS) Codes
+01
+Procedure Code
+G0299
+02
+Line Item Charge Amount
+1030.08
+02
+Unit or Basis for Measurement Code
+UNUnit
+03
+Service Unit Count
+32
+04
+Diagnosis Code Pointer
+1
+01
+Date Time Qualifier
+472Service
+01
+Date Time Period Format Qualifier
+D8Date Expressed in Format CCYYMMDD
+02
+Service Date
+20260227
+03
+Assigned Number
+2
+01
+Product or Service ID Qualifier
+HCHealth Care Financing Administration Common Procedural Coding System (HCPCS) Codes
+01
+Procedure Code
+G0156
+02
+Line Item Charge Amount
+152
+02
+Unit or Basis for Measurement Code
+UNUnit
+03
+Service Unit Count
+16
+04
+Diagnosis Code Pointer
+AB
+01
+Date Time Qualifier
+472Service
+01
+Date Time Period Format Qualifier
+D8Date Expressed in Format CCYYMMDD
+02
+Service Date
+20260227
+03
+Assigned Number
+3
+01
+Product or Service ID Qualifier
+HCHealth Care Financing Administration Common Procedural Coding System (HCPCS) Codes
+01
+Procedure Code
+G0151
+02
+Procedure Modifier
+GT
+03
+Line Item Charge Amount
+844.56
+02
+Unit or Basis for Measurement Code
+UNUnit
+03
+Service Unit Count
+24
+04
+Diagnosis Code Pointer
+2
+01
+Date Time Qualifier
+472Service
+01
+Date Time Period Format Qualifier
+D8Date Expressed in Format CCYYMMDD
+02
+Service Date
+20260227
+03
+Transaction Segment Count
+33
+01
+Transaction Set Control Number
+1
+02
+Number of Transaction Sets Included
+1
+01
+Group Control Number
+1
+02
+Number of Included Functional Groups
+1
+01
+Interchange Control Number
+268030329
+02

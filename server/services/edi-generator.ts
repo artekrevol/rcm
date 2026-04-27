@@ -50,6 +50,7 @@ export interface EDI837PInput {
     npi: string;
     taxonomy_code: string;
     license_number?: string | null;
+    entity_type?: string | null;
   };
   ordering_provider?: {
     first_name: string;
@@ -123,9 +124,9 @@ export function generate837P(input: EDI837PInput): string {
 
   segments.push(`BHT*0019*00*${claimControlNumber}*${date}*${time}*CH`);
 
-  // NM1*41: Submitter — use XX (NPI) qualifier since we submit with NPI, not clearinghouse ETIN
+  // NM1*41: Submitter — qualifier 46 (Electronic Transmitter ID) per X12 5010 spec
   segments.push(
-    `NM1*41*2*${practice.name}*****XX*${practice.npi}`
+    `NM1*41*2*${practice.name}*****46*${practice.npi}`
   );
   const billingPhone = (practice.phone || "0000000000").replace(/\D/g, "");
   segments.push(`PER*IC*Billing Contact*TE*${billingPhone}`);
@@ -200,10 +201,14 @@ export function generate837P(input: EDI837PInput): string {
     .join("*");
   segments.push(`HI*${diagCodes}`);
 
-  // Loop 2310B: Rendering Provider
-  segments.push(
-    `NM1*82*1*${provider.last_name}*${provider.first_name}****XX*${provider.npi}`
-  );
+  // Loop 2310B: Rendering Provider — entity type 2 (org) vs 1 (individual)
+  const isOrgProvider = provider.entity_type === "organization";
+  if (isOrgProvider) {
+    const orgName = [provider.first_name, provider.last_name].filter(Boolean).join(" ");
+    segments.push(`NM1*82*2*${orgName}*****XX*${provider.npi}`);
+  } else {
+    segments.push(`NM1*82*1*${provider.last_name}*${provider.first_name}****XX*${provider.npi}`);
+  }
   segments.push(`PRV*PE*PXC*${provider.taxonomy_code}`);
   // REF*1C: State license number — required by CareFirst, some VA companions, and commercial payers
   if (provider.license_number) {

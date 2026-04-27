@@ -153,7 +153,13 @@ function getOrgId(req: any): string | null {
 
 function diagPointerToNumeric(ptr: string): string {
   const map: Record<string, string> = { A: "1", B: "2", C: "3", D: "4" };
-  return String(ptr).split(":").map(p => map[p.toUpperCase()] || p).join(":");
+  const s = String(ptr || "A");
+  // Handle colon-separated format "A:B" → "1:2"
+  if (s.includes(":")) {
+    return s.split(":").map(p => map[p.toUpperCase()] || p).join(":");
+  }
+  // Handle compact format "AB" → "1:2", single "A" → "1"
+  return s.split("").map(p => map[p.toUpperCase()] || p).join(":");
 }
 
 function verifyOrg(entity: any, req: any): boolean {
@@ -201,6 +207,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS default_ordering_provider_id VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS homebound_default BOOLEAN DEFAULT true`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS exclude_facility BOOLEAN DEFAULT true`);
+    await pool.query(`ALTER TABLE providers ADD COLUMN IF NOT EXISTS entity_type VARCHAR DEFAULT 'individual'`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS auto_followup_days INTEGER DEFAULT 30`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_clean BOOLEAN DEFAULT false`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_contractual BOOLEAN DEFAULT false`);
@@ -324,6 +331,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       UPDATE hcpcs_rates SET rate_per_unit = 60.00, effective_date = '2026-01-01' WHERE hcpcs_code = 'S9123' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
       UPDATE hcpcs_rates SET rate_per_unit = 45.00, effective_date = '2026-01-01' WHERE hcpcs_code = 'S9124' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
       UPDATE hcpcs_rates SET rate_per_unit = 4.73, effective_date = '2026-01-01' WHERE hcpcs_code = 'T1019' AND payer_name = 'VA Community Care' AND effective_date < '2026-01-01';
+      INSERT INTO hcpcs_rates (id, hcpcs_code, payer_name, rate_per_unit, effective_date, created_at)
+        SELECT gen_random_uuid()::text, 'G0154', 'VA Community Care', 30.67, '2026-01-01', NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM hcpcs_rates WHERE hcpcs_code = 'G0154' AND payer_name = 'VA Community Care');
+      INSERT INTO hcpcs_rates (id, hcpcs_code, payer_name, rate_per_unit, effective_date, created_at)
+        SELECT gen_random_uuid()::text, 'G0155', 'VA Community Care', 38.00, '2026-01-01', NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM hcpcs_rates WHERE hcpcs_code = 'G0155' AND payer_name = 'VA Community Care');
     `);
 
     await pool.query(`
@@ -1449,6 +1462,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const location = (req.query.location as string || "").trim().toUpperCase();
       if (!code) return res.status(400).json({ error: "code is required" });
       const db = await import("./db").then(m => m.pool);
+
+      // B3: Check custom contracted rate first (hcpcs_rates table, VA Community Care payer)
+      const orgId = getOrgId(req);
+      const customRateResult = await db.query(
+        `SELECT rate_per_unit, payer_name, hc.unit_type, hc.unit_interval_minutes, hc.description_plain
+         FROM hcpcs_rates hr
+         LEFT JOIN hcpcs_codes hc ON hc.code = hr.hcpcs_code
+         WHERE hr.hcpcs_code = $1 AND LOWER(hr.payer_name) LIKE '%va community care%'
+         ORDER BY hr.effective_date DESC LIMIT 1`,
+        [code]
+      );
+      if (customRateResult.rows.length > 0) {
+        return res.json({ ...customRateResult.rows[0], is_custom_rate: true });
+      }
+
+      // Locality-specific rate lookup
       if (location) {
         const { rows } = await db.query(
           `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
@@ -1462,14 +1491,21 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         );
         if (rows.length > 0) return res.json(rows[0]);
       }
-      // Section 9: use practice default locality if no location passed
+
+      // Read billing_location from practice_settings (structured column, not key/value)
       const DEFAULT_LOCALITY = 'SAN FRANCISCO-OAKLAND-BERKELEY (ALAMEDA/CONTRA COSTA CNTY)';
-      const settingRow = await db.query(
-        `SELECT value FROM practice_settings WHERE key = 'default_va_locality' LIMIT 1`
-      ).catch(() => ({ rows: [] as any[] }));
-      const defaultLocality = (settingRow.rows[0]?.value || DEFAULT_LOCALITY).toUpperCase();
+      let defaultLocality = DEFAULT_LOCALITY;
+      try {
+        const psQuery = orgId
+          ? await db.query(`SELECT billing_location FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+          : await db.query(`SELECT billing_location FROM practice_settings LIMIT 1`);
+        if (psQuery.rows[0]?.billing_location) {
+          defaultLocality = psQuery.rows[0].billing_location.toUpperCase();
+        }
+      } catch (_) { /* fall through to default */ }
+
       const { rows: locRows } = await db.query(
-        `SELECT facility_rate as rate_per_unit, location_name,
+        `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
                 hc.unit_type, hc.unit_interval_minutes, hc.description_plain
          FROM va_location_rates vlr
          LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
@@ -3113,7 +3149,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       let prov = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
       if (provId) {
-        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code FROM providers WHERE id = $1", [provId]);
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, entity_type FROM providers WHERE id = $1", [provId]);
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
@@ -3211,6 +3247,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           npi: prov.npi || ps.primary_npi || "0000000000",
           taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
           license_number: prov.license_number || null,
+          entity_type: prov.entity_type || null,
         },
         ordering_provider: orderingProv,
         payer: payerInfo,
@@ -3289,7 +3326,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       let prov = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
       if (provId2) {
-        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code FROM providers WHERE id = $1", [provId2]);
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, entity_type FROM providers WHERE id = $1", [provId2]);
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
@@ -3368,6 +3405,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           npi: prov.npi || ps.primary_npi || "0000000000",
           taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
           license_number: prov.license_number || null,
+          entity_type: prov.entity_type || null,
         },
         payer: payerInfo,
       });
@@ -3441,7 +3479,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       let prov: any = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
       if (provId) {
-        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, license_number FROM providers WHERE id = $1", [provId]);
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, license_number, entity_type FROM providers WHERE id = $1", [provId]);
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
@@ -3524,6 +3562,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           npi: prov.npi || ps.primary_npi || "0000000000",
           taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
           license_number: prov.license_number || null,
+          entity_type: prov.entity_type || null,
         },
         payer: payerInfo,
       });
@@ -3623,7 +3662,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
       let prov: any = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
       if (provId) {
-        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, license_number FROM providers WHERE id = $1", [provId]);
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, license_number, entity_type FROM providers WHERE id = $1", [provId]);
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
@@ -3706,6 +3745,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           npi: prov.npi || ps.primary_npi || "0000000000",
           taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
           license_number: prov.license_number || null,
+          entity_type: prov.entity_type || null,
         },
         payer: payerInfo,
       });
