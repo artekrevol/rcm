@@ -1,0 +1,120 @@
+# Replit Investigation — Provider / Practice Data Model State
+
+## What this task is
+
+This is a **diagnostic task**, not a fix task. Do not modify any code, schema, or data. The goal is to surface the current state of the provider and practice data model so we can decide what to fix in a follow-up task.
+
+If during the investigation you spot something obviously wrong, document it — do not patch it.
+
+## Background
+
+We have evidence that Chajinel's organization data is corrupted in the providers table. One record has:
+
+- `first_name = "CHAJINEL HOME CARE SERVICE"` (org name in a person field)
+- `last_name = "LLC"` (entity suffix in last name)
+- `license_type = "RN"` (orgs don't have RN licenses)
+- `taxonomy_code = "253Z00000X"` (Home Health Aide — wrong for the agency itself)
+- `npi = "1184288680"` (this is a valid Type 2 organization NPI, correct number)
+- `entity_type = "individual"` (wrong — this NPI is a Type 2 org NPI)
+- `is_default_rendering = true`
+- `organization_id = "demo-org-001"`
+
+The UI for ClaimShield reportedly has both Provider management and Practice settings as separate areas. The question is whether the underlying data model is actually split between Practice (organization, billing entity) and IndividualProvider (clinician, rendering entity), OR whether everything is conflated into a single providers table that's being used for both — which would explain how an org NPI ended up in a record that also has license_type = RN.
+
+## Investigation tasks
+
+### 1. Inventory all provider/practice-related tables
+
+List every table in the database that stores anything related to:
+
+- Practices, organizations, agencies, billing entities
+- Individual providers, clinicians, rendering providers
+- Practice-to-provider relationships
+- Practice settings (the data behind the Settings → Practice Info tab)
+
+For each table, output:
+- Table name
+- Full schema (columns, types, constraints, foreign keys)
+- Row count
+- Sample row (first 1–3 rows, with sensitive fields like passwords redacted)
+
+### 2. Trace the UI to the data
+
+The Settings UI reportedly has separate areas for "Practice Info" and "Providers."
+
+- Which database table does Settings → Practice Info read from and write to?
+- Which database table does Settings → Providers read from and write to?
+- Are these the same table or different tables?
+- If different: how are they linked? Foreign key? Org ID?
+- If same: how does the UI distinguish a "practice" record from a "provider" record? Is it by `entity_type`, by `is_default_rendering`, by some other flag, or implicitly?
+
+### 3. Examine the Chajinel record specifically
+
+Pull the full row for the Chajinel record (id `f3e5ecae-8b39-4320-b8c2-f8e54da9ce81`) showing every column.
+
+Then answer:
+- Was this record created via the UI, by a seed script, or by automated org provisioning?
+- If automated: what code path created it? (search for "Chajinel" or "1184288680" in seed files, fixtures, migrations)
+- Were any companion records created at the same time (e.g., a corresponding Practice record)?
+
+### 4. Check organization scoping
+
+The record has `organization_id = "demo-org-001"`.
+
+- What table represents organizations / tenants in the system?
+- What other records exist for `demo-org-001`?
+- Specifically: is there a record in any table that represents "Chajinel as the practice/billing entity" separate from "Chajinel as a rendering provider"? Or only the one record?
+
+### 5. Trace the EDI generator
+
+In the EDI generation code (server/routes.ts and the 837P builder):
+
+- Which table/query supplies NM1*85 (Billing Provider)?
+- Which table/query supplies NM1*82 (Rendering Provider)?
+- Are they pulling from the same record or different records?
+- If the same record: where is the data model "supposed" to split them?
+
+### 6. Diagnose the conflation
+
+Based on findings 1–5, answer the central question:
+
+**Does the codebase have separate Practice and IndividualProvider concepts, or is everything in one providers table being used for both?**
+
+Three possible states:
+- **A. Fully conflated:** one providers table, used for everything. UI surfaces aren't actually separate — they're filters on the same data.
+- **B. Partially split:** separate tables exist but the seed/provisioning logic populates only one of them, leaving the model broken in practice.
+- **C. Properly split but mis-seeded:** separate tables exist and are wired correctly; the Chajinel record just got created in the wrong table by mistake.
+
+State which one is true with evidence from your investigation.
+
+### 7. List every assumption the UI makes
+
+When a user opens Settings → Providers, what assumptions does the page code make about the data?
+
+- Does it assume the user wants to see only individuals?
+- Does it filter on `entity_type`?
+- Does it filter on `is_default_rendering`?
+- What happens if a record exists with `entity_type = 'organization'` — does it show in the providers list, the practice info, both, or neither?
+
+Same questions for Settings → Practice Info.
+
+### 8. Output
+
+Produce a written report covering:
+
+1. Tables inventory with schemas and row counts
+2. UI-to-table mapping for Practice Info and Providers
+3. Full Chajinel record dump
+4. How the Chajinel record was created (which code path)
+5. Whether companion records exist for the same organization
+6. Which tables/queries supply NM1*85 vs NM1*82 in the EDI generator
+7. Diagnosis: A, B, or C from Task 6 with evidence
+8. UI assumption analysis from Task 7
+9. Recommendation for what should be fixed next, given the actual state
+
+## Constraints
+
+- **No code changes.** No schema migrations. No data updates. Read-only.
+- **No assumptions.** If something isn't clear from the code or data, say "unclear" — don't guess.
+- **Show your work.** Quote actual schema definitions, actual rows, actual code paths. Don't summarize without evidence.
+- **No fixes.** If you spot something obviously broken, document it in the report. The fix comes in a separate task once we've decided the right approach based on this diagnosis.
