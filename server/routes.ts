@@ -2817,7 +2817,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
                OR LOWER(COALESCE(payer_name,'')) LIKE $3
                OR ($2 = '' AND payer_id IS NULL)
              )
-             AND (coverage_end_date IS NULL OR coverage_end_date >= $4::date)
+             AND (term_date IS NULL OR term_date >= $4::date)
            ORDER BY created_at DESC LIMIT 1`,
           [c.patient_id, c.payer_id || '', `%${vobPayerName}%`, serviceDate]
         );
