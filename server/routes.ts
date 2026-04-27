@@ -465,6 +465,34 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
     }
 
+    // ── QA Test Accounts ─────────────────────────────────────────────────
+    {
+      const { hashPassword } = await import("./auth");
+      const qaPwd = 'TestPass123!';
+      const qaHash = await hashPassword(qaPwd);
+      const qaUsers = [
+        { email: 'qa-admin@claimshield.test',  name: 'QA Admin',       role: 'admin' },
+        { email: 'qa-rcm@claimshield.test',    name: 'QA RCM Manager', role: 'rcm_manager' },
+        { email: 'qa-intake@claimshield.test', name: 'QA Intake',      role: 'intake' },
+      ];
+      for (const u of qaUsers) {
+        const { rows } = await pool.query("SELECT id FROM users WHERE email = $1", [u.email]);
+        if (rows.length === 0) {
+          await pool.query(
+            "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, $1, $2, $3, $4, 'demo-org-001')",
+            [u.email, qaHash, u.role, u.name]
+          );
+          console.log(`Created QA user: ${u.email}`);
+        } else {
+          await pool.query(
+            "UPDATE users SET password = $1, role = $2, organization_id = 'demo-org-001' WHERE email = $3",
+            [qaHash, u.role, u.email]
+          );
+          console.log(`Synced QA user: ${u.email}`);
+        }
+      }
+    }
+
     // ── Payer database expansion ───────────────────────────────────────────
     // Idempotent: only inserts payers that don't already exist by name.
     await pool.query(`
