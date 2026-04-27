@@ -213,12 +213,15 @@ function ProvidersTab() {
   function applyNpiLookup() {
     if (!npiLookup.result) return;
     const r = npiLookup.result;
+    const registryType: "individual" | "organization" = r.entityType === "organization" ? "organization" : "individual";
     setForm((f) => ({
       ...f,
-      firstName: r.firstName || f.firstName,
-      lastName: r.lastName || f.lastName,
+      entityType: registryType,
+      organizationName: registryType === "organization" ? (r.organizationName || f.organizationName) : f.organizationName,
+      firstName: registryType === "individual" ? (r.firstName || f.firstName) : f.firstName,
+      lastName: registryType === "individual" ? (r.lastName || f.lastName) : f.lastName,
       taxonomyCode: r.taxonomyCode || f.taxonomyCode,
-      credentials: r.credential && CREDENTIAL_OPTIONS.includes(r.credential) ? r.credential : f.credentials,
+      credentials: registryType === "individual" && r.credential && CREDENTIAL_OPTIONS.includes(r.credential) ? r.credential : f.credentials,
     }));
     setNpiLookup({ loading: false, result: null });
     toast({ title: "Provider details filled from NPI Registry" });
@@ -570,31 +573,43 @@ function ProvidersTab() {
                 </Button>
               </div>
               {npiError && <p className="text-sm text-destructive flex items-center gap-1"><AlertTriangle className="h-3 w-3" />{npiError}</p>}
-              {npiLookup.result?.found && (
-                <div className="rounded-md border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 px-3 py-2 text-sm space-y-1">
-                  <p className="font-medium text-green-800 dark:text-green-300 flex items-center gap-1">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Found in NPI Registry
-                  </p>
-                  <p className="text-green-700 dark:text-green-400">
-                    {npiLookup.result.firstName} {npiLookup.result.lastName}
-                    {npiLookup.result.credential ? `, ${npiLookup.result.credential}` : ""}
-                  </p>
-                  {npiLookup.result.taxonomyDesc && (
-                    <p className="text-green-600 dark:text-green-500 text-xs">{npiLookup.result.taxonomyDesc} ({npiLookup.result.taxonomyCode})</p>
-                  )}
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs mt-1 border-green-300 dark:border-green-700 text-green-800 dark:text-green-300"
-                    onClick={applyNpiLookup}
-                    data-testid="button-apply-npi-lookup"
-                  >
-                    Auto-fill name &amp; taxonomy
-                  </Button>
-                </div>
-              )}
+              {npiLookup.result?.found && (() => {
+                const registryType: "individual" | "organization" = npiLookup.result.entityType === "organization" ? "organization" : "individual";
+                const typeMismatch = form.entityType !== registryType;
+                return (
+                  <div className="rounded-md border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950/30 px-3 py-2 text-sm space-y-1">
+                    <p className="font-medium text-green-800 dark:text-green-300 flex items-center gap-1">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Found in NPI Registry — {registryType === "organization" ? "Type 2 (Organization)" : "Type 1 (Individual)"}
+                    </p>
+                    {typeMismatch && (
+                      <p className="flex items-center gap-1 text-amber-700 dark:text-amber-400 font-medium" data-testid="text-npi-type-mismatch">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        NPI type mismatch: registry says <strong className="mx-0.5">{registryType}</strong> but form is set to <strong className="mx-0.5">{form.entityType}</strong>. Auto-fill will correct this.
+                      </p>
+                    )}
+                    <p className="text-green-700 dark:text-green-400">
+                      {registryType === "organization"
+                        ? (npiLookup.result.organizationName || npiLookup.result.firstName)
+                        : `${npiLookup.result.firstName} ${npiLookup.result.lastName}`}
+                      {registryType === "individual" && npiLookup.result.credential ? `, ${npiLookup.result.credential}` : ""}
+                    </p>
+                    {npiLookup.result.taxonomyDesc && (
+                      <p className="text-green-600 dark:text-green-500 text-xs">{npiLookup.result.taxonomyDesc} ({npiLookup.result.taxonomyCode})</p>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs mt-1 border-green-300 dark:border-green-700 text-green-800 dark:text-green-300"
+                      onClick={applyNpiLookup}
+                      data-testid="button-apply-npi-lookup"
+                    >
+                      Auto-fill name &amp; taxonomy{typeMismatch ? " (and fix type)" : ""}
+                    </Button>
+                  </div>
+                );
+              })()}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">

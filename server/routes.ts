@@ -1229,11 +1229,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const basic = result.basic || {};
       const addr = (result.addresses || []).find((a: any) => a.address_purpose === "LOCATION") || result.addresses?.[0] || {};
       const taxonomy = (result.taxonomies || []).find((t: any) => t.primary) || result.taxonomies?.[0] || {};
+      const isNpi1 = result.enumeration_type === "NPI-1";
       res.json({
         found: true,
-        entityType: result.enumeration_type === "NPI-1" ? "individual" : "organization",
-        firstName: basic.first_name || "",
-        lastName: basic.last_name || basic.organization_name || "",
+        entityType: isNpi1 ? "individual" : "organization",
+        firstName: isNpi1 ? (basic.first_name || "") : "",
+        lastName: isNpi1 ? (basic.last_name || "") : "",
+        organizationName: !isNpi1 ? (basic.organization_name || "") : "",
         credential: basic.credential || "",
         taxonomyCode: taxonomy.code || "",
         taxonomyDesc: taxonomy.desc || "",

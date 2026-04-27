@@ -1,0 +1,49 @@
+Two follow-ups on the Class Defect Cleanup work that just shipped:
+
+1. The summary doesn't mention Class C (foreign key constraints) at 
+   all. The prompt asked for an audit of every multi-tenant _id column 
+   and FK additions where missing. Did this happen? Specifically:
+   
+   - Does providers.organization_id now have a FK constraint to 
+     organizations.id?
+   - Did you audit other tables (claims, patients, practice_settings, 
+     users, etc.) for missing FK constraints on their tenant-scoping 
+     columns?
+   - Were any orphaned rows discovered? If yes, what was done with them?
+   
+   If Class C wasn't done, please run it now. It's the database-level 
+   safety net that prevents application-layer bugs from causing tenant 
+   leaks.
+
+2. The audit findings from each class were not included in the output. 
+   The prompt asked for written diagnosis before fixes. Please produce:
+   
+   - Class A: complete list of every place in the codebase that read 
+     payer.name to derive behavior (file, line, what was being derived). 
+     Confirm each one is now reading explicit columns.
+   - Class B: complete list of the 5 unscoped fallback queries you 
+     fixed (file, line, what they query for).
+   - Class C: result of the FK constraint audit if done; the audit 
+     itself if not yet done.
+   - Class A additional behaviors: did the audit find other behaviors 
+     besides filing indicator that were derived from payer name? If 
+     yes, list them — were they given their own columns or are they 
+     still heuristic?
+
+3. NPI Type warning: you mentioned the entity type selector. Does the 
+   form also warn when NPI doesn't match selected type? Spec was:
+   - Selected Individual + entered Type 2 NPI → warning
+   - Selected Organization + entered Type 1 NPI → warning
+   
+   Confirm whether this is implemented.
+
+4. Three sample 837P EDIs with Stedi inspector validation were asked 
+   for as proof. Please generate and attach:
+   - Test claim 1: Chajinel claim with TriWest payer, standard
+   - Test claim 2: Same claim after temporarily renaming the TriWest 
+     payer to "Test Payer Foo Bar" — SBR should still emit CH
+   - Test claim 3: Claim under an org with no provider configured — 
+     should hard-fail before EDI generation
+   
+   For each, paste the inspector errors count (should be 0 for tests 
+   1 and 2; test 3 doesn't reach EDI).
