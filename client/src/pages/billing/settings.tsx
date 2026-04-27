@@ -1409,6 +1409,7 @@ function PayersTab() {
                         <SelectItem value="medicare_advantage">Medicare Advantage</SelectItem>
                         <SelectItem value="medicaid">Medicaid</SelectItem>
                         <SelectItem value="commercial">Commercial / Private</SelectItem>
+                        <SelectItem value="bcbs">Blue Cross Blue Shield</SelectItem>
                         <SelectItem value="tricare">TRICARE</SelectItem>
                         <SelectItem value="workers_comp">Workers' Comp</SelectItem>
                         <SelectItem value="auto">Auto / Liability</SelectItem>

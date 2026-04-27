@@ -222,11 +222,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // Backfill: explicit payer_id first (most reliable), then name-based one-time migration
     await pool.query(`UPDATE payers SET payer_classification='va_community_care', claim_filing_indicator='CH' WHERE payer_id='TWVACCN' AND payer_classification IS NULL`);
     await pool.query(`UPDATE payers SET payer_classification='tricare', claim_filing_indicator='CH' WHERE (LOWER(name) LIKE '%tricare%' OR LOWER(name) LIKE '%champva%') AND payer_classification IS NULL`);
-    await pool.query(`UPDATE payers SET payer_classification='medicare_advantage', claim_filing_indicator='16' WHERE (LOWER(name) LIKE '%medicare advantage%' OR LOWER(name) LIKE '%aarp medicare%' OR LOWER(name) LIKE '%medicare complete%') AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='medicare_advantage', claim_filing_indicator='HM' WHERE (LOWER(name) LIKE '%medicare advantage%' OR LOWER(name) LIKE '%aarp medicare%' OR LOWER(name) LIKE '%medicare complete%') AND payer_classification IS NULL`);
     await pool.query(`UPDATE payers SET payer_classification='medicare_part_b', claim_filing_indicator='MB' WHERE LOWER(name) LIKE '%medicare%' AND payer_classification IS NULL`);
-    await pool.query(`UPDATE payers SET payer_classification='medicaid_state', claim_filing_indicator='MC' WHERE LOWER(name) LIKE '%medicaid%' AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='medicaid', claim_filing_indicator='MC' WHERE LOWER(name) LIKE '%medicaid%' AND payer_classification IS NULL`);
     await pool.query(`UPDATE payers SET payer_classification='bcbs', claim_filing_indicator='BL' WHERE (LOWER(name) LIKE '%blue cross%' OR LOWER(name) LIKE '%blue shield%' OR LOWER(name) LIKE '%bcbs%') AND payer_classification IS NULL`);
-    await pool.query(`UPDATE payers SET payer_classification='commercial_ppo', claim_filing_indicator='CI' WHERE payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='commercial', claim_filing_indicator='CI' WHERE payer_classification IS NULL`);
+    // Fix any rows written by prior runs of this migration that used now-retired value names
+    await pool.query(`UPDATE payers SET payer_classification='medicaid' WHERE payer_classification='medicaid_state'`);
+    await pool.query(`UPDATE payers SET payer_classification='commercial' WHERE payer_classification='commercial_ppo'`);
+    await pool.query(`UPDATE payers SET claim_filing_indicator='HM' WHERE payer_classification='medicare_advantage' AND claim_filing_indicator='16'`);
 
     // Class C: FK constraints for tenant-scoped tables (orphan-safe — verified 0 orphans in prod)
     await pool.query(`DO $$ BEGIN ALTER TABLE providers ADD CONSTRAINT providers_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);

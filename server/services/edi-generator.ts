@@ -138,7 +138,13 @@ export function generate837P(input: EDI837PInput): string {
 
   segments.push(`HL*2*1*22*0`);
 
-  segments.push(`SBR*P*18*******${payer.claim_filing_indicator || "CI"}`);
+  // SBR09: X12 5010 claim filing indicator. "CI" (Commercial Insurance) is the
+  // explicit X12 spec default when a payer has no specific indicator configured.
+  // Admins should set the correct code in payer settings to override this value.
+  const filingIndicator = payer.claim_filing_indicator && payer.claim_filing_indicator.trim()
+    ? payer.claim_filing_indicator.trim()
+    : "CI";
+  segments.push(`SBR*P*18*******${filingIndicator}`);
 
   segments.push(
     `NM1*IL*1*${patient.last_name}*${patient.first_name}****MI*${patient.member_id}`
