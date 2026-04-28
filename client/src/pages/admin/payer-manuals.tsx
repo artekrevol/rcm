@@ -4,20 +4,25 @@ import { format } from "date-fns";
 import {
   FileText, Plus, Play, CheckCircle2, XCircle, Clock, AlertCircle,
   ChevronDown, ChevronRight, ExternalLink, Trash2, RefreshCw, Pencil,
-  BookOpen, Zap, Upload, Link2,
+  BookOpen, Zap, Upload, Link2, Database, BarChart3, List,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 
@@ -287,6 +292,69 @@ interface PayerManual {
 
 type ReviewPayload = { itemId: string; reviewStatus: string; notes?: string; extractedJson?: any };
 
+interface PayerCoverageRow {
+  source_id: string;
+  payer_name: string;
+  priority: number;
+  canonical_url: string | null;
+  notes: string | null;
+  last_verified_date: string | null;
+  linked_manual_id: string | null;
+  manual_status: string | null;
+  manual_ingested_at: string | null;
+  manual_payer_id: string | null;
+  timely_filing: boolean;
+  timely_filing_reviewed: boolean;
+  prior_auth: boolean;
+  prior_auth_reviewed: boolean;
+  modifiers: boolean;
+  modifiers_reviewed: boolean;
+  appeals: boolean;
+  appeals_reviewed: boolean;
+}
+
+interface CoverageData {
+  summary: {
+    total_sources: number;
+    ingested_count: number;
+    timely_filing_pct: number;
+    timely_filing_reviewed_pct: number;
+    prior_auth_pct: number;
+    prior_auth_reviewed_pct: number;
+    modifiers_pct: number;
+    modifiers_reviewed_pct: number;
+    appeals_pct: number;
+    appeals_reviewed_pct: number;
+  };
+  payers: PayerCoverageRow[];
+}
+
+interface ValidationResult {
+  run_at: string;
+  reference_table: Array<{ payer_type: string; label: string; standard_days: number; min_acceptable: number; max_acceptable: number; fixed: boolean; regulatory_source: string }>;
+  summary: { total_manuals_checked: number; passed_manuals: number; flagged_manuals: number; discrepancy_count: number };
+  discrepancies: Array<{ manual_id: string; payer_name: string; item_id?: string; issue: string; detail: string; severity: string; extracted_days: number | null; expected_hint: any }>;
+  passed: Array<{ manual_id: string; payer_name: string; review_status: string; extracted_days: number | null }>;
+}
+
+function coverageDot(approved: boolean, reviewed: boolean, label: string) {
+  const title = approved ? `${label}: Approved` : reviewed ? `${label}: Reviewed (not found in public manual)` : `${label}: Not yet reviewed`;
+  return (
+    <span
+      title={title}
+      className={`inline-flex items-center justify-center h-5 w-5 rounded-full text-xs font-bold ${
+        approved
+          ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+          : reviewed
+          ? "bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400"
+          : "bg-muted text-muted-foreground"
+      }`}
+    >
+      {approved ? "✓" : reviewed ? "○" : "—"}
+    </span>
+  );
+}
+
 function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview: (p: ReviewPayload) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -306,6 +374,14 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
 
   function handleReject() {
     onReview({ itemId: item.id, reviewStatus: "rejected", notes: notes || undefined });
+  }
+
+  function handleNotFound() {
+    onReview({ itemId: item.id, reviewStatus: "not_found", notes: notes || "Section not found in public manual — confirmed absent by reviewer" });
+  }
+
+  function handleReopenToPending() {
+    onReview({ itemId: item.id, reviewStatus: "pending", notes: "Re-opened for re-review" });
   }
 
   return (
@@ -394,6 +470,16 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
           >
             <XCircle className="h-3 w-3 mr-1" /> Reject
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs text-amber-600 border-amber-200 hover:bg-amber-50 dark:text-amber-400 dark:border-amber-800"
+            onClick={handleNotFound}
+            data-testid={`button-not-found-${item.id}`}
+            title="Confirm this section is genuinely absent from the public manual"
+          >
+            <AlertCircle className="h-3 w-3 mr-1" /> Not in Manual
+          </Button>
           {item.extracted_json && (
             <Button
               size="sm"
@@ -411,15 +497,41 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
           )}
         </div>
       )}
+      {item.review_status === "rejected" && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-red-600 font-medium">Rejected —</span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs"
+            onClick={handleReopenToPending}
+            data-testid={`button-reopen-${item.id}`}
+            title="Re-open this item for re-review"
+          >
+            Re-open for Review
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
+
+const P4_SOURCE_PAYER_KEYWORDS: Record<string, string> = {
+  "pms-001": "unitedhealth", "pms-002": "blue cross", "pms-003": "cigna",
+  "pms-004": "humana",       "pms-005": "aetna",      "pms-006": "wellcare",
+  "pms-007": "molina",       "pms-008": "anthem",     "pms-009": "kaiser",
+  "pms-010": "health net",   "pms-011": "amerihealth","pms-012": "tufts",
+  "pms-013": "hcsc",         "pms-014": "highmark",   "pms-015": "capital blue",
+  "pms-016": "medica",       "pms-017": "priority health","pms-018": "independence blue",
+  "pms-019": "oscar",        "pms-020": "bright health",
+};
 
 export default function PayerManualsPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const [selectedManualId, setSelectedManualId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("manuals");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [addMode, setAddMode] = useState<"url" | "file">("url");
   const [addForm, setAddForm] = useState({ payerName: "", payerId: "", sourceUrl: "" });
@@ -436,6 +548,10 @@ export default function PayerManualsPage() {
     queryKey: ["/api/billing/payers"],
   });
 
+  const { data: coverageData, isLoading: coverageLoading } = useQuery<CoverageData>({
+    queryKey: ["/api/admin/payer-manual-coverage"],
+  });
+
   const { data: items = [], isLoading: itemsLoading } = useQuery<ExtractionItem[]>({
     queryKey: ["/api/admin/payer-manuals", selectedManualId, "items"],
     queryFn: async () => {
@@ -446,6 +562,10 @@ export default function PayerManualsPage() {
     },
     enabled: !!selectedManualId,
   });
+
+  const [pendingSourceId, setPendingSourceId] = useState<string | null>(null);
+  const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
+  const [validationLoading, setValidationLoading] = useState(false);
 
   const addMutation = useMutation({
     mutationFn: async () => {
@@ -468,16 +588,72 @@ export default function PayerManualsPage() {
         return res.json();
       }
     },
-    onSuccess: (manual) => {
+    onSuccess: async (manual) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manual-coverage"] });
+      if (pendingSourceId) {
+        try {
+          const linkRes = await fetch(`/api/admin/payer-manual-sources/${pendingSourceId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ linkedManualId: manual.id }),
+          });
+          if (!linkRes.ok) {
+            console.warn(`[SourceLink] PATCH failed for source ${pendingSourceId}: HTTP ${linkRes.status}`);
+            toast({ title: "Manual added", description: "Manual created, but source registry link could not be saved. Refresh the Source Registry to re-link manually.", variant: "destructive" });
+          } else {
+            queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manual-sources"] });
+            toast({ title: "Manual added", description: "Click 'Run Extraction' to start AI processing." });
+          }
+        } catch (e: any) {
+          console.warn(`[SourceLink] PATCH error for source ${pendingSourceId}:`, e.message);
+          toast({ title: "Manual added", description: "Manual created, but source registry link could not be saved. Refresh the Source Registry to re-link manually.", variant: "destructive" });
+        }
+        setPendingSourceId(null);
+      } else {
+        toast({ title: "Manual added", description: "Click 'Run Extraction' to start AI processing." });
+      }
       setShowAddDialog(false);
       setAddForm({ payerName: "", payerId: "", sourceUrl: "" });
       setUploadFile(null);
       setSelectedManualId(manual.id);
-      toast({ title: "Manual added", description: "Click 'Run Extraction' to start AI processing." });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
+
+  async function runValidationSweep() {
+    setValidationLoading(true);
+    try {
+      const res = await fetch("/api/admin/payer-manual-coverage/validate", { credentials: "include" });
+      if (!res.ok) throw new Error("Validation sweep failed");
+      setValidationResult(await res.json());
+    } catch (e: any) {
+      toast({ title: "Validation sweep failed", description: e.message, variant: "destructive" });
+    } finally {
+      setValidationLoading(false);
+    }
+  }
+
+  function openIngestFromSource(source: PayerCoverageRow) {
+    const keyword = P4_SOURCE_PAYER_KEYWORDS[source.source_id];
+    let matched: any = null;
+    if (keyword) {
+      matched = payers.find((p: any) => (p.name || "").toLowerCase().includes(keyword));
+    }
+    if (!matched) {
+      const srcLower = (source.payer_name || "").toLowerCase();
+      matched = payers.find((p: any) => {
+        const pLower = (p.name || "").toLowerCase();
+        return srcLower.split(/[\s\/\(\),]+/).filter((t: string) => t.length > 3).some((t: string) => pLower.includes(t));
+      }) ?? null;
+    }
+    setAddForm({ payerName: source.payer_name, payerId: matched?.id ?? "", sourceUrl: source.canonical_url || "" });
+    setAddMode("url");
+    setUploadFile(null);
+    setPendingSourceId(source.source_id);
+    setShowAddDialog(true);
+  }
 
   const processMutation = useMutation({
     mutationFn: async (manualId: string) => {
@@ -509,6 +685,8 @@ export default function PayerManualsPage() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals", selectedManualId, "items"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manual-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manual-sources"] });
       if (data?.sideEffectErrors?.length) {
         toast({
           title: "Approved with warnings",
@@ -528,6 +706,8 @@ export default function PayerManualsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manual-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manual-sources"] });
       setSelectedManualId(null);
       toast({ title: "Manual deleted" });
     },
@@ -545,6 +725,11 @@ export default function PayerManualsPage() {
   const sectionTypes: SectionType[] = ["timely_filing", "prior_auth", "modifiers", "appeals"];
 
   const canAdd = addForm.payerName && (addMode === "url" ? !!addForm.sourceUrl : !!uploadFile);
+  const summary = coverageData?.summary;
+  const coveragePayers = coverageData?.payers || [];
+  const lastIngested = coveragePayers
+    .filter((p) => p.manual_ingested_at)
+    .sort((a, b) => new Date(b.manual_ingested_at!).getTime() - new Date(a.manual_ingested_at!).getTime())[0];
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -565,24 +750,299 @@ export default function PayerManualsPage() {
         </Button>
       </div>
 
-      {/* Coverage summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {sectionTypes.map((st) => {
-          const total = manuals.filter((m) => m.status === "completed" || m.status === "ready_for_review").length;
-          return (
-            <Card key={st} data-testid={`card-coverage-${st}`}>
-              <CardContent className="p-3">
-                <p className="text-xs text-muted-foreground">{SECTION_LABELS[st]}</p>
-                <p className="text-xl font-semibold mt-0.5">
-                  {total}<span className="text-sm font-normal text-muted-foreground"> payers</span>
-                </p>
-                <p className="text-xs text-muted-foreground">with manual</p>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+      {/* Manual Coverage Dashboard Widget */}
+      <Card data-testid="card-coverage-dashboard">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-primary" />
+                Manual Coverage
+              </CardTitle>
+              <CardDescription className="text-xs mt-0.5">
+                Ingestion progress across top 20 commercial payers
+                {lastIngested?.manual_ingested_at && (
+                  <> · Last updated {format(new Date(lastIngested.manual_ingested_at), "MMM d, yyyy")}</>
+                )}
+              </CardDescription>
+            </div>
+            {coverageLoading && <div className="h-4 w-4 rounded-full border-2 border-primary border-t-transparent animate-spin" />}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Summary row */}
+          <div className="grid grid-cols-2 sm:grid-cols-6 gap-3">
+            <div className="sm:col-span-2 rounded-lg bg-muted/50 p-3" data-testid="stat-ingested-count">
+              <p className="text-xs text-muted-foreground">Payers Ingested</p>
+              <p className="text-2xl font-bold mt-0.5">
+                {summary?.ingested_count ?? 0}
+                <span className="text-sm font-normal text-muted-foreground">/{summary?.total_sources ?? 20}</span>
+              </p>
+            </div>
+            {(["timely_filing", "prior_auth", "modifiers", "appeals"] as const).map((st) => {
+              const approvedPct = summary ? (summary[`${st}_pct` as keyof typeof summary] as number ?? 0) : 0;
+              const reviewedPct = summary ? (summary[`${st}_reviewed_pct` as keyof typeof summary] as number ?? 0) : 0;
+              return (
+                <div key={st} className="rounded-lg bg-muted/50 p-3" data-testid={`stat-coverage-${st}`}>
+                  <p className="text-xs text-muted-foreground">{SECTION_LABELS[st]}</p>
+                  <p className="text-xl font-semibold mt-0.5">{approvedPct}<span className="text-sm font-normal text-muted-foreground">%</span></p>
+                  {reviewedPct > approvedPct && (
+                    <p className="text-xs text-muted-foreground mt-0.5" title="Approved + not_found">
+                      {reviewedPct}% reviewed
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
 
+          {/* Payer-by-payer status table */}
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-muted/30 hover:bg-muted/30">
+                  <TableHead className="w-6 text-xs py-2">#</TableHead>
+                  <TableHead className="text-xs py-2">Payer</TableHead>
+                  <TableHead className="text-xs py-2 text-center">Status</TableHead>
+                  <TableHead className="text-xs py-2 text-center">TF</TableHead>
+                  <TableHead className="text-xs py-2 text-center">PA</TableHead>
+                  <TableHead className="text-xs py-2 text-center">Mod</TableHead>
+                  <TableHead className="text-xs py-2 text-center">Appeals</TableHead>
+                  <TableHead className="text-xs py-2 text-right">Ingested</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {coveragePayers.length === 0 && !coverageLoading && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-6">
+                      No coverage data yet
+                    </TableCell>
+                  </TableRow>
+                )}
+                {coveragePayers.map((p) => (
+                  <TableRow key={p.source_id} data-testid={`row-coverage-${p.source_id}`}>
+                    <TableCell className="text-xs text-muted-foreground py-2">{p.priority}</TableCell>
+                    <TableCell className="text-sm font-medium py-2 max-w-[180px] truncate" title={p.payer_name}>
+                      {p.payer_name}
+                    </TableCell>
+                    <TableCell className="py-2 text-center">
+                      {p.linked_manual_id ? (
+                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                          p.manual_status === "completed" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" :
+                          p.manual_status === "ready_for_review" ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" :
+                          p.manual_status === "processing" ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" :
+                          "bg-muted text-muted-foreground"
+                        }`}>
+                          {p.manual_status === "completed" ? "Ingested" :
+                           p.manual_status === "ready_for_review" ? "Review" :
+                           p.manual_status === "processing" ? "Processing" : p.manual_status || "Pending"}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="py-2 text-center">{coverageDot(p.timely_filing, p.timely_filing_reviewed, "Timely Filing")}</TableCell>
+                    <TableCell className="py-2 text-center">{coverageDot(p.prior_auth, p.prior_auth_reviewed, "Prior Auth")}</TableCell>
+                    <TableCell className="py-2 text-center">{coverageDot(p.modifiers, p.modifiers_reviewed, "Modifiers")}</TableCell>
+                    <TableCell className="py-2 text-center">{coverageDot(p.appeals, p.appeals_reviewed, "Appeals")}</TableCell>
+                    <TableCell className="py-2 text-right text-xs text-muted-foreground">
+                      {p.manual_ingested_at ? format(new Date(p.manual_ingested_at), "MMM d, yyyy") : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground">TF = Timely Filing · PA = Prior Authorization · Mod = Modifiers · ✓ = approved · ○ = reviewed (not found in public manual)</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs shrink-0 ml-4"
+              onClick={runValidationSweep}
+              disabled={validationLoading}
+              data-testid="button-validation-sweep"
+            >
+              {validationLoading ? <RefreshCw className="h-3 w-3 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1.5" />}
+              CMS Validation Sweep
+            </Button>
+          </div>
+
+          {/* Validation Sweep Results */}
+          {validationResult && (
+            <div className="border rounded-lg p-4 space-y-3" data-testid="panel-validation-results">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">CMS Timely Filing Validation Sweep</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Run at {format(new Date(validationResult.run_at), "MMM d, yyyy h:mm a")} ·
+                    {" "}{validationResult.summary.total_manuals_checked} manuals checked ·
+                    {" "}{validationResult.summary.passed_manuals} manuals passed ·
+                    {" "}{validationResult.summary.discrepancy_count} discrepanc{validationResult.summary.discrepancy_count === 1 ? "y" : "ies"}
+                  </p>
+                </div>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setValidationResult(null)}>
+                  Dismiss
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Sources: {validationResult.reference_table.map(r => r.regulatory_source).join(" · ")}
+              </p>
+              {validationResult.discrepancies.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Discrepancies requiring review:</p>
+                  {validationResult.discrepancies.map((d, i) => (
+                    <div key={i} className={`rounded-md p-3 text-xs border ${
+                      d.severity === "error"
+                        ? "bg-red-50 border-red-200 dark:bg-red-950 dark:border-red-800"
+                        : "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800"
+                    }`} data-testid={`validation-issue-${i}`}>
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className={`h-3.5 w-3.5 shrink-0 mt-0.5 ${d.severity === "error" ? "text-red-600" : "text-amber-600"}`} />
+                        <div>
+                          <span className="font-semibold">{d.payer_name}</span>
+                          <span className="text-muted-foreground mx-1">·</span>
+                          <span className="capitalize">{d.issue.replace(/_/g, " ")}</span>
+                          <p className="mt-0.5 text-muted-foreground">{d.detail}</p>
+                          {d.expected_hint && (
+                            <p className="mt-0.5">Expected: <span className="font-medium">{String(d.expected_hint)}</span></p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-md p-3 bg-green-50 border border-green-200 dark:bg-green-950 dark:border-green-800 text-xs text-green-700 dark:text-green-300 flex items-center gap-2">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                  All timely filing values are within CMS and industry reference thresholds. No discrepancies found.
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Main tabs: Manuals review vs Source Registry */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+        <TabsList className="h-9">
+          <TabsTrigger value="manuals" className="text-sm" data-testid="tab-manuals">
+            <List className="h-4 w-4 mr-1.5" />
+            Manuals ({manuals.length})
+          </TabsTrigger>
+          <TabsTrigger value="registry" className="text-sm" data-testid="tab-registry">
+            <Database className="h-4 w-4 mr-1.5" />
+            Source Registry ({coveragePayers.length})
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Source Registry Tab */}
+        <TabsContent value="registry">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Payer Manual Source Registry</CardTitle>
+              <CardDescription>
+                Known public billing guideline URLs for the top 20 commercial payers. Click "Ingest" to start ingestion without hunting for the URL.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/30 hover:bg-muted/30">
+                    <TableHead className="w-8 text-xs pl-4">#</TableHead>
+                    <TableHead className="text-xs">Payer Name</TableHead>
+                    <TableHead className="text-xs">Status</TableHead>
+                    <TableHead className="text-xs">Manual URL</TableHead>
+                    <TableHead className="text-xs">Last Verified</TableHead>
+                    <TableHead className="text-xs text-right pr-4">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {coveragePayers.map((src) => (
+                    <TableRow key={src.source_id} data-testid={`row-source-${src.source_id}`}>
+                      <TableCell className="text-xs text-muted-foreground pl-4">{src.priority}</TableCell>
+                      <TableCell className="text-sm font-medium py-2">{src.payer_name}</TableCell>
+                      <TableCell className="py-2">
+                        <div className="flex flex-col gap-1">
+                        {src.linked_manual_id ? (
+                          src.manual_status === "completed" ? (
+                            <Badge variant="outline" className="text-xs text-green-700 border-green-200 bg-green-50 dark:bg-green-950 dark:border-green-800">
+                              <CheckCircle2 className="h-3 w-3 mr-1" /> Ingested
+                            </Badge>
+                          ) : src.manual_status === "ready_for_review" ? (
+                            <Badge variant="outline" className="text-xs text-blue-700 border-blue-200 bg-blue-50 dark:bg-blue-950 dark:border-blue-800">
+                              <Clock className="h-3 w-3 mr-1" /> In Review
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-xs text-yellow-700 border-yellow-200 bg-yellow-50 dark:bg-yellow-950 dark:border-yellow-800">
+                              <Clock className="h-3 w-3 mr-1" /> Processing
+                            </Badge>
+                          )
+                        ) : (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">
+                            <Clock className="h-3 w-3 mr-1" /> Not ingested
+                          </Badge>
+                        )}
+                        {src.linked_manual_id && !src.manual_payer_id && (
+                          <Badge variant="outline" className="text-xs text-amber-700 border-amber-200 bg-amber-50 dark:bg-amber-950 dark:border-amber-800" title="No payer record linked — prior-auth requirements will not auto-populate on approval">
+                            <AlertCircle className="h-3 w-3 mr-1" /> No payer link
+                          </Badge>
+                        )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="py-2 max-w-[260px]">
+                        {src.canonical_url ? (
+                          <a
+                            href={src.canonical_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary hover:underline flex items-center gap-1 truncate"
+                            title={src.canonical_url}
+                            data-testid={`link-source-url-${src.source_id}`}
+                          >
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{src.canonical_url.replace(/^https?:\/\//, "")}</span>
+                          </a>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">No URL recorded</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-2 text-xs text-muted-foreground">
+                        {src.last_verified_date ? format(new Date(src.last_verified_date), "MMM d, yyyy") : "—"}
+                      </TableCell>
+                      <TableCell className="py-2 text-right pr-4">
+                        {src.linked_manual_id ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() => { setSelectedManualId(src.linked_manual_id!); setActiveTab("manuals"); }}
+                            data-testid={`button-view-manual-${src.source_id}`}
+                          >
+                            View Manual
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="h-7 text-xs"
+                            onClick={() => openIngestFromSource(src)}
+                            data-testid={`button-ingest-${src.source_id}`}
+                          >
+                            <Zap className="h-3 w-3 mr-1" /> Ingest
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Manuals Review Tab */}
+        <TabsContent value="manuals">
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6">
         {/* Left: manual list */}
         <div className="space-y-2">
@@ -798,9 +1258,11 @@ export default function PayerManualsPage() {
           )}
         </div>
       </div>
+        </TabsContent>
+      </Tabs>
 
       {/* Add Manual Dialog */}
-      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+      <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setPendingSourceId(null); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Add Payer Manual</DialogTitle>
@@ -896,7 +1358,7 @@ export default function PayerManualsPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddDialog(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setShowAddDialog(false); setPendingSourceId(null); }}>Cancel</Button>
             <Button
               onClick={() => addMutation.mutate()}
               disabled={addMutation.isPending || !canAdd}

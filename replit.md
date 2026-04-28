@@ -96,3 +96,14 @@ Every new database table or column addition **must** be placed in the startup se
 - EDI validate endpoint runs both legacy trigger_pattern rules AND new condition_type rules engine
 - VOB check filters by payer_id/payer_name to avoid false positives
 - HCPCS VA rate lookup uses `default_va_locality` from practice_settings (fallback: SF Bay Area locality)
+### Phase 4: Top 20 Commercial Payer Ingestion
+- **`payer_manual_sources` table**: Registry of top 20 commercial payers with their known public billing guideline URLs, priority order, last_verified_date, notes, and linked_manual_id (FK to payer_manuals).
+- Seeded with all 20 payers (UHC, BCBS, Cigna, Humana, Aetna, Centene/WellCare, Molina, Elevance, Kaiser, Health Net, AmeriHealth, Tufts, HCSC, Highmark, Capital BlueCross, Medica, Priority Health, IBX, Oscar, Bright Health) in priority order by US covered-lives market share.
+- **New API endpoints** (all require super_admin):
+  - `GET /api/admin/payer-manual-sources` — list all 20 payer sources with linked manual status
+  - `PATCH /api/admin/payer-manual-sources/:id` — update canonical_url, last_verified_date, notes, linked_manual_id
+  - `GET /api/admin/payer-manual-coverage` — aggregate coverage data: summary (total_sources, ingested_count, section coverage %) + per-payer coverage (timely_filing ✓/✗, prior_auth ✓/✗, modifiers ✓/✗, appeals ✓/✗)
+- **Updated Payer Manuals admin page** (`client/src/pages/admin/payer-manuals.tsx`):
+  - "Manual Coverage" dashboard widget shows: Payers Ingested count, section coverage % for each type, and a full payer-by-payer status table with ✓/✗ indicators for each section type
+  - New "Source Registry" tab shows all 20 payers with their URLs, ingestion status, and "Ingest" button that pre-fills the Add Manual dialog with payer name + URL (auto-links the source to the created manual on success)
+  - Existing "Manuals" tab retains all existing manual review functionality

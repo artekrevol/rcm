@@ -689,3 +689,19 @@ export const manualExtractionItems = pgTable("manual_extraction_items", {
 export const insertManualExtractionItemSchema = createInsertSchema(manualExtractionItems).omit({ id: true, createdAt: true });
 export type InsertManualExtractionItem = z.infer<typeof insertManualExtractionItemSchema>;
 export type ManualExtractionItem = typeof manualExtractionItems.$inferSelect;
+
+export const payerManualSources = pgTable("payer_manual_sources", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payerName: varchar("payer_name").notNull(),
+  canonicalUrl: text("canonical_url"),
+  lastVerifiedDate: date("last_verified_date"),
+  notes: text("notes"),
+  priority: integer("priority").notNull().default(99),
+  linkedManualId: varchar("linked_manual_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPayerManualSourceSchema = createInsertSchema(payerManualSources).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPayerManualSource = z.infer<typeof insertPayerManualSourceSchema>;
+export type PayerManualSource = typeof payerManualSources.$inferSelect;

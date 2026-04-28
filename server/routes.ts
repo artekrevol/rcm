@@ -1457,6 +1457,66 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // Idempotent fix: ensure timely filing items never have an applied_rule_id
     await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = NULL WHERE section_type = 'timely_filing' AND applied_rule_id IS NOT NULL`).catch(() => {});
 
+    // ── Phase 4: Payer Manual Source Registry ──────────────────────────────
+    await seederLog('table', 'payer_manual_sources');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS payer_manual_sources (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        payer_name VARCHAR NOT NULL,
+        canonical_url TEXT,
+        last_verified_date DATE,
+        notes TEXT,
+        priority INTEGER NOT NULL DEFAULT 99,
+        linked_manual_id VARCHAR,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    // Harden referential integrity: linked_manual_id → payer_manuals(id); ON DELETE SET NULL
+    // ensures the registry entry is never left pointing to a non-existent manual.
+    await pool.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'fk_pms_linked_manual'
+        ) THEN
+          ALTER TABLE payer_manual_sources
+            ADD CONSTRAINT fk_pms_linked_manual
+            FOREIGN KEY (linked_manual_id) REFERENCES payer_manuals(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+    `).catch(() => {}); // non-fatal: races or ordering issues should not break startup
+    // Always run; ON CONFLICT (id) DO NOTHING makes this safe on repeated boots.
+    // Unconditional upsert ensures partial-population states (e.g., manual table cleanup)
+    // are automatically corrected without requiring a full DB wipe.
+    await pool.query(`
+        INSERT INTO payer_manual_sources (id, payer_name, canonical_url, priority, notes) VALUES
+        ('pms-001', 'UnitedHealthcare Commercial', 'https://www.uhcprovider.com/content/dam/provider/docs/public/policies/comm-reimbursement/COMM-Billing-Coding-Guide.pdf', 1, 'UHC Commercial billing guidelines — text PDF, publicly accessible'),
+        ('pms-002', 'Blue Cross Blue Shield (National)', 'https://www.bcbs.com/sites/default/files/file-attachments/health-of-america-report/HOA-Billing-Guidelines.pdf', 2, 'BCBS national guidelines; state plans may have additional local addenda'),
+        ('pms-003', 'Cigna Commercial', 'https://www.cigna.com/static/www-cigna-com/docs/health-care-providers/resources/clinical-payment-reimbursement-policies.pdf', 3, 'Cigna clinical payment and reimbursement policy overview'),
+        ('pms-004', 'Humana Commercial', 'https://www.humana.com/provider/medical-resources/billing-and-reimbursement/billing-coding-guidelines', 4, 'Humana billing and coding guidelines page — may require provider portal login for PDF'),
+        ('pms-005', 'Aetna Commercial', 'https://www.aetna.com/health-care-professionals/provider-education-manuals/billing-guide.html', 5, 'Aetna commercial provider billing guide (covered in Phase 2 seed)'),
+        ('pms-006', 'Centene / WellCare', 'https://www.wellcare.com/en/Provider/Manuals-and-Guidelines', 6, 'WellCare / Centene provider manual portal — publicly navigable'),
+        ('pms-007', 'Molina Healthcare', 'https://www.molinahealthcare.com/providers/resources/manuals/pdf/ProviderManual.pdf', 7, 'Molina provider operations manual — available via public provider portal'),
+        ('pms-008', 'Elevance Health (Anthem)', 'https://www.anthem.com/provider/policies-and-guidelines/', 8, 'Anthem / Elevance Health provider policy and guidelines hub'),
+        ('pms-009', 'Kaiser Permanente', 'https://providers.kaiserpermanente.org/wps/portal/provider/portal', 9, 'Kaiser provider portal — billing guidelines require provider enrollment for direct download'),
+        ('pms-010', 'Health Net', 'https://www.healthnet.com/portal/provider/content/providermanuals.action', 10, 'Health Net provider manuals page'),
+        ('pms-011', 'AmeriHealth Caritas', 'https://www.amerihealthcaritas.com/providers/resources/provider-manual.aspx', 11, 'AmeriHealth Caritas provider manual index'),
+        ('pms-012', 'Tufts Health Plan', 'https://tuftshealthplan.com/provider/provider-manual', 12, 'Tufts Health Plan commercial provider manual'),
+        ('pms-013', 'HCSC (Health Care Service Corp)', 'https://www.hcsc.com/providers/billing-and-claims', 13, 'HCSC billing and claims guidelines covering BCBS IL, TX, OK, NM, MT'),
+        ('pms-014', 'Highmark', 'https://www.highmarkprc.com/provider-reference-center.shtml', 14, 'Highmark provider reference center — billing and reimbursement policies'),
+        ('pms-015', 'Capital BlueCross', 'https://www.capbluecross.com/wps/portal/cap/provider/billing-payment', 15, 'Capital BlueCross provider billing and payment guidelines'),
+        ('pms-016', 'Medica', 'https://www.medica.com/providers/provider-manual', 16, 'Medica provider manual — available publicly without login'),
+        ('pms-017', 'Priority Health', 'https://www.priorityhealth.com/provider/manuals-and-guides', 17, 'Priority Health provider manuals and guides page'),
+        ('pms-018', 'Independence Blue Cross', 'https://www.ibx.com/providers/forms-and-guidelines/billing-guidelines', 18, 'IBX provider billing guidelines hub'),
+        ('pms-019', 'Oscar Health', 'https://www.hioscar.com/health/provider-resources', 19, 'Oscar Health provider resources — billing policies publicly accessible'),
+        ('pms-020', 'Bright Health / Friday Health', 'https://www.brighthealthplan.com/providers/resources', 20, 'Bright Health / Friday Health provider resources (company in wind-down; may have limited updates)')
+        ON CONFLICT (id) DO NOTHING
+    `);
+    console.log("[SEEDER] Seeded/verified 20 payer_manual_sources (Phase 4 top-20 commercial payer registry)");
+    // Deterministic source→manual linkage (Phase 2 seed → Phase 4 source registry)
+    // pms-005 = Aetna Commercial ↔ manual-aetna-001 (Phase 2 seed)
+    await pool.query(`UPDATE payer_manual_sources SET linked_manual_id = 'manual-aetna-001' WHERE id = 'pms-005' AND linked_manual_id IS NULL`).catch(() => {});
+
     // Idempotent: seed payer_auth_requirements from approved prior-auth extraction items
     {
       const { rows: triwestPayerForPAR } = await pool.query(`SELECT id, name FROM payers WHERE payer_id = 'TWVACCN' OR name ILIKE '%triwest%' LIMIT 1`).catch(() => ({ rows: [] }));
@@ -8458,8 +8518,9 @@ Warmly,
         }
       }
 
-      // Idempotent reprocessing: remove existing pending/not_found items so we start clean
-      await db.query(`DELETE FROM manual_extraction_items WHERE manual_id = $1 AND review_status IN ('pending','not_found')`, [manualId]);
+      // Idempotent reprocessing: remove all non-approved items so we start clean.
+      // Rejected items are also cleared so reprocessing gives a fresh extraction pass.
+      await db.query(`DELETE FROM manual_extraction_items WHERE manual_id = $1 AND review_status IN ('pending','not_found','rejected')`, [manualId]);
 
       // Mark as processing
       await db.query("UPDATE payer_manuals SET status = 'processing', updated_at = NOW() WHERE id = $1", [manualId]);
@@ -8482,7 +8543,7 @@ Warmly,
             if (section.chunks.length === 0) {
               await db.query(`
                 INSERT INTO manual_extraction_items (manual_id, section_type, review_status, notes)
-                VALUES ($1, $2, 'not_found', 'No relevant text found in document for this section type')
+                VALUES ($1, $2, 'pending', 'No relevant text found for this section — reviewer must confirm absent or re-extract')
               `, [manualId, section.sectionType]);
               continue;
             }
@@ -8506,6 +8567,21 @@ Warmly,
               }
             }
           }
+          // Ensure all 4 section types have at least one extraction item
+          // (creates pending placeholders for sections not extracted from the document;
+          //  reviewers must explicitly mark missing sections as not_found via the review UI)
+          for (const st of sectionTypes) {
+            const { rows: existing } = await db.query(
+              `SELECT id FROM manual_extraction_items WHERE manual_id = $1 AND section_type = $2 LIMIT 1`,
+              [manualId, st]
+            );
+            if (existing.length === 0) {
+              await db.query(`
+                INSERT INTO manual_extraction_items (manual_id, section_type, review_status, notes)
+                VALUES ($1, $2, 'pending', 'Section not extracted from document — requires reviewer to confirm absent or re-extract')
+              `, [manualId, st]);
+            }
+          }
           await db.query("UPDATE payer_manuals SET status = 'ready_for_review', updated_at = NOW() WHERE id = $1", [manualId]);
         } catch (err: any) {
           await db.query("UPDATE payer_manuals SET status = 'failed', error_message = $2, updated_at = NOW() WHERE id = $1", [manualId, err.message]);
@@ -8524,8 +8600,8 @@ Warmly,
       const { reviewStatus, notes, extractedJson } = req.body;
       const user = req.user as any;
 
-      if (!["approved", "rejected", "pending"].includes(reviewStatus)) {
-        return res.status(400).json({ error: "reviewStatus must be approved, rejected, or pending" });
+      if (!["approved", "rejected", "pending", "not_found"].includes(reviewStatus)) {
+        return res.status(400).json({ error: "reviewStatus must be approved, rejected, pending, or not_found" });
       }
 
       // If editing, update extracted_json first
@@ -8596,6 +8672,35 @@ Warmly,
         }
       }
 
+      // Auto-complete manual only when all items have a terminal acceptable status
+      // (approved or not_found). Remaining 'rejected' items mean extraction still needs
+      // correction — marking completed in that state would overstate coverage quality.
+      const { rows: pendingCheck } = await db.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE review_status = 'pending')::int  AS pending_cnt,
+          COUNT(*) FILTER (WHERE review_status = 'rejected')::int AS rejected_cnt
+        FROM manual_extraction_items
+        WHERE manual_id = $1
+      `, [item.manual_id]);
+
+      if (pendingCheck[0]?.pending_cnt === 0 && pendingCheck[0]?.rejected_cnt === 0) {
+        const { rows: manualRows } = await db.query(`
+          UPDATE payer_manuals
+          SET status = 'completed', updated_at = NOW()
+          WHERE id = $1 AND status IN ('ready_for_review', 'processing')
+          RETURNING id
+        `, [item.manual_id]);
+
+        if (manualRows.length > 0) {
+          // Update last_verified_date on linked payer_manual_source
+          await db.query(`
+            UPDATE payer_manual_sources
+            SET last_verified_date = NOW()::date, updated_at = NOW()
+            WHERE linked_manual_id = $1
+          `, [item.manual_id]).catch(() => {});
+        }
+      }
+
       res.json({ ...item, sideEffectErrors: sideEffectErrors.length > 0 ? sideEffectErrors : undefined });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -8606,9 +8711,333 @@ Warmly,
   app.delete("/api/admin/payer-manuals/:id", requireSuperAdmin, async (req, res) => {
     try {
       const { pool: db } = await import("./db");
+      // Clear source registry link before deleting so payers don't show stuck as "Ingested"
+      await db.query(
+        `UPDATE payer_manual_sources SET linked_manual_id = NULL, updated_at = NOW() WHERE linked_manual_id = $1`,
+        [req.params.id]
+      ).catch(() => {});
       await db.query("DELETE FROM manual_extraction_items WHERE manual_id = $1", [req.params.id]);
       await db.query("DELETE FROM payer_manuals WHERE id = $1", [req.params.id]);
       res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Payer Manual Source Registry (Phase 4) ─────────────────────────────
+
+  app.get("/api/admin/payer-manual-sources", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT pms.*,
+          pm.status AS manual_status,
+          pm.payer_name AS manual_payer_name,
+          pm.created_at AS manual_ingested_at
+        FROM payer_manual_sources pms
+        LEFT JOIN payer_manuals pm ON pm.id = pms.linked_manual_id
+        ORDER BY pms.priority ASC
+      `);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/admin/payer-manual-sources/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { z } = await import("zod");
+      const bodySchema = z.object({
+        lastVerifiedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Must be YYYY-MM-DD").nullable().optional(),
+        notes: z.string().max(2000).nullable().optional(),
+        canonicalUrl: z.string().url("Must be a valid URL").max(1000).nullable().optional(),
+        linkedManualId: z.string().max(100).nullable().optional(),
+      }).strict();
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Validation failed", details: parsed.error.flatten().fieldErrors });
+
+      const { pool: db } = await import("./db");
+      const { id } = req.params;
+      // Build SET clause dynamically so absent fields are not changed,
+      // but explicitly passed null values (e.g. linkedManualId=null) ARE applied.
+      const setClauses: string[] = ["updated_at = NOW()"];
+      const params: any[] = [];
+      let i = 1;
+      if ("lastVerifiedDate" in req.body) { setClauses.push(`last_verified_date = $${i++}`); params.push(parsed.data.lastVerifiedDate ?? null); }
+      if ("notes" in req.body) { setClauses.push(`notes = $${i++}`); params.push(parsed.data.notes ?? null); }
+      if ("canonicalUrl" in req.body) { setClauses.push(`canonical_url = $${i++}`); params.push(parsed.data.canonicalUrl ?? null); }
+      if ("linkedManualId" in req.body) { setClauses.push(`linked_manual_id = $${i++}`); params.push(parsed.data.linkedManualId ?? null); }
+      params.push(id);
+      const { rows } = await db.query(
+        `UPDATE payer_manual_sources SET ${setClauses.join(", ")} WHERE id = $${i} RETURNING *`,
+        params
+      );
+      if (!rows[0]) return res.status(404).json({ error: "Source not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/admin/payer-manual-coverage", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+
+      const { rows: sources } = await db.query(`
+        SELECT pms.*, pm.status AS manual_status, pm.created_at AS manual_ingested_at, pm.payer_id AS manual_payer_id
+        FROM payer_manual_sources pms
+        LEFT JOIN payer_manuals pm ON pm.id = pms.linked_manual_id
+        ORDER BY pms.priority ASC
+      `);
+
+      // Count both 'approved' AND 'not_found' as "reviewed" — not_found means the
+      // section was intentionally checked and confirmed absent in the public manual.
+      const { rows: coverageRows } = await db.query(`
+        SELECT
+          mei.manual_id,
+          mei.section_type,
+          COUNT(*) FILTER (WHERE mei.review_status = 'approved')                         AS approved_count,
+          COUNT(*) FILTER (WHERE mei.review_status IN ('approved', 'not_found'))         AS reviewed_count
+        FROM manual_extraction_items mei
+        INNER JOIN payer_manuals pm ON pm.id = mei.manual_id
+        GROUP BY mei.manual_id, mei.section_type
+      `);
+
+      const coverageByManual: Record<string, Record<string, { approved: number; reviewed: number }>> = {};
+      for (const row of coverageRows) {
+        if (!coverageByManual[row.manual_id]) coverageByManual[row.manual_id] = {};
+        coverageByManual[row.manual_id][row.section_type] = {
+          approved: parseInt(row.approved_count, 10),
+          reviewed: parseInt(row.reviewed_count, 10),
+        };
+      }
+
+      const sectionTypes = ["timely_filing", "prior_auth", "modifiers", "appeals"];
+      const payerData = sources.map((src: any) => {
+        const manualId = src.linked_manual_id;
+        const cov = manualId ? (coverageByManual[manualId] || {}) : {};
+        const secCov = (type: string) => cov[type] || { approved: 0, reviewed: 0 };
+        return {
+          source_id: src.id,
+          payer_name: src.payer_name,
+          priority: src.priority,
+          canonical_url: src.canonical_url,
+          notes: src.notes,
+          last_verified_date: src.last_verified_date,
+          linked_manual_id: manualId || null,
+          manual_status: src.manual_status || null,
+          manual_ingested_at: src.manual_ingested_at || null,
+          manual_payer_id: src.manual_payer_id || null,
+          // "approved" = extracted and confirmed; "reviewed" = approved OR explicitly not_found
+          timely_filing: secCov("timely_filing").approved > 0,
+          timely_filing_reviewed: secCov("timely_filing").reviewed > 0,
+          prior_auth: secCov("prior_auth").approved > 0,
+          prior_auth_reviewed: secCov("prior_auth").reviewed > 0,
+          modifiers: secCov("modifiers").approved > 0,
+          modifiers_reviewed: secCov("modifiers").reviewed > 0,
+          appeals: secCov("appeals").approved > 0,
+          appeals_reviewed: secCov("appeals").reviewed > 0,
+        };
+      });
+
+      const ingested = payerData.filter((p: any) => p.linked_manual_id && p.manual_status === "completed").length;
+      const total = payerData.length;
+      const pctApproved = (field: string) => total === 0 ? 0 : Math.round(
+        payerData.filter((p: any) => p[field]).length / total * 100
+      );
+      const pctReviewed = (field: string) => total === 0 ? 0 : Math.round(
+        payerData.filter((p: any) => p[`${field}_reviewed`]).length / total * 100
+      );
+
+      res.json({
+        summary: {
+          total_sources: total,
+          ingested_count: ingested,
+          timely_filing_pct: pctApproved("timely_filing"),
+          timely_filing_reviewed_pct: pctReviewed("timely_filing"),
+          prior_auth_pct: pctApproved("prior_auth"),
+          prior_auth_reviewed_pct: pctReviewed("prior_auth"),
+          modifiers_pct: pctApproved("modifiers"),
+          modifiers_reviewed_pct: pctReviewed("modifiers"),
+          appeals_pct: pctApproved("appeals"),
+          appeals_reviewed_pct: pctReviewed("appeals"),
+        },
+        payers: payerData,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Payer Manual Coverage: CMS Timely Filing Validation Sweep ───────────
+  // Compares approved timely_filing extraction items against a structured CMS/regulatory
+  // reference table and flags discrepancies for manual review.
+  app.get("/api/admin/payer-manual-coverage/validate", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+
+      // CMS/regulatory reference table for timely filing requirements.
+      // Sources: 42 CFR § 424.44 (Medicare), 32 CFR § 199.7(d) (TRICARE),
+      //          42 CFR § 447.45 (Medicaid), NAIC Prompt Pay Model Act (Commercial).
+      // min_acceptable/max_acceptable define the valid range; fixed=true means exact match required.
+      const CMS_TF_REFERENCE = [
+        {
+          payer_type: "medicare",
+          label: "Medicare",
+          standard_days: 365,
+          min_acceptable: 365,
+          max_acceptable: 365,
+          fixed: true,
+          regulatory_source: "42 CFR § 424.44(a)",
+          match_keywords: ["medicare"],
+        },
+        {
+          payer_type: "tricare",
+          label: "TRICARE/VA",
+          standard_days: 365,
+          min_acceptable: 365,
+          max_acceptable: 365,
+          fixed: true,
+          regulatory_source: "32 CFR § 199.7(d)",
+          match_keywords: ["tricare", "triwest", "champva"],
+        },
+        {
+          payer_type: "medicaid",
+          label: "Medicaid MCO",
+          standard_days: 365,
+          min_acceptable: 90,
+          max_acceptable: 730,
+          fixed: false,
+          regulatory_source: "42 CFR § 447.45; state plan",
+          match_keywords: ["medicaid", "amerihealth caritas", "molina", "centene", "wellcare", "amerigroup"],
+        },
+        {
+          payer_type: "commercial",
+          label: "Commercial",
+          standard_days: 180,
+          min_acceptable: 90,
+          max_acceptable: 730,
+          fixed: false,
+          regulatory_source: "NAIC Prompt Pay Model Act; provider contract",
+          match_keywords: [],
+        },
+      ] as const;
+
+      type TFRef = typeof CMS_TF_REFERENCE[number];
+
+      function resolveRef(payerName: string): TFRef {
+        const lower = payerName.toLowerCase();
+        for (const ref of CMS_TF_REFERENCE) {
+          if (ref.match_keywords.some((kw) => lower.includes(kw))) return ref;
+        }
+        return CMS_TF_REFERENCE[CMS_TF_REFERENCE.length - 1]; // commercial default
+      }
+
+      // Fetch ONE canonical timely_filing item per manual (most recently reviewed approved/not_found row).
+      // Using DISTINCT ON avoids duplicate discrepancy entries when a manual has multiple timely_filing rows.
+      // Pending/rejected items are excluded — they have not been human-reviewed yet.
+      const { rows: items } = await db.query(`
+        SELECT DISTINCT ON (pm.id)
+          pm.id             AS manual_id,
+          pm.payer_name,
+          pm.status         AS manual_status,
+          mei.id            AS item_id,
+          mei.review_status,
+          mei.extracted_json,
+          mei.notes
+        FROM payer_manuals pm
+        LEFT JOIN manual_extraction_items mei
+          ON mei.manual_id = pm.id
+          AND mei.section_type = 'timely_filing'
+          AND mei.review_status IN ('approved', 'not_found')
+        WHERE pm.status = 'completed'
+        ORDER BY pm.id, mei.reviewed_at DESC NULLS LAST
+      `);
+
+      const discrepancies: any[] = [];
+      const checked: any[] = [];
+
+      for (const row of items) {
+        const ref = resolveRef(row.payer_name || "");
+
+        if (!row.item_id) {
+          discrepancies.push({
+            manual_id: row.manual_id,
+            payer_name: row.payer_name,
+            issue: "missing_timely_filing",
+            detail: `No reviewed timely_filing item found for this completed manual (${ref.label} payer — expected ${ref.standard_days} days per ${ref.regulatory_source})`,
+            severity: "warning",
+            extracted_days: null,
+            expected_hint: ref.fixed ? `${ref.standard_days} days` : `${ref.min_acceptable}–${ref.max_acceptable} days`,
+          });
+          continue;
+        }
+
+        if (row.review_status === "not_found") {
+          checked.push({ manual_id: row.manual_id, payer_name: row.payer_name, review_status: "not_found", extracted_days: null, payer_type: ref.payer_type });
+          continue;
+        }
+
+        const days = row.extracted_json ? parseInt(row.extracted_json.days, 10) : NaN;
+
+        if (isNaN(days)) {
+          discrepancies.push({
+            manual_id: row.manual_id, payer_name: row.payer_name, item_id: row.item_id,
+            issue: "missing_days_field",
+            detail: "Approved extraction item does not have a numeric 'days' field in extracted_json",
+            severity: "error", extracted_days: null, expected_hint: null,
+          });
+          continue;
+        }
+
+        let flagged = false;
+
+        if (days < ref.min_acceptable) {
+          discrepancies.push({
+            manual_id: row.manual_id, payer_name: row.payer_name, item_id: row.item_id,
+            issue: "below_reference_minimum",
+            detail: `${days} days is below the ${ref.label} reference minimum of ${ref.min_acceptable} days (${ref.regulatory_source})`,
+            severity: "error", extracted_days: days,
+            expected_hint: `≥ ${ref.min_acceptable} days per ${ref.regulatory_source}`,
+          });
+          flagged = true;
+        } else if (days > ref.max_acceptable) {
+          discrepancies.push({
+            manual_id: row.manual_id, payer_name: row.payer_name, item_id: row.item_id,
+            issue: "above_reference_maximum",
+            detail: `${days} days exceeds the ${ref.label} reference maximum of ${ref.max_acceptable} days (${ref.regulatory_source})`,
+            severity: "warning", extracted_days: days,
+            expected_hint: `≤ ${ref.max_acceptable} days per ${ref.regulatory_source}`,
+          });
+          flagged = true;
+        } else if (ref.fixed && days !== ref.standard_days) {
+          discrepancies.push({
+            manual_id: row.manual_id, payer_name: row.payer_name, item_id: row.item_id,
+            issue: "fixed_standard_mismatch",
+            detail: `${ref.label} timely filing must be exactly ${ref.standard_days} days per ${ref.regulatory_source}; extracted value is ${days} days`,
+            severity: "warning", extracted_days: days,
+            expected_hint: `${ref.standard_days} days per ${ref.regulatory_source}`,
+          });
+          flagged = true;
+        }
+
+        if (!flagged) {
+          checked.push({ manual_id: row.manual_id, payer_name: row.payer_name, review_status: row.review_status, extracted_days: days, payer_type: ref.payer_type });
+        }
+      }
+
+      res.json({
+        run_at: new Date().toISOString(),
+        reference_table: CMS_TF_REFERENCE,
+        summary: {
+          total_manuals_checked: new Set([...discrepancies.map((r: any) => r.manual_id), ...checked.map((r: any) => r.manual_id)]).size,
+          passed_manuals: new Set(checked.map((r: any) => r.manual_id)).size,
+          flagged_manuals: new Set(discrepancies.map((r: any) => r.manual_id)).size,
+          discrepancy_count: discrepancies.length,
+        },
+        discrepancies,
+        passed: checked,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
