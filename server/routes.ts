@@ -203,6 +203,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_username VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_password VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_connected BOOLEAN DEFAULT false`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS frcpb_enrolled BOOLEAN DEFAULT false`);
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS frcpb_enrolled_at TIMESTAMP`);
     // Sprint-2 schema additions
     await pool.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_dismissed_at TIMESTAMP`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS default_tos VARCHAR`);
@@ -649,6 +651,21 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [plain, code]
       );
     }
+    // ── Seed FRCPB E2E test payer (canonical, global, idempotent) ────────────
+    // Uses WHERE NOT EXISTS — safe regardless of whether payer_id has a unique index.
+    try {
+      await pool.query(`
+        INSERT INTO payers (id, name, payer_id, timely_filing_days, auth_required, billing_type, is_active, is_custom, payer_classification)
+        SELECT gen_random_uuid()::text, 'Stedi E2E Test Payer', 'FRCPB', 0, false, 'professional', true, false, 'commercial'
+        WHERE NOT EXISTS (SELECT 1 FROM payers WHERE payer_id = 'FRCPB')
+      `);
+      const { rows: frcpbCheck } = await pool.query(`SELECT id FROM payers WHERE payer_id = 'FRCPB' LIMIT 1`);
+      if (frcpbCheck.length === 0) console.error("[Seeder] WARNING: FRCPB payer row missing after seed attempt");
+      else console.log("[Seeder] FRCPB E2E test payer confirmed in payers table");
+    } catch (err) {
+      console.error("[Seeder] ERROR seeding FRCPB payer:", err);
+    }
+
     console.log("Payer database and HCPCS descriptions updated");
 
     // Add new claim columns (idempotent)
@@ -1510,6 +1527,35 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         );
         res.json(rows[0]);
       }
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  app.patch("/api/billing/practice-settings/frcpb-enrollment", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { enrolled } = req.body;
+      if (typeof enrolled !== "boolean") return res.status(400).json({ error: "enrolled must be a boolean" });
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const existing = orgId
+        ? await db.query("SELECT id FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])
+        : await db.query("SELECT id FROM practice_settings LIMIT 1");
+      let settingsId: string;
+      if (existing.rows.length === 0) {
+        const created = await db.query(
+          `INSERT INTO practice_settings (id, practice_name, organization_id) VALUES (gen_random_uuid()::text, '', $1) RETURNING id`,
+          [orgId || null]
+        );
+        settingsId = created.rows[0].id;
+      } else {
+        settingsId = existing.rows[0].id;
+      }
+      const { rows } = await db.query(
+        `UPDATE practice_settings SET frcpb_enrolled=$1, frcpb_enrolled_at=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
+        [enrolled, enrolled ? new Date() : null, settingsId]
+      );
+      res.json(rows[0]);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }

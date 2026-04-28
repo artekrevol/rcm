@@ -2192,6 +2192,22 @@ function ClearinghouseTab() {
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
   });
+  const [togglingFrcpb, setTogglingFrcpb] = useState(false);
+  const frcpbEnrolled = !!(practiceSettings?.frcpb_enrolled);
+  const frcpbEnrolledAt: string | null = practiceSettings?.frcpb_enrolled_at ?? null;
+
+  const handleToggleFrcpb = async () => {
+    setTogglingFrcpb(true);
+    try {
+      await apiRequest("PATCH", "/api/billing/practice-settings/frcpb-enrollment", { enrolled: !frcpbEnrolled });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/practice-settings"] });
+      toast({ title: !frcpbEnrolled ? "FRCPB enrollment activated" : "FRCPB enrollment removed" });
+    } catch (err: any) {
+      toast({ title: "Error updating FRCPB enrollment", description: err.message, variant: "destructive" });
+    } finally {
+      setTogglingFrcpb(false);
+    }
+  };
   const { data: stediStatus } = useQuery<{ configured: boolean }>({
     queryKey: ["/api/billing/stedi/status"],
     queryFn: async () => {
@@ -2388,6 +2404,42 @@ function ClearinghouseTab() {
               No Stedi-synced payers yet. Go to the Payers tab and click "Sync from Stedi" to match your payers against the Stedi network and populate this table.
             </div>
           )}
+        </div>
+
+        {/* FRCPB E2E Test Payer enrollment status */}
+        <div data-testid="section-frcpb-enrollment">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Stedi E2E Test Payer (FRCPB)</p>
+          <div className="flex items-center justify-between rounded-md border px-4 py-3">
+            <div className="flex items-center gap-3">
+              {frcpbEnrolled ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 text-xs font-medium px-2.5 py-1" data-testid="badge-frcpb-enrolled">
+                  <CheckCircle className="h-3 w-3" /> Enrolled
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 text-xs font-medium px-2.5 py-1" data-testid="badge-frcpb-not-enrolled">
+                  <XCircle className="h-3 w-3" /> Not enrolled
+                </span>
+              )}
+              <div>
+                <p className="text-sm font-medium">Stedi E2E Test Payer</p>
+                <p className="text-xs text-muted-foreground">
+                  Payer ID: <span className="font-mono">FRCPB</span>
+                  {frcpbEnrolled && frcpbEnrolledAt && (
+                    <> · Enrolled {new Date(frcpbEnrolledAt).toLocaleDateString()}</>
+                  )}
+                </p>
+              </div>
+            </div>
+            <Button
+              variant={frcpbEnrolled ? "outline" : "default"}
+              size="sm"
+              onClick={handleToggleFrcpb}
+              disabled={togglingFrcpb}
+              data-testid="button-frcpb-toggle"
+            >
+              {togglingFrcpb ? "Saving…" : frcpbEnrolled ? "Unenroll" : "Mark Enrolled"}
+            </Button>
+          </div>
         </div>
       </div>
 

@@ -528,6 +528,8 @@ export const practiceSettings = pgTable("practice_settings", {
   phone: varchar("phone"),
   defaultPos: varchar("default_pos").default("12"),
   organizationId: varchar("organization_id"),
+  frcpbEnrolled: boolean("frcpb_enrolled").default(false),
+  frcpbEnrolledAt: timestamp("frcpb_enrolled_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
