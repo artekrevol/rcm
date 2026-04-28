@@ -113,6 +113,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
         secondaryGroupNumber: patient.secondary_group_number || "",
         secondaryPlanName: patient.secondary_plan_name || "",
         secondaryRelationship: patient.secondary_relationship || "Self",
+        planProduct: patient.plan_product || "",
       });
       setLoadedId(patient.id);
     }
@@ -166,6 +167,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
       secondaryGroupNumber: form.secondaryGroupNumber || null,
       secondaryPlanName: form.secondaryPlanName || null,
       secondaryRelationship: form.secondaryRelationship || null,
+      planProduct: form.planProduct || null,
     });
   }
 
@@ -268,6 +270,28 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
               <Label>Member ID</Label>
               <Input value={form.memberId} onChange={(e) => set({ memberId: e.target.value })} data-testid="input-edit-member-id" />
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Plan Product</Label>
+            <Select
+              value={form.planProduct || "__none__"}
+              onValueChange={(v) => set({ planProduct: v === "__none__" ? "" : v })}
+            >
+              <SelectTrigger data-testid="select-plan-product">
+                <SelectValue placeholder="Select plan product…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Unknown / Not specified</SelectItem>
+                <SelectItem value="HMO">HMO</SelectItem>
+                <SelectItem value="PPO">PPO</SelectItem>
+                <SelectItem value="POS">POS</SelectItem>
+                <SelectItem value="EPO">EPO</SelectItem>
+                <SelectItem value="Indemnity">Indemnity</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Plan product affects which rules apply. HMOs typically require PCP referrals; PPOs allow out-of-network. Check the patient's insurance card — it usually shows the plan product near the top.
+            </p>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
@@ -1052,8 +1076,21 @@ export default function PatientDetail() {
           </div>
           <p className="text-muted-foreground text-sm">
             {patient.dob && `DOB: ${patient.dob}`}
-            {patient.insurance_carrier && ` · ${patient.insurance_carrier}`}
+            {patient.insurance_carrier && (
+              <span data-testid="text-insurance-summary">
+                {` · `}
+                {patient.insurance_carrier}
+                {patient.plan_product && patient.plan_product !== "unknown"
+                  ? ` (${patient.plan_product})`
+                  : ""}
+              </span>
+            )}
             {patient.member_id && ` · ID: ${patient.member_id}`}
+            {(!patient.plan_product || patient.plan_product === "unknown") && (
+              <span className="text-amber-600 dark:text-amber-400 ml-1" data-testid="text-plan-product-missing">
+                · Plan product: Not specified
+              </span>
+            )}
           </p>
         </div>
       </div>

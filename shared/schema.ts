@@ -88,6 +88,7 @@ export const patients = pgTable("patients", {
   intakeCompleted: boolean("intake_completed").default(false),
   vobVerified: boolean("vob_verified").default(false),
   notes: text("notes"),
+  planProduct: text("plan_product"),
   organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
@@ -152,6 +153,7 @@ export const claims = pgTable("claims", {
   delayReasonCode: varchar("delay_reason_code"),
   followUpDate: date("follow_up_date"),
   followUpStatus: varchar("follow_up_status"),
+  planProduct: text("plan_product"),
 });
 
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });

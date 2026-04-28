@@ -5,6 +5,7 @@ import {
   LogOut,
   Shield,
   BookOpen,
+  Wrench,
 } from "lucide-react";
 import {
   Sidebar,
@@ -79,6 +80,14 @@ function AdminSidebar() {
                   <Link href="/admin/payer-manuals" data-testid="nav-admin-payer-manuals">
                     <BookOpen className="h-5 w-5" />
                     <span>Payer Manuals</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={location === "/admin/data-tools"}>
+                  <Link href="/admin/data-tools" data-testid="nav-admin-data-tools">
+                    <Wrench className="h-5 w-5" />
+                    <span>Data Tools</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

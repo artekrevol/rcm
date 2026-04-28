@@ -1552,6 +1552,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
     }
 
+    // Prompt 01 — Plan Product Dimension
+    await seederLog('column', 'patients', 'plan_product');
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS plan_product TEXT CHECK (plan_product IN ('HMO','PPO','POS','EPO','Indemnity','unknown') OR plan_product IS NULL)`);
+    await seederLog('column', 'claims', 'plan_product');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS plan_product TEXT CHECK (plan_product IN ('HMO','PPO','POS','EPO','Indemnity','unknown') OR plan_product IS NULL)`);
+    await seederLog('column', 'manual_extraction_items', 'applies_to_plan_products');
+    await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS applies_to_plan_products JSONB DEFAULT '["all"]'::jsonb`);
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -2968,9 +2976,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
 
       await db.query(
-        `INSERT INTO claims (id, organization_id, patient_id, encounter_id, payer, cpt_codes, amount, status, risk_score, readiness_status, created_at, payer_id, authorization_number, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, 0, 'draft', 0, 'GREEN', $7, $8, $9, $10)`,
-        [claimId, getOrgId(req), patientId, encounterId, p.insurance_carrier || 'Unknown', '[]', now, p.payer_id || null, p.authorization_number || null, (req.user as any)?.email || null]
+        `INSERT INTO claims (id, organization_id, patient_id, encounter_id, payer, cpt_codes, amount, status, risk_score, readiness_status, created_at, payer_id, authorization_number, created_by, plan_product)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, 0, 'draft', 0, 'GREEN', $7, $8, $9, $10, $11)`,
+        [claimId, getOrgId(req), patientId, encounterId, p.insurance_carrier || 'Unknown', '[]', now, p.payer_id || null, p.authorization_number || null, (req.user as any)?.email || null, p.plan_product || null]
       );
 
       await db.query(
@@ -3012,6 +3020,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         orderingProviderNpi: "ordering_provider_npi",
         orderingProviderOrg: "ordering_provider_org",
         delayReasonCode: "delay_reason_code", followUpDate: "follow_up_date", followUpStatus: "follow_up_status",
+        planProduct: "plan_product",
       };
       const fields: string[] = [];
       const values: any[] = [];
@@ -5153,6 +5162,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         secondaryGroupNumber: "secondary_group_number", secondaryPlanName: "secondary_plan_name",
         secondaryRelationship: "secondary_relationship",
         streetAddress: "street_address", city: "city", zipCode: "zip_code",
+        planProduct: "plan_product",
       };
       if (req.body.referringProviderNpi) {
         const { validateNPI } = await import("../shared/npi-validation");
@@ -8597,24 +8607,33 @@ Warmly,
   app.patch("/api/admin/payer-manual-items/:id", requireSuperAdmin, async (req, res) => {
     try {
       const { pool: db } = await import("./db");
-      const { reviewStatus, notes, extractedJson } = req.body;
+      const { reviewStatus, notes, extractedJson, appliesToPlanProducts } = req.body;
       const user = req.user as any;
 
       if (!["approved", "rejected", "pending", "not_found"].includes(reviewStatus)) {
         return res.status(400).json({ error: "reviewStatus must be approved, rejected, pending, or not_found" });
       }
 
-      // If editing, update extracted_json first
-      const jsonUpdate = extractedJson ? `, extracted_json = $5` : "";
-      const params: any[] = [reviewStatus, user?.email || 'admin', notes || null, req.params.id];
-      if (extractedJson) params.push(JSON.stringify(extractedJson));
+      // Build param list dynamically — keep id as the last param so WHERE $N is always correct
+      const baseParams: any[] = [reviewStatus, user?.email || 'admin', notes || null];
+      let extraUpdates = "";
+      if (extractedJson) {
+        baseParams.push(JSON.stringify(extractedJson));
+        extraUpdates += `, extracted_json = $${baseParams.length}::jsonb`;
+      }
+      if (appliesToPlanProducts !== undefined) {
+        baseParams.push(JSON.stringify(appliesToPlanProducts));
+        extraUpdates += `, applies_to_plan_products = $${baseParams.length}::jsonb`;
+      }
+      baseParams.push(req.params.id);
+      const idParam = baseParams.length;
 
       const { rows } = await db.query(`
         UPDATE manual_extraction_items
-        SET review_status = $1, reviewed_by = $2, reviewed_at = NOW(), notes = $3 ${jsonUpdate}
-        WHERE id = $4
+        SET review_status = $1, reviewed_by = $2, reviewed_at = NOW(), notes = $3 ${extraUpdates}
+        WHERE id = $${idParam}
         RETURNING *
-      `, params);
+      `, baseParams);
 
       if (!rows.length) return res.status(404).json({ error: "Item not found" });
       const item = rows[0];
@@ -9379,6 +9398,44 @@ Warmly,
         console.error('[Enrollment Webhook] Error:', err);
       }
     });
+  });
+
+  // ── Admin: Data Tools — Backfill plan_product ─────────────────────────────
+  app.get("/api/admin/data-tools/backfill-plan-products", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT p.id, p.first_name, p.last_name, p.insurance_carrier, p.member_id, p.plan_product,
+               pay.name AS payer_name
+        FROM patients p
+        LEFT JOIN payers pay ON pay.id = p.payer_id OR LOWER(pay.name) = LOWER(p.insurance_carrier)
+        WHERE p.plan_product IS NULL
+        ORDER BY p.last_name NULLS LAST, p.first_name NULLS LAST
+        LIMIT 500
+      `);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/admin/data-tools/backfill-plan-products/:patientId", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { planProduct } = req.body;
+      const allowed = ['HMO', 'PPO', 'POS', 'EPO', 'Indemnity', 'unknown'];
+      if (!planProduct || !allowed.includes(planProduct)) {
+        return res.status(400).json({ error: "Invalid plan_product value" });
+      }
+      const { rows } = await db.query(
+        `UPDATE patients SET plan_product = $1, updated_at = NOW() WHERE id = $2 RETURNING id, plan_product`,
+        [planProduct, req.params.patientId]
+      );
+      if (!rows.length) return res.status(404).json({ error: "Patient not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
 }

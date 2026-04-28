@@ -31,6 +31,7 @@ The platform adopts an enterprise SaaS design aesthetic with shadcn/ui and Tailw
 - **EDI/Clearinghouse Integration**: Supports 837P EDI generation and submission via SFTP (Office Ally) and integrates with Stedi for real-time eligibility checks (270/271) and automated processing of 277 acknowledgments and 835 remittances.
 - **Admin Module**: A `super_admin` role provides access to clinic management, user activity monitoring, and payer manual ingestion.
 - **Payer Manual Ingestion**: Admin pipeline to ingest payer provider manuals via URL, extracting and processing information using AI with graceful fallback.
+- **Plan Product Dimension**: `plan_product` column (HMO/PPO/POS/EPO/Indemnity/unknown/NULL) on both `patients` and `claims` tables. Captured inline in the claim wizard Step 1 (patient selection card) with an HMO-referral info banner. Displayed and editable on the patient detail page Insurance card. Snapshotted from patient record into claim at draft creation. `applies_to_plan_products` JSONB column on `manual_extraction_items` lets admins scope rules to specific plan products via multi-select. Backfill tool at `/admin/data-tools` for bulk-setting existing patient records.
 - **CMS-1500 PDF Generation**: Enhanced to include new claim fields.
 - **Test Claim Mode**: Provides end-to-end EDI validation via Stedi's production API with a test indicator, preventing phantom claims from reaching real payers.
 

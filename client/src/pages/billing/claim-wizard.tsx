@@ -189,14 +189,47 @@ function StepIndicator({ current }: { current: number }) {
   );
 }
 
+const PLAN_PRODUCT_OPTIONS = [
+  { value: "HMO", label: "HMO" },
+  { value: "PPO", label: "PPO" },
+  { value: "POS", label: "POS" },
+  { value: "EPO", label: "EPO" },
+  { value: "Indemnity", label: "Indemnity" },
+  { value: "unknown", label: "Unknown / Not specified" },
+];
+
 function PatientSearch({ onSelect, selectedPatient }: {
   onSelect: (patient: any) => void;
   selectedPatient: any;
 }) {
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [timer, setTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [planProduct, setPlanProduct] = useState<string>(selectedPatient?.plan_product || "");
+  const [savingPlan, setSavingPlan] = useState(false);
+
+  useEffect(() => {
+    setPlanProduct(selectedPatient?.plan_product || "");
+  }, [selectedPatient?.id]);
+
+  async function handlePlanProductChange(value: string) {
+    if (!selectedPatient?.id) return;
+    setPlanProduct(value);
+    setSavingPlan(true);
+    try {
+      const res = await apiRequest("PATCH", `/api/billing/patients/${selectedPatient.id}`, {
+        planProduct: value === "unknown" ? "unknown" : value || null,
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      onSelect({ ...selectedPatient, plan_product: value });
+    } catch {
+      toast({ title: "Error saving plan product", variant: "destructive" });
+    } finally {
+      setSavingPlan(false);
+    }
+  }
 
   function handleChange(val: string) {
     setSearch(val);
@@ -220,45 +253,85 @@ function PatientSearch({ onSelect, selectedPatient }: {
   }, [patients, debouncedSearch, selectedPatient]);
 
   if (selectedPatient) {
+    const effectivePlanProduct = planProduct || selectedPatient.plan_product || "";
     return (
-      <Card className="border-green-200 bg-green-50/50 dark:border-green-900 dark:bg-green-950/20" data-testid="card-selected-patient">
-        <CardContent className="pt-4 pb-3">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
+      <div className="space-y-3">
+        <Card className="border-green-200 bg-green-50/50 dark:border-green-900 dark:bg-green-950/20" data-testid="card-selected-patient">
+          <CardContent className="pt-4 pb-3">
+            <div className="flex items-start justify-between">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-semibold text-lg" data-testid="text-selected-name">
+                    {selectedPatient.first_name || ""} {selectedPatient.last_name || selectedPatient.lead_name || "Unknown"}
+                  </h3>
+                  {selectedPatient.vob_verified && (
+                    <Badge variant="outline" className="text-green-700 border-green-300 bg-green-100" data-testid="badge-vob-verified">
+                      <CheckCircle2 className="h-3 w-3 mr-1" />VOB Verified
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-sm text-muted-foreground space-y-0.5">
+                  {selectedPatient.dob && <p>DOB: {selectedPatient.dob}</p>}
+                  {selectedPatient.insurance_carrier && (
+                    <p data-testid="text-wizard-insurance">
+                      Insurance: {selectedPatient.insurance_carrier}
+                      {effectivePlanProduct && effectivePlanProduct !== "unknown" ? ` (${effectivePlanProduct})` : ""}
+                    </p>
+                  )}
+                  {selectedPatient.member_id && <p>Member ID: {selectedPatient.member_id}</p>}
+                  {selectedPatient.authorization_number && <p>Auth #: {selectedPatient.authorization_number}</p>}
+                </div>
+              </div>
               <div className="flex items-center gap-2">
-                <h3 className="font-semibold text-lg" data-testid="text-selected-name">
-                  {selectedPatient.first_name || ""} {selectedPatient.last_name || selectedPatient.lead_name || "Unknown"}
-                </h3>
-                {selectedPatient.vob_verified && (
-                  <Badge variant="outline" className="text-green-700 border-green-300 bg-green-100" data-testid="badge-vob-verified">
-                    <CheckCircle2 className="h-3 w-3 mr-1" />VOB Verified
-                  </Badge>
-                )}
-              </div>
-              <div className="text-sm text-muted-foreground space-y-0.5">
-                {selectedPatient.dob && <p>DOB: {selectedPatient.dob}</p>}
-                {selectedPatient.insurance_carrier && <p>Insurance: {selectedPatient.insurance_carrier}</p>}
-                {selectedPatient.member_id && <p>Member ID: {selectedPatient.member_id}</p>}
-                {selectedPatient.authorization_number && <p>Auth #: {selectedPatient.authorization_number}</p>}
+                <a
+                  href={`/billing/patients/${selectedPatient.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm text-primary hover:underline flex items-center gap-1"
+                  data-testid="link-edit-patient"
+                >
+                  Edit patient <ExternalLink className="h-3 w-3" />
+                </a>
+                <Button variant="ghost" size="sm" onClick={() => { onSelect(null); setSearch(""); setDebouncedSearch(""); }} data-testid="button-change-patient">
+                  Change
+                </Button>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <a
-                href={`/billing/patients/${selectedPatient.id}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm text-primary hover:underline flex items-center gap-1"
-                data-testid="link-edit-patient"
-              >
-                Edit patient <ExternalLink className="h-3 w-3" />
-              </a>
-              <Button variant="ghost" size="sm" onClick={() => { onSelect(null); setSearch(""); setDebouncedSearch(""); }} data-testid="button-change-patient">
-                Change
-              </Button>
+            <div className="mt-3 pt-3 border-t border-green-200 dark:border-green-800">
+              <div className="flex items-center gap-3">
+                <Label className="text-xs text-muted-foreground whitespace-nowrap">Plan Product</Label>
+                <Select
+                  value={effectivePlanProduct || "__none__"}
+                  onValueChange={(v) => handlePlanProductChange(v === "__none__" ? "unknown" : v)}
+                  disabled={savingPlan}
+                >
+                  <SelectTrigger className="h-7 text-xs w-48" data-testid="select-wizard-plan-product">
+                    <SelectValue placeholder="Select plan product…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Unknown / Not specified</SelectItem>
+                    {PLAN_PRODUCT_OPTIONS.filter(o => o.value !== "unknown").map((o) => (
+                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {savingPlan && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Plan product affects which rules apply and will be recorded on the claim.
+              </p>
             </div>
+          </CardContent>
+        </Card>
+        {effectivePlanProduct === "HMO" && (
+          <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg" data-testid="banner-hmo-referral">
+            <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+            <p className="text-sm text-blue-700 dark:text-blue-300">
+              <span className="font-medium">HMO plan detected.</span> HMO plans typically require a PCP referral for specialist visits. We'll prompt for referral info before claim submission.
+            </p>
           </div>
-        </CardContent>
-      </Card>
+        )}
+      </div>
     );
   }
 

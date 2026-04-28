@@ -1,0 +1,171 @@
+# Replit Prompt 01 — Plan Product Dimension
+
+## Context
+
+ClaimShield's payers table currently treats each payer as a monolith. In reality, a single payer (e.g., Blue Cross Blue Shield of Texas) sells multiple plan products — HMO, PPO, POS, EPO — that have different reimbursement rates, different filing rules, and different prior authorization requirements.
+
+Currently when a claim is created, we capture payer but not which plan product the patient is on. This makes payer-specific rule enforcement impossible (the same payer's rules differ by product) and prevents us from auditing whether reimbursement is correct against the contracted rate for that product.
+
+This prompt adds plan product as a dimension across the data model and the wizard. Subsequent prompts in this sequence (Rules Engine Refactor, Timely Filing Guardian, PCP Referral Capture) all depend on this field existing.
+
+## Standing constraints
+
+- No live Stedi submissions during verification
+- Commit messages must include verification queries WITH their actual results
+- Read-only DB access via `PRODUCTION_READONLY_DATABASE_URL`
+- All schema migrations must be idempotent
+- New columns must include sensible defaults to avoid breaking existing claim flows
+
+## Tasks
+
+### Task 1 — Schema additions
+
+Add `plan_product` columns to two tables:
+
+```sql
+-- patient_insurance: which plan product is this patient enrolled in
+ALTER TABLE patient_insurance 
+ADD COLUMN IF NOT EXISTS plan_product TEXT 
+CHECK (plan_product IN ('HMO', 'PPO', 'POS', 'EPO', 'Indemnity', 'unknown') OR plan_product IS NULL);
+
+-- claims: which plan product was active when this claim was created
+ALTER TABLE claims 
+ADD COLUMN IF NOT EXISTS plan_product TEXT 
+CHECK (plan_product IN ('HMO', 'PPO', 'POS', 'EPO', 'Indemnity', 'unknown') OR plan_product IS NULL);
+```
+
+Both columns nullable initially. Default to NULL so existing rows don't break.
+
+If `payer_manual_extractions` or any rules-related table exists from the recent Phase 4 work, also add an optional `applies_to_plan_products` JSONB array so that rules can be scoped to specific plan products:
+
+```sql
+-- Allow rules to scope to specific plan products
+ALTER TABLE payer_manual_extractions
+ADD COLUMN IF NOT EXISTS applies_to_plan_products JSONB DEFAULT '["all"]'::jsonb;
+```
+
+The JSONB array contains plan product strings the rule applies to. `["all"]` means it applies to all products (current behavior). `["HMO", "POS"]` means it applies only to those products.
+
+### Task 2 — Wizard Step 1 (Patient/Insurance)
+
+The patient/insurance entry step currently captures payer name, member ID, group number. Add a plan product dropdown immediately below the payer selection.
+
+Dropdown options:
+- HMO
+- PPO
+- POS
+- EPO
+- Indemnity
+- Unknown / Not specified (default)
+
+Help text below the dropdown:
+> "Plan product affects which rules apply. HMOs typically require PCP referrals; PPOs allow out-of-network. Check the patient's insurance card — it usually shows the plan product near the top."
+
+When the user selects HMO, surface an info banner:
+> "HMO plans typically require a PCP referral for specialist visits. We'll prompt for referral info before claim submission."
+
+(The actual referral capture lands in Prompt 5 — for now just the banner.)
+
+### Task 3 — Patient detail page
+
+The patient detail page should display the plan product alongside the payer/member ID. Format:
+
+> Insurance: Blue Cross Blue Shield of Texas (HMO)  
+> Member ID: 12345
+
+If plan_product is NULL or 'unknown', display:
+
+> Insurance: Blue Cross Blue Shield of Texas  
+> Member ID: 12345  
+> Plan product: Not specified — [Edit]
+
+The "[Edit]" link opens an inline editor to set the field without going back to the wizard.
+
+### Task 4 — Claim creation propagation
+
+When a claim is created, copy the plan_product value from the patient's `patient_insurance` record into the `claims.plan_product` column. This snapshots the value at the moment the claim was created, so even if the patient's plan changes later, the claim retains the original product context.
+
+If the patient_insurance record has plan_product = NULL or 'unknown', the claim's plan_product is also NULL/'unknown'. Do not attempt to infer.
+
+### Task 5 — Rules ingestion accommodation
+
+The payer manual ingestion service should be aware that some rules apply only to specific plan products. When Claude extracts a rule that's scoped (e.g., "PPO claims have 90-day filing deadline; HMO claims have 60-day filing deadline" — these become two separate rule rows), the `applies_to_plan_products` JSONB should be populated.
+
+This is a passive change for now — the extraction prompts don't need to be rewritten. Just ensure that when an admin manually edits an extracted rule via the admin UI, they can set the `applies_to_plan_products` array.
+
+Add a multi-select control to the extraction item edit modal:
+
+> Plan products this rule applies to: [✓] All [ ] HMO [ ] PPO [ ] POS [ ] EPO [ ] Indemnity
+
+Default is "All" checked. If admin selects specific products, the JSONB updates accordingly.
+
+### Task 6 — Audit query for existing claims
+
+Run this against PRODUCTION_READONLY_DATABASE_URL after deploy and report results in the commit message:
+
+```sql
+-- Distribution of plan products in existing claims (should be all NULL initially)
+SELECT plan_product, COUNT(*) 
+FROM claims 
+GROUP BY plan_product 
+ORDER BY plan_product NULLS LAST;
+
+-- Distribution in patient insurance records
+SELECT plan_product, COUNT(*) 
+FROM patient_insurance 
+GROUP BY plan_product 
+ORDER BY plan_product NULLS LAST;
+```
+
+Report exact counts in the commit message. Do not estimate.
+
+### Task 7 — Backfill helper
+
+Add an admin-only "Backfill plan products" tool in `/admin/data-tools` (create the tools page if it doesn't exist). The tool:
+
+1. Lists all `patient_insurance` records where `plan_product IS NULL`
+2. For each, displays patient name, payer, member ID
+3. Provides a dropdown to set the plan product
+4. Saves changes via PATCH
+
+This isn't pretty automation — it's an operational tool for admin to bulk-update existing records once they're identified. Targeted at staff doing data cleanup, not end users.
+
+## Acceptance
+
+- `plan_product` column exists on both `patient_insurance` and `claims` (verified via information_schema query)
+- `applies_to_plan_products` column exists on `payer_manual_extractions` (verified)
+- Wizard captures plan_product in Step 1 with the correct dropdown options
+- Patient detail page displays plan_product or "Not specified" with edit link
+- Claim creation copies plan_product from patient insurance record at the moment of creation
+- Admin can set `applies_to_plan_products` on individual extraction items
+- Backfill tool functional in `/admin/data-tools`
+
+## Output expected from Replit
+
+1. List of files modified
+2. SQL migration file with rollback script
+3. Verification query results from Task 6 with actual counts
+4. Screenshots of:
+   - Wizard Step 1 with plan_product dropdown
+   - Patient detail page showing plan_product
+   - Admin extraction item editor with plan_products multi-select
+   - Backfill tool UI
+5. Confirmation: when patient with HMO plan is selected in wizard, the HMO info banner appears
+
+## Verification commands you (the user) should run yourself
+
+```sql
+-- Schema check
+SELECT table_name, column_name, data_type 
+FROM information_schema.columns 
+WHERE column_name = 'plan_product' 
+   OR column_name = 'applies_to_plan_products'
+ORDER BY table_name;
+
+-- Should return 3 rows: 
+--   patient_insurance.plan_product
+--   claims.plan_product
+--   payer_manual_extractions.applies_to_plan_products
+```
+
+After Replit ships, run a smoke test: create one patient with HMO plan, create a claim for them, verify both records have `plan_product = 'HMO'` populated.

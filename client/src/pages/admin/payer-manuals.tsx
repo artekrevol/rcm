@@ -272,7 +272,10 @@ interface ExtractionItem {
   reviewed_at: string | null;
   applied_rule_id: string | null;
   notes: string | null;
+  applies_to_plan_products: string[] | null;
 }
+
+const PLAN_PRODUCT_OPTIONS = ["HMO", "PPO", "POS", "EPO", "Indemnity"] as const;
 
 interface PayerManual {
   id: string;
@@ -290,7 +293,7 @@ interface PayerManual {
   pending_count: number;
 }
 
-type ReviewPayload = { itemId: string; reviewStatus: string; notes?: string; extractedJson?: any };
+type ReviewPayload = { itemId: string; reviewStatus: string; notes?: string; extractedJson?: any; appliesToPlanProducts?: string[] };
 
 interface PayerCoverageRow {
   source_id: string;
@@ -360,8 +363,23 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
   const [editMode, setEditMode] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
   const [editedJson, setEditedJson] = useState<any>(item.extracted_json ? { ...item.extracted_json } : null);
+  const [selectedProducts, setSelectedProducts] = useState<string[]>(
+    item.applies_to_plan_products && !item.applies_to_plan_products.includes("all")
+      ? item.applies_to_plan_products
+      : []
+  );
   const isPending = item.review_status === "pending";
   const isNotFound = item.review_status === "not_found";
+
+  function toggleProduct(product: string) {
+    setSelectedProducts(prev =>
+      prev.includes(product) ? prev.filter(p => p !== product) : [...prev, product]
+    );
+  }
+
+  function getAppliesToPlanProducts(): string[] {
+    return selectedProducts.length === 0 ? ["all"] : selectedProducts;
+  }
 
   function handleApprove() {
     onReview({
@@ -369,6 +387,7 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
       reviewStatus: "approved",
       notes: notes || undefined,
       extractedJson: editMode && editedJson ? editedJson : undefined,
+      appliesToPlanProducts: getAppliesToPlanProducts(),
     });
   }
 
@@ -412,6 +431,39 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
         <div className="mt-2 bg-background/60 rounded p-2 border border-dashed">
           <p className="text-xs font-semibold text-muted-foreground mb-2">Editing extracted fields:</p>
           <JsonEditor sectionType={item.section_type} value={editedJson} onChange={setEditedJson} />
+        </div>
+      )}
+      {(editMode || isPending) && (
+        <div className="mt-2 bg-background/40 rounded p-2 border border-dashed">
+          <p className="text-xs font-semibold text-muted-foreground mb-1">Plan products this rule applies to:</p>
+          <div className="flex flex-wrap gap-2">
+            <label className="flex items-center gap-1 text-xs cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selectedProducts.length === 0}
+                onChange={() => setSelectedProducts([])}
+                data-testid={`checkbox-plan-all-${item.id}`}
+              />
+              All
+            </label>
+            {PLAN_PRODUCT_OPTIONS.map((prod) => (
+              <label key={prod} className="flex items-center gap-1 text-xs cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedProducts.includes(prod)}
+                  onChange={() => toggleProduct(prod)}
+                  disabled={selectedProducts.length === 0 && false}
+                  data-testid={`checkbox-plan-${prod}-${item.id}`}
+                />
+                {prod}
+              </label>
+            ))}
+          </div>
+          {selectedProducts.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Rule applies only to: {selectedProducts.join(", ")}
+            </p>
+          )}
         </div>
       )}
 
@@ -672,12 +724,12 @@ export default function PayerManualsPage() {
   });
 
   const reviewMutation = useMutation({
-    mutationFn: async ({ itemId, reviewStatus, notes, extractedJson }: ReviewPayload) => {
+    mutationFn: async ({ itemId, reviewStatus, notes, extractedJson, appliesToPlanProducts }: ReviewPayload) => {
       const res = await fetch(`/api/admin/payer-manual-items/${itemId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ reviewStatus, notes, extractedJson }),
+        body: JSON.stringify({ reviewStatus, notes, extractedJson, appliesToPlanProducts }),
       });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
       return res.json();
