@@ -1301,6 +1301,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         payer_name VARCHAR NOT NULL,
         source_url TEXT,
         file_name VARCHAR,
+        file_content BYTEA,
         status VARCHAR NOT NULL DEFAULT 'pending',
         error_message TEXT,
         uploaded_by VARCHAR,
@@ -1309,6 +1310,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS file_content BYTEA`);
 
     await seederLog('table', 'manual_extraction_items');
     await pool.query(`
@@ -1442,13 +1444,52 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ON CONFLICT (id) DO NOTHING
       `);
 
-      // Link applied_rule_id back to modifier/appeals extraction items
+      // Link applied_rule_id back to modifier/appeals extraction items only (not timely_filing)
       await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = 'rule-from-manual-tw-mod' WHERE id = 'mei-tw-mod-001'`).catch(() => {});
-      await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = 'rule-from-manual-tw-ap' WHERE id = 'mei-tw-tf-001'`).catch(() => {});
       await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = 'rule-from-manual-mc-mod' WHERE id = 'mei-mc-mod-001'`).catch(() => {});
       await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = 'rule-from-manual-ae-mod' WHERE id = 'mei-ae-mod-001'`).catch(() => {});
+      // Timely filing items update payers directly — no rule link
+      await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = NULL WHERE id IN ('mei-tw-tf-001','mei-mc-tf-001','mei-ae-tf-001')`).catch(() => {});
 
       console.log("[SEEDER] Seeded 3 payer manuals (TriWest, Medicare, Aetna) with approved extraction items");
+    }
+
+    // Idempotent fix: ensure timely filing items never have an applied_rule_id
+    await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = NULL WHERE section_type = 'timely_filing' AND applied_rule_id IS NOT NULL`).catch(() => {});
+
+    // Idempotent: seed payer_auth_requirements from approved prior-auth extraction items
+    {
+      const { rows: triwestPayerForPAR } = await pool.query(`SELECT id, name FROM payers WHERE payer_id = 'TWVACCN' OR name ILIKE '%triwest%' LIMIT 1`).catch(() => ({ rows: [] }));
+      const { rows: medicarePayerForPAR } = await pool.query(`SELECT id, name FROM payers WHERE LOWER(name) LIKE '%medicare%' AND payer_classification = 'medicare_part_b' LIMIT 1`).catch(() => ({ rows: [] }));
+      const { rows: aetnaPayerForPAR } = await pool.query(`SELECT id, name FROM payers WHERE LOWER(name) LIKE '%aetna%' LIMIT 1`).catch(() => ({ rows: [] }));
+
+      if (triwestPayerForPAR[0]?.id) {
+        await pool.query(`
+          INSERT INTO payer_auth_requirements (payer_id, payer_name, code, code_type, auth_required, auth_conditions, notes)
+          VALUES ($1, $2, '*', 'HCPCS', true, 'VA referral required for all home health services. Authorization number must appear on every claim.', 'Source: TriWest Healthcare Alliance Manual (Phase 2 ingestion)')
+          ON CONFLICT (payer_id, code) DO NOTHING
+        `, [triwestPayerForPAR[0].id, triwestPayerForPAR[0].name]).catch(() => {});
+      }
+      if (medicarePayerForPAR[0]?.id) {
+        const medicareCodes = ['G0299','G0300','G0151','G0152','G0153','G0154','G0155','G0156'];
+        for (const code of medicareCodes) {
+          await pool.query(`
+            INSERT INTO payer_auth_requirements (payer_id, payer_name, code, code_type, auth_required, auth_conditions, notes)
+            VALUES ($1, $2, $3, 'HCPCS', true, 'Face-to-face encounter required within 90 days before or 30 days after home health start of care. Must document homebound status and medical necessity.', 'Source: Medicare Part B Manual (Phase 2 ingestion)')
+            ON CONFLICT (payer_id, code) DO NOTHING
+          `, [medicarePayerForPAR[0].id, medicarePayerForPAR[0].name, code]).catch(() => {});
+        }
+      }
+      if (aetnaPayerForPAR[0]?.id) {
+        const aetnaCodes = ['97110','97530','97112','97116','97035','97140','97010','97018','97032','97033','97034','97150'];
+        for (const code of aetnaCodes) {
+          await pool.query(`
+            INSERT INTO payer_auth_requirements (payer_id, payer_name, code, code_type, auth_required, auth_conditions, notes)
+            VALUES ($1, $2, $3, 'HCPCS', true, 'PT and OT services require prior auth after 20 visits per benefit year. Submit auth request at least 5 business days before 21st visit.', 'Source: Aetna Commercial Manual (Phase 2 ingestion)')
+            ON CONFLICT (payer_id, code) DO NOTHING
+          `, [aetnaPayerForPAR[0].id, aetnaPayerForPAR[0].name, code]).catch(() => {});
+        }
+      }
     }
 
     console.log("[SEEDER] Startup schema seeder complete.");
@@ -8342,25 +8383,46 @@ Warmly,
   });
 
   // Create a new payer manual (URL-based or file upload)
-  app.post("/api/admin/payer-manuals", requireSuperAdmin, async (req, res) => {
-    try {
-      const { pool: db } = await import("./db");
-      const { payerName, payerId, sourceUrl } = req.body;
-      if (!payerName) return res.status(400).json({ error: "payerName is required" });
-      if (!sourceUrl) return res.status(400).json({ error: "sourceUrl is required" });
+  {
+    const multer = (await import("multer")).default;
+    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+    app.post("/api/admin/payer-manuals", requireSuperAdmin, upload.single("file"), async (req, res) => {
+      try {
+        const { pool: db } = await import("./db");
+        const { validateManualUrl } = await import("./services/manual-extractor");
+        const { payerName, payerId, sourceUrl } = req.body;
+        if (!payerName) return res.status(400).json({ error: "payerName is required" });
 
-      const user = req.user as any;
-      const { rows } = await db.query(`
-        INSERT INTO payer_manuals (payer_name, payer_id, source_url, status, uploaded_by)
-        VALUES ($1, $2, $3, 'pending', $4)
-        RETURNING *
-      `, [payerName, payerId || null, sourceUrl, user?.email || 'admin']);
+        const file = (req as any).file as Express.Multer.File | undefined;
+        if (!file && !sourceUrl) return res.status(400).json({ error: "sourceUrl or file upload is required" });
 
-      res.json(rows[0]);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+        // SSRF guard — validate URL if provided
+        if (sourceUrl) {
+          try { validateManualUrl(sourceUrl); } catch (e: any) {
+            return res.status(400).json({ error: `Invalid source URL: ${e.message}` });
+          }
+        }
+
+        const user = req.user as any;
+        const { rows } = await db.query(`
+          INSERT INTO payer_manuals (payer_name, payer_id, source_url, file_name, file_content, status, uploaded_by)
+          VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+          RETURNING *
+        `, [
+          payerName,
+          payerId || null,
+          sourceUrl || null,
+          file?.originalname || null,
+          file?.buffer || null,
+          user?.email || 'admin',
+        ]);
+
+        res.json(rows[0]);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+  }
 
   // Get extraction items for a manual
   app.get("/api/admin/payer-manuals/:id/items", requireSuperAdmin, async (req, res) => {
@@ -8386,7 +8448,15 @@ Warmly,
       if (!manuals.length) return res.status(404).json({ error: "Manual not found" });
       const manual = manuals[0];
 
-      if (!manual.source_url) return res.status(400).json({ error: "No source URL configured" });
+      if (!manual.source_url && !manual.file_content) return res.status(400).json({ error: "No source URL or uploaded file configured" });
+
+      // Validate URL before starting async work (SSRF guard)
+      if (manual.source_url) {
+        const { validateManualUrl } = await import("./services/manual-extractor");
+        try { validateManualUrl(manual.source_url); } catch (e: any) {
+          return res.status(400).json({ error: `Invalid source URL: ${e.message}` });
+        }
+      }
 
       // Mark as processing
       await db.query("UPDATE payer_manuals SET status = 'processing', updated_at = NOW() WHERE id = $1", [manualId]);
@@ -8398,7 +8468,11 @@ Warmly,
           const { extractManualSections } = await import("./services/manual-extractor");
           const { extractSection } = await import("./services/claude-extractor");
 
-          const { sections } = await extractManualSections({ url: manual.source_url });
+          // Use file buffer if uploaded, otherwise fetch from URL
+          const extractInput = manual.file_content
+            ? { buffer: Buffer.from(manual.file_content), fileName: manual.file_name || "upload.pdf" }
+            : { url: manual.source_url };
+          const { sections } = await extractManualSections(extractInput);
           const sectionTypes = ["timely_filing", "prior_auth", "modifiers", "appeals"] as const;
 
           for (const section of sections) {
@@ -8493,11 +8567,20 @@ Warmly,
           const trigger = item.section_type === "modifiers" ? `modifier,${data.modifier_code || ''}`.toLowerCase() : "appeal,dispute";
           const prevention = item.section_type === "modifiers" ? `Apply modifier ${data.modifier_code} per payer policy` : `File appeal within ${data.deadline_days} days via ${data.submission_method}`;
 
+          // Derive contextual specialty tags from payer name
+          const payerName = (manual?.payer_name || '').toLowerCase();
+          const contextTags: string[] = [];
+          if (payerName.includes('triwest') || payerName.includes('va ') || payerName.includes('community care')) contextTags.push('VA Community Care');
+          if (payerName.includes('medicare')) { contextTags.push('Medicare'); contextTags.push('Home Health'); }
+          if (payerName.includes('medicaid')) contextTags.push('Medicaid');
+          if (contextTags.length === 0) contextTags.push('Universal');
+          const tagsLiteral = `{${contextTags.map(t => `"${t}"`).join(',')}}`;
+
           const { rows: ruleRows } = await db.query(`
             INSERT INTO rules (name, description, trigger_pattern, prevention_action, payer, enabled, specialty_tags)
             VALUES ($1, $2, $3, $4, $5, true, $6)
             RETURNING id
-          `, [ruleName, description || '', trigger, prevention, manual?.payer_name || '', '{}']).catch(() => ({ rows: [] })) as any;
+          `, [ruleName, description || '', trigger, prevention, manual?.payer_name || '', tagsLiteral]).catch(() => ({ rows: [] })) as any;
 
           if (ruleRows?.[0]?.id) {
             await db.query("UPDATE manual_extraction_items SET applied_rule_id = $1 WHERE id = $2", [ruleRows[0].id, item.id]).catch(() => {});

@@ -1,6 +1,52 @@
 import { load } from "cheerio";
+import { URL } from "url";
+import * as net from "net";
 
 export type SectionType = "timely_filing" | "prior_auth" | "modifiers" | "appeals";
+
+// SSRF guard — block private/internal URLs
+const BLOCKED_HOSTNAMES = new Set([
+  "localhost", "0.0.0.0", "metadata.google.internal", "169.254.169.254",
+  "::1", "ip6-localhost", "ip6-loopback",
+]);
+
+function isPrivateIp(host: string): boolean {
+  // Check dotted-quad private ranges
+  const parts = host.split(".").map(Number);
+  if (parts.length === 4 && parts.every((p) => !isNaN(p))) {
+    const [a, b] = parts;
+    if (a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 0) return true;
+  }
+  return false;
+}
+
+export function validateManualUrl(raw: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("Invalid URL format");
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("Only http and https URLs are allowed");
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (BLOCKED_HOSTNAMES.has(host)) {
+    throw new Error(`URL host '${host}' is not allowed`);
+  }
+  if (isPrivateIp(host)) {
+    throw new Error(`URL resolves to a private/internal IP range which is not allowed`);
+  }
+  // Block numeric IPv6 literals that may be private
+  if (net.isIPv6(host.replace(/^\[/, "").replace(/\]$/, ""))) {
+    throw new Error("IPv6 literal URLs are not allowed");
+  }
+}
 
 export const SECTION_KEYWORDS: Record<SectionType, string[]> = {
   timely_filing: [

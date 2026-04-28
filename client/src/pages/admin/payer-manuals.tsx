@@ -1,14 +1,13 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   FileText, Plus, Play, CheckCircle2, XCircle, Clock, AlertCircle,
   ChevronDown, ChevronRight, ExternalLink, Trash2, RefreshCw, Pencil,
-  BookOpen, Zap,
+  BookOpen, Zap, Upload, Link2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,8 +18,8 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
 
 type SectionType = "timely_filing" | "prior_auth" | "modifiers" | "appeals";
 
@@ -46,22 +45,22 @@ const SECTION_BADGE: Record<SectionType, string> = {
 };
 
 function statusBadge(status: string) {
-  const map: Record<string, { label: string; variant: string }> = {
-    pending: { label: "Pending", variant: "bg-muted text-muted-foreground" },
-    processing: { label: "Processing…", variant: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" },
-    ready_for_review: { label: "Ready for Review", variant: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" },
-    completed: { label: "Completed", variant: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" },
-    failed: { label: "Failed", variant: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
+  const map: Record<string, { label: string; cls: string }> = {
+    pending: { label: "Pending", cls: "bg-muted text-muted-foreground" },
+    processing: { label: "Processing…", cls: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" },
+    ready_for_review: { label: "Ready for Review", cls: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" },
+    completed: { label: "Completed", cls: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" },
+    failed: { label: "Failed", cls: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
   };
-  const s = map[status] || { label: status, variant: "bg-muted text-muted-foreground" };
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${s.variant}`}>{s.label}</span>;
+  const s = map[status] || { label: status, cls: "bg-muted text-muted-foreground" };
+  return <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${s.cls}`}>{s.label}</span>;
 }
 
 function reviewStatusIcon(status: string) {
-  if (status === "approved") return <CheckCircle2 className="h-4 w-4 text-green-600" />;
-  if (status === "rejected") return <XCircle className="h-4 w-4 text-red-500" />;
-  if (status === "not_found") return <AlertCircle className="h-4 w-4 text-muted-foreground" />;
-  return <Clock className="h-4 w-4 text-amber-500" />;
+  if (status === "approved") return <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />;
+  if (status === "rejected") return <XCircle className="h-4 w-4 text-red-500 shrink-0" />;
+  if (status === "not_found") return <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />;
+  return <Clock className="h-4 w-4 text-amber-500 shrink-0" />;
 }
 
 function confidenceBadge(confidence: number | null) {
@@ -104,6 +103,158 @@ function formatExtractedJson(json: any, sectionType: string): React.ReactNode {
   );
 }
 
+// ─── Structured JSON editor per section type ─────────────────────────────────
+
+function JsonEditor({ sectionType, value, onChange }: { sectionType: SectionType; value: any; onChange: (v: any) => void }) {
+  if (!value) return null;
+  if (sectionType === "timely_filing") {
+    return (
+      <div className="space-y-2">
+        <div>
+          <Label className="text-xs">Days to file</Label>
+          <Input
+            type="number"
+            value={value.days ?? ""}
+            onChange={(e) => onChange({ ...value, days: Number(e.target.value) })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-days"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Exceptions (comma-separated)</Label>
+          <Input
+            value={(value.exceptions || []).join(", ")}
+            onChange={(e) => onChange({ ...value, exceptions: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-exceptions"
+          />
+        </div>
+      </div>
+    );
+  }
+  if (sectionType === "prior_auth") {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Label className="text-xs">Auth required</Label>
+          <Switch
+            checked={!!value.requires_auth}
+            onCheckedChange={(v) => onChange({ ...value, requires_auth: v })}
+            data-testid="switch-edit-requires-auth"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Criteria</Label>
+          <Textarea
+            value={value.criteria || ""}
+            onChange={(e) => onChange({ ...value, criteria: e.target.value })}
+            className="text-xs mt-0.5"
+            rows={2}
+            data-testid="textarea-edit-criteria"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">CPT/HCPCS codes (comma-separated)</Label>
+          <Input
+            value={(value.cpt_codes || []).join(", ")}
+            onChange={(e) => onChange({ ...value, cpt_codes: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-cpt-codes"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Threshold units</Label>
+          <Input
+            type="number"
+            value={value.threshold_units ?? ""}
+            onChange={(e) => onChange({ ...value, threshold_units: e.target.value ? Number(e.target.value) : null })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-threshold"
+          />
+        </div>
+      </div>
+    );
+  }
+  if (sectionType === "modifiers") {
+    return (
+      <div className="space-y-2">
+        <div>
+          <Label className="text-xs">Modifier code</Label>
+          <Input
+            value={value.modifier_code || ""}
+            onChange={(e) => onChange({ ...value, modifier_code: e.target.value })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-modifier-code"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Description</Label>
+          <Input
+            value={value.description || ""}
+            onChange={(e) => onChange({ ...value, description: e.target.value })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-description"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Payer rule</Label>
+          <Textarea
+            value={value.payer_rule || ""}
+            onChange={(e) => onChange({ ...value, payer_rule: e.target.value })}
+            className="text-xs mt-0.5"
+            rows={2}
+            data-testid="textarea-edit-payer-rule"
+          />
+        </div>
+      </div>
+    );
+  }
+  if (sectionType === "appeals") {
+    return (
+      <div className="space-y-2">
+        <div>
+          <Label className="text-xs">Deadline (days)</Label>
+          <Input
+            type="number"
+            value={value.deadline_days ?? ""}
+            onChange={(e) => onChange({ ...value, deadline_days: Number(e.target.value) })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-deadline"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Level</Label>
+          <Input
+            value={value.level || ""}
+            onChange={(e) => onChange({ ...value, level: e.target.value })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-level"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Submission method</Label>
+          <Input
+            value={value.submission_method || ""}
+            onChange={(e) => onChange({ ...value, submission_method: e.target.value })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-submission-method"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Requirements (comma-separated)</Label>
+          <Input
+            value={(value.requirements || []).join(", ")}
+            onChange={(e) => onChange({ ...value, requirements: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-requirements"
+          />
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
 interface ExtractionItem {
   id: string;
   manual_id: string;
@@ -134,11 +285,28 @@ interface PayerManual {
   pending_count: number;
 }
 
-function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview: (id: string, status: "approved" | "rejected", notes?: string) => void }) {
+type ReviewPayload = { itemId: string; reviewStatus: string; notes?: string; extractedJson?: any };
+
+function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview: (p: ReviewPayload) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [notes, setNotes] = useState(item.notes || "");
+  const [editedJson, setEditedJson] = useState<any>(item.extracted_json ? { ...item.extracted_json } : null);
   const isPending = item.review_status === "pending";
+  const isNotFound = item.review_status === "not_found";
+
+  function handleApprove() {
+    onReview({
+      itemId: item.id,
+      reviewStatus: "approved",
+      notes: notes || undefined,
+      extractedJson: editMode && editedJson ? editedJson : undefined,
+    });
+  }
+
+  function handleReject() {
+    onReview({ itemId: item.id, reviewStatus: "rejected", notes: notes || undefined });
+  }
 
   return (
     <div className={`rounded-lg border p-3 ${SECTION_COLORS[item.section_type] || "bg-muted"}`} data-testid={`card-extraction-${item.id}`}>
@@ -150,7 +318,7 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
           </span>
           {confidenceBadge(item.confidence)}
           {item.applied_rule_id && (
-            <span className="text-xs text-muted-foreground">→ Rule applied</span>
+            <span className="text-xs text-green-700 dark:text-green-400">→ Rule applied</span>
           )}
         </div>
         <button onClick={() => setExpanded(!expanded)} className="text-muted-foreground hover:text-foreground" data-testid={`button-expand-${item.id}`}>
@@ -158,10 +326,16 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
         </button>
       </div>
 
-      {/* Structured fields */}
-      {item.extracted_json && (
+      {/* Structured fields — show edit form if in edit mode, else read-only view */}
+      {item.extracted_json && !editMode && (
         <div className="mt-2">
           {formatExtractedJson(item.extracted_json, item.section_type)}
+        </div>
+      )}
+      {editMode && editedJson && (
+        <div className="mt-2 bg-background/60 rounded p-2 border border-dashed">
+          <p className="text-xs font-semibold text-muted-foreground mb-2">Editing extracted fields:</p>
+          <JsonEditor sectionType={item.section_type} value={editedJson} onChange={setEditedJson} />
         </div>
       )}
 
@@ -170,7 +344,7 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
         <p className="text-xs text-muted-foreground mt-1 italic">{item.notes}</p>
       )}
 
-      {/* Expanded: raw snippet + edit notes */}
+      {/* Expanded: raw snippet + notes edit */}
       {expanded && (
         <div className="mt-3 space-y-2">
           {item.raw_snippet && (
@@ -179,7 +353,7 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
               <p className="text-xs bg-background/60 rounded p-2 text-foreground leading-relaxed">{item.raw_snippet}</p>
             </div>
           )}
-          {editMode && (
+          {(isPending || editMode) && (
             <div>
               <Label className="text-xs">Notes (optional)</Label>
               <Textarea
@@ -193,42 +367,48 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
           )}
           {item.reviewed_by && (
             <p className="text-xs text-muted-foreground">
-              Reviewed by {item.reviewed_by} {item.reviewed_at ? `on ${format(new Date(item.reviewed_at), "MMM d, yyyy")}` : ""}
+              Reviewed by {item.reviewed_by}{item.reviewed_at ? ` on ${format(new Date(item.reviewed_at), "MMM d, yyyy")}` : ""}
             </p>
           )}
         </div>
       )}
 
       {/* Actions */}
-      {isPending && item.review_status !== "not_found" && (
-        <div className="mt-3 flex items-center gap-2">
+      {isPending && !isNotFound && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant="default"
             className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white"
-            onClick={() => onReview(item.id, "approved", notes || undefined)}
+            onClick={handleApprove}
             data-testid={`button-approve-${item.id}`}
           >
-            <CheckCircle2 className="h-3 w-3 mr-1" /> Approve
+            <CheckCircle2 className="h-3 w-3 mr-1" /> {editMode ? "Save & Approve" : "Approve"}
           </Button>
           <Button
             size="sm"
             variant="outline"
             className="h-7 text-xs text-red-600 border-red-200 hover:bg-red-50"
-            onClick={() => onReview(item.id, "rejected", notes || undefined)}
+            onClick={handleReject}
             data-testid={`button-reject-${item.id}`}
           >
             <XCircle className="h-3 w-3 mr-1" /> Reject
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs"
-            onClick={() => { setEditMode(!editMode); setExpanded(true); }}
-            data-testid={`button-edit-${item.id}`}
-          >
-            <Pencil className="h-3 w-3 mr-1" /> {editMode ? "Close edit" : "Edit & approve"}
-          </Button>
+          {item.extracted_json && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={() => {
+                setEditMode(!editMode);
+                if (!editMode) setEditedJson({ ...item.extracted_json });
+                setExpanded(true);
+              }}
+              data-testid={`button-edit-${item.id}`}
+            >
+              <Pencil className="h-3 w-3 mr-1" /> {editMode ? "Cancel edit" : "Edit fields"}
+            </Button>
+          )}
         </div>
       )}
     </div>
@@ -241,7 +421,10 @@ export default function PayerManualsPage() {
 
   const [selectedManualId, setSelectedManualId] = useState<string | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [addMode, setAddMode] = useState<"url" | "file">("url");
   const [addForm, setAddForm] = useState({ payerName: "", payerId: "", sourceUrl: "" });
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [filterSection, setFilterSection] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
@@ -265,23 +448,44 @@ export default function PayerManualsPage() {
   });
 
   const addMutation = useMutation({
-    mutationFn: async (data: typeof addForm) => {
-      const res = await apiRequest("POST", "/api/admin/payer-manuals", data);
-      return res.json();
+    mutationFn: async () => {
+      if (addMode === "file" && uploadFile) {
+        const fd = new FormData();
+        fd.append("payerName", addForm.payerName);
+        if (addForm.payerId) fd.append("payerId", addForm.payerId);
+        fd.append("file", uploadFile);
+        const res = await fetch("/api/admin/payer-manuals", { method: "POST", body: fd, credentials: "include" });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+        return res.json();
+      } else {
+        const res = await fetch("/api/admin/payer-manuals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ payerName: addForm.payerName, payerId: addForm.payerId, sourceUrl: addForm.sourceUrl }),
+        });
+        if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+        return res.json();
+      }
     },
     onSuccess: (manual) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals"] });
       setShowAddDialog(false);
       setAddForm({ payerName: "", payerId: "", sourceUrl: "" });
+      setUploadFile(null);
       setSelectedManualId(manual.id);
-      toast({ title: "Manual added", description: "Click 'Run Extraction' to start processing." });
+      toast({ title: "Manual added", description: "Click 'Run Extraction' to start AI processing." });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
   const processMutation = useMutation({
     mutationFn: async (manualId: string) => {
-      const res = await apiRequest("POST", `/api/admin/payer-manuals/${manualId}/process`, {});
+      const res = await fetch(`/api/admin/payer-manuals/${manualId}/process`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "include", body: "{}",
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
       return res.json();
     },
     onSuccess: () => {
@@ -292,8 +496,14 @@ export default function PayerManualsPage() {
   });
 
   const reviewMutation = useMutation({
-    mutationFn: async ({ itemId, reviewStatus, notes }: { itemId: string; reviewStatus: string; notes?: string }) => {
-      const res = await apiRequest("PATCH", `/api/admin/payer-manual-items/${itemId}`, { reviewStatus, notes });
+    mutationFn: async ({ itemId, reviewStatus, notes, extractedJson }: ReviewPayload) => {
+      const res = await fetch(`/api/admin/payer-manual-items/${itemId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ reviewStatus, notes, extractedJson }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
       return res.json();
     },
     onSuccess: () => {
@@ -305,12 +515,13 @@ export default function PayerManualsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: async (manualId: string) => {
-      const res = await apiRequest("DELETE", `/api/admin/payer-manuals/${manualId}`, undefined);
+      const res = await fetch(`/api/admin/payer-manuals/${manualId}`, { method: "DELETE", credentials: "include" });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals"] });
-      if (selectedManualId) setSelectedManualId(null);
+      setSelectedManualId(null);
       toast({ title: "Manual deleted" });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
@@ -326,13 +537,7 @@ export default function PayerManualsPage() {
 
   const sectionTypes: SectionType[] = ["timely_filing", "prior_auth", "modifiers", "appeals"];
 
-  function getCoverageForManual(manualId: string) {
-    const manualItems = items.filter((i) => i.manual_id === manualId);
-    return sectionTypes.map((st) => ({
-      type: st,
-      found: manualItems.some((i) => i.section_type === st && i.review_status !== "not_found"),
-    }));
-  }
+  const canAdd = addForm.payerName && (addMode === "url" ? !!addForm.sourceUrl : !!uploadFile);
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -355,18 +560,16 @@ export default function PayerManualsPage() {
 
       {/* Coverage summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {(["timely_filing", "prior_auth", "modifiers", "appeals"] as SectionType[]).map((st) => {
-          const count = manuals.filter((m) => {
-            const allItems = items.filter((i) => i.manual_id === m.id && i.section_type === st && i.review_status === "approved");
-            return allItems.length > 0;
-          }).length;
-          const total = manuals.filter((m) => m.status === "completed").length;
+        {sectionTypes.map((st) => {
+          const total = manuals.filter((m) => m.status === "completed" || m.status === "ready_for_review").length;
           return (
             <Card key={st} data-testid={`card-coverage-${st}`}>
               <CardContent className="p-3">
                 <p className="text-xs text-muted-foreground">{SECTION_LABELS[st]}</p>
-                <p className="text-xl font-semibold mt-0.5">{count}<span className="text-sm font-normal text-muted-foreground">/{total}</span></p>
-                <p className="text-xs text-muted-foreground">payers covered</p>
+                <p className="text-xl font-semibold mt-0.5">
+                  {total}<span className="text-sm font-normal text-muted-foreground"> payers</span>
+                </p>
+                <p className="text-xs text-muted-foreground">with manual</p>
               </CardContent>
             </Card>
           );
@@ -424,10 +627,10 @@ export default function PayerManualsPage() {
                       />
                     );
                   })}
-                  <span className="text-xs text-muted-foreground ml-1">section coverage</span>
+                  <span className="text-xs text-muted-foreground ml-1">coverage</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Added {format(new Date(manual.created_at), "MMM d, yyyy")}
+                  {manual.file_name ? manual.file_name : manual.source_url ? "URL manual" : "—"} · Added {format(new Date(manual.created_at), "MMM d, yyyy")}
                 </p>
               </button>
             ))
@@ -460,8 +663,13 @@ export default function PayerManualsPage() {
                           data-testid="link-source-url"
                         >
                           <ExternalLink className="h-3 w-3" />
-                          {selectedManual.source_url.slice(0, 70)}…
+                          {selectedManual.source_url.slice(0, 65)}…
                         </a>
+                      )}
+                      {selectedManual.file_name && (
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                          <FileText className="h-3 w-3" /> {selectedManual.file_name}
+                        </p>
                       )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -550,7 +758,7 @@ export default function PayerManualsPage() {
                   <CardContent className="py-10 text-center">
                     <p className="text-sm text-muted-foreground">
                       {selectedManual.status === "pending"
-                        ? "Click 'Run Extraction' to extract rules from this manual."
+                        ? "Click 'Run Extraction' to extract rules from this manual using AI."
                         : "No items match the current filters."}
                     </p>
                   </CardContent>
@@ -570,7 +778,7 @@ export default function PayerManualsPage() {
                             <ExtractionItemCard
                               key={item.id}
                               item={item}
-                              onReview={(id, status, notes) => reviewMutation.mutate({ itemId: id, reviewStatus: status, notes })}
+                              onReview={(p) => reviewMutation.mutate(p)}
                             />
                           ))}
                         </div>
@@ -616,24 +824,75 @@ export default function PayerManualsPage() {
               </Select>
               <p className="text-xs text-muted-foreground">Linking allows approved timely filing rules to auto-update the payer record.</p>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="pm-url">Manual URL *</Label>
-              <Input
-                id="pm-url"
-                type="url"
-                value={addForm.sourceUrl}
-                onChange={(e) => setAddForm({ ...addForm, sourceUrl: e.target.value })}
-                placeholder="https://payer.com/billing-guidelines.pdf"
-                data-testid="input-source-url"
-              />
-              <p className="text-xs text-muted-foreground">Supports HTML pages and text-layer PDFs. Image-only PDFs not supported.</p>
+
+            {/* Source mode toggle */}
+            <div className="space-y-2">
+              <Label>Manual source</Label>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={addMode === "url" ? "default" : "outline"}
+                  onClick={() => setAddMode("url")}
+                  data-testid="button-mode-url"
+                >
+                  <Link2 className="h-4 w-4 mr-1" /> URL
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={addMode === "file" ? "default" : "outline"}
+                  onClick={() => setAddMode("file")}
+                  data-testid="button-mode-file"
+                >
+                  <Upload className="h-4 w-4 mr-1" /> Upload PDF
+                </Button>
+              </div>
             </div>
+
+            {addMode === "url" ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="pm-url">Manual URL *</Label>
+                <Input
+                  id="pm-url"
+                  type="url"
+                  value={addForm.sourceUrl}
+                  onChange={(e) => setAddForm({ ...addForm, sourceUrl: e.target.value })}
+                  placeholder="https://payer.com/billing-guidelines.pdf"
+                  data-testid="input-source-url"
+                />
+                <p className="text-xs text-muted-foreground">Supports HTML pages and text-layer PDFs. Image-only PDFs are not supported.</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label>PDF File *</Label>
+                <div
+                  className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                  onClick={() => fileInputRef.current?.click()}
+                  data-testid="div-file-drop"
+                >
+                  {uploadFile ? (
+                    <p className="text-sm text-foreground">{uploadFile.name} ({(uploadFile.size / 1024).toFixed(0)} KB)</p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Click to select a PDF file (max 20 MB)</p>
+                  )}
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.html,.htm,.txt"
+                  className="hidden"
+                  onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                  data-testid="input-file"
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAddDialog(false)}>Cancel</Button>
             <Button
-              onClick={() => addMutation.mutate(addForm)}
-              disabled={addMutation.isPending || !addForm.payerName || !addForm.sourceUrl}
+              onClick={() => addMutation.mutate()}
+              disabled={addMutation.isPending || !canAdd}
               data-testid="button-submit-add-manual"
             >
               {addMutation.isPending ? "Adding…" : "Add Manual"}
