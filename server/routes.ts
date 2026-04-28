@@ -177,6 +177,30 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   try {
     const { pool } = await import("./db");
 
+    console.log("[SEEDER] Starting startup schema seeder…");
+
+    // Helper: check whether a table or column exists, log result, return boolean.
+    // Used to emit "applied" vs "already present" log lines for high-drift-risk objects.
+    const seederLog = async (type: 'table' | 'column', table: string, column?: string): Promise<boolean> => {
+      let exists = false;
+      if (type === 'table') {
+        const { rows } = await pool.query(
+          `SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=$1`,
+          [table]
+        );
+        exists = rows.length > 0;
+        console.log(`[SEEDER] table ${table}: ${exists ? 'already present' : 'creating'}`);
+      } else {
+        const { rows } = await pool.query(
+          `SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND column_name=$2`,
+          [table, column!]
+        );
+        exists = rows.length > 0;
+        console.log(`[SEEDER] column ${table}.${column}: ${exists ? 'already present' : 'adding'}`);
+      }
+      return exists;
+    };
+
     // Core multi-tenancy columns — must run before any seed or login query
     // Ensure organizations table exists first (other tables may FK or reference it)
     await pool.query(`CREATE TABLE IF NOT EXISTS organizations (
@@ -203,7 +227,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_username VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_sftp_password VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS oa_connected BOOLEAN DEFAULT false`);
+    await seederLog('column', 'practice_settings', 'frcpb_enrolled');
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS frcpb_enrolled BOOLEAN DEFAULT false`);
+    await seederLog('column', 'practice_settings', 'frcpb_enrolled_at');
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS frcpb_enrolled_at TIMESTAMP`);
     // Sprint-2 schema additions
     await pool.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS onboarding_dismissed_at TIMESTAMP`);
@@ -1075,6 +1101,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_webhook_events_event_id ON webhook_events(event_id)`);
 
     // ── Submission audit trail (Environment Guards — runs on every deploy) ─────
+    await seederLog('table', 'submission_attempts');
     await pool.query(`
       CREATE TABLE IF NOT EXISTS submission_attempts (
         id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -1095,6 +1122,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE submission_attempts ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT false`).catch(() => {});
     await pool.query(`ALTER TABLE submission_attempts ADD COLUMN IF NOT EXISTS block_reason VARCHAR`).catch(() => {});
     // last_test_correlation_id on claims (may not exist in older prod databases)
+    await seederLog('column', 'claims', 'last_test_correlation_id');
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_correlation_id VARCHAR`).catch(() => {});
 
     // ── Section 1: payer enrollment status columns ────────────────────────────
@@ -1253,6 +1281,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       console.log("Seeded demo ERA batches");
     }
 
+    console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
   }

@@ -81,6 +81,14 @@ The platform adopts an enterprise SaaS design aesthetic with shadcn/ui and Tailw
   - `webhook_events` table stores event_id for idempotency
   - `payers` table: enrollment_status_835, enrollment_status_837, enrollment_activated_at columns
 
+### Schema Governance Rule (CRITICAL)
+Every new database table or column addition **must** be placed in the startup seeder inside `server/routes.ts` (the `try` block at the top of `registerRoutes`). Use `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE … ADD COLUMN IF NOT EXISTS` so the statement is idempotent. **Never add raw DDL only to `scripts/post-merge.sh`** — that script only runs on Replit task-branch merges, not on Railway production deployments.
+
+- The startup seeder runs on every server start in all environments (Replit and Railway).
+- The seeder logs `[SEEDER] Starting startup schema seeder…` at the beginning and `[SEEDER] Startup schema seeder complete.` at the end so you can confirm it ran.
+- For schema objects at high risk of environment drift, a `seederLog('table'|'column', …)` check is called just before the DDL statement to log whether the object was already present or is being created for the first time.
+- `scripts/post-merge.sh` now only installs dependencies (`npm install`); the seeder owns all DDL.
+
 ### Rules Engine (ClaimShield 2.0)
 - Universal rules seeded with `condition_type` schema (12 rules: missing NPI, diagnosis, charges, payer, service date, VA auth, timely filing, duplicate, etc.)
 - `rules` table new columns: condition_type, condition_value, action, is_active
