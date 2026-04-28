@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronDown, ChevronRight, ExternalLink, CheckCircle2, AlertCircle, AlertTriangle,
-  XCircle, Search, Radio, FileText, Loader2, Clock, FlaskConical,
+  XCircle, Search, Radio, FileText, Loader2, Clock, FlaskConical, Pencil,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -160,6 +160,13 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
                   <FileText className="h-3.5 w-3.5 mr-1" /> Open Claim
                 </Button>
               </Link>
+              {claim.status === "draft" && (
+                <Link href={`/billing/claims/new?claimId=${claim.id}`}>
+                  <Button variant="outline" size="sm" data-testid={`button-edit-draft-${claim.id?.slice(0, 8)}`}>
+                    <Pencil className="h-3.5 w-3.5 mr-1" /> Continue Editing
+                  </Button>
+                </Link>
+              )}
               {claim.patient_record_id && (
                 <Link href={`/billing/patients/${claim.patient_record_id}`}>
                   <Button variant="ghost" size="sm" data-testid={`button-open-patient-${claim.id?.slice(0, 8)}`}>

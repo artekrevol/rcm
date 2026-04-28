@@ -47,6 +47,8 @@ import {
   RefreshCw,
   FlaskConical,
   ChevronRight,
+  Pencil,
+  CheckCircle,
 } from "lucide-react";
 import { format, differenceInDays, formatDistanceToNow } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
@@ -233,6 +235,20 @@ export default function ClaimDetailPage() {
     },
     onError: () => {
       toast({ title: "Failed to submit claim", variant: "destructive" });
+    },
+  });
+
+  const markReadyMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("PATCH", `/api/billing/claims/${id}`, { status: "created" });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/claim-tracker"] });
+      toast({ title: "Claim marked as ready", description: "You can now review and submit this claim." });
+    },
+    onError: () => {
+      toast({ title: "Failed to update claim status", variant: "destructive" });
     },
   });
 
@@ -888,6 +904,30 @@ export default function ClaimDetailPage() {
                 <HelpCircle className="h-4 w-4 mr-2" />
                 View Risk Analysis
               </Button>
+              {claim.status === "draft" && (
+                <>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => setLocation(`/billing/claims/new?claimId=${claim.id}`)}
+                    data-testid="button-continue-editing"
+                  >
+                    <Pencil className="h-4 w-4 mr-2" />
+                    Continue Editing Draft
+                  </Button>
+                  <Button
+                    className="w-full justify-start"
+                    onClick={() => markReadyMutation.mutate()}
+                    disabled={markReadyMutation.isPending}
+                    data-testid="button-mark-ready"
+                  >
+                    {markReadyMutation.isPending
+                      ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      : <CheckCircle className="h-4 w-4 mr-2" />}
+                    Mark Ready to Submit
+                  </Button>
+                </>
+              )}
               {practiceSettings?.oa_connected &&
                 ["exported", "draft", "created"].includes(claim.status) && (
                   <Button
