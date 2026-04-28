@@ -8458,6 +8458,9 @@ Warmly,
         }
       }
 
+      // Idempotent reprocessing: remove existing pending/not_found items so we start clean
+      await db.query(`DELETE FROM manual_extraction_items WHERE manual_id = $1 AND review_status IN ('pending','not_found')`, [manualId]);
+
       // Mark as processing
       await db.query("UPDATE payer_manuals SET status = 'processing', updated_at = NOW() WHERE id = $1", [manualId]);
       res.json({ status: "processing", message: "Extraction started" });
@@ -8540,14 +8543,16 @@ Warmly,
       if (!rows.length) return res.status(404).json({ error: "Item not found" });
       const item = rows[0];
 
-      // If approved, write to downstream tables
+      // If approved, write to downstream tables — collect errors instead of silently swallowing them
+      const sideEffectErrors: string[] = [];
       if (reviewStatus === "approved" && item.extracted_json) {
         const data = item.extracted_json as any;
         const { rows: manuals } = await db.query("SELECT * FROM payer_manuals WHERE id = $1", [item.manual_id]);
         const manual = manuals[0];
 
         if (item.section_type === "timely_filing" && data.days > 0 && manual?.payer_id) {
-          await db.query("UPDATE payers SET timely_filing_days = $1 WHERE id = $2", [data.days, manual.payer_id]).catch(() => {});
+          await db.query("UPDATE payers SET timely_filing_days = $1 WHERE id = $2", [data.days, manual.payer_id])
+            .catch((e: any) => sideEffectErrors.push(`timely_filing update: ${e.message}`));
         }
         if (item.section_type === "prior_auth" && manual?.payer_id) {
           const codes: string[] = data.cpt_codes && data.cpt_codes.length > 0 ? data.cpt_codes : ["*"];
@@ -8556,7 +8561,8 @@ Warmly,
               INSERT INTO payer_auth_requirements (payer_id, payer_name, code, code_type, auth_required, auth_conditions, notes)
               VALUES ($1, $2, $3, 'HCPCS', $4, $5, $6)
               ON CONFLICT (payer_id, code) DO UPDATE SET auth_conditions = EXCLUDED.auth_conditions, notes = EXCLUDED.notes
-            `, [manual.payer_id, manual.payer_name, code, data.requires_auth, data.criteria, `Source: ${manual.payer_name} Manual`]).catch(() => {});
+            `, [manual.payer_id, manual.payer_name, code, data.requires_auth, data.criteria, `Source: ${manual.payer_name} Manual`])
+              .catch((e: any) => sideEffectErrors.push(`payer_auth code ${code}: ${e.message}`));
           }
         }
         if (item.section_type === "modifiers" || item.section_type === "appeals") {
@@ -8576,19 +8582,21 @@ Warmly,
           if (contextTags.length === 0) contextTags.push('Universal');
           const tagsLiteral = `{${contextTags.map(t => `"${t}"`).join(',')}}`;
 
-          const { rows: ruleRows } = await db.query(`
+          const ruleResult = await db.query(`
             INSERT INTO rules (name, description, trigger_pattern, prevention_action, payer, enabled, specialty_tags)
             VALUES ($1, $2, $3, $4, $5, true, $6)
             RETURNING id
-          `, [ruleName, description || '', trigger, prevention, manual?.payer_name || '', tagsLiteral]).catch(() => ({ rows: [] })) as any;
+          `, [ruleName, description || '', trigger, prevention, manual?.payer_name || '', tagsLiteral])
+            .catch((e: any) => { sideEffectErrors.push(`rules insert: ${e.message}`); return { rows: [] }; }) as any;
 
-          if (ruleRows?.[0]?.id) {
-            await db.query("UPDATE manual_extraction_items SET applied_rule_id = $1 WHERE id = $2", [ruleRows[0].id, item.id]).catch(() => {});
+          if (ruleResult?.rows?.[0]?.id) {
+            await db.query("UPDATE manual_extraction_items SET applied_rule_id = $1 WHERE id = $2", [ruleResult.rows[0].id, item.id])
+              .catch((e: any) => sideEffectErrors.push(`applied_rule_id update: ${e.message}`));
           }
         }
       }
 
-      res.json(item);
+      res.json({ ...item, sideEffectErrors: sideEffectErrors.length > 0 ? sideEffectErrors : undefined });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

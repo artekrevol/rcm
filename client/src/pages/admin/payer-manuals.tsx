@@ -506,9 +506,16 @@ export default function PayerManualsPage() {
       if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals", selectedManualId, "items"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals"] });
+      if (data?.sideEffectErrors?.length) {
+        toast({
+          title: "Approved with warnings",
+          description: `Rule was approved but some downstream writes had issues: ${data.sideEffectErrors[0]}`,
+          variant: "destructive",
+        });
+      }
     },
     onError: (err: any) => toast({ title: "Review failed", description: err.message, variant: "destructive" }),
   });
