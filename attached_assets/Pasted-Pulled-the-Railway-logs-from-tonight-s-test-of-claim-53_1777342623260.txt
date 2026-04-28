@@ -1,0 +1,98 @@
+Pulled the Railway logs from tonight's test of claim 53925842. They 
+reveal three things, in order of severity:
+
+1. The submission_attempts table DOES NOT EXIST in production.
+
+Direct evidence from the log:
+  [SubmissionAudit] Could not log attempt: relation 
+  "submission_attempts" does not exist
+
+Your commit message claimed this table was created. It was not. The 
+schema migration didn't run in production. This is the third 
+schema-state inaccuracy from your commit messages this week 
+(prior: last_test_correlation_id column, "Megan Perez seed data" 
+claim). I cannot accept commit messages as verification anymore — 
+every database claim must be query-verified before merge.
+
+Please:
+- Confirm whether the migration code exists in your codebase
+- If yes, why it didn't run on deploy — is the migration path broken?
+- Run the migration now in production (not heliumdb)
+- Verify by running this against PRODUCTION_READONLY_DATABASE_URL:
+  SELECT column_name FROM information_schema.columns 
+  WHERE table_name = 'submission_attempts';
+
+2. The submit-stedi endpoint never calls Stedi. It fails internally 
+in 82ms.
+
+Direct evidence from the log:
+  POST /api/billing/claims/.../test-stedi 200 in 4903ms (success)
+  POST /api/billing/claims/.../submit-stedi 200 in 82ms (failure)
+
+The test endpoint takes 4.9 seconds — that's a real Stedi round trip. 
+The submit endpoint takes 82ms — that's an internal validator 
+rejection without calling Stedi. The error message attributes the 
+failure to Stedi: "EDI envelope is malformed — cannot determine 
+ISA15. Submission blocked." This attribution is false. Stedi never 
+saw the request.
+
+Please:
+- Find the internal validator in the submit-stedi code path that's 
+  rejecting in 82ms
+- Fix the error message to accurately attribute: "ClaimShield 
+  internal validation failed: cannot read ISA15 from generated EDI"
+- Investigate why the EDI generator output passes the test endpoint 
+  but fails the submit endpoint's internal validation
+
+3. The submit-stedi endpoint isn't using the test-mode override.
+
+The test endpoint logs:
+  [Stedi] testClaim claimId=... ISA15=T (forced)
+
+The submit endpoint has no equivalent log line. Its EDI generator 
+isn't being told to force ISA15='T' even though the user has the 
+"Submit as test" override checkbox checked.
+
+Hypothesis: The override checkbox value isn't being passed to the 
+submit endpoint, OR is being passed but ignored, OR is being passed 
+but not applied to the EDI generator. The test endpoint hardcodes 
+ISA15='T' (the "forced" log indicates this). The submit endpoint 
+should accept a parameter from the request body indicating whether 
+the override is active and apply it the same way.
+
+Please:
+- Trace the test-mode override checkbox value from the wizard 
+  through the API request to the EDI generator in the submit path
+- Add the same "ISA15=T (forced)" capability to the submit endpoint 
+  when the override is active
+- Add an equivalent log line for the submit endpoint so we can 
+  verify it's working
+
+Combined fix: both paths should use the SAME function for EDI 
+generation and the SAME function for Stedi submission. The fact 
+that they behave differently means they're using different code 
+paths somewhere. Consolidate to one. Both buttons should call the 
+same underlying code; only the user-facing label and the destination 
+flag differ.
+
+Diagnostic queries to run before fixing:
+- Compare the request bodies sent from the test button vs the submit 
+  button (browser DevTools network tab can show this)
+- Find both endpoint handlers in routes.ts and diff them
+- Find the EDI generation calls in each — confirm they pass the same 
+  parameters or document why they differ
+
+Do not run live Stedi submissions during diagnosis. The bug is 
+reproducible from the wizard and the logs give you everything you 
+need.
+
+When fixed, verify with:
+1. Build the same Robert Hernandez claim
+2. Click "Submit Claim (Test)" with override checked
+3. Should see in logs: 
+   [Stedi] submitClaim claimId=... ISA15=T (forced)
+   POST /submit-stedi 200 in ~5000ms (real Stedi round trip)
+   {"success": true, ...}
+4. Stedi portal should show the claim with ISA15=T and no payer 
+   forwarding
+5. submission_attempts table should have a row logging the attempt

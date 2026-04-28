@@ -1074,6 +1074,29 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_webhook_events_event_id ON webhook_events(event_id)`);
 
+    // ── Submission audit trail (Environment Guards — runs on every deploy) ─────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS submission_attempts (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        claim_id VARCHAR NOT NULL,
+        organization_id VARCHAR,
+        isa15 VARCHAR(1) NOT NULL,
+        test_mode_override BOOLEAN DEFAULT false,
+        automated BOOLEAN DEFAULT false,
+        test_data_result VARCHAR,
+        test_data_score INTEGER,
+        attempted_by VARCHAR,
+        attempted_at TIMESTAMP DEFAULT NOW() NOT NULL
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_submission_attempts_claim_id ON submission_attempts(claim_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_submission_attempts_at ON submission_attempts(attempted_at)`);
+    // Optional annotation columns (non-critical, present in some envs)
+    await pool.query(`ALTER TABLE submission_attempts ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT false`).catch(() => {});
+    await pool.query(`ALTER TABLE submission_attempts ADD COLUMN IF NOT EXISTS block_reason VARCHAR`).catch(() => {});
+    // last_test_correlation_id on claims (may not exist in older prod databases)
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_correlation_id VARCHAR`).catch(() => {});
+
     // ── Section 1: payer enrollment status columns ────────────────────────────
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_status_835 VARCHAR DEFAULT 'not_enrolled'`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_status_837 VARCHAR DEFAULT 'not_enrolled'`);
@@ -3667,6 +3690,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const isFrcpbPayer = (payerInfo as any).payer_id === "FRCPB";
       const testModeOverride: boolean = !!(req.body?.testMode) || isFrcpbPayer;
       const isa15 = resolveISA15(testModeOverride);
+      console.log(
+        `[Stedi] submit-stedi pending: claimId=${c.id} ISA15=${isa15}` +
+        (testModeOverride ? " (forced test)" : "") +
+        ` isFrcpb=${isFrcpbPayer} reqBodyTestMode=${!!req.body?.testMode}`
+      );
 
       const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
       const serviceLines = rawLines.map((sl: any) => ({
