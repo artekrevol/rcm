@@ -153,7 +153,8 @@ function extractTextFromHtml(html: string): string {
   return bodyText.replace(/\t/g, " ").replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-const PDF_VISION_MAX_BYTES = 20 * 1024 * 1024; // 20 MB — Claude PDF limit
+// 5 MB keeps us well under Claude's 200 K-token context limit for scanned pages
+const PDF_VISION_MAX_BYTES = 5 * 1024 * 1024;
 
 async function extractPdfWithClaudeVision(buffer: Buffer): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -179,7 +180,7 @@ async function extractPdfWithClaudeVision(buffer: Buffer): Promise<string> {
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: "claude-3-5-sonnet-20241022",
+      model: "claude-haiku-4-5-20251001",
       max_tokens: 4096,
       messages: [
         {
