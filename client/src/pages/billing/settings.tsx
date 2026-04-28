@@ -713,6 +713,7 @@ function PracticeInfoTab() {
     state: "",
     zip: "",
     billingLocation: "",
+    defaultVaLocality: "",
   });
   const [npiError, setNpiError] = useState("");
   const [locationSearch, setLocationSearch] = useState("");
@@ -760,6 +761,7 @@ function PracticeInfoTab() {
         state: addr.state || "",
         zip: addr.zip || "",
         billingLocation: settings.billing_location || "",
+        defaultVaLocality: settings.default_va_locality || "",
       });
       setInitialized(true);
     }
@@ -801,6 +803,7 @@ function PracticeInfoTab() {
       defaultPos: form.defaultPos,
       address: { street: form.street, city: form.city, state: form.state, zip: form.zip },
       billingLocation: form.billingLocation || null,
+      defaultVaLocality: form.defaultVaLocality || null,
     });
   }
 
@@ -867,11 +870,11 @@ function PracticeInfoTab() {
         </div>
       </div>
       <div className="space-y-2">
-        <Label className="flex items-center gap-1.5"><MapPin className="h-4 w-4" />Fee Schedule Region / Locality</Label>
-        <p className="text-xs text-muted-foreground">Select the location that matches your practice's billing address. Used to look up applicable fee schedule rates (Medicare MAC locality, VA CCN, commercial contract).</p>
-        <Select value={form.billingLocation} onValueChange={(v) => setForm({ ...form, billingLocation: v })}>
+        <Label className="flex items-center gap-1.5"><MapPin className="h-4 w-4" />VA Fee Schedule Locality</Label>
+        <p className="text-xs text-muted-foreground">Select the locality that matches your practice location. This pre-fills the VA locality in claim service lines and determines the applicable VA Community Care fee schedule rate.</p>
+        <Select value={form.defaultVaLocality} onValueChange={(v) => setForm({ ...form, defaultVaLocality: v })}>
           <SelectTrigger data-testid="select-billing-location">
-            <SelectValue placeholder="Select billing locality..." />
+            <SelectValue placeholder="Select VA locality..." />
           </SelectTrigger>
           <SelectContent>
             <div className="p-2">

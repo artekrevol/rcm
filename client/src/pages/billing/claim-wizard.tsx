@@ -475,8 +475,19 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
         }
       }
     } catch {}
-    onChange(index, { locationName: location, isAverageRate: false });
+    onChange(index, { locationName: null, isAverageRate: false });
   }
+
+  const payerLowerForEffect = (patientPayer || "").toLowerCase().replace(/\s+/g, "");
+  const isVAForEffect = payerLowerForEffect.includes("va") || payerLowerForEffect.includes("triwest") || payerLowerForEffect.includes("vaccn");
+
+  // Auto-trigger rate lookup when a VA code is added and locality isn't set yet
+  useEffect(() => {
+    if (line.code && isVACode(line.code) && isVAForEffect && !line.locationName && !line.ratePerUnit) {
+      lookupRate(line.code, billingLocation);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [line.code, billingLocation]);
 
   async function handleCodeSelect(result: any) {
     const payerLower = (patientPayer || "").toLowerCase().replace(/\s+/g, "");
@@ -1460,7 +1471,7 @@ export default function ClaimWizard() {
                   onChange={updateServiceLine}
                   onRemove={removeServiceLine}
                   patientPayer={patient?.insurance_carrier || null}
-                  billingLocation={wizardData?.practiceSettings?.billing_location || null}
+                  billingLocation={wizardData?.practiceSettings?.default_va_locality || wizardData?.practiceSettings?.billing_location || null}
                 />
               ))}
               <Separator />

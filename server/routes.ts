@@ -1121,6 +1121,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // Optional annotation columns (non-critical, present in some envs)
     await pool.query(`ALTER TABLE submission_attempts ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT false`).catch(() => {});
     await pool.query(`ALTER TABLE submission_attempts ADD COLUMN IF NOT EXISTS block_reason VARCHAR`).catch(() => {});
+    // VA locality: dedicated column separate from billing address ZIP/city
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS default_va_locality VARCHAR`).catch(() => {});
+    // Migrate existing billing_location values that are actual locality names (not ZIP codes or bare city names)
+    await pool.query(`
+      UPDATE practice_settings SET default_va_locality = billing_location
+      WHERE default_va_locality IS NULL
+        AND billing_location IS NOT NULL
+        AND LENGTH(billing_location) > 10
+        AND billing_location ~ '[A-Za-z].*[A-Za-z]'
+        AND billing_location NOT ~ '^\\d+$'
+    `).catch(() => {});
     // last_test_correlation_id on claims (may not exist in older prod databases)
     await seederLog('column', 'claims', 'last_test_correlation_id');
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_correlation_id VARCHAR`).catch(() => {});
@@ -1552,7 +1563,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation, oa_submitter_id, oa_sftp_username, oa_sftp_password, defaultTos, defaultOrderingProviderId, homeboundDefault, excludeFacility } = req.body;
+      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation, defaultVaLocality, oa_submitter_id, oa_sftp_username, oa_sftp_password, defaultTos, defaultOrderingProviderId, homeboundDefault, excludeFacility } = req.body;
       const orgId = getOrgId(req);
       const db = await import("./db").then(m => m.pool);
       const existing = orgId
@@ -1561,6 +1572,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (existing.rows.length > 0) {
         let query = `UPDATE practice_settings SET practice_name=$1, primary_npi=$2, tax_id=$3, taxonomy_code=$4, address=$5, phone=$6, default_pos=$7, billing_location=$9, updated_at=NOW()`;
         const params: any[] = [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '11', existing.rows[0].id, billingLocation || null];
+        if (defaultVaLocality !== undefined) { query += `, default_va_locality=$${params.length + 1}`; params.push(defaultVaLocality || null); }
         if (oa_submitter_id !== undefined) { query += `, oa_submitter_id=$${params.length + 1}`; params.push(oa_submitter_id); }
         if (oa_sftp_username !== undefined) { query += `, oa_sftp_username=$${params.length + 1}`; params.push(oa_sftp_username); }
         if (oa_sftp_password !== undefined) { query += `, oa_sftp_password=$${params.length + 1}`; params.push(oa_sftp_password); }
@@ -1573,9 +1585,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         res.json(rows[0]);
       } else {
         const { rows } = await db.query(
-          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location, organization_id, default_tos, default_ordering_provider_id, homebound_default, exclude_facility)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
-          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', billingLocation || null, orgId || null, defaultTos || null, defaultOrderingProviderId || null, homeboundDefault ?? true, excludeFacility ?? true]
+          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location, default_va_locality, organization_id, default_tos, default_ordering_provider_id, homebound_default, exclude_facility)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', billingLocation || null, defaultVaLocality || null, orgId || null, defaultTos || null, defaultOrderingProviderId || null, homeboundDefault ?? true, excludeFacility ?? true]
         );
         res.json(rows[0]);
       }
@@ -1659,18 +1671,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (rows.length > 0) return res.json(rows[0]);
       }
 
-      // Read billing_location from practice_settings (structured column, not key/value)
-      const DEFAULT_LOCALITY = 'SAN FRANCISCO-OAKLAND-BERKELEY (ALAMEDA/CONTRA COSTA CNTY)';
-      let defaultLocality = DEFAULT_LOCALITY;
+      // Read default_va_locality (dedicated column) then fall back to billing_location from practice_settings
+      const HARDCODED_DEFAULT = 'SAN FRANCISCO-OAKLAND-BERKELEY (ALAMEDA/CONTRA COSTA CNTY)';
+      let defaultLocality = HARDCODED_DEFAULT;
       try {
         const psQuery = orgId
-          ? await db.query(`SELECT billing_location FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
-          : await db.query(`SELECT billing_location FROM practice_settings LIMIT 1`);
-        if (psQuery.rows[0]?.billing_location) {
-          defaultLocality = psQuery.rows[0].billing_location.toUpperCase();
+          ? await db.query(`SELECT default_va_locality, billing_location FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+          : await db.query(`SELECT default_va_locality, billing_location FROM practice_settings LIMIT 1`);
+        const ps = psQuery.rows[0];
+        if (ps?.default_va_locality) {
+          defaultLocality = ps.default_va_locality.toUpperCase();
+        } else if (ps?.billing_location) {
+          defaultLocality = ps.billing_location.toUpperCase();
         }
-      } catch (_) { /* fall through to default */ }
+      } catch (_) { /* fall through to hardcoded default */ }
 
+      // Try exact locality-name match against the practice's default
       const { rows: locRows } = await db.query(
         `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
                 hc.unit_type, hc.unit_interval_minutes, hc.description_plain
@@ -1684,6 +1700,38 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (locRows.length > 0) {
         return res.json({ ...locRows[0], is_default_locality: true });
       }
+
+      // Try fuzzy match (handles partial names like "AUSTIN" → "AUSTIN-ROUND ROCK-SAN MARCOS")
+      const { rows: fuzzyRows } = await db.query(
+        `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
+                hc.unit_type, hc.unit_interval_minutes, hc.description_plain
+         FROM va_location_rates vlr
+         LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
+         WHERE vlr.hcpcs_code = $1
+           AND UPPER(vlr.location_name) LIKE $2
+           AND vlr.is_non_reimbursable = false
+         ORDER BY LENGTH(vlr.location_name) LIMIT 1`,
+        [code, `%${defaultLocality}%`]
+      );
+      if (fuzzyRows.length > 0) {
+        return res.json({ ...fuzzyRows[0], is_default_locality: true });
+      }
+
+      // Last resort: fall back to hard-coded SF Bay Area default
+      const { rows: sfRows } = await db.query(
+        `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
+                hc.unit_type, hc.unit_interval_minutes, hc.description_plain
+         FROM va_location_rates vlr
+         LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
+         WHERE vlr.hcpcs_code = $1 AND UPPER(vlr.location_name) = $2
+           AND vlr.is_non_reimbursable = false
+         LIMIT 1`,
+        [code, HARDCODED_DEFAULT]
+      );
+      if (sfRows.length > 0) {
+        return res.json({ ...sfRows[0], is_default_locality: true });
+      }
+
       const { rows: avgRows } = await db.query(
         `SELECT ROUND(AVG(facility_rate)::numeric, 2) as rate_per_unit
          FROM va_location_rates
