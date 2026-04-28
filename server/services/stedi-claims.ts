@@ -56,6 +56,8 @@ export interface StediSubmissionResult {
   validationErrors?: (string | StediValidationError)[];
   rawResponse?: Record<string, unknown>;
   error?: string;
+  /** "claimshield" = blocked by our own guard before reaching Stedi; "stedi" = Stedi returned an error */
+  blockedBy?: "claimshield" | "stedi";
 }
 
 /**
@@ -63,7 +65,10 @@ export interface StediSubmissionResult {
  * Returns 'T', 'P', or null if the segment cannot be parsed.
  */
 function readISA15(edi: string): "T" | "P" | null {
-  const match = edi.match(/^ISA\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*([PT])\*/m);
+  // ISA has 16 data elements. ISA15 (Usage Indicator, T/P) is the 15th field.
+  // Pattern: ISA * 01 * 02 * 03 * 04 * 05 * 06 * 07 * 08 * 09 * 10 * 11 * 12 * 13 * 14 * [T|P] * 16 ~
+  // We need 14 x "[^*]*\*" groups (ISA01-ISA14) then capture ISA15.
+  const match = edi.match(/^ISA\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*([PT])\*/m);
   if (!match) return null;
   return match[1] as "T" | "P";
 }
@@ -108,7 +113,8 @@ export async function submitClaim(
   if (!isa15) {
     return {
       success: false,
-      error: "EDI envelope is malformed — cannot determine ISA15. Submission blocked.",
+      blockedBy: "claimshield",
+      error: "ClaimShield could not read the ISA15 field from the generated EDI — the claim was not sent to the payer. Please try again. If the problem persists, contact support.",
     };
   }
 
@@ -134,6 +140,7 @@ export async function submitClaim(
   if (!response.ok) {
     return {
       success: false,
+      blockedBy: "stedi",
       rawResponse: data,
       error:
         data.message ||
@@ -149,6 +156,7 @@ export async function submitClaim(
 
   return {
     success: accepted,
+    blockedBy: accepted ? undefined : "stedi",
     transactionId,
     controlNumber: ref.customerClaimNumber || ref.patientControlNumber || (data as any).controlNumber,
     status: accepted ? "Accepted" : "Rejected",

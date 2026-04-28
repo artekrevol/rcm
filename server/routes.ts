@@ -2766,12 +2766,55 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (serviceLines.length === 0) { score += 20; factors.push("No service lines"); }
       if (claim.charge_overridden) { score += 5; factors.push("Charge manually overridden"); }
 
+      // ── Duplicate diagnosis code check ───────────────────────────────────────
+      const allDx: string[] = [];
+      if (claim.icd10_primary) allDx.push(claim.icd10_primary.trim().toUpperCase());
+      if (Array.isArray(claim.icd10_secondary)) {
+        for (const code of claim.icd10_secondary) {
+          if (code) allDx.push(code.trim().toUpperCase());
+        }
+      }
+      if (allDx.length > new Set(allDx).size) {
+        const dupes = allDx.filter((c, i) => allDx.indexOf(c) !== i);
+        score += 40;
+        factors.push(`Duplicate diagnosis code(s): ${[...new Set(dupes)].join(", ")} — payers reject claims with repeated diagnosis codes`);
+      }
+
+      // ── Service date checks ──────────────────────────────────────────────────
       const serviceDate = claim.service_date;
       if (serviceDate) {
-        const daysSince = Math.floor((Date.now() - new Date(serviceDate).getTime()) / 86400000);
-        const payerResult = await db.query("SELECT timely_filing_days FROM payers WHERE name = $1 OR id = $2", [claim.payer, claim.payer_id]);
-        const filingLimit = payerResult.rows[0]?.timely_filing_days || 365;
-        if (daysSince > filingLimit * 0.8) { score += 15; factors.push(`Service date ${daysSince} days ago — approaching ${filingLimit}-day filing limit`); }
+        const svcTime = new Date(serviceDate).getTime();
+        const now = Date.now();
+        const daysSince = Math.floor((now - svcTime) / 86400000);
+
+        if (daysSince < 0) {
+          // Future-dated — payers always reject
+          score += 60;
+          factors.push(`Service date is ${Math.abs(daysSince)} day(s) in the future — payers reject future-dated claims`);
+        } else {
+          const payerResult = await db.query("SELECT timely_filing_days FROM payers WHERE name = $1 OR id = $2", [claim.payer, claim.payer_id]);
+          const filingLimit = payerResult.rows[0]?.timely_filing_days || 365;
+          const daysRemaining = filingLimit - daysSince;
+          if (daysRemaining < 0) {
+            score += 40;
+            factors.push(`Service date is ${daysSince} days ago — past the ${filingLimit}-day timely filing limit`);
+          } else if (daysRemaining <= 30) {
+            score += 20;
+            factors.push(`Filing deadline in ${daysRemaining} day(s) — submit immediately (${filingLimit}-day limit)`);
+          } else if (daysSince > filingLimit * 0.8) {
+            score += 10;
+            factors.push(`Service date ${daysSince} days ago — approaching ${filingLimit}-day filing limit`);
+          }
+        }
+
+        // DOB sanity: patient should have been born before the service date
+        if (patient?.dob) {
+          const dobTime = new Date(patient.dob).getTime();
+          if (dobTime > svcTime) {
+            score += 20;
+            factors.push("Patient date of birth is after the service date — possible data entry error");
+          }
+        }
       }
 
       const riskScore = Math.min(score, 100);
@@ -3800,6 +3843,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       res.json({
         success: result.success,
+        blockedBy: result.blockedBy,
         transactionId: result.transactionId,
         status: result.status,
         validationErrors: result.validationErrors || [],
@@ -3807,7 +3851,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       });
     } catch (err: any) {
       console.error("Stedi submit error:", err);
-      console.error('[API] Error:', err); res.status(500).json({ success: false, error: 'An unexpected error occurred. Please try again.' });
+      const isAutomatedBlock = err?.name === "AutomatedSubmissionBlocked";
+      res.status(isAutomatedBlock ? 403 : 500).json({
+        success: false,
+        blockedBy: "claimshield",
+        error: isAutomatedBlock
+          ? "Automated submission blocked — a human session is required to submit claims to a real payer."
+          : "An unexpected error occurred during submission. The claim was not sent.",
+      });
     }
   });
 

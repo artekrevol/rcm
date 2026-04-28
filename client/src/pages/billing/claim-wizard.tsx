@@ -946,7 +946,7 @@ export default function ClaimWizard() {
   const isFrcpbPayer = matchedPayer?.payer_id === "FRCPB";
 
   const [stediSubmitting, setStediSubmitting] = useState(false);
-  const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string; validationErrors?: any[] } | null>(null);
+  const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string; validationErrors?: any[]; blockedBy?: "claimshield" | "stedi" } | null>(null);
   const [testingClaim, setTestingClaim] = useState(false);
   const [showTestModal, setShowTestModal] = useState(false);
   const [testClaimResult, setTestClaimResult] = useState<{ success: boolean; status?: string; transactionId?: string; validationErrors?: any[]; summary?: string; payerName?: string; error?: string } | null>(null);
@@ -1910,7 +1910,11 @@ export default function ClaimWizard() {
                 <div className="flex items-start gap-2 text-red-800 dark:text-red-200">
                   <XCircle className="h-4 w-4 mt-0.5 shrink-0 text-red-600" />
                   <div>
-                    <p className="font-semibold">Stedi rejected the submission</p>
+                    <p className="font-semibold">
+                      {stediResult.blockedBy === "claimshield"
+                        ? "Submission blocked by ClaimShield"
+                        : "Stedi rejected the submission"}
+                    </p>
                     <p className="text-xs mt-0.5">{stediResult.error}</p>
                     {stediResult.validationErrors && stediResult.validationErrors.length > 0 && (
                       <ul className="mt-1.5 space-y-0.5">
