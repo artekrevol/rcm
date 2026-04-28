@@ -121,7 +121,8 @@ function findRelevantChunks(fullText: string, sectionType: SectionType): string[
 
 async function extractTextFromUrl(url: string): Promise<string> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+  // Allow 60 s to download — large PDFs from major payers can be slow
+  const timeout = setTimeout(() => controller.abort(), 60000);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
@@ -152,14 +153,94 @@ function extractTextFromHtml(html: string): string {
   return bodyText.replace(/\t/g, " ").replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+const PDF_VISION_MAX_BYTES = 20 * 1024 * 1024; // 20 MB — Claude PDF limit
+
+async function extractPdfWithClaudeVision(buffer: Buffer): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set — cannot use Claude PDF vision");
+
+  if (buffer.length > PDF_VISION_MAX_BYTES) {
+    // Trim to first 20 MB to stay within Claude's document limit
+    buffer = buffer.subarray(0, PDF_VISION_MAX_BYTES);
+  }
+
+  const base64 = buffer.toString("base64");
+
+  const visionController = new AbortController();
+  const visionTimeout = setTimeout(() => visionController.abort(), 120000); // 2-min timeout for large PDFs
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    signal: visionController.signal,
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "pdfs-2024-09-25",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-3-5-sonnet-20241022",
+      max_tokens: 4096,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "document",
+              source: {
+                type: "base64",
+                media_type: "application/pdf",
+                data: base64,
+              },
+            },
+            {
+              type: "text",
+              text: `Extract all text content from this payer billing manual PDF, preserving section headings and structure.
+Pay special attention to sections about:
+1. Timely filing requirements (how many days to submit claims)
+2. Prior authorization requirements
+3. Billing modifier requirements
+4. Claims appeal and reconsideration process
+
+Return the extracted text in plain text format with section headings preserved. Do not summarize — return the actual text.`,
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  clearTimeout(visionTimeout);
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Claude PDF vision API error ${res.status}: ${err.slice(0, 300)}`);
+  }
+
+  const data = (await res.json()) as any;
+  const text = data.content?.[0]?.text || "";
+  if (!text.trim()) throw new Error("Claude PDF vision returned empty text");
+  return text.replace(/\s{3,}/g, "\n\n").trim();
+}
+
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  // First try the fast, free text-layer extraction
   try {
     const pdfParse = (await import("pdf-parse")).default;
     const data = await pdfParse(buffer);
-    return data.text.replace(/\s{3,}/g, "\n\n").trim();
+    const text = data.text.replace(/\s{3,}/g, "\n\n").trim();
+    // If the PDF had a proper text layer, use it
+    if (text.length > 200) return text;
   } catch {
-    throw new Error("PDF text extraction failed — file may be image-only (OCR not supported)");
+    // pdf-parse failed — fall through to Claude vision
   }
+
+  // Fallback: use Claude's vision to read image-based / scanned PDFs
+  if (process.env.ANTHROPIC_API_KEY) {
+    return await extractPdfWithClaudeVision(buffer);
+  }
+
+  throw new Error("PDF text extraction failed — file may be image-only (ANTHROPIC_API_KEY required for OCR)");
 }
 
 export async function extractManualSections(
