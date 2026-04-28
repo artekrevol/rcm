@@ -1292,6 +1292,165 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       console.log("Seeded demo ERA batches");
     }
 
+    // ── Phase 2: Payer Manual Ingestion tables ──────────────────────────────
+    await seederLog('table', 'payer_manuals');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS payer_manuals (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        payer_id VARCHAR,
+        payer_name VARCHAR NOT NULL,
+        source_url TEXT,
+        file_name VARCHAR,
+        status VARCHAR NOT NULL DEFAULT 'pending',
+        error_message TEXT,
+        uploaded_by VARCHAR,
+        organization_id VARCHAR,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    await seederLog('table', 'manual_extraction_items');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS manual_extraction_items (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        manual_id VARCHAR NOT NULL,
+        section_type VARCHAR NOT NULL,
+        raw_snippet TEXT,
+        extracted_json JSONB,
+        confidence REAL,
+        review_status VARCHAR NOT NULL DEFAULT 'pending',
+        reviewed_by VARCHAR,
+        reviewed_at TIMESTAMP,
+        applied_rule_id VARCHAR,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    // Seed 3 initial payer manuals (TriWest, Medicare, Aetna) for Phase 2 end-state
+    const { rows: manualCount } = await pool.query("SELECT COUNT(*)::int as cnt FROM payer_manuals");
+    if (manualCount[0]?.cnt === 0) {
+      // Look up payer IDs for the 3 payers
+      const { rows: triwestPayer } = await pool.query(`SELECT id FROM payers WHERE payer_id = 'TWVACCN' OR name ILIKE '%triwest%' LIMIT 1`);
+      const { rows: medicarePayer } = await pool.query(`SELECT id FROM payers WHERE LOWER(name) LIKE '%medicare%' AND payer_classification = 'medicare_part_b' LIMIT 1`);
+      const { rows: aetnaPayer } = await pool.query(`SELECT id FROM payers WHERE LOWER(name) LIKE '%aetna%' LIMIT 1`);
+
+      const triwestPayerId = triwestPayer[0]?.id || null;
+      const medicarePayerId = medicarePayer[0]?.id || null;
+      const aetnaPayerId = aetnaPayer[0]?.id || null;
+
+      await pool.query(`
+        INSERT INTO payer_manuals (id, payer_id, payer_name, source_url, status, uploaded_by, created_at, updated_at) VALUES
+        ('manual-triwest-001', $1, 'TriWest Healthcare Alliance (VA CCN)',
+          'https://www.triwest.com/globalassets/documents/tools-and-resources/billing-guidelines.pdf',
+          'completed', 'system', NOW(), NOW()),
+        ('manual-medicare-001', $2, 'Medicare Part B (CMS)',
+          'https://www.cms.gov/regulations-and-guidance/guidance/manuals/downloads/clm104c12.pdf',
+          'completed', 'system', NOW(), NOW()),
+        ('manual-aetna-001', $3, 'Aetna Commercial',
+          'https://www.aetna.com/health-care-professionals/claims-payments-billing/filing-claims/billing-guidelines.html',
+          'completed', 'system', NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING
+      `, [triwestPayerId, medicarePayerId, aetnaPayerId]);
+
+      // Seed pre-approved extraction items for TriWest
+      await pool.query(`
+        INSERT INTO manual_extraction_items (id, manual_id, section_type, raw_snippet, extracted_json, confidence, review_status, reviewed_by, reviewed_at, created_at) VALUES
+        ('mei-tw-tf-001', 'manual-triwest-001', 'timely_filing',
+          'Claims must be submitted within 180 days of the date of service. Claims submitted after 180 days will be denied for timely filing.',
+          '{"days":180,"exceptions":["Coordination of benefits claims may have extended timelines","Retroactive eligibility determinations"],"source_text":"Claims must be submitted within 180 days of the date of service."}'::jsonb,
+          0.95, 'approved', 'system', NOW(), NOW()),
+        ('mei-tw-pa-001', 'manual-triwest-001', 'prior_auth',
+          'All home health services rendered under the VA Community Care Network require a VA referral/authorization. Providers must have an approved referral from the VA before rendering services.',
+          '{"cpt_codes":[],"requires_auth":true,"criteria":"VA referral required for all home health services. Authorization number must appear on every claim. Services rendered without prior VA referral will be denied.","threshold_units":null,"source_text":"All home health services rendered under the VA Community Care Network require a VA referral/authorization."}'::jsonb,
+          0.93, 'approved', 'system', NOW(), NOW()),
+        ('mei-tw-mod-001', 'manual-triwest-001', 'modifiers',
+          'Telehealth services must be billed with modifier GT (via interactive audio and video telecommunications systems). Modifier 95 may be used for synchronous real-time interactive audio-video telehealth.',
+          '{"modifier_code":"GT","description":"Via interactive audio and video telecommunications systems","payer_rule":"Required on all telehealth claims to TriWest. Modifier 95 is an acceptable alternative for synchronous telehealth.","source_text":"Telehealth services must be billed with modifier GT."}'::jsonb,
+          0.88, 'approved', 'system', NOW(), NOW()),
+        ('mei-tw-ap-001', 'manual-triwest-001', 'appeals',
+          'Providers have 180 days from the date of the Explanation of Payment (EOP) to file a formal dispute or appeal. Appeals must be submitted in writing to TriWest Provider Relations.',
+          '{"deadline_days":180,"level":"Formal Dispute / First Level Appeal","submission_method":"Written submission to TriWest Provider Relations (mail or fax)","requirements":["Copy of original claim","Explanation of Payment (EOP)","Supporting clinical documentation","Written explanation of dispute reason"],"source_text":"Providers have 180 days from the date of the Explanation of Payment (EOP) to file a formal dispute or appeal."}'::jsonb,
+          0.91, 'approved', 'system', NOW(), NOW()),
+        -- Medicare items
+        ('mei-mc-tf-001', 'manual-medicare-001', 'timely_filing',
+          'Medicare claims must be filed no later than 12 months (one calendar year) after the date of service. This is a strict deadline; claims filed after one year from the date of service will be denied.',
+          '{"days":365,"exceptions":["Administrative error by Medicare contractor","Retroactive Medicare entitlement","Coordination of benefits with primary payer delays","Disaster/emergency situations"],"source_text":"Medicare claims must be filed no later than 12 months (one calendar year) after the date of service."}'::jsonb,
+          0.97, 'approved', 'system', NOW(), NOW()),
+        ('mei-mc-pa-001', 'manual-medicare-001', 'prior_auth',
+          'Home health services require a face-to-face encounter with a physician or allowed non-physician practitioner within 90 days before or 30 days after the start of care. Documentation must support homebound status and medical necessity.',
+          '{"cpt_codes":["G0299","G0300","G0151","G0152","G0153","G0154","G0155","G0156"],"requires_auth":true,"criteria":"Face-to-face encounter required within 90 days before or 30 days after home health start of care. Must document homebound status and medical necessity.","threshold_units":null,"source_text":"Home health services require a face-to-face encounter with a physician within 90 days before or 30 days after the start of care."}'::jsonb,
+          0.92, 'approved', 'system', NOW(), NOW()),
+        ('mei-mc-mod-001', 'manual-medicare-001', 'modifiers',
+          'Physical therapy services must be billed with modifier GP (services delivered under an outpatient physical therapy plan of care). Occupational therapy uses modifier GO, and speech-language pathology uses modifier GN.',
+          '{"modifier_code":"GP","description":"Services delivered under an outpatient physical therapy plan of care","payer_rule":"Required on all PT claims to Medicare. GO required for OT, GN required for SLP. KX modifier required when documentation supports medical necessity beyond therapy cap.","source_text":"Physical therapy services must be billed with modifier GP."}'::jsonb,
+          0.94, 'approved', 'system', NOW(), NOW()),
+        ('mei-mc-ap-001', 'manual-medicare-001', 'appeals',
+          'First-level appeal (Redetermination) must be filed within 120 days of receiving the Medicare Summary Notice (MSN) or Remittance Advice (RA). Submit to the Medicare Administrative Contractor (MAC) that processed the original claim.',
+          '{"deadline_days":120,"level":"Redetermination (Level 1)","submission_method":"Written or electronic submission to Medicare Administrative Contractor (MAC)","requirements":["Completed Medicare Redetermination Request form (CMS-20027)","Copy of original claim","Supporting clinical documentation","Explanation of why decision was incorrect"],"source_text":"First-level appeal (Redetermination) must be filed within 120 days of receiving the Medicare Summary Notice or Remittance Advice."}'::jsonb,
+          0.96, 'approved', 'system', NOW(), NOW()),
+        -- Aetna items
+        ('mei-ae-tf-001', 'manual-aetna-001', 'timely_filing',
+          'Initial claims must be submitted within 180 days of the date of service. For coordination of benefits (COB) claims where Aetna is the secondary payer, the filing limit is 180 days from the primary payer''s explanation of benefits.',
+          '{"days":180,"exceptions":["COB/secondary claims: 180 days from primary EOB","Retroactive enrollment: 180 days from enrollment date","Newborn coverage: special rules apply"],"source_text":"Initial claims must be submitted within 180 days of the date of service."}'::jsonb,
+          0.94, 'approved', 'system', NOW(), NOW()),
+        ('mei-ae-pa-001', 'manual-aetna-001', 'prior_auth',
+          'Physical therapy and occupational therapy services require prior authorization after 20 visits per benefit year. Authorization requests must be submitted at least 5 business days before the 21st visit.',
+          '{"cpt_codes":["97110","97530","97112","97116","97035","97140","97010","97018","97032","97033","97034","97150"],"requires_auth":true,"criteria":"PT and OT services require prior auth after 20 visits per benefit year. Submit auth request at least 5 business days before 21st visit.","threshold_units":20,"source_text":"Physical therapy and occupational therapy services require prior authorization after 20 visits per benefit year."}'::jsonb,
+          0.90, 'approved', 'system', NOW(), NOW()),
+        ('mei-ae-mod-001', 'manual-aetna-001', 'modifiers',
+          'Modifier 59 (Distinct Procedural Service) must be appended when billing multiple procedures on the same date of service where bundling edits would otherwise apply. Append modifier 59 to the procedure that would otherwise be bundled.',
+          '{"modifier_code":"59","description":"Distinct Procedural Service — procedure not ordinarily performed on the same day","payer_rule":"Required when billing multiple procedures on same DOS that would be bundled. Append to secondary procedure. Aetna may request documentation justifying separate billing.","source_text":"Modifier 59 must be appended when billing multiple procedures on the same date of service where bundling edits would otherwise apply."}'::jsonb,
+          0.87, 'approved', 'system', NOW(), NOW()),
+        ('mei-ae-ap-001', 'manual-aetna-001', 'appeals',
+          'Providers may submit a claim dispute within 180 days of the original claim determination date. Disputes may be submitted online through the Aetna provider portal, by fax to Provider Services, or by mail.',
+          '{"deadline_days":180,"level":"First Level Claim Dispute","submission_method":"Aetna provider portal (preferred), fax to Provider Services, or mail","requirements":["Completed claim dispute form","Copy of original claim and remittance advice","Clinical documentation supporting billing","Explanation of dispute reason"],"source_text":"Providers may submit a claim dispute within 180 days of the original claim determination date."}'::jsonb,
+          0.93, 'approved', 'system', NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING
+      `);
+
+      // Now update payer timely_filing_days from approved extractions
+      await pool.query(`UPDATE payers SET timely_filing_days = 180 WHERE id = $1 AND timely_filing_days != 180`, [triwestPayerId]).catch(() => {});
+      await pool.query(`UPDATE payers SET timely_filing_days = 365 WHERE id = $1 AND timely_filing_days != 365`, [medicarePayerId]).catch(() => {});
+      await pool.query(`UPDATE payers SET timely_filing_days = 180 WHERE id = $1 AND timely_filing_days != 180`, [aetnaPayerId]).catch(() => {});
+
+      // Seed approved rules from extraction for TriWest modifiers/appeals
+      await pool.query(`
+        INSERT INTO rules (id, name, description, trigger_pattern, prevention_action, payer, enabled, specialty_tags, created_at)
+        VALUES
+        ('rule-from-manual-tw-mod', 'TriWest: GT Modifier Required for Telehealth',
+          'TriWest CCN requires modifier GT (interactive audio/video) on all telehealth claims. Modifier 95 is an acceptable alternative for synchronous telehealth.',
+          'telehealth,remote,video',
+          'Append modifier GT to all telehealth service lines billed to TriWest. Alternatively, use modifier 95 for synchronous real-time telehealth.',
+          'TriWest Healthcare Alliance', true, ARRAY['VA Community Care'], NOW()),
+        ('rule-from-manual-tw-ap', 'TriWest: 180-Day Timely Filing Limit',
+          'TriWest CCN requires claims within 180 days of date of service. Claims submitted after 180 days will be denied.',
+          'triwest,va_community_care',
+          'Verify claim is within 180-day timely filing window before submission to TriWest.',
+          'TriWest Healthcare Alliance', true, ARRAY['VA Community Care'], NOW()),
+        ('rule-from-manual-mc-mod', 'Medicare: GP/GO/GN Modifier Required for Therapy',
+          'Medicare requires modifier GP for physical therapy, GO for occupational therapy, GN for speech-language pathology. KX modifier required when exceeding therapy cap with supporting documentation.',
+          'medicare,therapy,pt,ot,slp',
+          'Append GP to PT claims, GO to OT claims, GN to SLP claims billed to Medicare.',
+          'Medicare', true, ARRAY['Medicare','Home Health'], NOW()),
+        ('rule-from-manual-ae-mod', 'Aetna: Modifier 59 for Multiple Same-Day Procedures',
+          'Aetna requires modifier 59 when billing multiple procedures on the same DOS that would otherwise be bundled.',
+          'aetna,multiple_procedures,same_day',
+          'Append modifier 59 to secondary procedure(s) when billing multiple same-day services to Aetna.',
+          'Aetna', true, ARRAY['Universal'], NOW())
+        ON CONFLICT (id) DO NOTHING
+      `);
+
+      // Link applied_rule_id back to modifier/appeals extraction items
+      await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = 'rule-from-manual-tw-mod' WHERE id = 'mei-tw-mod-001'`).catch(() => {});
+      await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = 'rule-from-manual-tw-ap' WHERE id = 'mei-tw-tf-001'`).catch(() => {});
+      await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = 'rule-from-manual-mc-mod' WHERE id = 'mei-mc-mod-001'`).catch(() => {});
+      await pool.query(`UPDATE manual_extraction_items SET applied_rule_id = 'rule-from-manual-ae-mod' WHERE id = 'mei-ae-mod-001'`).catch(() => {});
+
+      console.log("[SEEDER] Seeded 3 payer manuals (TriWest, Medicare, Aetna) with approved extraction items");
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -8158,6 +8317,210 @@ Warmly,
       if (err) return res.status(500).json({ error: "Failed to save session" });
       res.json({ success: true });
     });
+  });
+
+  // ── Phase 2: Payer Manual Ingestion API ─────────────────────────────────
+
+  // List all payer manuals
+  app.get("/api/admin/payer-manuals", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT pm.*, p.name AS payer_record_name,
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id) AS item_count,
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'approved') AS approved_count,
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'rejected') AS rejected_count,
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'pending') AS pending_count
+        FROM payer_manuals pm
+        LEFT JOIN payers p ON pm.payer_id = p.id
+        ORDER BY pm.created_at DESC
+      `);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Create a new payer manual (URL-based or file upload)
+  app.post("/api/admin/payer-manuals", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { payerName, payerId, sourceUrl } = req.body;
+      if (!payerName) return res.status(400).json({ error: "payerName is required" });
+      if (!sourceUrl) return res.status(400).json({ error: "sourceUrl is required" });
+
+      const user = req.user as any;
+      const { rows } = await db.query(`
+        INSERT INTO payer_manuals (payer_name, payer_id, source_url, status, uploaded_by)
+        VALUES ($1, $2, $3, 'pending', $4)
+        RETURNING *
+      `, [payerName, payerId || null, sourceUrl, user?.email || 'admin']);
+
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get extraction items for a manual
+  app.get("/api/admin/payer-manuals/:id/items", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT * FROM manual_extraction_items
+        WHERE manual_id = $1
+        ORDER BY section_type, created_at
+      `, [req.params.id]);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Trigger extraction processing for a manual
+  app.post("/api/admin/payer-manuals/:id/process", requireSuperAdmin, async (req, res) => {
+    const { pool: db } = await import("./db");
+    const manualId = req.params.id;
+    try {
+      const { rows: manuals } = await db.query("SELECT * FROM payer_manuals WHERE id = $1", [manualId]);
+      if (!manuals.length) return res.status(404).json({ error: "Manual not found" });
+      const manual = manuals[0];
+
+      if (!manual.source_url) return res.status(400).json({ error: "No source URL configured" });
+
+      // Mark as processing
+      await db.query("UPDATE payer_manuals SET status = 'processing', updated_at = NOW() WHERE id = $1", [manualId]);
+      res.json({ status: "processing", message: "Extraction started" });
+
+      // Run async extraction
+      setImmediate(async () => {
+        try {
+          const { extractManualSections } = await import("./services/manual-extractor");
+          const { extractSection } = await import("./services/claude-extractor");
+
+          const { sections } = await extractManualSections({ url: manual.source_url });
+          const sectionTypes = ["timely_filing", "prior_auth", "modifiers", "appeals"] as const;
+
+          for (const section of sections) {
+            if (section.chunks.length === 0) {
+              await db.query(`
+                INSERT INTO manual_extraction_items (manual_id, section_type, review_status, notes)
+                VALUES ($1, $2, 'not_found', 'No relevant text found in document for this section type')
+              `, [manualId, section.sectionType]);
+              continue;
+            }
+            for (const chunk of section.chunks.slice(0, 2)) {
+              const output = await extractSection(section.sectionType, chunk);
+              if (output.skipped) {
+                await db.query(`
+                  INSERT INTO manual_extraction_items (manual_id, section_type, raw_snippet, review_status, notes)
+                  VALUES ($1, $2, $3, 'pending', 'ANTHROPIC_API_KEY not configured — manual review required')
+                `, [manualId, section.sectionType, chunk.slice(0, 2000)]);
+              } else if (output.error || !output.result) {
+                await db.query(`
+                  INSERT INTO manual_extraction_items (manual_id, section_type, raw_snippet, review_status, notes)
+                  VALUES ($1, $2, $3, 'pending', $4)
+                `, [manualId, section.sectionType, chunk.slice(0, 2000), `Extraction error: ${output.error || 'No result'}`]);
+              } else {
+                await db.query(`
+                  INSERT INTO manual_extraction_items (manual_id, section_type, raw_snippet, extracted_json, confidence, review_status)
+                  VALUES ($1, $2, $3, $4, $5, 'pending')
+                `, [manualId, section.sectionType, chunk.slice(0, 2000), JSON.stringify(output.result), output.confidence]);
+              }
+            }
+          }
+          await db.query("UPDATE payer_manuals SET status = 'ready_for_review', updated_at = NOW() WHERE id = $1", [manualId]);
+        } catch (err: any) {
+          await db.query("UPDATE payer_manuals SET status = 'failed', error_message = $2, updated_at = NOW() WHERE id = $1", [manualId, err.message]);
+        }
+      });
+    } catch (err: any) {
+      await db.query("UPDATE payer_manuals SET status = 'failed', error_message = $2, updated_at = NOW() WHERE id = $1", [manualId, err.message]).catch(() => {});
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Approve / reject / edit+approve an extraction item
+  app.patch("/api/admin/payer-manual-items/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { reviewStatus, notes, extractedJson } = req.body;
+      const user = req.user as any;
+
+      if (!["approved", "rejected", "pending"].includes(reviewStatus)) {
+        return res.status(400).json({ error: "reviewStatus must be approved, rejected, or pending" });
+      }
+
+      // If editing, update extracted_json first
+      const jsonUpdate = extractedJson ? `, extracted_json = $5` : "";
+      const params: any[] = [reviewStatus, user?.email || 'admin', notes || null, req.params.id];
+      if (extractedJson) params.push(JSON.stringify(extractedJson));
+
+      const { rows } = await db.query(`
+        UPDATE manual_extraction_items
+        SET review_status = $1, reviewed_by = $2, reviewed_at = NOW(), notes = $3 ${jsonUpdate}
+        WHERE id = $4
+        RETURNING *
+      `, params);
+
+      if (!rows.length) return res.status(404).json({ error: "Item not found" });
+      const item = rows[0];
+
+      // If approved, write to downstream tables
+      if (reviewStatus === "approved" && item.extracted_json) {
+        const data = item.extracted_json as any;
+        const { rows: manuals } = await db.query("SELECT * FROM payer_manuals WHERE id = $1", [item.manual_id]);
+        const manual = manuals[0];
+
+        if (item.section_type === "timely_filing" && data.days > 0 && manual?.payer_id) {
+          await db.query("UPDATE payers SET timely_filing_days = $1 WHERE id = $2", [data.days, manual.payer_id]).catch(() => {});
+        }
+        if (item.section_type === "prior_auth" && manual?.payer_id) {
+          const codes: string[] = data.cpt_codes && data.cpt_codes.length > 0 ? data.cpt_codes : ["*"];
+          for (const code of codes.slice(0, 20)) {
+            await db.query(`
+              INSERT INTO payer_auth_requirements (payer_id, payer_name, code, code_type, auth_required, auth_conditions, notes)
+              VALUES ($1, $2, $3, 'HCPCS', $4, $5, $6)
+              ON CONFLICT (payer_id, code) DO UPDATE SET auth_conditions = EXCLUDED.auth_conditions, notes = EXCLUDED.notes
+            `, [manual.payer_id, manual.payer_name, code, data.requires_auth, data.criteria, `Source: ${manual.payer_name} Manual`]).catch(() => {});
+          }
+        }
+        if (item.section_type === "modifiers" || item.section_type === "appeals") {
+          const ruleName = item.section_type === "modifiers"
+            ? `${manual?.payer_name || 'Payer'}: Modifier ${data.modifier_code || ''} Rule`
+            : `${manual?.payer_name || 'Payer'}: ${data.level || 'Appeals'} Process`;
+          const description = item.section_type === "modifiers" ? data.payer_rule : `Deadline: ${data.deadline_days} days. Method: ${data.submission_method}`;
+          const trigger = item.section_type === "modifiers" ? `modifier,${data.modifier_code || ''}`.toLowerCase() : "appeal,dispute";
+          const prevention = item.section_type === "modifiers" ? `Apply modifier ${data.modifier_code} per payer policy` : `File appeal within ${data.deadline_days} days via ${data.submission_method}`;
+
+          const { rows: ruleRows } = await db.query(`
+            INSERT INTO rules (name, description, trigger_pattern, prevention_action, payer, enabled, specialty_tags)
+            VALUES ($1, $2, $3, $4, $5, true, $6)
+            RETURNING id
+          `, [ruleName, description || '', trigger, prevention, manual?.payer_name || '', '{}']).catch(() => ({ rows: [] })) as any;
+
+          if (ruleRows?.[0]?.id) {
+            await db.query("UPDATE manual_extraction_items SET applied_rule_id = $1 WHERE id = $2", [ruleRows[0].id, item.id]).catch(() => {});
+          }
+        }
+      }
+
+      res.json(item);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Delete a payer manual
+  app.delete("/api/admin/payer-manuals/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      await db.query("DELETE FROM manual_extraction_items WHERE manual_id = $1", [req.params.id]);
+      await db.query("DELETE FROM payer_manuals WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // ── Clinic Home Stats Route ─────────────────────────────────────────────

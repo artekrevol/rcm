@@ -652,3 +652,40 @@ export const submissionAttempts = pgTable("submission_attempts", {
 export const insertSubmissionAttemptSchema = createInsertSchema(submissionAttempts).omit({ id: true, attemptedAt: true });
 export type InsertSubmissionAttempt = z.infer<typeof insertSubmissionAttemptSchema>;
 export type SubmissionAttempt = typeof submissionAttempts.$inferSelect;
+
+export const payerManuals = pgTable("payer_manuals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payerId: varchar("payer_id"),
+  payerName: varchar("payer_name").notNull(),
+  sourceUrl: text("source_url"),
+  fileName: varchar("file_name"),
+  status: varchar("status").notNull().default("pending"),
+  errorMessage: text("error_message"),
+  uploadedBy: varchar("uploaded_by"),
+  organizationId: varchar("organization_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertPayerManualSchema = createInsertSchema(payerManuals).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPayerManual = z.infer<typeof insertPayerManualSchema>;
+export type PayerManual = typeof payerManuals.$inferSelect;
+
+export const manualExtractionItems = pgTable("manual_extraction_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  manualId: varchar("manual_id").notNull(),
+  sectionType: varchar("section_type").notNull(),
+  rawSnippet: text("raw_snippet"),
+  extractedJson: jsonb("extracted_json").$type<Record<string, unknown>>(),
+  confidence: real("confidence"),
+  reviewStatus: varchar("review_status").notNull().default("pending"),
+  reviewedBy: varchar("reviewed_by"),
+  reviewedAt: timestamp("reviewed_at"),
+  appliedRuleId: varchar("applied_rule_id"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertManualExtractionItemSchema = createInsertSchema(manualExtractionItems).omit({ id: true, createdAt: true });
+export type InsertManualExtractionItem = z.infer<typeof insertManualExtractionItemSchema>;
+export type ManualExtractionItem = typeof manualExtractionItems.$inferSelect;
