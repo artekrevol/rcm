@@ -3,6 +3,8 @@ import type { Server } from "http";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { resolveISA15, isAutomatedContext } from "./lib/environment";
+import { looksLikeTestData } from "./lib/test-data-detector";
 import { storage } from "./storage";
 import { requireAuth, requireRole, requireSuperAdmin } from "./auth";
 import {
@@ -3557,6 +3559,26 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
 
       const pat = patientResult.rows[0] || {};
+
+      // ── Automated-agent gate (Task 5) ─────────────────────────────────────
+      const automated = isAutomatedContext({
+        hasUserSession: !!(req.user),
+        userAgent: req.headers["user-agent"],
+        xAutomatedAgent: req.headers["x-automated-agent"] as string | undefined,
+      });
+      if (automated && process.env.STEDI_AUTOMATED_TEST_MODE !== "true") {
+        return res.status(403).json({
+          success: false,
+          error: "Automated submission blocked. Human session required for production claim submission.",
+        });
+      }
+
+      // ── Test-mode override (Task 3d) ──────────────────────────────────────
+      // testMode=true from wizard checkbox, or FRCPB payer always forces test.
+      const isFrcpbPayer = (payerInfo as any).payer_id === "FRCPB";
+      const testModeOverride: boolean = !!(req.body?.testMode) || isFrcpbPayer;
+      const isa15 = resolveISA15(testModeOverride);
+
       const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
       const serviceLines = rawLines.map((sl: any) => ({
         hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
@@ -3577,11 +3599,63 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         return res.status(400).json({ success: false, error: "VALIDATION_ERROR: Claim has no ICD-10 diagnosis codes." });
       }
 
+      // ── Synthetic test-data gate (Task 2 + 3b) ───────────────────────────
+      // When ISA15=P (real payer), block claims with synthetic/demo data.
+      // When ISA15=T (test mode), allow through — synthetic data is expected.
+      {
+        const pdAddr = typeof pat.address === "object" && pat.address ? pat.address as any : {};
+        const tda = looksLikeTestData({
+          patient: {
+            firstName: pat.first_name || "",
+            lastName: pat.last_name || "",
+            memberId: pat.member_id || pat.insurance_id || "",
+            dob: pat.dob || "",
+            address: pdAddr.street || pdAddr.street1 || "",
+          },
+          claim: { authNumber: c.authorization_number || null },
+          practice: { address: ps.address },
+        });
+        if (isa15 === "P" && tda.result === "blocked") {
+          console.warn(
+            `[SubmissionGuard] Blocked ISA15=P submission — synthetic data detected. ` +
+            `Claim=${c.id} Score=${tda.score} Signals=${JSON.stringify(tda.signals)}`
+          );
+          return res.status(422).json({
+            success: false,
+            error: "Submission blocked: this claim contains synthetic test data that cannot be submitted to a real payer.",
+            testDataSignals: tda.signals,
+          });
+        }
+        if (isa15 === "P" && tda.result === "suspicious") {
+          console.warn(
+            `[SubmissionGuard] Suspicious data in ISA15=P submission. ` +
+            `Claim=${c.id} Score=${tda.score} Signals=${JSON.stringify(tda.signals)}`
+          );
+        }
+        // Log attempt to submission_attempts table (Task 3e audit trail)
+        await db.query(
+          `INSERT INTO submission_attempts (id, claim_id, organization_id, isa15, test_mode_override, automated, test_data_result, test_data_score, attempted_by, attempted_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())`,
+          [
+            crypto.randomUUID(),
+            c.id,
+            c.organization_id,
+            isa15,
+            testModeOverride,
+            automated,
+            tda.result,
+            tda.score,
+            (req.user as any)?.id || null,
+          ]
+        ).catch((e: any) => console.warn("[SubmissionAudit] Could not log attempt:", e.message));
+      }
+
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
       const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
 
       const { generate837P } = await import("./services/edi-generator");
       const ediString = generate837P({
+        isa15,
         claim: {
           id: c.id,
           patient_id: c.patient_id,
@@ -3631,7 +3705,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         payer: payerInfo,
       });
 
-      const result = await stediSubmitClaim({ ediContent: ediString, claimId: c.id });
+      const result = await stediSubmitClaim({ ediContent: ediString, claimId: c.id, hasUserSession: true, userAgent: req.headers["user-agent"] });
 
       if (result.success) {
         let followUpDays = 30;
@@ -3766,6 +3840,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const { generate837P } = await import("./services/edi-generator");
       const ediString = generate837P({
+        isa15: "T", // testClaim always forces ISA15=T; explicit for audit clarity
         claim: {
           id: c.id,
           patient_id: c.patient_id,
@@ -4715,7 +4790,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // Stedi configuration status (used by frontend to toggle live vs manual mode)
   app.get("/api/billing/stedi/status", requireRole("admin", "rcm_manager"), async (_req, res) => {
     const { isStediConfigured } = await import("./services/stedi-eligibility");
-    res.json({ configured: isStediConfigured() });
+    const { ISA15_INDICATOR, STEDI_ENV } = await import("./lib/environment");
+    res.json({
+      configured: isStediConfigured(),
+      ediMode: ISA15_INDICATOR,
+      stediEnv: STEDI_ENV,
+    });
   });
 
   // Run live Stedi eligibility check for a billing patient
@@ -8074,12 +8154,16 @@ Warmly,
   // ── Section 11: /api/billing/stedi-status ──────────────────────────────────
   app.get("/api/billing/stedi-status", requireRole("admin", "rcm_manager"), async (_req, res) => {
     const isConfigured = !!process.env.STEDI_API_KEY;
+    const { STEDI_ENV, ISA15_INDICATOR } = await import("./lib/environment");
+    const ediMode = ISA15_INDICATOR; // 'P' = production payer forwarding, 'T' = test (no forwarding)
     res.json({
       configured: isConfigured,
-      mode: isConfigured ? 'production' : 'not_configured',
+      ediMode,
+      stediEnv: STEDI_ENV,
+      mode: isConfigured ? (ediMode === "P" ? "production" : "test") : "not_configured",
       label: isConfigured
-        ? '✓ Connected to Stedi — Production'
-        : '⚠ Stedi not configured'
+        ? (ediMode === "P" ? "✓ Stedi — Production (ISA15=P)" : "✓ Stedi — Test mode (ISA15=T)")
+        : "⚠ Stedi not configured",
     });
   });
 

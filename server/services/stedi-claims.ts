@@ -1,3 +1,5 @@
+import { resolveISA15, isAutomatedContext } from "../lib/environment";
+
 const STEDI_API_KEY = process.env.STEDI_API_KEY;
 // Raw X12 endpoint — accepts a single { x12: "ISA*..." } body field.
 // The structured-JSON /v3/submission endpoint does NOT accept raw EDI and
@@ -7,6 +9,17 @@ const STEDI_CLAIMS_URL =
 const STEDI_POLL_URL =
   "https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/claims/reports";
 
+/**
+ * Thrown when an automated agent (no human session) tries to reach a real-
+ * money Stedi endpoint. This is a defense-in-depth layer on top of ISA15.
+ */
+export class AutomatedSubmissionBlocked extends Error {
+  constructor(reason: string) {
+    super(`[AutomatedSubmissionBlocked] ${reason}`);
+    this.name = "AutomatedSubmissionBlocked";
+  }
+}
+
 export function isStediConfigured(): boolean {
   return !!STEDI_API_KEY;
 }
@@ -14,7 +27,18 @@ export function isStediConfigured(): boolean {
 export interface StediClaimSubmissionParams {
   ediContent: string;
   claimId: string;
+  /**
+   * When true the submission is a human-initiated test (ISA15='T' already
+   * embedded by generate837P). No payer forwarding occurs.
+   */
   isTest?: boolean;
+  /**
+   * Must be set to true by any human-session controller before calling
+   * submitClaim. Automated agents must pass this explicitly AND have
+   * STEDI_AUTOMATED_TEST_MODE=true in env.
+   */
+  hasUserSession?: boolean;
+  userAgent?: string;
 }
 
 export interface StediValidationError {
@@ -34,6 +58,16 @@ export interface StediSubmissionResult {
   error?: string;
 }
 
+/**
+ * Extract ISA15 from an EDI envelope string.
+ * Returns 'T', 'P', or null if the segment cannot be parsed.
+ */
+function readISA15(edi: string): "T" | "P" | null {
+  const match = edi.match(/^ISA\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*([PT])\*/m);
+  if (!match) return null;
+  return match[1] as "T" | "P";
+}
+
 export async function submitClaim(
   params: StediClaimSubmissionParams
 ): Promise<StediSubmissionResult> {
@@ -41,11 +75,47 @@ export async function submitClaim(
     throw new Error("STEDI_API_KEY not configured");
   }
 
-  let edi = params.ediContent;
+  // ── Automated-agent gate (Task 5) ────────────────────────────────────────
+  // Block any automated process from reaching the production submission path
+  // unless STEDI_AUTOMATED_TEST_MODE=true (which only ever runs test claims).
+  const automated = isAutomatedContext({
+    hasUserSession: params.hasUserSession ?? false,
+    userAgent: params.userAgent,
+    xAutomatedAgent: process.env.X_AUTOMATED_AGENT,
+  });
+  if (automated) {
+    const automatedTestMode = process.env.STEDI_AUTOMATED_TEST_MODE === "true";
+    if (!automatedTestMode) {
+      throw new AutomatedSubmissionBlocked(
+        "No human session detected. Set STEDI_AUTOMATED_TEST_MODE=true if you need automated test submissions."
+      );
+    }
+    // Automated + test mode: must NOT be ISA15=P
+    const isa15 = readISA15(params.ediContent);
+    if (isa15 === "P") {
+      throw new AutomatedSubmissionBlocked(
+        "STEDI_AUTOMATED_TEST_MODE is set but EDI contains ISA15='P'. Automated agents may only submit ISA15='T' claims."
+      );
+    }
+  }
 
-  // Ensure ISA15 is 'P' (Production) — replace test indicator if present
-  // ISA15 is the 15th element of the ISA segment (index 14, 0-based)
-  edi = edi.replace(/^(ISA\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*)T(\*)/m, "$1P$2");
+  // ── ISA15 safety assertion (Task 1) ──────────────────────────────────────
+  // The caller is responsible for embedding the correct ISA15 via generate837P
+  // with resolveISA15(). We read ISA15 from the EDI and refuse to silently
+  // upgrade 'T' to 'P' the way the old code did — that was the root cause of
+  // the Megan Perez production submission.
+  const isa15 = readISA15(params.ediContent);
+  if (!isa15) {
+    return {
+      success: false,
+      error: "EDI envelope is malformed — cannot determine ISA15. Submission blocked.",
+    };
+  }
+
+  console.log(
+    `[Stedi] submitClaim claimId=${params.claimId} ISA15=${isa15} ` +
+    `session=${params.hasUserSession ? "human" : "automated"}`
+  );
 
   const response = await fetch(STEDI_CLAIMS_URL, {
     method: "POST",
@@ -54,9 +124,7 @@ export async function submitClaim(
       "Content-Type": "application/json",
       "Idempotency-Key": params.claimId,
     },
-    // Raw X12 endpoint only accepts { x12 }. Payer routing info is
-    // already embedded in the ISA/NM1 segments of the EDI content.
-    body: JSON.stringify({ x12: edi }),
+    body: JSON.stringify({ x12: params.ediContent }),
   });
 
   const rawText = await response.text();
@@ -75,8 +143,6 @@ export async function submitClaim(
     };
   }
 
-  // /v3/raw-x12-submission success response shape:
-  // { claimReference: { correlationId, customerClaimNumber, patientControlNumber, rhclaimNumber, payerId, ... }, meta: { ... } }
   const ref = (data as any).claimReference || {};
   const transactionId = ref.correlationId || ref.rhclaimNumber || (data as any).transactionId;
   const accepted = response.status === 200;
@@ -101,24 +167,22 @@ export async function testClaim(
 
   let edi = params.ediContent;
 
-  // Force ISA15 to 'T' (Test) — the 15th ISA element
-  // ISA*00*          *00*          *ZZ*SENDER*ZZ*RECEIVER*DATE*TIME*^*00501*CTRL*0*P*:~
-  //                                                                              ^ this is ISA15 (P or T)
+  // Always force ISA15='T' for test validation — this is the only endpoint
+  // that may safely mutate ISA15, and it can only ever downgrade P→T, never T→P.
   edi = edi.replace(
     /^(ISA\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*[^*]*\*)[PT](\*)/m,
     "$1T$2"
   );
+
+  console.log(`[Stedi] testClaim claimId=${params.claimId} ISA15=T (forced)`);
 
   const response = await fetch(STEDI_CLAIMS_URL, {
     method: "POST",
     headers: {
       Authorization: `Key ${STEDI_API_KEY}`,
       "Content-Type": "application/json",
-      // Use a unique idempotency key per test run so retests aren't deduplicated
       "Idempotency-Key": `test-${params.claimId}-${Date.now()}`,
     },
-    // Raw X12 endpoint only accepts { x12 }. ISA15 is already forced to 'T'
-    // above, which tells Stedi/payer this is a test transmission.
     body: JSON.stringify({ x12: edi }),
   });
 
@@ -146,8 +210,6 @@ export async function testClaim(
     };
   }
 
-  // /v3/raw-x12-submission success response shape:
-  // { claimReference: { correlationId, customerClaimNumber, patientControlNumber, ... }, meta: { ... } }
   const ref = (data as any).claimReference || {};
   const transactionId = ref.correlationId || ref.rhclaimNumber || (data as any).transactionId;
   const accepted = response.status === 200;

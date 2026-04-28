@@ -626,3 +626,27 @@ export const claimTemplates = pgTable("claim_templates", {
 export const insertClaimTemplateSchema = createInsertSchema(claimTemplates).omit({ id: true, createdAt: true });
 export type InsertClaimTemplate = z.infer<typeof insertClaimTemplateSchema>;
 export type ClaimTemplate = typeof claimTemplates.$inferSelect;
+
+/**
+ * submission_attempts — audit log of every attempted Stedi claim submission.
+ * Written by the submit-stedi route before the Stedi API call is made.
+ * Enables Task 6-style retrospective audits without relying on claim_events.
+ */
+export const submissionAttempts = pgTable("submission_attempts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  claimId: varchar("claim_id").notNull(),
+  organizationId: varchar("organization_id"),
+  isa15: varchar("isa15", { length: 1 }).notNull(),
+  testModeOverride: boolean("test_mode_override").default(false),
+  automated: boolean("automated").default(false),
+  testDataResult: varchar("test_data_result", { length: 16 }),
+  testDataScore: integer("test_data_score"),
+  attemptedBy: varchar("attempted_by"),
+  attemptedAt: timestamp("attempted_at").defaultNow(),
+  blocked: boolean("blocked").default(false),
+  blockReason: varchar("block_reason"),
+});
+
+export const insertSubmissionAttemptSchema = createInsertSchema(submissionAttempts).omit({ id: true, attemptedAt: true });
+export type InsertSubmissionAttempt = z.infer<typeof insertSubmissionAttemptSchema>;
+export type SubmissionAttempt = typeof submissionAttempts.$inferSelect;

@@ -1,4 +1,13 @@
 export interface EDI837PInput {
+  /**
+   * ISA15 Interchange Usage Indicator.
+   * 'T' = Test (Stedi validates, does NOT forward to real payer — safe)
+   * 'P' = Production (Stedi forwards to real payer — real-world consequence)
+   *
+   * Resolved by the caller via resolveISA15() from server/lib/environment.ts.
+   * Default: ISA15_INDICATOR from environment (T in dev, P in production).
+   */
+  isa15?: "P" | "T";
   claim: {
     id: string;
     patient_id: string;
@@ -102,10 +111,14 @@ export function generate837P(input: EDI837PInput): string {
   const state = practice.state || "TX";
   const zip = practice.zip || "78701";
 
+  // ISA15 must be set by the caller via resolveISA15() from server/lib/environment.ts.
+  // Default is 'T' (safe) — callers explicitly opt into 'P' for production submissions.
+  const isa15 = input.isa15 || "T";
+
   const segments: string[] = [];
 
   segments.push(
-    `ISA*00*          *00*          *ZZ*${practice.npi.padEnd(15)}*ZZ*${payer.payer_id.padEnd(15)}*${date.slice(2)}*${time}*^*00501*${controlNumber}*0*P*:`
+    `ISA*00*          *00*          *ZZ*${practice.npi.padEnd(15)}*ZZ*${payer.payer_id.padEnd(15)}*${date.slice(2)}*${time}*^*00501*${controlNumber}*0*${isa15}*:`
   );
 
   segments.push(

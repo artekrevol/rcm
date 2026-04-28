@@ -931,7 +931,7 @@ export default function ClaimWizard() {
     enabled: !!matchedPayer?.id && activeCodes.length > 0,
   });
 
-  const { data: stediStatus } = useQuery<{ configured: boolean }>({
+  const { data: stediStatus } = useQuery<{ configured: boolean; ediMode?: "P" | "T"; stediEnv?: string }>({
     queryKey: ["/api/billing/stedi/status"],
     queryFn: async () => {
       const res = await fetch("/api/billing/stedi/status");
@@ -940,12 +940,26 @@ export default function ClaimWizard() {
     },
   });
   const stediConfigured = stediStatus?.configured ?? false;
+  // ediMode from server environment — 'T' in dev/staging, 'P' only in production
+  const ediMode: "P" | "T" = stediStatus?.ediMode ?? "T";
+  // FRCPB is the Stedi E2E test payer — always force test mode for it
+  const isFrcpbPayer = matchedPayer?.payer_id === "FRCPB";
 
   const [stediSubmitting, setStediSubmitting] = useState(false);
   const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string; validationErrors?: any[] } | null>(null);
   const [testingClaim, setTestingClaim] = useState(false);
   const [showTestModal, setShowTestModal] = useState(false);
   const [testClaimResult, setTestClaimResult] = useState<{ success: boolean; status?: string; transactionId?: string; validationErrors?: any[]; summary?: string; payerName?: string; error?: string } | null>(null);
+  // Test-mode override — user can force ISA15=T even in production environment
+  const [testModeOverride, setTestModeOverride] = useState(false);
+  // Production submission confirmation modal
+  const [showProdConfirmModal, setShowProdConfirmModal] = useState(false);
+  const [confirmationText, setConfirmationText] = useState("");
+
+  // Effective test mode: override checkbox OR FRCPB payer auto-lock
+  const effectiveTestMode = testModeOverride || isFrcpbPayer;
+  // isProductionMode = true when EDI will be sent to a real payer (ISA15=P)
+  const isProductionMode = ediMode === "P" && !effectiveTestMode;
 
   useEffect(() => {
     if (providers.length > 0 && !providerId) {
@@ -2017,9 +2031,53 @@ export default function ClaimWizard() {
 
               {stediConfigured ? (
                 <div className="flex flex-col items-end gap-2">
+
+                  {/* ── Environment badge (Task 4c) ─────────────────────── */}
+                  <div className="flex items-center gap-1.5 mb-1" data-testid="env-badge-wrapper">
+                    {isProductionMode ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-300 dark:bg-red-950/50 dark:text-red-400 dark:border-red-700" data-testid="badge-env-production">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse inline-block" />
+                        LIVE — ISA15=P — Payer receives claim
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 border border-blue-300 dark:bg-blue-950/50 dark:text-blue-400 dark:border-blue-700" data-testid="badge-env-test">
+                        <FlaskConical className="h-3 w-3" />
+                        TEST — ISA15=T — No payer forwarding
+                      </span>
+                    )}
+                  </div>
+
+                  {/* ── FRCPB auto-lock notice (Task 4f) ───────────────── */}
+                  {isFrcpbPayer && (
+                    <p className="text-xs text-blue-600 dark:text-blue-400 text-right max-w-[240px]" data-testid="notice-frcpb-lock">
+                      <Shield className="h-3 w-3 inline mr-1" />
+                      FRCPB is the Stedi E2E test payer. Test mode locked.
+                    </p>
+                  )}
+
+                  {/* ── Test-mode override checkbox (Task 3d) ────────────── */}
+                  {!isFrcpbPayer && ediMode === "P" && (
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none" data-testid="label-test-mode-override">
+                      <Checkbox
+                        checked={testModeOverride}
+                        onCheckedChange={(v) => setTestModeOverride(!!v)}
+                        data-testid="checkbox-test-mode-override"
+                      />
+                      Submit as test (ISA15=T) — no payer forwarding
+                    </label>
+                  )}
+
+                  {/* ── Main submit button (Task 3a/3c) ─────────────────── */}
                   <Button
                     onClick={async () => {
                       if (!claimId) return;
+                      if (isProductionMode) {
+                        // Open production confirmation modal before submitting
+                        setConfirmationText("");
+                        setShowProdConfirmModal(true);
+                        return;
+                      }
+                      // Test mode — submit directly
                       setStediSubmitting(true);
                       setStediResult(null);
                       try {
@@ -2027,6 +2085,7 @@ export default function ClaimWizard() {
                           method: "POST",
                           credentials: "include",
                           headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ testMode: effectiveTestMode }),
                         });
                         const result = await res.json();
                         setStediResult(result);
@@ -2045,10 +2104,19 @@ export default function ClaimWizard() {
                     }}
                     disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || stediSubmitting || stediResult?.success}
                     data-testid="button-submit-stedi"
+                    className={isProductionMode ? "bg-red-600 hover:bg-red-700 text-white dark:bg-red-700 dark:hover:bg-red-800" : ""}
                   >
                     {stediSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                    {stediResult?.success ? "Submitted ✓" : stediSubmitting ? "Submitting..." : "Submit Claim →"}
+                    {stediResult?.success
+                      ? "Submitted ✓"
+                      : stediSubmitting
+                      ? "Submitting..."
+                      : isProductionMode
+                      ? "Submit to Payer (Live) →"
+                      : "Submit Claim (Test) →"}
                   </Button>
+
+                  {/* ── Test validation button (Task 3a) ────────────────── */}
                   <Button
                     variant="outline"
                     size="sm"
@@ -2111,6 +2179,85 @@ export default function ClaimWizard() {
       </Dialog>
 
       {/* Stedi Test Validation Result Modal */}
+      {/* ── Production submission confirmation modal (Task 3c) ─────────────── */}
+      <Dialog open={showProdConfirmModal} onOpenChange={(o) => { setShowProdConfirmModal(o); if (!o) setConfirmationText(""); }}>
+        <DialogContent className="max-w-md" data-testid="dialog-prod-confirm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <AlertTriangle className="h-5 w-5" />
+              Submit to Real Payer — Live Claim
+            </DialogTitle>
+            <DialogDescription>
+              This claim will be transmitted to the payer with <strong>ISA15=P</strong>. The payer will receive and adjudicate it. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="rounded-md border border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 p-3 text-sm">
+              <p className="font-medium text-red-800 dark:text-red-300">You are about to submit a live claim.</p>
+              <ul className="mt-1.5 text-xs text-red-700 dark:text-red-400 space-y-1 list-disc list-inside">
+                <li>The payer will receive this 837P and adjudicate it</li>
+                <li>This counts against your timely filing window</li>
+                <li>Duplicate submission will trigger denial for duplicate</li>
+              </ul>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="confirm-submit-input">
+                Type <strong>SUBMIT TO PAYER</strong> to confirm:
+              </label>
+              <Input
+                id="confirm-submit-input"
+                data-testid="input-confirm-submit"
+                value={confirmationText}
+                onChange={(e) => setConfirmationText(e.target.value)}
+                placeholder="SUBMIT TO PAYER"
+                className="font-mono"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowProdConfirmModal(false); setConfirmationText(""); }} data-testid="button-cancel-prod-confirm">
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700 text-white dark:bg-red-700 dark:hover:bg-red-800"
+              disabled={confirmationText.trim() !== "SUBMIT TO PAYER" || stediSubmitting}
+              data-testid="button-confirm-prod-submit"
+              onClick={async () => {
+                if (!claimId || confirmationText.trim() !== "SUBMIT TO PAYER") return;
+                setShowProdConfirmModal(false);
+                setConfirmationText("");
+                setStediSubmitting(true);
+                setStediResult(null);
+                try {
+                  const res = await fetch(`/api/billing/claims/${claimId}/submit-stedi`, {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ testMode: false }),
+                  });
+                  const result = await res.json();
+                  setStediResult(result);
+                  if (result.success) {
+                    queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
+                    toast({ title: "Claim submitted to payer (live)", description: `Transaction ID: ${result.transactionId || "N/A"}` });
+                  } else {
+                    toast({ title: "Stedi submission failed", description: result.error, variant: "destructive" });
+                  }
+                } catch (err: any) {
+                  setStediResult({ success: false, error: err.message });
+                  toast({ title: "Submission error", description: err.message, variant: "destructive" });
+                } finally {
+                  setStediSubmitting(false);
+                }
+              }}
+            >
+              {stediSubmitting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Submitting...</> : "Confirm — Submit to Payer"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showTestModal} onOpenChange={setShowTestModal}>
         <DialogContent className="max-w-lg" data-testid="dialog-test-result">
           <DialogHeader>
