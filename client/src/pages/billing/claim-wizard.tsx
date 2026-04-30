@@ -976,7 +976,20 @@ export default function ClaimWizard() {
   const [externalOrderingNpi, setExternalOrderingNpi] = useState("");
   const [delayReasonCode, setDelayReasonCode] = useState("none");
 
-  const [riskResult, setRiskResult] = useState<{ riskScore: number; readinessStatus: string; factors: string[] } | null>(null);
+  const [riskResult, setRiskResult] = useState<{
+    riskScore: number;
+    readinessStatus: string;
+    factors: string[];
+    cciFactors?: Array<{
+      type: string;
+      severity: "high" | "medium";
+      primary_code: string;
+      secondary_code: string;
+      modifier_indicator: string;
+      message: string;
+      fix_suggestion: string;
+    }>;
+  } | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
@@ -1848,6 +1861,61 @@ export default function ClaimWizard() {
             </Card>
           )}
 
+          {/* CCI Edit Conflicts Panel */}
+          {riskResult?.cciFactors && riskResult.cciFactors.length > 0 && (
+            <Card className="border-2 border-orange-400 bg-orange-50/50 dark:bg-orange-950/20" data-testid="card-cci-panel">
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertTriangle className="h-5 w-5 text-orange-500 shrink-0" />
+                  <div>
+                    <h3 className="font-semibold text-orange-700 dark:text-orange-400">
+                      CCI Edit Conflicts Detected
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      CMS NCCI (National Correct Coding Initiative) flagged {riskResult.cciFactors.length} conflict{riskResult.cciFactors.length > 1 ? "s" : ""} on this claim.
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-2" data-testid="list-cci-conflicts">
+                  {riskResult.cciFactors.map((cf, i) => (
+                    <div
+                      key={i}
+                      className={`rounded-md p-3 text-sm border ${
+                        cf.modifier_indicator === "0"
+                          ? "bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-700"
+                          : "bg-yellow-50 dark:bg-yellow-950/30 border-yellow-300 dark:border-yellow-700"
+                      }`}
+                      data-testid={`cci-conflict-${i}`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge variant="outline" className={`text-xs font-mono ${cf.modifier_indicator === "0" ? "border-red-500 text-red-600" : "border-yellow-500 text-yellow-700"}`}>
+                          {cf.primary_code}
+                        </Badge>
+                        <span className="text-muted-foreground">+</span>
+                        <Badge variant="outline" className={`text-xs font-mono ${cf.modifier_indicator === "0" ? "border-red-500 text-red-600" : "border-yellow-500 text-yellow-700"}`}>
+                          {cf.secondary_code}
+                        </Badge>
+                        <Badge className={`ml-auto text-xs ${cf.modifier_indicator === "0" ? "bg-red-600" : "bg-yellow-500"}`}>
+                          {cf.modifier_indicator === "0" ? "Hard Block" : "Modifier Required"}
+                        </Badge>
+                      </div>
+                      <p className="text-muted-foreground">{cf.message}</p>
+                      <p className="text-xs mt-1 font-medium">
+                        Fix: {cf.fix_suggestion}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                {riskResult.cciFactors.some((cf) => cf.modifier_indicator === "0") && (
+                  <p className="text-xs text-red-600 dark:text-red-400 font-semibold mt-3 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    Hard-block conflicts must be resolved before this claim can be submitted.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
@@ -2190,7 +2258,7 @@ export default function ClaimWizard() {
                         setStediSubmitting(false);
                       }
                     }}
-                    disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || stediSubmitting || stediResult?.success}
+                    disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || stediSubmitting || stediResult?.success || (riskResult?.cciFactors?.some((cf) => cf.modifier_indicator === "0") ?? false)}
                     data-testid="button-submit-stedi"
                     className={isProductionMode ? "bg-red-600 hover:bg-red-700 text-white dark:bg-red-700 dark:hover:bg-red-800" : ""}
                   >
@@ -2241,7 +2309,7 @@ export default function ClaimWizard() {
               ) : (
                 <Button
                   onClick={() => setShowSubmitModal(true)}
-                  disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged)}
+                  disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || (riskResult?.cciFactors?.some((cf) => cf.modifier_indicator === "0") ?? false)}
                   data-testid="button-submit-claim"
                 >
                   Submit via Office Ally

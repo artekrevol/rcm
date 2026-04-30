@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { setupAuth, ensureSessionTable } from "./auth";
 import { startOrchestrator } from "./jobs/flow-orchestrator";
 import { seedCaritasFlow } from "./seeds/caritas-flow";
+import { startCciCron } from "./jobs/cci-cron";
 
 const app = express();
 const httpServer = createServer(app);
@@ -111,6 +112,7 @@ app.use((req, res, next) => {
         console.error("[startup] seedCaritasFlow error:", err)
       );
       startOrchestrator();
+      startCciCron();
     },
   );
 })();

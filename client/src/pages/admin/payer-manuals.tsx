@@ -615,9 +615,24 @@ export default function PayerManualsPage() {
     enabled: !!selectedManualId,
   });
 
+  const { data: cciStats = [], refetch: refetchCciStats } = useQuery<any[]>({
+    queryKey: ["/api/admin/cci/stats"],
+    enabled: activeTab === "cci",
+  });
+
   const [pendingSourceId, setPendingSourceId] = useState<string | null>(null);
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [validationLoading, setValidationLoading] = useState(false);
+
+  // CCI tab state
+  const [cciSearchCode, setCciSearchCode] = useState("");
+  const [cciSearchResults, setCciSearchResults] = useState<any[]>([]);
+  const [cciSearchLoading, setCciSearchLoading] = useState(false);
+  const [cciUploadFile, setCciUploadFile] = useState<File | null>(null);
+  const [cciVersion, setCciVersion] = useState("");
+  const [cciUploading, setCciUploading] = useState(false);
+  const [cciIngestRunning, setCciIngestRunning] = useState(false);
+  const cciFileRef = useRef<HTMLInputElement>(null);
 
   const addMutation = useMutation({
     mutationFn: async () => {
@@ -986,6 +1001,10 @@ export default function PayerManualsPage() {
             <Database className="h-4 w-4 mr-1.5" />
             Source Registry ({coveragePayers.length})
           </TabsTrigger>
+          <TabsTrigger value="cci" className="text-sm" data-testid="tab-cci">
+            <BarChart3 className="h-4 w-4 mr-1.5" />
+            CCI Edits
+          </TabsTrigger>
         </TabsList>
 
         {/* Source Registry Tab */}
@@ -1310,6 +1329,251 @@ export default function PayerManualsPage() {
           )}
         </div>
       </div>
+        </TabsContent>
+
+        {/* CCI Edits Tab */}
+        <TabsContent value="cci">
+          <div className="space-y-4">
+            {/* Stats cards */}
+            {cciStats.length === 0 ? (
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-center text-muted-foreground py-8">
+                    <BarChart3 className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                    <p className="font-medium">No CCI edits ingested yet.</p>
+                    <p className="text-sm mt-1">Use "Ingest from CMS" to pull the latest NCCI Practitioner PTP file, or upload a CSV/ZIP manually.</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {cciStats.map((row: any) => (
+                  <Card key={row.ncci_version} data-testid={`card-cci-version-${row.ncci_version}`}>
+                    <CardContent className="pt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-semibold text-sm">{row.ncci_version}</span>
+                        <Badge variant="outline" className="text-xs">{Number(row.total_edits).toLocaleString()} total</Badge>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                        <div className="bg-green-50 dark:bg-green-950/30 rounded p-2">
+                          <p className="font-bold text-green-700 dark:text-green-400">{Number(row.active_edits).toLocaleString()}</p>
+                          <p className="text-muted-foreground">Active</p>
+                        </div>
+                        <div className="bg-red-50 dark:bg-red-950/30 rounded p-2">
+                          <p className="font-bold text-red-700 dark:text-red-400">{Number(row.hard_blocks).toLocaleString()}</p>
+                          <p className="text-muted-foreground">Hard Blocks</p>
+                        </div>
+                        <div className="bg-yellow-50 dark:bg-yellow-950/30 rounded p-2">
+                          <p className="font-bold text-yellow-700 dark:text-yellow-400">{Number(row.soft_warnings).toLocaleString()}</p>
+                          <p className="text-muted-foreground">Soft Warns</p>
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2 text-right">
+                        Last ingested: {row.last_ingested_at ? format(new Date(row.last_ingested_at), "MMM d, yyyy h:mm a") : "—"}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            {/* Actions row */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Ingest from CMS */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4" />
+                    Ingest from CMS (Quarterly)
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Downloads the latest NCCI Practitioner PTP ZIP from cms.gov and upserts all edits.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Button
+                    size="sm"
+                    disabled={cciIngestRunning}
+                    data-testid="button-cci-ingest-cms"
+                    onClick={async () => {
+                      setCciIngestRunning(true);
+                      try {
+                        const res = await fetch("/api/admin/cci/ingest", { method: "POST", credentials: "include" });
+                        const data = await res.json();
+                        if (data.success) {
+                          toast({ title: "CCI ingest complete", description: `Inserted: ${data.stats.inserted}, Updated: ${data.stats.updated}` });
+                          refetchCciStats();
+                        } else {
+                          toast({ title: "Ingest failed", description: data.error, variant: "destructive" });
+                        }
+                      } catch (e: any) {
+                        toast({ title: "Ingest error", description: e.message, variant: "destructive" });
+                      } finally {
+                        setCciIngestRunning(false);
+                      }
+                    }}
+                  >
+                    {cciIngestRunning ? <><RefreshCw className="h-3 w-3 mr-1.5 animate-spin" /> Ingesting...</> : <><Play className="h-3 w-3 mr-1.5" /> Ingest Now</>}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* Manual upload */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Upload className="h-4 w-4" />
+                    Manual Upload (CSV or ZIP)
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Upload a CMS NCCI CSV or ZIP file manually for any quarter.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Version label (e.g. 2025Q2)"
+                      value={cciVersion}
+                      onChange={(e) => setCciVersion(e.target.value)}
+                      className="text-sm h-8"
+                      data-testid="input-cci-version"
+                    />
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      ref={cciFileRef}
+                      type="file"
+                      accept=".csv,.zip"
+                      className="hidden"
+                      onChange={(e) => setCciUploadFile(e.target.files?.[0] || null)}
+                      data-testid="input-cci-file"
+                    />
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => cciFileRef.current?.click()} data-testid="button-cci-choose-file">
+                      {cciUploadFile ? cciUploadFile.name : "Choose file…"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="h-8"
+                      disabled={!cciUploadFile || cciUploading}
+                      data-testid="button-cci-upload"
+                      onClick={async () => {
+                        if (!cciUploadFile) return;
+                        setCciUploading(true);
+                        try {
+                          const fd = new FormData();
+                          fd.append("file", cciUploadFile);
+                          if (cciVersion) fd.append("version", cciVersion);
+                          const res = await fetch("/api/admin/cci/upload", { method: "POST", credentials: "include", body: fd });
+                          const data = await res.json();
+                          if (data.success) {
+                            toast({ title: "Upload complete", description: `Inserted: ${data.stats.inserted}, Updated: ${data.stats.updated}` });
+                            setCciUploadFile(null);
+                            setCciVersion("");
+                            if (cciFileRef.current) cciFileRef.current.value = "";
+                            refetchCciStats();
+                          } else {
+                            toast({ title: "Upload failed", description: data.error, variant: "destructive" });
+                          }
+                        } catch (e: any) {
+                          toast({ title: "Upload error", description: e.message, variant: "destructive" });
+                        } finally {
+                          setCciUploading(false);
+                        }
+                      }}
+                    >
+                      {cciUploading ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" /> Uploading…</> : <><Upload className="h-3 w-3 mr-1" /> Upload</>}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Code search */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Zap className="h-4 w-4" />
+                  Code Conflict Lookup
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Enter a HCPCS/CPT code to see all NCCI conflicts in the current quarter.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="e.g. 99213"
+                    value={cciSearchCode}
+                    onChange={(e) => setCciSearchCode(e.target.value.toUpperCase())}
+                    className="text-sm h-8 max-w-[160px] font-mono"
+                    data-testid="input-cci-search"
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter") {
+                        if (!cciSearchCode) return;
+                        setCciSearchLoading(true);
+                        try {
+                          const res = await fetch(`/api/admin/cci/search?code=${encodeURIComponent(cciSearchCode)}`, { credentials: "include" });
+                          setCciSearchResults(await res.json());
+                        } catch { setCciSearchResults([]); }
+                        finally { setCciSearchLoading(false); }
+                      }
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8"
+                    disabled={!cciSearchCode || cciSearchLoading}
+                    data-testid="button-cci-search"
+                    onClick={async () => {
+                      if (!cciSearchCode) return;
+                      setCciSearchLoading(true);
+                      try {
+                        const res = await fetch(`/api/admin/cci/search?code=${encodeURIComponent(cciSearchCode)}`, { credentials: "include" });
+                        setCciSearchResults(await res.json());
+                      } catch { setCciSearchResults([]); }
+                      finally { setCciSearchLoading(false); }
+                    }}
+                  >
+                    {cciSearchLoading ? <RefreshCw className="h-3 w-3 animate-spin" /> : "Search"}
+                  </Button>
+                </div>
+
+                {cciSearchResults.length > 0 && (
+                  <div className="rounded border overflow-x-auto" data-testid="table-cci-results">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-xs">Column 1</TableHead>
+                          <TableHead className="text-xs">Column 2</TableHead>
+                          <TableHead className="text-xs">Modifier</TableHead>
+                          <TableHead className="text-xs">Effective</TableHead>
+                          <TableHead className="text-xs">Rationale</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {cciSearchResults.map((row: any, i: number) => (
+                          <TableRow key={i} data-testid={`cci-result-row-${i}`}>
+                            <TableCell className="font-mono text-xs">{row.column_1_code}</TableCell>
+                            <TableCell className="font-mono text-xs">{row.column_2_code}</TableCell>
+                            <TableCell>
+                              <Badge className={`text-xs ${row.modifier_indicator === "0" ? "bg-red-600" : "bg-yellow-500"}`}>
+                                {row.modifier_indicator === "0" ? "Hard Block" : row.modifier_indicator === "1" ? "Modifier OK" : "Historical"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs">{row.effective_date ? format(new Date(row.effective_date), "MM/dd/yyyy") : "—"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">{row.ptp_edit_rationale || "—"}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                {cciSearchResults.length === 0 && cciSearchCode && !cciSearchLoading && (
+                  <p className="text-xs text-muted-foreground" data-testid="text-cci-no-results">No conflicts found for {cciSearchCode} in the current NCCI version.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
       </Tabs>
 

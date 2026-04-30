@@ -35,6 +35,7 @@ The platform adopts an enterprise SaaS design aesthetic with shadcn/ui and Tailw
 - **CMS-1500 PDF Generation**: Enhanced to include new claim fields.
 - **Test Claim Mode**: Provides end-to-end EDI validation via Stedi's production API with a test indicator, preventing phantom claims from reaching real payers.
 - **Intake Flow Engine**: A 12-item flow orchestration layer on top of the intake module. Includes 5 new DB tables (`flows`, `flow_steps`, `flow_runs`, `flow_run_events`, `comm_locks`), a 30-second polling orchestrator, a Caritas Senior Care 8-step demo flow (wait → SMS → wait → call → VOB → call → SMS → email), concurrency locking via advisory locks, Vapi webhook integration for call-end advancement, inbound SMS endpoint, and a Flow Inspector UI tab on the lead detail page.
+- **CCI Edits (NCCI) Ingestion**: Global `cci_edits` table (no org scope) stores CMS NCCI Practitioner PTP edits with modifier_indicator (0=hard block, 1=soft/modifier, 9=historical). `server/services/cci-ingest.ts` parses CMS ZIP/CSV (flexible column header detection, tab and comma delimited). `server/jobs/cci-cron.ts` runs quarterly ingest on day 5 of Jan/Apr/Jul/Oct. API routes: `GET /api/admin/cci/stats`, `GET /api/admin/cci/search`, `POST /api/admin/cci/ingest`, `POST /api/admin/cci/upload`, `GET /api/billing/cci/check`. Risk engine (`POST /api/billing/claims/:id/risk`) now checks service lines against CCI edits and adds `cciFactors[]` to the response (hard blocks add 100 pts, soft warnings without unbundling modifier add 30 pts). Claim wizard step 3 shows a CCI conflicts panel; hard-block conflicts (modifier_indicator=0) disable both submit buttons. Admin CCI tab added to `/admin/payer-manuals` with stats cards, ingest-from-CMS button, manual CSV/ZIP upload, and code conflict lookup.
 
 ## External Dependencies
 
@@ -66,3 +67,6 @@ The platform adopts an enterprise SaaS design aesthetic with shadcn/ui and Tailw
 ### EDI / Clearinghouse
 - **ssh2-sftp-client**: SFTP client for Office Ally.
 - **Stedi API**: For real-time eligibility (270/271) and EDI processing (277/835), including webhooks for event delivery.
+
+### Utilities
+- **unzipper**: ZIP extraction for CMS NCCI quarterly file downloads and manual uploads.

@@ -1,0 +1,232 @@
+# Replit Prompt 02 — CCI Edits Ingestion
+
+## Context
+
+CCI edits (Correct Coding Initiative, sometimes called NCCI edits) are CMS-published tables that define which CPT/HCPCS code pairs cannot be billed together on the same claim. They're updated quarterly, publicly available, and are a major source of preventable claim denials that most SMB billing platforms don't surface well.
+
+Rosemary explicitly asked for this in the April 28 call. Adding it gives ClaimShield a denial-prevention surface that competitors don't have, using structured CSV data (much more reliable than PDF extraction).
+
+CCI edits exist in two flavors:
+- **Practitioner PTP edits (Procedure-to-Procedure)** — for professional claims (837P)
+- **Hospital PTP edits** — for institutional claims (837I)
+
+For now we focus on **Practitioner PTP edits** since ClaimShield's pilot customers are professional billers (home care, specialty practices, not hospitals).
+
+CMS publishes the data at: https://www.cms.gov/medicare/coding-billing/national-correct-coding-initiative-ncci-edits/medicare-ncci-procedure-procedure-ptp-edits
+
+The current quarterly file is downloadable as a ZIP containing CSV files. The relevant file is the "Practitioner PTP Edits" CSV.
+
+## Standing constraints
+
+- No live Stedi submissions during verification
+- Commit messages must include verification queries WITH their actual results
+- All schema migrations must be idempotent
+- New tables must have FK constraints to organizations.id where applicable (CCI edits do NOT — they are global reference data, not tenant-scoped)
+
+## Tasks
+
+### Task 1 — Schema for CCI edits
+
+Create a new global reference table:
+
+```sql
+CREATE TABLE IF NOT EXISTS cci_edits (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  
+  -- The pair
+  column_1_code TEXT NOT NULL,        -- the "comprehensive" code
+  column_2_code TEXT NOT NULL,        -- the "component" code that gets bundled
+  
+  -- The rule  
+  modifier_indicator TEXT NOT NULL,   -- '0', '1', or '9' per CMS spec
+  
+  -- Metadata
+  effective_date DATE NOT NULL,
+  deletion_date DATE,                 -- NULL if currently active
+  ptp_edit_rationale TEXT,            -- CMS's stated reason
+  
+  -- Versioning
+  ncci_version TEXT NOT NULL,         -- e.g., '2026Q2'
+  source_file TEXT NOT NULL,          -- filename from CMS
+  ingested_at TIMESTAMP DEFAULT NOW(),
+  
+  -- Indexes
+  UNIQUE (column_1_code, column_2_code, effective_date, ncci_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cci_edits_column_1 ON cci_edits (column_1_code);
+CREATE INDEX IF NOT EXISTS idx_cci_edits_column_2 ON cci_edits (column_2_code);
+CREATE INDEX IF NOT EXISTS idx_cci_edits_active ON cci_edits (column_1_code, column_2_code) 
+  WHERE deletion_date IS NULL;
+```
+
+The modifier_indicator values mean:
+- `0` = the code pair cannot be unbundled by any modifier (hard block)
+- `1` = the code pair can be unbundled with an appropriate modifier (e.g., 59, XE, XS, XP, XU)
+- `9` = the edit is no longer active (historical record)
+
+This table is global, not per-organization. CCI edits apply universally to Medicare and most commercial payers that follow Medicare's coding standards.
+
+### Task 2 — Ingest service
+
+Create `server/services/cci-ingest.ts` that:
+
+1. Downloads the latest Practitioner PTP edits ZIP from CMS
+2. Extracts the CSV
+3. Parses it (CMS CSV format — typically: Column1, Column2, Effective Date, Deletion Date, Modifier Indicator, PTP Edit Rationale)
+4. Upserts each row into `cci_edits` table (using ON CONFLICT to handle re-ingestion)
+5. Logs stats: rows inserted, rows updated, rows skipped, errors
+
+Add a quarterly cron job that runs the ingest automatically. CMS releases new versions on roughly the first of January, April, July, October. Run on the 5th of each of those months to give CMS time to publish.
+
+CMS data download URL pattern: 
+```
+https://www.cms.gov/files/zip/medicare-ncci-practitioner-ptp-edits-{year}-q{quarter}.zip
+```
+(URL format may vary — verify by visiting the CMS page above and finding the actual current download link.)
+
+If the URL format changes year-to-year, accept failure gracefully and log a clear error: "CMS NCCI quarterly file download failed. Manual upload required at /admin/data-tools/cci-upload."
+
+### Task 3 — Manual upload fallback
+
+Create an admin-only upload endpoint at `/admin/data-tools/cci-upload`:
+
+1. Accepts a ZIP file or CSV file
+2. Auto-detects format (ZIP gets unzipped first)
+3. Validates the CSV structure matches expected CMS format
+4. Runs the same ingest logic as the cron job
+5. Reports stats inline: "Ingested 4,832 new edits, updated 1,221, skipped 0 errors"
+
+This is the safety net for when CMS changes URLs or auth requirements.
+
+### Task 4 — Wizard validation
+
+In the claim wizard's service line entry step (where the user enters CPT/HCPCS codes for the claim), add a CCI edit check:
+
+When the user has entered 2+ service lines, run a query to find any CCI conflicts:
+
+```sql
+SELECT cci.column_1_code, cci.column_2_code, cci.modifier_indicator, 
+       cci.ptp_edit_rationale, cci.deletion_date
+FROM cci_edits cci
+WHERE deletion_date IS NULL
+  AND (
+    (cci.column_1_code IN ($enteredCodes) AND cci.column_2_code IN ($enteredCodes))
+  )
+  AND ncci_version = (SELECT MAX(ncci_version) FROM cci_edits);
+```
+
+For each conflict found:
+
+- If `modifier_indicator = '0'` → hard block. Show modal: "These codes cannot be billed together. CMS bundles {column_2_code} into {column_1_code}. Reason: {rationale}. Remove one before submitting."
+
+- If `modifier_indicator = '1'` → warning, can proceed. Show banner: "These codes are normally bundled. To bill them separately, you must add an appropriate unbundling modifier (typically 59, XE, XS, XP, or XU) to {column_2_code}. Without the modifier, {column_2_code} will be denied."
+
+- If `modifier_indicator = '9'` → no warning needed (edit is historical).
+
+The check fires on:
+- Service line addition
+- Service line edit
+- Wizard step transition (Step 2 → Step 3)
+- Final submission attempt
+
+### Task 5 — Risk engine integration
+
+The risk engine should now factor CCI conflicts into its score:
+
+- Hard block (indicator 0) on any pair → score 100, status RED, factor: "Incompatible code pair detected. Claim will be denied."
+- Soft warning (indicator 1) without modifier → score +30, status at minimum YELLOW, factor: "Code pair requires unbundling modifier."
+- Same pair WITH appropriate modifier already on the line → score +0, no factor (resolved).
+
+Update the `riskFactors` array in the risk engine's response to include these CCI factors with structured details:
+
+```javascript
+{
+  type: 'cci_edit',
+  severity: 'high' | 'medium',
+  primary_code: 'XXXXX',
+  secondary_code: 'YYYYY',
+  modifier_indicator: '0' | '1',
+  message: 'Human-readable explanation',
+  fix_suggestion: 'Remove code XXXX' | 'Add modifier 59 to code YYYYY'
+}
+```
+
+### Task 6 — Admin coverage view
+
+Add a "CCI Edits" tab to `/admin/payer-manuals` (or the broader admin section). It should display:
+
+- Current NCCI version active in the database (e.g., "2026Q2")
+- Last ingestion timestamp
+- Total active edits (deletion_date IS NULL)
+- Total historical edits (deletion_date IS NOT NULL)
+- "Ingest now from CMS" button (triggers the cron job manually)
+- "Upload manual file" link to the upload endpoint
+- Search bar: enter a CPT code, see all conflicts that involve it
+
+The search bar is the highest-value piece. A biller can paste in a code they're about to use and see what it conflicts with. Format:
+
+```
+Searching for: 11042
+
+Conflicts (12 found):
+  11042 ↔ 11000   indicator: 0   "Mutually exclusive procedures"
+  11042 ↔ 11001   indicator: 1   "Component code"
+  11042 ↔ 97597   indicator: 1   "Component of more comprehensive procedure"
+  ...
+```
+
+### Task 7 — Verification queries
+
+Run these against `PRODUCTION_READONLY_DATABASE_URL` after deploy and include results in the commit message:
+
+```sql
+-- Schema check
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'cci_edits'
+ORDER BY ordinal_position;
+
+-- Active edit count (after first successful ingestion)
+SELECT 
+  ncci_version,
+  COUNT(*) AS total_edits,
+  COUNT(*) FILTER (WHERE deletion_date IS NULL) AS active_edits,
+  COUNT(*) FILTER (WHERE modifier_indicator = '0') AS hard_blocks,
+  COUNT(*) FILTER (WHERE modifier_indicator = '1') AS soft_warnings
+FROM cci_edits
+GROUP BY ncci_version
+ORDER BY ncci_version DESC;
+
+-- Sample edits (sanity check)
+SELECT column_1_code, column_2_code, modifier_indicator, effective_date, ptp_edit_rationale
+FROM cci_edits
+WHERE deletion_date IS NULL
+LIMIT 10;
+```
+
+## Acceptance
+
+- `cci_edits` table exists with correct schema
+- At least one quarterly NCCI file successfully ingested (or manual upload working as fallback)
+- Wizard surfaces CCI conflicts at service line entry with correct modifier_indicator handling
+- Risk engine factors CCI conflicts into its score
+- Admin coverage view functional with search bar
+- Cron job scheduled (visible in deployment logs)
+
+## What NOT to do in this prompt
+
+- Do not extend to hospital PTP edits (837I). Focus on practitioner only for now.
+- Do not extend to MUE (Medically Unlikely Edits). That's a separate CMS dataset, future prompt.
+- Do not auto-add unbundling modifiers when a soft warning fires. The biller decides whether the modifier is justified — the system surfaces, doesn't decide.
+
+## Output expected from Replit
+
+1. List of files modified
+2. SQL migration with rollback
+3. Sample of 10 ingested CCI edits (verification query result)
+4. Screenshots:
+   - Wizard with CCI conflict modal (use a known-conflicting test pair like 11042/11000)
+   - Risk panel showing CCI factor
+   - Admin CCI edits tab with version, count, and search
+5. Stats from first successful ingestion (rows inserted, version, source file)

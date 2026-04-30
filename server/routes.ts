@@ -1645,6 +1645,28 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`ALTER TABLE leads ADD COLUMN dob TEXT`);
     }
 
+    // ── CCI Edits (NCCI Practitioner PTP) — global reference table ────────────
+    if (!(await seederLog('table', 'cci_edits'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS cci_edits (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          column_1_code TEXT NOT NULL,
+          column_2_code TEXT NOT NULL,
+          modifier_indicator TEXT NOT NULL,
+          effective_date DATE NOT NULL,
+          deletion_date DATE,
+          ptp_edit_rationale TEXT,
+          ncci_version TEXT NOT NULL,
+          source_file TEXT NOT NULL,
+          ingested_at TIMESTAMP DEFAULT NOW(),
+          UNIQUE (column_1_code, column_2_code, effective_date, ncci_version)
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_cci_edits_column_1 ON cci_edits (column_1_code)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_cci_edits_column_2 ON cci_edits (column_2_code)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_cci_edits_active ON cci_edits (column_1_code, column_2_code) WHERE deletion_date IS NULL`);
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -3271,6 +3293,63 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         }
       }
 
+      // ── CCI Edit conflict check ──────────────────────────────────────────────
+      const cciFactors: any[] = [];
+      if (serviceLines.length >= 2) {
+        const codes = serviceLines
+          .map((sl: any) => (sl.hcpcs_code || sl.code || "").trim().toUpperCase())
+          .filter(Boolean);
+        if (codes.length >= 2) {
+          const cciResult = await db.query(`
+            SELECT column_1_code, column_2_code, modifier_indicator, ptp_edit_rationale
+            FROM cci_edits
+            WHERE deletion_date IS NULL
+              AND ncci_version = (SELECT MAX(ncci_version) FROM cci_edits WHERE TRUE)
+              AND column_1_code = ANY($1)
+              AND column_2_code = ANY($1)
+              AND modifier_indicator != '9'
+          `, [codes]);
+
+          for (const conflict of cciResult.rows) {
+            const { column_1_code, column_2_code, modifier_indicator, ptp_edit_rationale } = conflict;
+            // Check whether the component code already has an unbundling modifier
+            const compLine = serviceLines.find(
+              (sl: any) => (sl.hcpcs_code || sl.code || "").toUpperCase() === column_2_code
+            );
+            const hasUnbundlingModifier = compLine?.modifier &&
+              ["59", "XE", "XS", "XP", "XU"].some((m) =>
+                compLine.modifier.toUpperCase().split(/[\s,]+/).includes(m)
+              );
+
+            if (modifier_indicator === "0") {
+              score += 100;
+              factors.push(`CCI hard block: ${column_1_code} and ${column_2_code} cannot be billed together — CMS bundles ${column_2_code} into ${column_1_code}. Remove one before submitting.`);
+              cciFactors.push({
+                type: "cci_edit",
+                severity: "high",
+                primary_code: column_1_code,
+                secondary_code: column_2_code,
+                modifier_indicator: "0",
+                message: `${column_1_code} and ${column_2_code} are an incompatible pair (hard block). ${ptp_edit_rationale || ""}`,
+                fix_suggestion: `Remove ${column_2_code} from the claim`,
+              });
+            } else if (modifier_indicator === "1" && !hasUnbundlingModifier) {
+              score += 30;
+              factors.push(`CCI soft warning: ${column_1_code} and ${column_2_code} are normally bundled. Add an unbundling modifier (59, XE, XS, XP, or XU) to ${column_2_code} to bill separately.`);
+              cciFactors.push({
+                type: "cci_edit",
+                severity: "medium",
+                primary_code: column_1_code,
+                secondary_code: column_2_code,
+                modifier_indicator: "1",
+                message: `${column_1_code} and ${column_2_code} are typically bundled. ${ptp_edit_rationale || ""}`,
+                fix_suggestion: `Add modifier 59 (or XE/XS/XP/XU) to ${column_2_code}`,
+              });
+            }
+          }
+        }
+      }
+
       const riskScore = Math.min(score, 100);
       const readinessStatus = riskScore >= 60 ? "RED" : riskScore >= 30 ? "YELLOW" : "GREEN";
 
@@ -3279,7 +3358,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [riskScore, readinessStatus, req.params.id]
       );
 
-      res.json({ riskScore, readinessStatus, factors });
+      res.json({ riskScore, readinessStatus, factors, cciFactors });
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
@@ -10061,6 +10140,141 @@ Warmly,
       );
       if (!rows.length) return res.status(404).json({ error: "Patient not found" });
       res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── CCI Edits (NCCI) — admin routes ────────────────────────────────────────
+
+  // GET /api/admin/cci/stats — version, counts, last ingestion
+  app.get("/api/admin/cci/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const stats = await db.query(`
+        SELECT
+          ncci_version,
+          COUNT(*)                                            AS total_edits,
+          COUNT(*) FILTER (WHERE deletion_date IS NULL)       AS active_edits,
+          COUNT(*) FILTER (WHERE modifier_indicator = '0')   AS hard_blocks,
+          COUNT(*) FILTER (WHERE modifier_indicator = '1')   AS soft_warnings,
+          MAX(ingested_at)                                    AS last_ingested_at
+        FROM cci_edits
+        GROUP BY ncci_version
+        ORDER BY ncci_version DESC
+        LIMIT 10
+      `);
+      res.json(stats.rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/admin/cci/search?code=XXXXX — find conflicts for a given code
+  app.get("/api/admin/cci/search", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const code = (req.query.code as string || "").trim().toUpperCase();
+      if (!code) return res.status(400).json({ error: "code query param required" });
+      const result = await db.query(`
+        SELECT column_1_code, column_2_code, modifier_indicator, ptp_edit_rationale,
+               effective_date, deletion_date, ncci_version
+        FROM cci_edits
+        WHERE deletion_date IS NULL
+          AND ncci_version = (SELECT MAX(ncci_version) FROM cci_edits)
+          AND (column_1_code = $1 OR column_2_code = $1)
+        ORDER BY modifier_indicator, column_1_code, column_2_code
+        LIMIT 200
+      `, [code]);
+      res.json(result.rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/cci/ingest — trigger ingest from CMS
+  app.post("/api/admin/cci/ingest", requireSuperAdmin, async (req, res) => {
+    try {
+      const { ingestFromCms } = await import("./services/cci-ingest");
+      const stats = await ingestFromCms();
+      res.json({ success: true, stats });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/admin/cci/upload — manual ZIP or CSV upload
+  app.post("/api/admin/cci/upload", requireSuperAdmin, async (req, res) => {
+    const multerMod = (await import("multer")).default;
+    const cciUpload = multerMod({ storage: multerMod.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+    return cciUpload.single("file")(req, res, async (uploadErr) => {
+      if (uploadErr) return res.status(400).json({ error: uploadErr.message });
+      try {
+        const { ingestCsvBuffer } = await import("./services/cci-ingest");
+        if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+        const version = (req.body.version as string || "").trim() || "manual_upload";
+        const fileName = req.file.originalname;
+        let csvBuffer: Buffer;
+
+        if (fileName.toLowerCase().endsWith(".zip")) {
+          const os = await import("os");
+          const pathMod = await import("path");
+          const fs = await import("fs");
+          const tmpDir = os.tmpdir();
+          const tmpZip = pathMod.join(tmpDir, `cci_upload_${Date.now()}.zip`);
+          fs.writeFileSync(tmpZip, req.file.buffer);
+
+          const unzipper = await import("unzipper");
+          const files: { name: string; buf: Buffer }[] = [];
+          await new Promise<void>((resolve, reject) => {
+            fs.createReadStream(tmpZip)
+              .pipe(unzipper.Parse())
+              .on("entry", (entry: any) => {
+                if (entry.path.toLowerCase().endsWith(".csv")) {
+                  const chunks: Buffer[] = [];
+                  entry.on("data", (d: Buffer) => chunks.push(d));
+                  entry.on("end", () => files.push({ name: entry.path, buf: Buffer.concat(chunks) }));
+                } else {
+                  entry.autodrain();
+                }
+              })
+              .on("close", resolve)
+              .on("error", reject);
+          });
+          fs.unlinkSync(tmpZip);
+          if (!files.length) return res.status(400).json({ error: "No CSV found in ZIP" });
+          csvBuffer = files[0].buf;
+        } else {
+          csvBuffer = req.file.buffer;
+        }
+
+        const stats = await ingestCsvBuffer(csvBuffer, fileName, version);
+        res.json({ success: true, stats });
+      } catch (err: any) {
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+  });
+
+  // GET /api/billing/cci/check?codes=A,B,C — wizard CCI conflict check
+  app.get("/api/billing/cci/check", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const raw = (req.query.codes as string || "").toUpperCase();
+      const codes = raw.split(",").map((c) => c.trim()).filter(Boolean);
+      if (codes.length < 2) return res.json([]);
+
+      const result = await db.query(`
+        SELECT column_1_code, column_2_code, modifier_indicator, ptp_edit_rationale
+        FROM cci_edits
+        WHERE deletion_date IS NULL
+          AND ncci_version = (SELECT MAX(ncci_version) FROM cci_edits WHERE TRUE)
+          AND column_1_code = ANY($1)
+          AND column_2_code = ANY($1)
+          AND modifier_indicator != '9'
+      `, [codes]);
+      res.json(result.rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
