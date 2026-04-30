@@ -1,0 +1,83 @@
+Excellent verification. Three defects confirmed; let's fix them 
+in this order:
+
+FIX 1 — Bundle Defect 1 (rules engine) + Defect 3 (snapshot) 
+together. They both need to fire at claim creation, so they're 
+the same code change.
+
+Steps:
+a) Add evaluateClaimRisk() call to the POST /api/billing/claims 
+   route handler (and any other route that creates a draft). 
+   Persist last_risk_factors and last_risk_evaluation_at.
+b) In the same handler, also capture rules_snapshot, 
+   rules_engine_version, and ncci_version_at_creation. The 
+   snapshot logic exists per Sprint 5 but isn't being called.
+c) Build a one-time backfill script that runs evaluateClaimRisk() 
+   against all 81 existing production claims. Make it idempotent 
+   (safe to re-run). Skip claims where status is in a terminal 
+   state if that's appropriate; evaluate everything else.
+d) Run the backfill script against PRODUCTION_DATABASE_URL.
+e) Verify with these queries against PRODUCTION_DATABASE_URL:
+
+   -- All claims should have evaluation timestamps now
+   SELECT COUNT(*) AS total,
+          COUNT(*) FILTER (WHERE last_risk_evaluation_at IS NOT NULL) AS evaluated,
+          COUNT(*) FILTER (WHERE last_risk_factors IS NOT NULL) AS with_factors
+   FROM claims;
+   
+   -- Distribution of risk factor counts
+   SELECT 
+     CASE 
+       WHEN jsonb_array_length(last_risk_factors) = 0 THEN 'clean'
+       WHEN jsonb_array_length(last_risk_factors) BETWEEN 1 AND 2 THEN 'few'
+       WHEN jsonb_array_length(last_risk_factors) BETWEEN 3 AND 5 THEN 'several'
+       ELSE 'many'
+     END AS factor_bucket,
+     COUNT(*) 
+   FROM claims 
+   WHERE last_risk_factors IS NOT NULL
+   GROUP BY factor_bucket;
+   
+   -- Sample 3 claims with their factors so I can spot-check
+   SELECT id, status, jsonb_array_length(last_risk_factors) AS factors,
+          last_risk_factors
+   FROM claims
+   WHERE last_risk_factors IS NOT NULL
+   ORDER BY created_at DESC
+   LIMIT 3;
+
+Acceptance for Fix 1:
+- 81 of 81 claims have last_risk_evaluation_at populated
+- claims_with_factors > 0 (some claims should have flagged rules)
+- New claim creation populates evaluation + snapshot 
+  automatically (test by creating one claim through the UI 
+  after deploy, then querying it)
+
+FIX 2 — Defect 2 (history hooks). After Fix 1 ships and 
+verifies, add the INSERT into payer_manual_extraction_history 
+in the route that updates manual_extraction_items.review_status.
+
+Two-part scope:
+a) Add the insert going forward — every future review action 
+   captures a history row.
+b) Backfill historical approvals — all 12 currently-approved 
+   items should get a "created" or "approved" entry in history, 
+   even if the original action wasn't captured. Use the 
+   reviewed_at timestamp and reviewed_by from the items 
+   themselves.
+
+Verify with:
+SELECT change_type, COUNT(*), MAX(changed_at) 
+FROM payer_manual_extraction_history 
+GROUP BY change_type;
+
+Should show at least 12 rows (one per approved item) plus any 
+new actions that have happened since.
+
+DO NOT START FIX 2 until Fix 1 is shipped and verified. Sequential 
+shipping with verification between each one — same standing order 
+as before.
+
+For both fixes, post Production Verification reports following 
+the format we established. Run queries against 
+PRODUCTION_DATABASE_URL, not your dev DB.

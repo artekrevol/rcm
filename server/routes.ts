@@ -4315,8 +4315,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [crypto.randomUUID(), claimId, patientId, 'created', 'Claim draft created via wizard', (req.user as any)?.id || null]
       );
 
-      // ── Prompt 06: snapshot rules state at claim creation ────────────────────
+      // ── Snapshot + risk evaluation at claim creation ─────────────────────────
       try {
+        const { evaluateClaim, scoreViolations } = await import("./services/rules-engine");
+
         const [{ rows: approvedRules }, { rows: ncciRows }] = await Promise.all([
           db.query(`
             SELECT mei.id, mei.section_type, mei.extracted_json, mei.reviewed_by, mei.reviewed_at,
@@ -4324,13 +4326,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             FROM manual_extraction_items mei
             JOIN payer_source_documents pm ON pm.id = mei.source_document_id
             WHERE mei.review_status = 'approved'
-              AND pm.payer_id = $1
+              AND ($1::uuid IS NULL OR pm.payer_id = $1)
             ORDER BY mei.reviewed_at DESC
           `, [p.payer_id || null]).catch(() => ({ rows: [] })),
           db.query(`SELECT MAX(ncci_version) AS latest FROM cci_edits`).catch(() => ({ rows: [{ latest: null }] })),
         ]);
 
-        const ncciVersion = ncciRows[0]?.latest || null;
+        const ncciVersion: string | null = ncciRows[0]?.latest || null;
         const snapshot = {
           snapshot_taken_at: now.toISOString(),
           applied_rules: approvedRules.map((r: any) => ({
@@ -4344,12 +4346,50 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           ncci_version: ncciVersion,
           rules_engine_version: "1.0.0",
         };
+
+        // Build evaluation context from the newly created claim + patient
+        const evalCtx = {
+          claimId,
+          organizationId: getOrgId(req),
+          patientId,
+          payerId: p.payer_id || null,
+          payerName: p.insurance_carrier || "",
+          planProduct: p.plan_product || null,
+          serviceDate: null,
+          serviceLines: [],
+          icd10Primary: "",
+          icd10Secondary: [] as string[],
+          authorizationNumber: p.authorization_number || null,
+          placeOfService: "11",
+          memberId: p.member_id || null,
+          patientDob: p.dob ? new Date(p.dob) : null,
+          patientFirstName: p.first_name || null,
+          patientLastName: p.last_name || null,
+          testMode: false,
+          pcpReferralCheckStatus: null as any,
+        };
+
+        const violations = await evaluateClaim(evalCtx);
+        const { riskScore, readinessStatus } = scoreViolations(violations);
+        const finalScore = Math.min(riskScore, 100);
+        const finalStatus: "GREEN" | "YELLOW" | "RED" =
+          finalScore >= 71 ? "RED" : finalScore >= 31 ? "YELLOW" : "GREEN";
+
         await db.query(
-          `UPDATE claims SET rules_snapshot = $1::jsonb, rules_engine_version = $2, ncci_version_at_creation = $3 WHERE id = $4`,
-          [JSON.stringify(snapshot), "1.0.0", ncciVersion, claimId]
+          `UPDATE claims
+           SET rules_snapshot = $1::jsonb,
+               rules_engine_version = $2,
+               ncci_version_at_creation = $3,
+               last_risk_evaluation_at = NOW(),
+               last_risk_factors = $4::jsonb,
+               risk_score = $5,
+               readiness_status = $6
+           WHERE id = $7`,
+          [JSON.stringify(snapshot), "1.0.0", ncciVersion,
+           JSON.stringify(violations), finalScore, finalStatus, claimId]
         );
       } catch (snapErr: any) {
-        console.warn('[Snapshot] Failed to snapshot rules for claim', claimId, snapErr?.message);
+        console.warn('[ClaimDraft] Snapshot/risk evaluation failed for', claimId, snapErr?.message);
       }
 
       res.status(201).json({ claimId, encounterId });
@@ -10825,7 +10865,7 @@ Warmly,
         }
       }
 
-      // ── Prompt 06: write history row + update last_verified_at ─────────────
+      // ── Write history row + update last_verified_at ────────────────────────
       try {
         // Map review_status to change_type
         const changeTypeMap: Record<string, string> = {
@@ -10833,12 +10873,22 @@ Warmly,
           rejected: "rejected",
           pending: "reopened",
           not_found: "rejected",
+          needs_reverification: "needs_reverification",
         };
         const changeType = extractedJson ? "data_corrected" : (changeTypeMap[reviewStatus] || "edited");
 
-        const { rows: manualForHistory } = await db.query(
-          "SELECT document_name AS payer_name FROM payer_source_documents WHERE id = $1", [item.source_document_id]
-        ).catch(() => ({ rows: [] })) as any;
+        // Look up payer name — works across both schema variants:
+        //   production: manual_id → payer_manuals.payer_name
+        //   dev:        source_document_id → payer_source_documents.document_name
+        const docId = (item.manual_id || item.source_document_id) ?? null;
+        let historyPayerName: string | null = null;
+        if (docId) {
+          const [pmResult, psdResult] = await Promise.all([
+            db.query("SELECT payer_name FROM payer_manuals WHERE id = $1", [docId]).catch(() => ({ rows: [] })),
+            db.query("SELECT document_name AS payer_name FROM payer_source_documents WHERE id = $1", [docId]).catch(() => ({ rows: [] })),
+          ]);
+          historyPayerName = (pmResult.rows[0] ?? psdResult.rows[0])?.payer_name ?? null;
+        }
 
         await db.query(`
           INSERT INTO payer_manual_extraction_history
@@ -10850,7 +10900,7 @@ Warmly,
           changeType,
           JSON.stringify({ ...item, review_status: reviewStatus }),
           notes || null,
-          (manualForHistory as any[])[0]?.payer_name || null,
+          historyPayerName,
           item.section_type,
         ]);
 
