@@ -7622,7 +7622,12 @@ Warmly,
           fs.step_type AS current_step_type
         FROM flow_runs fr
         LEFT JOIN leads l ON l.id = fr.lead_id
-        LEFT JOIN flow_steps fs ON fs.id = fr.current_step_id
+        LEFT JOIN LATERAL (
+          SELECT step_order, step_type FROM flow_steps
+          WHERE flow_id = fr.flow_id
+          ORDER BY step_order ASC
+          LIMIT 1 OFFSET fr.current_step_index
+        ) fs ON true
         WHERE fr.flow_id = $1
         ORDER BY fr.started_at DESC
         LIMIT 25
@@ -7664,7 +7669,12 @@ Warmly,
         FROM flow_runs fr
         LEFT JOIN flows f ON f.id = fr.flow_id
         LEFT JOIN leads l ON l.id = fr.lead_id
-        LEFT JOIN flow_steps fs ON fs.id = fr.current_step_id
+        LEFT JOIN LATERAL (
+          SELECT step_order, step_type, channel FROM flow_steps
+          WHERE flow_id = fr.flow_id
+          ORDER BY step_order ASC
+          LIMIT 1 OFFSET fr.current_step_index
+        ) fs ON true
         WHERE fr.status = 'running'
         ORDER BY fr.next_action_at ASC
         LIMIT 100
