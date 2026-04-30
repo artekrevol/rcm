@@ -1,0 +1,45 @@
+Starting Container
+[SEEDER] Starting startup schema seeder…
+[SEEDER] column practice_settings.frcpb_enrolled: already present
+[SEEDER] column practice_settings.frcpb_enrolled_at: already present
+Assigned existing data to demo organization
+Synced super_admin password: abeer@tekrevol.com
+> rest-express@1.0.0 start
+> NODE_ENV=production node dist/index.cjs
+Synced Chajinel user: daniela@chajinel.com
+Synced Chajinel user: djonguitud@chajinel.com
+Synced QA user: qa-admin@claimshield.test
+Synced QA user: qa-rcm@claimshield.test
+Synced QA user: qa-intake@claimshield.test
+[Seeder] FRCPB E2E test payer confirmed in payers table
+Payer database and HCPCS descriptions updated
+[SEEDER] table submission_attempts: already present
+[SEEDER] column claims.last_test_correlation_id: already present
+[SEEDER] column claims.last_risk_evaluation_at: already present
+[SEEDER] column claims.last_risk_factors: already present
+[SEEDER] table document_types: already present
+[SEEDER] table payer_source_documents: already present
+[SEEDER] table manual_extraction_items: already present
+[SEEDER] Prompt A: payer_manuals detected — running migration to payer_source_documents…
+[SEEDER] Prompt A: 3 rows in payer_source_documents after copy
+[SEEDER] Prompt A: Migration complete. payer_manuals dropped. All FK chains updated.
+[SEEDER] table rule_kinds: already present
+Startup migration error: column "description" of relation "rule_kinds" does not exist
+11:22:11 PM [express] serving on port 8080
+[orchestrator] Flow orchestrator started (interval: 30s)
+[cci-cron] CCI quarterly ingest cron started
+[TF-Guardian] Cron started — will run daily at 6:00 UTC
+[scraper-cron] Scheduled scraper cron started — daily at 3:00 UTC, weekly synthetic test Sunday 3:30 UTC
+[seed] Caritas flow already exists
+11:22:12 PM [express] GET /api/health 200 in 10ms
+[835 Poll] No new 835 ERA reports found
+[277 Poll] No new 277CA reports found
+[cci-cron] Quarterly ingest triggered for 2026Q2
+[cci-ingest] Downloading https://www.cms.gov/files/zip/medicare-ncci-practitioner-ptp-edits-2026-q2.zip
+[cci-ingest] CMS NCCI quarterly file download failed (HTTP 404 for https://www.cms.gov/files/zip/medicare-ncci-practitioner-ptp-edits-2026-q2.zip). Manual upload required at /admin/data-tools/cci-upload.
+[cci-cron] Ingest failed: CMS NCCI quarterly file download failed (HTTP 404 for https://www.cms.gov/files/zip/medicare-ncci-practitioner-ptp-edits-2026-q2.zip). Manual upload required at /admin/data-tools/cci-upload.
+11:23:25 PM [express] POST /api/auth/login 401 in 108ms :: {"error":"Invalid email or password"}
+11:23:30 PM [express] GET /api/auth/me 401 in 1ms :: {"error":"Not authenticated"}
+11:23:33 PM [express] POST /api/auth/login 401 in 69ms :: {"error":"Invalid email or password"}
+11:23:37 PM [express] GET /api/auth/me 401 in 1ms :: {"error":"Not authenticated"}
+11:23:40 PM [express] POST /api/auth/login 401 in 70ms :: {"error":"Invalid email or password"}
