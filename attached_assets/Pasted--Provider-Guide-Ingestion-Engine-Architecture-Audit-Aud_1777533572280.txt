@@ -1,0 +1,481 @@
+# Provider Guide Ingestion Engine — Architecture Audit
+
+**Audit date:** April 30, 2026
+**Reference document:** 2026 UnitedHealthcare Care Provider Administrative Guide (484 pages, effective April 1, 2026)
+**Engine reviewed:** Current Replit-built ingestion pipeline (Layers 1–9)
+
+---
+
+## Executive summary
+
+The engine is **competently engineered for the problem it set out to solve**: take a single payer manual, chunk it, run section-aware extraction prompts, queue the output for human review, and atomically write approved rules to live tables. The SSRF guards, atomic side-effects, audit trail, plan-product scoping flag, and CMS conflict validation are all genuinely good design.
+
+The problem is that **it's solving a model of "the provider manual" that doesn't survive contact with a Tier-1 commercial payer**. UnitedHealthcare's actual operational reality is: 1 administrative guide + 11+ supplements + 1 separate prior-auth list + hundreds of reimbursement policies + thousands of medical policies + monthly bulletins. The engine assumes 1:1 payer-to-manual. UHC alone needs 1:N.
+
+The audit below is organized into:
+
+1. **What the engine captures correctly** (don't break these)
+2. **Critical gaps** (would cause real-world denials to go undetected)
+3. **Schema-level gaps** (data model needs evolution)
+4. **Future-perspective gaps** (the moat the engine can't yet defend)
+5. **Specific Replit prompts** to address the highest-priority findings
+
+Every gap is mapped to a specific section of the 2026 UHC Administrative Guide so the findings are verifiable.
+
+---
+
+## 0. Foundational principle: payer-activated complexity (the CollaborateMD anti-pattern)
+
+Before any of the gaps below are addressed, one product principle has to govern all of them: **complexity surfaces only when activated by what the practice actually bills**.
+
+CollaborateMD's failure mode is that it exposes the entire universe of payer rules to every user on every claim, regardless of whether they apply. The result is an interface that requires a certified biller to navigate — which is exactly the bar Rosemary's been describing as the wall between her and a platform her team could actually use.
+
+ClaimShield's interface should be **computed at runtime from the rules corpus per context**, not hardcoded. The backend can be as complex as UHC requires. The frontend renders only the fields, validations, and warnings that apply to the current (practice, payer, plan_product, patient, claim) tuple.
+
+### The four-gate activation cascade
+
+```
+Gate 1: Practice → Payers tab
+        Practice enables which payers they bill.
+        → If UHC is not enabled, no UHC complexity exists in the UI. Period.
+
+Gate 2: Payer → Enabled plan_products  
+        When adding UHC, practice picks which products they bill.
+        → If only PPO is enabled, HMO referral logic stays dormant.
+        → Adding MA HMO activates a stricter referral rule than Commercial HMO.
+
+Gate 3: Plan product → Activated patient fields
+        Patient creation form shows fields conditionally.
+        → Medicare patient: 4-field form
+        → UHC PPO patient: 4-field form (no plan-specific extras)
+        → UHC Commercial HMO patient: 6-field form (PCP, referral capture)
+        → Medi-Cal MCO with delegation: 8-field form (delegated entity ID, PCP, IPA-issued auth number)
+
+Gate 4: Patient context → Claim wizard rendering
+        Wizard validates against only the rules that apply to this claim.
+        → Medicare patient: no PCP referral warnings ever shown
+        → UHC HMO patient: blocked from submission without referral_id
+        → Patient with delegated IPA: claim routing logic uses IPA address from rule chain, not payer address
+```
+
+### Schema implication
+
+Every rule, every plan_product configuration, and every payer_source_document declares **what additional patient and claim fields it requires** when active. The patient record table is sparse — all possible fields exist as columns, but the form only renders the union of fields required by the patient's currently-active rules.
+
+The minimum schema additions to make this work:
+
+- `plan_products.required_patient_fields` (JSONB array of field codes)
+- `plan_products.required_claim_fields` (JSONB array of field codes)
+- `rules.activates_form_fields` (JSONB array of field codes the rule introduces)
+- `practice_payer_enrollments` table (which payer + plan_product combos this practice has activated)
+- A frontend resolver: `getActivatedFieldsForContext(practice_id, payer_id, plan_product_id, delegated_entity_id) → field_set`
+
+The same resolver powers the patient form, the claim wizard, and the validation engine. One source of truth.
+
+### Why this is the actual differentiator
+
+The technical moat is the rules ingestion engine. The **product moat** is that ClaimShield uses that depth to make the UI simpler, not more complex. Every other billing platform makes the UX worse as the rules database grows. ClaimShield makes the UX more precise.
+
+For the May 12 demo with Rosemary, the visual proof of this principle is a three-screenshot sequence:
+
+- **Screenshot 1:** Patient form for a Medicare patient — 4 fields visible.
+- **Screenshot 2:** Same form, payer switched to UHC Commercial HMO — form expands to 7 fields with PCP and referral now required.
+- **Screenshot 3:** Same form, payer switched to Medi-Cal with IPA delegation — form expands to 9 fields with delegated_entity dropdown active and routing preview showing claim goes to IPA, not Medi-Cal.
+
+That sequence says: *"We know everything about every payer, and you only ever see what you need."* No other billing platform can demonstrate that.
+
+### How this principle reshapes every prompt below
+
+Every gap and prompt in the rest of this audit must be implemented under this principle. Specifically:
+
+- **Plan product fields don't appear globally** — they appear only for patients whose payer has them enabled.
+- **Delegated entity dropdown doesn't appear on every patient record** — it appears only when (payer, plan_product, state) combination has delegation rules in the corpus.
+- **Modifier rule warnings don't fire on every claim** — they fire only when the payer + plan_product + service code combination has a rule registered.
+- **Smart Edits don't appear as a tab in the rules database** — they appear nested under the payer that has them, only if that payer is enrolled.
+- **Bulletins don't appear in the practice's notification feed unless** they reference a payer the practice bills.
+
+Build the rules corpus to UHC-level depth. Render the corpus to the user only as far as their context demands.
+
+---
+
+## 1. What the engine captures correctly
+
+These should not be touched in subsequent revisions:
+
+- **SSRF protection** in `manual-extractor.ts` — the IP/hostname/IPv6 guard rail is correct and prevents server-side request forgery via the URL upload path. Keep as-is.
+- **Async extraction with `setImmediate`** — returning HTTP 200 with `status: processing` and continuing extraction in background is the right pattern.
+- **Section keyword scoring** — using ranked keyword chunks rather than running Claude against the full 484-page text is the only way this stays under cost/latency budget.
+- **Confidence scoring as rule-based, not secondary AI call** — the right call. Secondary AI calls compound hallucination risk and double the cost.
+- **`not_found` as an explicit reviewer status** — distinguishing "section is genuinely absent" from "we haven't reviewed yet" is critical for coverage reporting and is often missed in similar systems.
+- **Atomic side-effects on approval** — writing to `payers`, `payer_auth_requirements`, and `rules` in a single transaction with `applied_rule_id` linkback is correct.
+- **`payer_manual_extraction_history` audit log** — full state snapshots per change with denormalized columns for fast dashboard queries is a defensible compliance pattern.
+- **CMS conflict validation** — comparing extracted timely-filing values against the hard-coded Medicare/TRICARE/Medicaid regulatory reference is genuinely innovative and should be a sales point.
+- **`rules_snapshot` JSONB on claims at draft creation** — preserving exactly which rules governed a claim at creation time is the right foundation for audit defensibility.
+
+These are real engineering wins. The rest of this document is gaps, not corrections to the above.
+
+---
+
+## 2. Critical gaps (would cause undetected denials)
+
+### 2.1 Timely filing is not in the manual at all
+
+**Engine assumption:** Manual contains a number of days that can be extracted and written to `payers.timely_filing_days`.
+
+**UHC reality (Chapter 10, p. 137):** *"Timely filing — You must file your claim within your timely filing limits or it may be denied... Timely filing limits vary based on state requirements and contracts. Refer to your internal contracting contact or Agreement for your specific timely filing requirements."*
+
+The Quick Reference Guide (p. vi) repeats: *"Refer to your internal contracting contact or Participation Agreement for timely filing information."*
+
+**Impact:** Running the current Timely Filing extractor against UHC will either return `not_found` (good, but useless) or hallucinate a number from a state-specific carve-out (bad, silent wrong answer). The Timely Filing Guardian agent will then fire alerts based on a fabricated deadline.
+
+**Resolution:** Timely filing data has to come from a **second ingestion source** — the practice's contract / Participation Agreement, not the manual. Schema needs a `timely_filing_source` column with values like `manual_extracted`, `contract_extracted`, `regulatory_default`, `manual_override`, plus a confidence band per source. Until contract ingestion exists, UHC timely filing should be flagged "contract-dependent" in the UI rather than show a number.
+
+---
+
+### 2.2 The actual prior-auth list is not in the manual
+
+**Engine assumption:** CPT codes requiring auth can be extracted from the manual and written to `payer_auth_requirements`.
+
+**UHC reality (Chapter 7, p. 90):** *"View the most current and complete advance notification requirements, including procedure codes and associated services, at UHCprovider.com > Coverage and payments > Prior authorization > Advance notification and prior authorization requirements."*
+
+The list is a **separately-maintained, monthly-updated document** at a different URL. It contains the actual CPT-by-CPT rules. The manual only describes the *process* of requesting auth.
+
+**Impact:** Running the current Prior Auth extractor against UHC will return `auth_required: true` for a few generic categories (specialty drugs, fixed-wing transport, SNF admission) and miss the actual several-hundred-line CPT list entirely. The Prior Auth Agent will block the wrong claims and miss the right ones.
+
+**Resolution:** The ingestion pipeline needs a **second class of source document**: structured PA lists. These are typically PDFs or Excel spreadsheets with one CPT per row plus auth conditions. They need a different extractor (table-aware, not narrative-aware), a different update cadence (monthly vs annually), and a different data model (already correct: per-CPT rows in `payer_auth_requirements`). Add `source_url` and `source_document_type` columns to track provenance.
+
+---
+
+### 2.3 Critical timeframes other than timely filing are completely missed
+
+The current engine extracts: timely filing days, appeal deadline days. The UHC manual contains at least 18 other time-sensitive operational rules that drive denials and audit failures, including:
+
+| Rule | Source | Current capture |
+|---|---|---|
+| Prior auth submission: ≥15 calendar days advance, minimum 5 business days before service | Ch. 7, p. 89 | Not captured |
+| Home health/DME advance notification: within 2 business days of start of service | Ch. 7, p. 89 | Not captured |
+| Standard PA decision turnaround: 15 cal days commercial / 7 cal days MA | Ch. 7, p. 89 | Not captured |
+| Expedited PA decision turnaround: 72 hours | Ch. 7, p. 89 | Not captured |
+| Part B drug PA: 72 hr standard / 24 hr expedited | Ch. 8, p. 114 | Not captured |
+| Records for expedited appeals: within 2 hours (incl. weekends/holidays) | Ch. 10, p. 150 | Not captured |
+| Records for standard appeals: within 24 hours (incl. weekends/holidays) | Ch. 10, p. 150 | Not captured |
+| Effectuation of overturned decisions: 2 hr expedited / 24 hr standard | Ch. 10, p. 150 | Not captured |
+| Refund remittance: within 30 calendar days of overpayment notice | Ch. 11, p. 156 | Not captured |
+| Recoupment offset window: after 45 calendar days from refund request | Ch. 11, p. 156 | Not captured |
+| Medical record submission for audit: 14 days standard, 24/48/72 hr urgent (electronic file transfer) | Ch. 12, p. 158 | Not captured |
+| Records retention: 10 years | Ch. 12, p. 158 | Not captured |
+| Lab results submission: within 30 days of test (HEDIS) | Ch. 9, p. 122 | Not captured |
+| Discharge summary submission: within 7 days of inpatient discharge | Ch. 9, p. 123 | Not captured |
+| Smart Edits response window: 5 calendar days before auto-process | Ch. 10, p. 129 | Not captured |
+| Corrected claim minimum delay: 48 hours after first submission | Ch. 10, p. 128 | Not captured |
+| MA appeal deadline post-denial: 60 calendar days | Ch. 10, p. 150 | Partially captured |
+| Notice of Medicare Noncoverage: 2 calendar days before termination of SNF/HH/CORF services | Ch. 11, p. 157 | Not captured |
+| Demographic change notification: 30 calendar days advance | Ch. 2, p. 22 | Not captured |
+| Termination notice to members: 30/45 days advance | Ch. 2, p. 25 | Not captured |
+| Concurrent inpatient notification: immediate | Ch. 9, p. 124 | Not captured |
+
+**Resolution:** Generalize the section schema. Instead of four hardcoded sections (timely_filing, prior_auth, modifiers, appeals), introduce a **`rule_kind` taxonomy** with at minimum:
+
+- `submission_timeframe` (when must X be submitted by)
+- `decision_timeframe` (when must payer decide by)
+- `documentation_timeframe` (when must records be supplied by)
+- `notification_event` (when must provider notify payer)
+- `member_notice` (when must provider notify member)
+- `submission_method` (how must X be submitted)
+- `liability_assignment` (modifier-driven member vs provider liability)
+
+Each `rule_kind` has its own extractor prompt, its own confidence rubric, and its own downstream side-effect.
+
+---
+
+### 2.4 Modifier rules are oversimplified to the point of being misleading
+
+**Engine schema:** `{ modifier_code: "59", description: "...", payer_rule: "...", source_text: "..." }`
+
+**UHC reality (Ch. 11, pp. 153–154):** Modifiers GA, GZ, GY each have IF-THEN logic that determines *who pays for the service*:
+
+- **GA modifier**: Service is noncovered AND member signed advance written consent AND IDN was issued → **member liability**, may bill member
+- **GZ modifier**: Service is noncovered AND no advance notice given to member → **provider liability**, may NOT bill member
+- **GY modifier**: Service is statutorily excluded from Medicare AND explicitly excluded in EOC → **member liability**, may bill member
+
+This is conditional logic that determines collections — not a single string. Misclassifying GZ as GA is a balance-billing violation that triggers regulatory exposure beyond a denial.
+
+Same problem applies to modifier 25 (significant, separately identifiable E&M on same day as procedure), 59 (distinct procedural service), 26 (professional component), TC (technical component), 76/77 (repeat procedure), 91 (repeat clinical lab), GT/95 (telehealth), and more — each has condition-dependent allowability.
+
+**Resolution:** Modifier schema needs to capture:
+
+```
+{
+  modifier_code: "GA",
+  conditions_required: ["noncovered_service", "advance_written_consent_signed", "idn_issued"],
+  conditions_excluded: [...],
+  liability_assignment: "member" | "provider" | "payer",
+  appeal_path_if_denied: "...",
+  source_quote: "..."
+}
+```
+
+---
+
+### 2.5 Smart Edits are payer-specific clearinghouse-level rules that the engine has no category for
+
+**UHC reality (Ch. 10, p. 129):** *"Smart Edits is an EDI capability that auto-detects claims with potential errors. Smart Edits may also be applied to help reduce claim denials and improve the claim processing time. You have 5 calendar days to update claims flagged or identified by Return and Documentation Smart Edits before they are automatically processed. Rejection Smart Edits require you to take action on your claims to make it into our claim processing system."*
+
+Smart Edits are payer-specific edit rules applied at the clearinghouse level — they're *between* HIPAA edits (universal) and CCI edits (universal). UHC has them; Cigna has its own; Aetna has its own. The engine schema collapses these into "modifiers" because that's the closest available rule type, which is wrong.
+
+**Resolution:** Add a fifth section to the extraction taxonomy: `payer_specific_edits`. This becomes the third pillar of the rules engine alongside provider-manual ingestion and CCI edits. Capture: edit name, edit category (Return-and-Documentation vs Rejection), trigger condition, response window, recommended remediation, source quote.
+
+---
+
+### 2.6 The Capitation/Delegation supplement breaks the entire single-payer evaluation model
+
+**UHC reality (Capitation/Delegation supplement, p. 182, and Ch. 7, p. 87):**
+
+*"MA plans that have delegated arrangements with medical groups/IPAs — in these arrangements, the delegate's protocols must be followed. Submit prior authorizations as directed on the member's ID card."*
+
+This means: for some UHC members, the actual rules governing their care come from an IPA's protocol document, not UHC's manual. The patient ID card directs you where to send authorizations and where to file claims. The current engine has no concept of "rule chain" — it can't model "use delegate's protocol unless silent, then UHC's protocol."
+
+This is the exact issue Rosemary flagged in your prior conversation: California complexity. The engine's evaluation key is `(payer_id)`. It needs to be `(payer_id, plan_product, delegated_entity_id, state, effective_date)`.
+
+**Resolution:**
+
+1. Add `delegated_entity_id` to `patients` and `claims`.
+2. Add `delegated_entities` table separate from `payers`.
+3. At rule evaluation time, resolve the chain: delegate-specific rule → payer rule → state/regulatory default. First match wins.
+4. The Patient creation flow needs a "Is this member assigned to a delegated medical group / IPA?" field with a lookup against the delegated entities table.
+
+---
+
+### 2.7 Plan products beyond HMO/PPO are not modeled, and they all have different rules
+
+**UHC reality (Ch. 4 & 5, pp. 37–80):** UHC offers, just within the lines covered by this single guide:
+
+- **Commercial:** HMO, PPO, POS, EPO, Indemnity, HSA, HRA, FSA, Surest, Options PPO, Choice, Choice Plus, Navigate, Charter, Compass, Doctors Plan, Edge, Heritage, Select Plus
+- **Individual Exchange:** Bronze, Silver, Gold, Platinum metal levels; Sanitas Narrow Network (Bexar TX); Kelsey-Seybold Narrow Network (5 TX counties); referral-required exchanges in 26 states
+- **Medicare Advantage:** HMO, HMO-POS, PPO, MA D-SNP, MA C-SNP, MA I-SNP, Erickson Advantage HMO-POS, UnitedHealthcare Group MA HMO, UnitedHealthcare Group MA PPO, Peoples Health Group MA HMO-POS, Medicare Direct, Medicare Supplement, Medicare Select
+- **Specialty/regional:** Empire Plan (NY State), Mid-Atlantic, NHP (FL), Oxford (CT/NJ/NY), Oxford Level Funded, OneNet PPO/Workers' Comp, Preferred Care Network, UHC West, River Valley
+
+Each combination has different referral, prior auth, timely filing, and appeals rules. The current `applies_to_plan_products: ["HMO","PPO","POS","EPO","Indemnity"]` JSONB array doesn't even cover the named plan list.
+
+**Resolution:** Move plan products from a free-form JSONB array to a structured `plan_products` reference table with at least: `plan_product_code`, `parent_plan_family`, `plan_type` (HMO/PPO/POS/EPO/Indemnity/Capitated), `requires_pcp` (bool), `requires_referral` (bool), `is_government` (bool), `regulatory_basis` (Medicare Advantage / ACA Marketplace / ERISA / state). Rules then reference plan_product_codes, not free-text strings.
+
+---
+
+### 2.8 Referral requirements are an entire missing rule family
+
+**UHC reality (Ch. 6, pp. 82–86):**
+
+- HMO Medicare Advantage plans **require** PCP referral to specialists
+- HMO commercial plans require referrals
+- HMO-POS allows out-of-network without referral but at higher cost
+- PPO does not require referrals
+- 26 specific Individual Exchange states **require** referrals
+- For Medicare Advantage, *"services denied for failure to follow referral requirements are provider liability"*
+- Some referrals must reference the W500 Emergent Wrap network when a network provider is unavailable
+- Referrals to out-of-network laboratories require separate prior approval
+
+The current engine has four sections: timely_filing, prior_auth, modifiers, appeals. **Referrals is not one of them.** This is a major denial vector — a UHC HMO claim without a PCP referral is provider liability with no member recourse.
+
+**Resolution:** Add `referrals` as a fifth (or sixth, after `payer_specific_edits`) section to the extraction taxonomy. Schema:
+
+```
+{
+  applies_to_plan_products: [...],
+  referral_required: true,
+  referral_source: "PCP" | "specialist" | "any_network",
+  referral_format: "electronic_278" | "manual_form" | "verbal",
+  exceptions: ["self-referral_for_OB", ...],
+  state_specific_overrides: {...}
+}
+```
+
+---
+
+### 2.9 The 484-page manual is being distilled to ~16 pages of context
+
+**Engine math:**
+- Top 4 chunks per section by keyword score
+- Up to 2 chunks per section sent to Claude
+- 4 sections × 2 chunks × ~6,000 chars = 48,000 chars max
+- 48,000 chars ≈ 16 letter-size pages
+
+**Reality:** UHC's manual is 484 pages. The engine sees ~3% of it. This is fine when the relevant content is concentrated in a known section. It is not fine when:
+
+- A timeframe rule is mentioned in passing in Chapter 9 (specific protocols) but the keyword scorer tagged Chapter 10 as the timely-filing section
+- A modifier rule is buried in Chapter 11 (Compensation) under "Charging Members for Noncovered Services" rather than in a dedicated modifier section
+- A supplement (Empire Plan, Oxford, NHP, etc.) overrides the main guide for a specific population, and that section never makes it into the top-4 chunks
+
+**Resolution:** Two complementary changes:
+
+1. **Hierarchical extraction:** First pass identifies sections (table-of-contents-aware), second pass extracts within each identified section. PDFs from major payers all have predictable section structures. Build a section recognizer (regex + Claude vision on the TOC pages) before keyword chunking.
+
+2. **Multi-pass coverage:** Run the extractor 3-5 times with rotating chunk selection (not always top-2 by score) and surface conflicts to the reviewer. If pass 1 says timely_filing = 365 days and pass 3 says timely_filing = 90 days for HMO, the reviewer sees both and decides.
+
+---
+
+## 3. Schema-level gaps
+
+### 3.1 No effective-date semantics on rules
+
+The 2026 UHC Admin Guide states: *"This guide is effective April 1, 2026, for physicians, health care professionals, facilities and ancillary health care providers currently participating in our commercial and MA networks. It is effective now for health care providers who join our network on or after Jan. 1, 2026."*
+
+A claim with service date March 15, 2026 should be evaluated against the **2025** rules, not the 2026 rules. The engine has no concept of `effective_date_start` and `effective_date_end` per rule, only `last_verified_at`. The rules_snapshot on claims at creation time partially mitigates this, but only for claims created after the snapshot was taken.
+
+**Resolution:** Every rule row needs `effective_start` and `effective_end` (nullable for "currently in effect"). Rule evaluation joins on `service_date BETWEEN effective_start AND effective_end`. When a new manual is ingested, the prior version's rules are not deleted — they're closed out (`effective_end = new_manual_effective_date - 1`) and the new rules are inserted with `effective_start = new_manual_effective_date`.
+
+### 3.2 No "agreement override" semantics
+
+UHC's manual: *"If there is inconsistency between the terms of your Agreement and this guide, your Agreement controls. The exception to this rule is when your Agreement defines a protocol that is specific to one of our affiliates and is inconsistent with a protocol in the corresponding affiliate supplement to this guide."*
+
+Some rules (most administrative protocols) are agreement-overridable. Others (statutory/regulatory) are not. The engine treats all rules as equivalent.
+
+**Resolution:** Add `is_agreement_overridable` and `is_regulatory_floor` (bool) to every rule. The Patient creation flow eventually needs a "contract custom override" facility for the practice to enter their agreement-specific values without losing the manual baseline.
+
+### 3.3 No source-document granularity within a payer
+
+Current schema: `payer_manuals` (one row per ingested document) → `manual_extraction_items` (rows tied to that manual). This works for one manual. UHC has 1 master + 11 supplements + 1 PA list + N reimbursement policies + N medical policies. The current schema cannot represent "this rule comes from the Capitation/Delegation supplement, version 2026.1, page 192" vs "this rule comes from the main guide, Ch. 7, page 88."
+
+**Resolution:** Promote the document concept. Rename `payer_manuals` to `payer_source_documents` and add `document_type` (admin_guide / supplement / pa_list / reimbursement_policy / medical_policy / bulletin), `parent_document_id` (nullable, for supplements), `effective_start`, `effective_end`. Extraction items reference `source_document_id`, not `payer_id` directly. Coverage matrix rolls up from documents to payer.
+
+### 3.4 No relationship between rules and the regulatory floor
+
+The CMS conflict validation endpoint is a one-off check. It should be a continuous data structure. Each rule has:
+
+- A regulatory floor (Medicare 365 days, Medicaid 90-365 days, NAIC commercial 90-365 days)
+- An extracted value
+- An agreement override (if any)
+- A computed effective value = MIN(floor, extracted) for filing limits, or as-extracted for stricter rules
+
+**Resolution:** Add a `regulatory_floors` reference table seeded with CMS/CFR/NAIC values. Every rule joins to it. The CMS conflict report becomes a materialized view of the join, not an ad-hoc validator.
+
+### 3.5 No representation of place-of-service rules
+
+UHC's manual has multiple POS-specific rules: assistant surgeon claims require POS validation (Ch. 10), telehealth has POS-02/POS-10 distinctions (Ch. 9), some specialty pharmacy services have POS restrictions (Ch. 8), DME has POS handling (Ch. 11). The engine has no POS rule type.
+
+**Resolution:** Add `place_of_service_rules` as a section. Schema captures: applicable POS codes, applicable CPT/HCPCS codes, restriction (allowed / denied / requires_modifier / requires_specific_pos).
+
+---
+
+## 4. Future-perspective gaps (the moat the engine can't yet defend)
+
+These are the gaps that determine whether ClaimShield's positioning — *"the only billing platform with an automatic payer rules ingestion engine"* — survives competitive pressure 12 months from now.
+
+### 4.1 Medical policies = thousands of documents per major payer
+
+UHC's medical policies (separate from the admin guide) cover: what diagnosis codes support what services, what clinical criteria establish medical necessity, what's covered/not covered/experimental. The manual references them in dozens of places but contains none of them. UHC publishes monthly Medical Policy Update Bulletins announcing changes.
+
+**Why this matters strategically:** Medical policies are the *coverage layer*. Provider manuals are the *operational layer*. A platform that knows both prevents the right denials. A platform that knows only one is half-built. From your prior conversation: *"Provider manuals are operational rules; medical policies are coverage rules. A platform that knows both is a platform that prevents the right denials."*
+
+**Build implication:** Medical policy ingestion is its own pipeline (per-policy PDF, much smaller than the admin guide, but thousands of them). Bulletin monitoring is its own scheduled job. This is Phase 3 territory — but Phase 3 has to be on the roadmap explicitly, with an architectural path that the current schema doesn't have to be torn up to support.
+
+### 4.2 Reimbursement policies = hundreds of documents per major payer
+
+Separately from medical policies, UHC publishes reimbursement policies covering specific billing scenarios (Modifier 25, Modifier 59, Multiple Procedures, Anesthesia Services, Concurrent Care, After-Hours Care, Bundled Services, etc.). Each is a 5-30 page document with conditional logic. Each one drives specific denials.
+
+**Build implication:** Reimbursement policies are highly structured (mostly tables and IF-THEN rules) and lend themselves well to LLM extraction. They should be a dedicated source type in the source documents table.
+
+### 4.3 NCD/LCD ingestion for Medicare Advantage
+
+UHC MA explicitly applies NCD (National Coverage Determinations) and LCD (Local Coverage Determinations). LCDs are MAC-specific (Palmetto, Noridian, WPS, NGS, FCSO, CGS — each covers different states with different LCDs). The engine doesn't model MAC at all.
+
+**Build implication:** NCDs and LCDs are publicly published by CMS in highly structured form. They're the easiest "high-value" ingestion target after CCI edits. Adding them gives ClaimShield a Medicare Advantage moat that no general-purpose billing platform has.
+
+### 4.4 Bulletin / change monitoring
+
+UHC publishes monthly Network News bulletins, monthly Medical Policy Update Bulletins, and monthly Reimbursement Policy Update Bulletins. Each one announces what changed. The current re-ingestion model (re-process every 90 days) misses 60-90 days of changes per major payer.
+
+**Build implication:** Add a "bulletin watcher" service that subscribes to each payer's bulletin RSS feed (or scrapes the news page) and creates `re-verify` flags on the relevant extraction items when a bulletin announces a change. This is a small build with a large credibility payoff.
+
+### 4.5 Diff surfacing across versions
+
+The 2026 UHC manual is 484 pages. The 2025 was probably 470. The 2027 will be 500. Year-over-year diffs are where the actionable changes live. Current schema closes out old rules and inserts new ones — there's no UI for "what changed between 2025 and 2026 for UHC?"
+
+**Build implication:** Diff visualization between source document versions. This is also where Rosemary's role lives: she reviews the diff, not the full manual, every year.
+
+### 4.6 Risk adjustment / HCC coding intelligence
+
+Ch. 10 (pp. 139-140) of the UHC manual contains substantial HCC risk adjustment guidance. This is a separate revenue stream (more accurate diagnosis coding = higher RAF score = higher Medicare Advantage payment) that no billing platform competitor addresses. The current engine doesn't even have a section type for it.
+
+**Build implication:** Add HCC coding as a 7th section type. This becomes a cross-sell from claim submission into value-based contracting.
+
+### 4.7 Member-state-aware rules (QMB, dual-eligibles, etc.)
+
+UHC's manual (Ch. 11) has hard rules: cannot bill Qualified Medicare Beneficiaries for cost-sharing under any circumstances. Dual-eligible billing has special protections. The engine has no concept of "member status" — only payer and plan product.
+
+**Build implication:** Patient schema needs `qmb_status`, `dual_eligible`, `medicare_savings_program`. Rules engine evaluates against patient status, not just payer.
+
+### 4.8 EDI / clearinghouse-level rules
+
+UHC mandates 837 v5010, has Smart Edits at the clearinghouse layer, has specific NDC formatting requirements (24D field on CMS-1500, field 43 on UB-04, LIN03 + CTP04-05 in 837), HCT level on EPO claims (loop 2400 MEA segment), DEX Z-codes for molecular pathology. These are EDI-construction rules. The engine has no taxonomy for them.
+
+**Build implication:** From your prior 837P validation work, you already have this knowledge in the codebase. Pull it out into a structured `edi_construction_rules` table by payer and plan product. This is what ClaimShield's wizard already enforces — it should be a queryable rule, not hardcoded logic.
+
+---
+
+## 5. Concrete prompts for Replit (in priority order)
+
+These map to the gaps above. Each is sized for a 2-3 day Replit prompt.
+
+### Prompt A: Multi-document source schema (foundation for all subsequent work)
+
+Refactor `payer_manuals` → `payer_source_documents`. Add `document_type` (admin_guide / supplement / pa_list / reimbursement_policy / medical_policy / bulletin / contract / fee_schedule), `parent_document_id` (nullable), `effective_start`, `effective_end`. Extraction items reference `source_document_id` instead of `payer_id`. Coverage matrix queries roll up from documents to payer. Migrate existing data: every current `payer_manual` becomes a `source_document` with `document_type = 'admin_guide'`.
+
+### Prompt B: Rule kind taxonomy expansion
+
+Replace the four hardcoded section types with a `rule_kinds` reference table seeded with: `timely_filing`, `prior_auth`, `referrals`, `appeals`, `modifiers_and_liability`, `payer_specific_edits`, `submission_timeframe`, `decision_timeframe`, `documentation_timeframe`, `notification_event`, `member_notice`, `place_of_service`, `risk_adjustment_hcc`, `edi_construction`. Each rule_kind has its own extractor prompt template, confidence rubric, downstream side-effect handler, and UI panel. Existing approved rules migrate to the closest new rule_kind.
+
+### Prompt C0: Practice-payer enrollment + form field resolver (activation foundation)
+
+Add `practice_payer_enrollments` table: which (practice_id, payer_id, plan_product_id) combinations this practice has activated. Build a `getActivatedFieldsForContext(practice, payer, plan_product, delegated_entity) → field_set` resolver as a single backend service. The patient creation form, the claim wizard's required-field validator, and the rules engine all consume this resolver. Practice Settings → Payers tab becomes the master switch: enabling a payer surfaces a sub-checklist of plan_products to enable, each of which carries the field set it activates. Disabling a payer hides all related fields and rules — but does not delete historical patient/claim data, which retains its sparse columns.
+
+Acceptance test: a practice with only Medicare + TRICARE enabled never sees the words "HMO", "PPO", "PCP referral", "delegated entity", or "IPA" anywhere in the UI, in any form, on any screen.
+
+### Prompt C: Plan products + delegated entities (built on C0's resolver)
+
+Add `plan_products` reference table (structured, not free-form) with at minimum: `plan_product_code`, `parent_plan_family`, `plan_type` (HMO/PPO/POS/EPO/Indemnity/Capitated), `regulatory_basis` (Medicare Advantage / ACA Marketplace / ERISA / state), `requires_pcp` (bool), `requires_referral` (bool), `is_government` (bool), `required_patient_fields` (JSONB), `required_claim_fields` (JSONB).
+
+Add `delegated_entities` table. Patient and claim records reference `plan_product_id` and (nullable) `delegated_entity_id`. Rule evaluation resolves the chain: delegate-specific → payer-specific → regulatory default. First match wins.
+
+The patient creation form pulls its field list from the C0 resolver — no hardcoded "show plan_product dropdown" logic. If the selected payer has only one plan_product enabled by the practice, the dropdown collapses to a hidden default. If the (payer, plan_product, state) tuple has zero delegation rules in the corpus, the delegated_entity field is not rendered.
+
+Acceptance test for C: switching a patient from "UHC Commercial PPO" to "UHC Commercial HMO" causes the form to gain exactly two fields (PCP, PCP referral). Switching from "UHC Commercial HMO" to "Medi-Cal MCO with IPA delegation" causes the form to gain exactly two more fields (delegated_entity, IPA-issued auth number) and the routing preview to update.
+
+### Prompt D: Effective-date semantics on rules
+
+Add `effective_start` and `effective_end` to every rule row. Rule evaluation joins on `service_date BETWEEN effective_start AND effective_end`. New manual ingestion closes out prior rules with `effective_end = new_effective_start - 1` rather than deleting them. CMS conflict validation becomes a materialized view of the join with the regulatory floor table.
+
+### Prompt E: Hierarchical extraction (TOC-aware)
+
+Before chunk scoring, identify the table of contents using a regex pass + Claude vision on TOC pages. Map sections → page ranges. Chunk within identified sections rather than across the whole document. Surface "section not found" as a distinct outcome from "section found but empty." Rerun a single section without rerunning the whole document.
+
+### Prompt F: Bulletin watcher
+
+Daily scheduled job per payer: scrape the payer's news/bulletin page (or RSS feed if available), diff against last seen, flag any extraction items where the source document is referenced in the bulletin as `needs_reverification` with the bulletin URL stored in notes. Surface in the Rules Database freshness panel.
+
+---
+
+## 6. What stays the same for May 12
+
+For Rosemary's May 12 meeting, **the current build is sufficient to demo and impress**. Three live demos as planned (provider manual ingestion, CCI edits, plan_type-aware rules) will validate the method. None of the gaps above need to be closed before May 12.
+
+What does need to change before May 12:
+
+1. **Reframe the demo narrative.** Lead with: "This is Phase 1 of three. The first phase ingests provider manuals — operational rules. Phase 2 ingests reimbursement and medical policies — coverage rules. Phase 3 ingests bulletins and contract data — change management." This framing positions the gaps as a roadmap, not as missing work.
+
+2. **Show the Capitation/Delegation supplement read in.** Even if the engine doesn't yet model the rule chain, demonstrating that the *supplement* is recognized and queued for review proves the multi-document architecture is on the path.
+
+3. **Have the Prompt A schema migration plan ready as a one-pager.** When Rosemary asks "how do you handle multiple documents per payer," the answer is "here's the schema we're moving to, and here's the migration timeline."
+
+4. **Build the activation cascade screenshot sequence as the third live demo.** This is the single most important visual on May 12 — the proof that ClaimShield is the inverse of CollaborateMD. The sequence:
+
+   - **Screen A:** Patient form for a Medicare home health patient. Four fields visible. No plan_product dropdown. No referral logic. No IPA mention. Clean, simple, scoped.
+   - **Screen B:** Click "Change payer" → switch to UHC Commercial HMO. Form animates to expand with two new fields: PCP selection and Referral ID. A small inline note: *"This payer requires a PCP referral on specialist visits."*
+   - **Screen C:** Switch payer again to Medi-Cal MCO (CA) → form expands two more fields: Delegated Medical Group / IPA dropdown and IPA-issued auth number. The routing preview at the bottom of the form updates: *"Claims for this patient will be sent to [IPA Name], not directly to Medi-Cal, per the delegated arrangement."*
+   
+   Then the closer line, said out loud while the screen sits on Screen C: *"Every billing platform shows you 30 fields and lets you figure out which apply. We show you only the fields the payer requires. The complexity is in the engine, not the interface."*
+
+The current engine is good enough to win the May 12 meeting. It is not good enough to defend the strategic positioning at scale. The audit above is the gap between those two states — and the prompt list is the path between them.
+
+---
+
+*Audit prepared against UHC 2026 Administrative Guide (484 pages). All references verifiable in source PDF.*
