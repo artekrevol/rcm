@@ -1303,36 +1303,81 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       console.log("Seeded demo ERA batches");
     }
 
-    // ── Phase 2: Payer Manual Ingestion tables ──────────────────────────────
-    await seederLog('table', 'payer_manuals');
+    // ── Prompt A: document_types reference table ─────────────────────────────
+    await seederLog('table', 'document_types');
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS payer_manuals (
+      CREATE TABLE IF NOT EXISTS document_types (
+        code VARCHAR PRIMARY KEY,
+        label VARCHAR NOT NULL,
+        typical_update_cadence VARCHAR,
+        active_for_extraction BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      INSERT INTO document_types (code, label, typical_update_cadence, active_for_extraction) VALUES
+        ('admin_guide',          'Administrative Guide',            'annual',        TRUE),
+        ('supplement',           'Supplement to Admin Guide',       'annual',        TRUE),
+        ('pa_list',              'Prior Authorization List',         'monthly',       TRUE),
+        ('reimbursement_policy', 'Reimbursement Policy',            'quarterly',     FALSE),
+        ('medical_policy',       'Medical Policy',                  'monthly',       FALSE),
+        ('bulletin',             'Update Bulletin',                 'monthly',       FALSE),
+        ('contract',             'Provider Contract / Agreement',   'per-contract',  FALSE),
+        ('fee_schedule',         'Fee Schedule',                    'annual',        FALSE)
+      ON CONFLICT (code) DO NOTHING
+    `);
+
+    // ── Prompt A: payer_source_documents table ──────────────────────────────
+    await seederLog('table', 'payer_source_documents');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS payer_source_documents (
         id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
         payer_id VARCHAR,
-        payer_name VARCHAR NOT NULL,
+        document_type VARCHAR NOT NULL DEFAULT 'admin_guide' REFERENCES document_types(code) ON UPDATE CASCADE ON DELETE RESTRICT,
+        parent_document_id VARCHAR REFERENCES payer_source_documents(id) ON DELETE SET NULL,
+        document_name VARCHAR NOT NULL,
         source_url TEXT,
-        file_name VARCHAR,
         file_content BYTEA,
-        status VARCHAR NOT NULL DEFAULT 'pending',
+        file_name VARCHAR,
+        document_version VARCHAR,
+        effective_start DATE,
+        effective_end DATE,
+        status VARCHAR NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','ready_for_review','completed','failed','superseded')),
+        last_verified_date DATE,
         error_message TEXT,
         uploaded_by VARCHAR,
         organization_id VARCHAR,
-        created_at TIMESTAMP DEFAULT NOW(),
-        updated_at TIMESTAMP DEFAULT NOW()
+        notes TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
-    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS file_content BYTEA`);
-    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS document_type VARCHAR NOT NULL DEFAULT 'admin_guide'`);
-    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS parent_document_id VARCHAR REFERENCES payer_manuals(id) ON DELETE SET NULL`);
-    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS effective_start DATE`);
-    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS effective_end DATE`);
-    await pool.query(`UPDATE payer_manuals SET document_type = 'admin_guide' WHERE document_type IS NULL OR document_type = ''`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_payer ON payer_source_documents(payer_id, document_type)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_parent ON payer_source_documents(parent_document_id) WHERE parent_document_id IS NOT NULL`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_effective ON payer_source_documents(payer_id, effective_start, effective_end)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_status ON payer_source_documents(status) WHERE status IN ('pending','processing','ready_for_review')`);
+    // Prompt A: payer_manuals → payer_source_documents is also accepted for 'failed' + 'completed' status values.
+    // Relax the CHECK constraint to include those values from the legacy schema if needed.
+    await pool.query(`
+      ALTER TABLE payer_source_documents DROP CONSTRAINT IF EXISTS payer_source_documents_status_check
+    `).catch(() => {});
+    await pool.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'psd_status_check'
+        ) THEN
+          ALTER TABLE payer_source_documents
+            ADD CONSTRAINT psd_status_check
+            CHECK (status IN ('pending','processing','ready_for_review','completed','failed','superseded'));
+        END IF;
+      END $$
+    `).catch(() => {});
 
     await seederLog('table', 'manual_extraction_items');
     await pool.query(`
       CREATE TABLE IF NOT EXISTS manual_extraction_items (
         id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
-        manual_id VARCHAR NOT NULL,
+        source_document_id VARCHAR NOT NULL,
         section_type VARCHAR NOT NULL,
         raw_snippet TEXT,
         extracted_json JSONB,
@@ -1345,6 +1390,85 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
+
+    // ── Prompt A: one-time migration payer_manuals → payer_source_documents ───
+    // Runs only if payer_manuals still exists (i.e., upgrading from pre-Prompt-A schema).
+    // On a fresh database this block is a no-op because payer_manuals is never created.
+    {
+      const { rows: [pmCheck] } = await pool.query(`
+        SELECT EXISTS (
+          SELECT 1 FROM information_schema.tables WHERE table_name = 'payer_manuals'
+        ) AS exists
+      `);
+      if (pmCheck.exists) {
+        console.log("[SEEDER] Prompt A: payer_manuals detected — running migration to payer_source_documents…");
+
+        // 1. Copy all payer_manuals rows into payer_source_documents (same IDs, payer_name → document_name)
+        await pool.query(`
+          INSERT INTO payer_source_documents (
+            id, payer_id, document_type, parent_document_id, document_name,
+            source_url, file_content, file_name, effective_start, effective_end,
+            status, error_message, uploaded_by, organization_id, created_at, updated_at
+          )
+          SELECT
+            id, payer_id,
+            COALESCE(NULLIF(document_type,''), 'admin_guide'),
+            parent_document_id,
+            payer_name,
+            source_url, file_content, file_name, effective_start, effective_end,
+            CASE WHEN status IN ('pending','processing','ready_for_review','completed','failed')
+                 THEN status ELSE 'pending' END,
+            error_message, uploaded_by, organization_id, created_at, updated_at
+          FROM payer_manuals
+          ON CONFLICT (id) DO NOTHING
+        `);
+        const { rows: [{ cnt: psdCnt }] } = await pool.query(`SELECT COUNT(*)::int AS cnt FROM payer_source_documents`);
+        console.log(`[SEEDER] Prompt A: ${psdCnt} rows in payer_source_documents after copy`);
+
+        // 2. Add source_document_id to manual_extraction_items (may already exist on retry)
+        await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS source_document_id VARCHAR`);
+        // Copy from manual_id
+        await pool.query(`
+          UPDATE manual_extraction_items SET source_document_id = manual_id
+          WHERE source_document_id IS NULL AND manual_id IS NOT NULL
+        `);
+
+        // 3. Add linked_source_document_id to payer_manual_sources
+        await pool.query(`ALTER TABLE payer_manual_sources ADD COLUMN IF NOT EXISTS linked_source_document_id VARCHAR`);
+        await pool.query(`
+          UPDATE payer_manual_sources SET linked_source_document_id = linked_manual_id
+          WHERE linked_source_document_id IS NULL AND linked_manual_id IS NOT NULL
+        `);
+
+        // 4. Drop old FK + add new FK on payer_manual_sources
+        await pool.query(`ALTER TABLE payer_manual_sources DROP CONSTRAINT IF EXISTS fk_pms_linked_manual`);
+        await pool.query(`
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pms_linked_source_document') THEN
+              ALTER TABLE payer_manual_sources
+                ADD CONSTRAINT fk_pms_linked_source_document
+                FOREIGN KEY (linked_source_document_id) REFERENCES payer_source_documents(id) ON DELETE SET NULL;
+            END IF;
+          END $$
+        `).catch(() => {});
+
+        // 5. Verify: no orphan extraction items
+        const { rows: [{ cnt: orphanCnt }] } = await pool.query(`
+          SELECT COUNT(*)::int AS cnt FROM manual_extraction_items
+          WHERE source_document_id IS NOT NULL
+            AND source_document_id NOT IN (SELECT id FROM payer_source_documents)
+        `);
+        if (parseInt(String(orphanCnt)) > 0) {
+          console.error(`[SEEDER] Prompt A ERROR: ${orphanCnt} orphan manual_extraction_items — aborting payer_manuals drop`);
+        } else {
+          // 6. Drop legacy columns + table
+          await pool.query(`ALTER TABLE manual_extraction_items DROP COLUMN IF EXISTS manual_id`);
+          await pool.query(`ALTER TABLE payer_manual_sources DROP COLUMN IF EXISTS linked_manual_id`);
+          await pool.query(`DROP TABLE payer_manuals`);
+          console.log("[SEEDER] Prompt A: Migration complete. payer_manuals dropped. All FK chains updated.");
+        }
+      }
+    }
 
     // ── Prompt B1: rule_kinds reference table ─────────────────────────────────
     await seederLog('table', 'rule_kinds');
@@ -1428,9 +1552,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
     }
 
-    // Seed 3 initial payer manuals (TriWest, Medicare, Aetna) for Phase 2 end-state
-    const { rows: manualCount } = await pool.query("SELECT COUNT(*)::int as cnt FROM payer_manuals");
-    if (manualCount[0]?.cnt === 0) {
+    // Seed 3 initial source documents (TriWest, Medicare, Aetna) for Phase 2 end-state
+    const { rows: [{ cnt: psdSeedCnt }] } = await pool.query(
+      "SELECT COUNT(*)::int AS cnt FROM payer_source_documents WHERE id = 'manual-triwest-001'"
+    );
+    if (psdSeedCnt === 0) {
       // Look up payer IDs for the 3 payers
       const { rows: triwestPayer } = await pool.query(`SELECT id FROM payers WHERE payer_id = 'TWVACCN' OR name ILIKE '%triwest%' LIMIT 1`);
       const { rows: medicarePayer } = await pool.query(`SELECT id FROM payers WHERE LOWER(name) LIKE '%medicare%' AND payer_classification = 'medicare_part_b' LIMIT 1`);
@@ -1441,14 +1567,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const aetnaPayerId = aetnaPayer[0]?.id || null;
 
       await pool.query(`
-        INSERT INTO payer_manuals (id, payer_id, payer_name, source_url, status, uploaded_by, created_at, updated_at) VALUES
-        ('manual-triwest-001', $1, 'TriWest Healthcare Alliance (VA CCN)',
+        INSERT INTO payer_source_documents (id, payer_id, document_name, document_type, source_url, status, uploaded_by, created_at, updated_at) VALUES
+        ('manual-triwest-001', $1, 'TriWest Healthcare Alliance (VA CCN)', 'admin_guide',
           'https://www.triwest.com/globalassets/documents/tools-and-resources/billing-guidelines.pdf',
           'completed', 'system', NOW(), NOW()),
-        ('manual-medicare-001', $2, 'Medicare Part B (CMS)',
+        ('manual-medicare-001', $2, 'Medicare Part B (CMS)', 'admin_guide',
           'https://www.cms.gov/regulations-and-guidance/guidance/manuals/downloads/clm104c12.pdf',
           'completed', 'system', NOW(), NOW()),
-        ('manual-aetna-001', $3, 'Aetna Commercial',
+        ('manual-aetna-001', $3, 'Aetna Commercial', 'admin_guide',
           'https://www.aetna.com/health-care-professionals/claims-payments-billing/filing-claims/billing-guidelines.html',
           'completed', 'system', NOW(), NOW())
         ON CONFLICT (id) DO NOTHING
@@ -1456,7 +1582,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       // Seed pre-approved extraction items for TriWest
       await pool.query(`
-        INSERT INTO manual_extraction_items (id, manual_id, section_type, raw_snippet, extracted_json, confidence, review_status, reviewed_by, reviewed_at, created_at) VALUES
+        INSERT INTO manual_extraction_items (id, source_document_id, section_type, raw_snippet, extracted_json, confidence, review_status, reviewed_by, reviewed_at, created_at) VALUES
         ('mei-tw-tf-001', 'manual-triwest-001', 'timely_filing',
           'Claims must be submitted within 180 days of the date of service. Claims submitted after 180 days will be denied for timely filing.',
           '{"days":180,"exceptions":["Coordination of benefits claims may have extended timelines","Retroactive eligibility determinations"],"source_text":"Claims must be submitted within 180 days of the date of service."}'::jsonb,
@@ -1565,21 +1691,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         last_verified_date DATE,
         notes TEXT,
         priority INTEGER NOT NULL DEFAULT 99,
-        linked_manual_id VARCHAR,
+        linked_source_document_id VARCHAR,
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
-    // Harden referential integrity: linked_manual_id → payer_manuals(id); ON DELETE SET NULL
-    // ensures the registry entry is never left pointing to a non-existent manual.
+    // Prompt A: ensure linked_source_document_id column exists (migration block may have added it already)
+    await pool.query(`ALTER TABLE payer_manual_sources ADD COLUMN IF NOT EXISTS linked_source_document_id VARCHAR`).catch(() => {});
+    // Harden referential integrity: linked_source_document_id → payer_source_documents(id); ON DELETE SET NULL
     await pool.query(`
       DO $$ BEGIN
         IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint WHERE conname = 'fk_pms_linked_manual'
+          SELECT 1 FROM pg_constraint WHERE conname = 'fk_pms_linked_source_document'
         ) THEN
           ALTER TABLE payer_manual_sources
-            ADD CONSTRAINT fk_pms_linked_manual
-            FOREIGN KEY (linked_manual_id) REFERENCES payer_manuals(id) ON DELETE SET NULL;
+            ADD CONSTRAINT fk_pms_linked_source_document
+            FOREIGN KEY (linked_source_document_id) REFERENCES payer_source_documents(id) ON DELETE SET NULL;
         END IF;
       END $$;
     `).catch(() => {}); // non-fatal: races or ordering issues should not break startup
@@ -1611,9 +1738,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ON CONFLICT (id) DO NOTHING
     `);
     console.log("[SEEDER] Seeded/verified 20 payer_manual_sources (Phase 4 top-20 commercial payer registry)");
-    // Deterministic source→manual linkage (Phase 2 seed → Phase 4 source registry)
+    // Deterministic source→document linkage (Phase 2 seed → Phase 4 source registry)
     // pms-005 = Aetna Commercial ↔ manual-aetna-001 (Phase 2 seed)
-    await pool.query(`UPDATE payer_manual_sources SET linked_manual_id = 'manual-aetna-001' WHERE id = 'pms-005' AND linked_manual_id IS NULL`).catch(() => {});
+    await pool.query(`UPDATE payer_manual_sources SET linked_source_document_id = 'manual-aetna-001' WHERE id = 'pms-005' AND linked_source_document_id IS NULL`).catch(() => {});
 
     // Idempotent: seed payer_auth_requirements from approved prior-auth extraction items
     {
@@ -3583,9 +3710,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         const [{ rows: approvedRules }, { rows: ncciRows }] = await Promise.all([
           db.query(`
             SELECT mei.id, mei.section_type, mei.extracted_json, mei.reviewed_by, mei.reviewed_at,
-                   pm.payer_id AS manual_payer_id, pm.payer_name
+                   pm.payer_id AS manual_payer_id, pm.document_name AS payer_name
             FROM manual_extraction_items mei
-            JOIN payer_manuals pm ON pm.id = mei.manual_id
+            JOIN payer_source_documents pm ON pm.id = mei.source_document_id
             WHERE mei.review_status = 'approved'
               AND pm.payer_id = $1
             ORDER BY mei.reviewed_at DESC
@@ -9656,22 +9783,35 @@ Warmly,
 
   // ── Phase 2: Payer Manual Ingestion API ─────────────────────────────────
 
-  // List all payer manuals
+  // Document types reference table
+  app.get("/api/admin/document-types", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`SELECT * FROM document_types ORDER BY sort_order, code`);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // List all payer source documents
   app.get("/api/admin/payer-manuals", requireSuperAdmin, async (req, res) => {
     try {
       const { pool: db } = await import("./db");
       const { rows } = await db.query(`
-        SELECT pm.*, p.name AS payer_record_name,
-          parent.payer_name AS parent_document_name,
-          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id) AS item_count,
-          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'approved') AS approved_count,
-          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'rejected') AS rejected_count,
-          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'pending') AS pending_count,
-          (SELECT COUNT(*)::int FROM payer_manuals WHERE parent_document_id = pm.id) AS supplement_count
-        FROM payer_manuals pm
+        SELECT pm.*, pm.document_name AS payer_name, p.name AS payer_record_name,
+          parent.document_name AS parent_document_name,
+          dt.label AS document_type_label,
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE source_document_id = pm.id) AS item_count,
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE source_document_id = pm.id AND review_status = 'approved') AS approved_count,
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE source_document_id = pm.id AND review_status = 'rejected') AS rejected_count,
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE source_document_id = pm.id AND review_status = 'pending') AS pending_count,
+          (SELECT COUNT(*)::int FROM payer_source_documents WHERE parent_document_id = pm.id) AS supplement_count
+        FROM payer_source_documents pm
         LEFT JOIN payers p ON pm.payer_id = p.id
-        LEFT JOIN payer_manuals parent ON pm.parent_document_id = parent.id
-        ORDER BY pm.payer_name ASC, pm.document_type ASC, pm.effective_start DESC NULLS LAST, pm.created_at DESC
+        LEFT JOIN payer_source_documents parent ON pm.parent_document_id = parent.id
+        LEFT JOIN document_types dt ON dt.code = pm.document_type
+        ORDER BY pm.document_name ASC, pm.document_type ASC, pm.effective_start DESC NULLS LAST, pm.created_at DESC
       `);
       res.json(rows);
     } catch (err: any) {
@@ -9709,9 +9849,9 @@ Warmly,
 
         const user = req.user as any;
         const { rows } = await db.query(`
-          INSERT INTO payer_manuals (payer_name, payer_id, source_url, file_name, file_content, status, uploaded_by, document_type, parent_document_id, effective_start, effective_end)
+          INSERT INTO payer_source_documents (document_name, payer_id, source_url, file_name, file_content, status, uploaded_by, document_type, parent_document_id, effective_start, effective_end)
           VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)
-          RETURNING *
+          RETURNING *, document_name AS payer_name
         `, [
           payerName,
           payerId || null,
@@ -9738,7 +9878,7 @@ Warmly,
       const { pool: db } = await import("./db");
       const { rows } = await db.query(`
         SELECT * FROM manual_extraction_items
-        WHERE manual_id = $1
+        WHERE source_document_id = $1
         ORDER BY section_type, created_at
       `, [req.params.id]);
       res.json(rows);
@@ -9752,7 +9892,7 @@ Warmly,
     const { pool: db } = await import("./db");
     const manualId = req.params.id;
     try {
-      const { rows: manuals } = await db.query("SELECT * FROM payer_manuals WHERE id = $1", [manualId]);
+      const { rows: manuals } = await db.query("SELECT *, document_name AS payer_name FROM payer_source_documents WHERE id = $1", [manualId]);
       if (!manuals.length) return res.status(404).json({ error: "Manual not found" });
       const manual = manuals[0];
 
@@ -9768,10 +9908,10 @@ Warmly,
 
       // Idempotent reprocessing: remove all non-approved items so we start clean.
       // Rejected items are also cleared so reprocessing gives a fresh extraction pass.
-      await db.query(`DELETE FROM manual_extraction_items WHERE manual_id = $1 AND review_status IN ('pending','not_found','rejected')`, [manualId]);
+      await db.query(`DELETE FROM manual_extraction_items WHERE source_document_id = $1 AND review_status IN ('pending','not_found','rejected')`, [manualId]);
 
       // Mark as processing
-      await db.query("UPDATE payer_manuals SET status = 'processing', updated_at = NOW() WHERE id = $1", [manualId]);
+      await db.query("UPDATE payer_source_documents SET status = 'processing', updated_at = NOW() WHERE id = $1", [manualId]);
       res.json({ status: "processing", message: "Extraction started" });
 
       // Run async extraction
@@ -9798,7 +9938,7 @@ Warmly,
           for (const section of sections) {
             if (section.chunks.length === 0) {
               await db.query(`
-                INSERT INTO manual_extraction_items (manual_id, section_type, review_status, notes)
+                INSERT INTO manual_extraction_items (source_document_id, section_type, review_status, notes)
                 VALUES ($1, $2, 'pending', 'No relevant text found for this section — reviewer must confirm absent or re-extract')
               `, [manualId, section.sectionType]);
               continue;
@@ -9807,44 +9947,44 @@ Warmly,
               const output = await extractSection(section.sectionType, chunk);
               if (output.skipped) {
                 await db.query(`
-                  INSERT INTO manual_extraction_items (manual_id, section_type, raw_snippet, review_status, notes)
+                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, review_status, notes)
                   VALUES ($1, $2, $3, 'pending', 'ANTHROPIC_API_KEY not configured — manual review required')
                 `, [manualId, section.sectionType, chunk.slice(0, 2000)]);
               } else if (output.error || !output.result) {
                 await db.query(`
-                  INSERT INTO manual_extraction_items (manual_id, section_type, raw_snippet, review_status, notes)
+                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, review_status, notes)
                   VALUES ($1, $2, $3, 'pending', $4)
                 `, [manualId, section.sectionType, chunk.slice(0, 2000), `Extraction error: ${output.error || 'No result'}`]);
               } else {
                 await db.query(`
-                  INSERT INTO manual_extraction_items (manual_id, section_type, raw_snippet, extracted_json, confidence, review_status)
+                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, extracted_json, confidence, review_status)
                   VALUES ($1, $2, $3, $4, $5, 'pending')
                 `, [manualId, section.sectionType, chunk.slice(0, 2000), JSON.stringify(output.result), output.confidence]);
               }
             }
           }
-          // Ensure all 4 section types have at least one extraction item
+          // Ensure all section types have at least one extraction item
           // (creates pending placeholders for sections not extracted from the document;
           //  reviewers must explicitly mark missing sections as not_found via the review UI)
           for (const st of sectionTypes) {
             const { rows: existing } = await db.query(
-              `SELECT id FROM manual_extraction_items WHERE manual_id = $1 AND section_type = $2 LIMIT 1`,
+              `SELECT id FROM manual_extraction_items WHERE source_document_id = $1 AND section_type = $2 LIMIT 1`,
               [manualId, st]
             );
             if (existing.length === 0) {
               await db.query(`
-                INSERT INTO manual_extraction_items (manual_id, section_type, review_status, notes)
+                INSERT INTO manual_extraction_items (source_document_id, section_type, review_status, notes)
                 VALUES ($1, $2, 'pending', 'Section not extracted from document — requires reviewer to confirm absent or re-extract')
               `, [manualId, st]);
             }
           }
-          await db.query("UPDATE payer_manuals SET status = 'ready_for_review', updated_at = NOW() WHERE id = $1", [manualId]);
+          await db.query("UPDATE payer_source_documents SET status = 'ready_for_review', updated_at = NOW() WHERE id = $1", [manualId]);
         } catch (err: any) {
-          await db.query("UPDATE payer_manuals SET status = 'failed', error_message = $2, updated_at = NOW() WHERE id = $1", [manualId, err.message]);
+          await db.query("UPDATE payer_source_documents SET status = 'failed', error_message = $2, updated_at = NOW() WHERE id = $1", [manualId, err.message]);
         }
       });
     } catch (err: any) {
-      await db.query("UPDATE payer_manuals SET status = 'failed', error_message = $2, updated_at = NOW() WHERE id = $1", [manualId, err.message]).catch(() => {});
+      await db.query("UPDATE payer_source_documents SET status = 'failed', error_message = $2, updated_at = NOW() WHERE id = $1", [manualId, err.message]).catch(() => {});
       res.status(500).json({ error: err.message });
     }
   });
@@ -9888,7 +10028,7 @@ Warmly,
       const sideEffectErrors: string[] = [];
       if (reviewStatus === "approved" && item.extracted_json) {
         const data = item.extracted_json as any;
-        const { rows: manuals } = await db.query("SELECT * FROM payer_manuals WHERE id = $1", [item.manual_id]);
+        const { rows: manuals } = await db.query("SELECT *, document_name AS payer_name FROM payer_source_documents WHERE id = $1", [item.source_document_id]);
         const manual = manuals[0];
 
         if (item.section_type === "timely_filing" && data.days > 0 && manual?.payer_id) {
@@ -9950,24 +10090,24 @@ Warmly,
           COUNT(*) FILTER (WHERE review_status = 'pending')::int  AS pending_cnt,
           COUNT(*) FILTER (WHERE review_status = 'rejected')::int AS rejected_cnt
         FROM manual_extraction_items
-        WHERE manual_id = $1
-      `, [item.manual_id]);
+        WHERE source_document_id = $1
+      `, [item.source_document_id]);
 
       if (pendingCheck[0]?.pending_cnt === 0 && pendingCheck[0]?.rejected_cnt === 0) {
         const { rows: manualRows } = await db.query(`
-          UPDATE payer_manuals
+          UPDATE payer_source_documents
           SET status = 'completed', updated_at = NOW()
           WHERE id = $1 AND status IN ('ready_for_review', 'processing')
           RETURNING id
-        `, [item.manual_id]);
+        `, [item.source_document_id]);
 
         if (manualRows.length > 0) {
           // Update last_verified_date on linked payer_manual_source
           await db.query(`
             UPDATE payer_manual_sources
             SET last_verified_date = NOW()::date, updated_at = NOW()
-            WHERE linked_manual_id = $1
-          `, [item.manual_id]).catch(() => {});
+            WHERE linked_source_document_id = $1
+          `, [item.source_document_id]).catch(() => {});
         }
       }
 
@@ -9983,7 +10123,7 @@ Warmly,
         const changeType = extractedJson ? "data_corrected" : (changeTypeMap[reviewStatus] || "edited");
 
         const { rows: manualForHistory } = await db.query(
-          "SELECT payer_name FROM payer_manuals WHERE id = $1", [item.manual_id]
+          "SELECT document_name AS payer_name FROM payer_source_documents WHERE id = $1", [item.source_document_id]
         ).catch(() => ({ rows: [] })) as any;
 
         await db.query(`
@@ -10022,11 +10162,11 @@ Warmly,
       const { pool: db } = await import("./db");
       // Clear source registry link before deleting so payers don't show stuck as "Ingested"
       await db.query(
-        `UPDATE payer_manual_sources SET linked_manual_id = NULL, updated_at = NOW() WHERE linked_manual_id = $1`,
+        `UPDATE payer_manual_sources SET linked_source_document_id = NULL, updated_at = NOW() WHERE linked_source_document_id = $1`,
         [req.params.id]
       ).catch(() => {});
-      await db.query("DELETE FROM manual_extraction_items WHERE manual_id = $1", [req.params.id]);
-      await db.query("DELETE FROM payer_manuals WHERE id = $1", [req.params.id]);
+      await db.query("DELETE FROM manual_extraction_items WHERE source_document_id = $1", [req.params.id]);
+      await db.query("DELETE FROM payer_source_documents WHERE id = $1", [req.params.id]);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -10041,10 +10181,10 @@ Warmly,
       const { rows } = await db.query(`
         SELECT pms.*,
           pm.status AS manual_status,
-          pm.payer_name AS manual_payer_name,
+          pm.document_name AS manual_payer_name,
           pm.created_at AS manual_ingested_at
         FROM payer_manual_sources pms
-        LEFT JOIN payer_manuals pm ON pm.id = pms.linked_manual_id
+        LEFT JOIN payer_source_documents pm ON pm.id = pms.linked_source_document_id
         ORDER BY pms.priority ASC
       `);
       res.json(rows);
@@ -10075,7 +10215,7 @@ Warmly,
       if ("lastVerifiedDate" in req.body) { setClauses.push(`last_verified_date = $${i++}`); params.push(parsed.data.lastVerifiedDate ?? null); }
       if ("notes" in req.body) { setClauses.push(`notes = $${i++}`); params.push(parsed.data.notes ?? null); }
       if ("canonicalUrl" in req.body) { setClauses.push(`canonical_url = $${i++}`); params.push(parsed.data.canonicalUrl ?? null); }
-      if ("linkedManualId" in req.body) { setClauses.push(`linked_manual_id = $${i++}`); params.push(parsed.data.linkedManualId ?? null); }
+      if ("linkedManualId" in req.body) { setClauses.push(`linked_source_document_id = $${i++}`); params.push(parsed.data.linkedManualId ?? null); }
       params.push(id);
       const { rows } = await db.query(
         `UPDATE payer_manual_sources SET ${setClauses.join(", ")} WHERE id = $${i} RETURNING *`,
@@ -10093,9 +10233,10 @@ Warmly,
       const { pool: db } = await import("./db");
 
       const { rows: sources } = await db.query(`
-        SELECT pms.*, pm.status AS manual_status, pm.created_at AS manual_ingested_at, pm.payer_id AS manual_payer_id
+        SELECT pms.*, pm.status AS manual_status, pm.created_at AS manual_ingested_at, pm.payer_id AS manual_payer_id,
+               pm.document_name AS linked_document_name
         FROM payer_manual_sources pms
-        LEFT JOIN payer_manuals pm ON pm.id = pms.linked_manual_id
+        LEFT JOIN payer_source_documents pm ON pm.id = pms.linked_source_document_id
         ORDER BY pms.priority ASC
       `);
 
@@ -10103,19 +10244,19 @@ Warmly,
       // section was intentionally checked and confirmed absent in the public manual.
       const { rows: coverageRows } = await db.query(`
         SELECT
-          mei.manual_id,
+          mei.source_document_id,
           mei.section_type,
           COUNT(*) FILTER (WHERE mei.review_status = 'approved')                         AS approved_count,
           COUNT(*) FILTER (WHERE mei.review_status IN ('approved', 'not_found'))         AS reviewed_count
         FROM manual_extraction_items mei
-        INNER JOIN payer_manuals pm ON pm.id = mei.manual_id
-        GROUP BY mei.manual_id, mei.section_type
+        INNER JOIN payer_source_documents pm ON pm.id = mei.source_document_id
+        GROUP BY mei.source_document_id, mei.section_type
       `);
 
       const coverageByManual: Record<string, Record<string, { approved: number; reviewed: number }>> = {};
       for (const row of coverageRows) {
-        if (!coverageByManual[row.manual_id]) coverageByManual[row.manual_id] = {};
-        coverageByManual[row.manual_id][row.section_type] = {
+        if (!coverageByManual[row.source_document_id]) coverageByManual[row.source_document_id] = {};
+        coverageByManual[row.source_document_id][row.section_type] = {
           approved: parseInt(row.approved_count, 10),
           reviewed: parseInt(row.reviewed_count, 10),
         };
@@ -10130,7 +10271,7 @@ Warmly,
         "notification_event", "member_notice",
       ];
       const payerData = sources.map((src: any) => {
-        const manualId = src.linked_manual_id;
+        const manualId = src.linked_source_document_id;
         const cov = manualId ? (coverageByManual[manualId] || {}) : {};
         const secCov = (type: string) => cov[type] || { approved: 0, reviewed: 0 };
 
@@ -10148,14 +10289,16 @@ Warmly,
           notes: src.notes,
           last_verified_date: src.last_verified_date,
           linked_manual_id: manualId || null,
+          linked_source_document_id: manualId || null,
           manual_status: src.manual_status || null,
           manual_ingested_at: src.manual_ingested_at || null,
           manual_payer_id: src.manual_payer_id || null,
+          linked_document_name: src.linked_document_name || null,
           ...coverage,
         };
       });
 
-      const ingested = payerData.filter((p: any) => p.linked_manual_id && p.manual_status === "completed").length;
+      const ingested = payerData.filter((p: any) => p.linked_source_document_id && p.manual_status === "completed").length;
       const total = payerData.length;
       const pctApproved = (field: string) => total === 0 ? 0 : Math.round(
         payerData.filter((p: any) => p[field]).length / total * 100
@@ -10269,21 +10412,21 @@ Warmly,
         return CMS_TF_REFERENCE[CMS_TF_REFERENCE.length - 1]; // commercial default
       }
 
-      // Fetch ONE canonical timely_filing item per manual (most recently reviewed approved/not_found row).
-      // Using DISTINCT ON avoids duplicate discrepancy entries when a manual has multiple timely_filing rows.
+      // Fetch ONE canonical timely_filing item per source document (most recently reviewed approved/not_found row).
+      // Using DISTINCT ON avoids duplicate discrepancy entries when a document has multiple timely_filing rows.
       // Pending/rejected items are excluded — they have not been human-reviewed yet.
       const { rows: items } = await db.query(`
         SELECT DISTINCT ON (pm.id)
           pm.id             AS manual_id,
-          pm.payer_name,
+          pm.document_name  AS payer_name,
           pm.status         AS manual_status,
           mei.id            AS item_id,
           mei.review_status,
           mei.extracted_json,
           mei.notes
-        FROM payer_manuals pm
+        FROM payer_source_documents pm
         LEFT JOIN manual_extraction_items mei
-          ON mei.manual_id = pm.id
+          ON mei.source_document_id = pm.id
           AND mei.section_type = 'timely_filing'
           AND mei.review_status IN ('approved', 'not_found')
         WHERE pm.status = 'completed'
@@ -10905,8 +11048,8 @@ Warmly,
           SELECT pms.payer_name, pm.id AS manual_id,
                  COUNT(mei.id) FILTER (WHERE mei.review_status = 'approved')::int AS approved_count
           FROM payer_manual_sources pms
-          LEFT JOIN payer_manuals pm ON pm.id = pms.linked_manual_id
-          LEFT JOIN manual_extraction_items mei ON mei.manual_id = pm.id
+          LEFT JOIN payer_source_documents pm ON pm.id = pms.linked_source_document_id
+          LEFT JOIN manual_extraction_items mei ON mei.source_document_id = pm.id
           GROUP BY pms.payer_name, pm.id
           ORDER BY pms.priority
           LIMIT 20
@@ -10943,17 +11086,17 @@ Warmly,
       const { pool: db } = await import("./db");
       const { rows } = await db.query(`
         SELECT
-          pm.payer_name,
+          pm.document_name AS payer_name,
           pm.payer_id,
           mei.section_type,
           MAX(COALESCE(mei.last_verified_at, mei.reviewed_at)) AS last_verified,
           EXTRACT(DAY FROM NOW() - MAX(COALESCE(mei.last_verified_at, mei.reviewed_at)))::int AS days_since,
           COUNT(*) FILTER (WHERE mei.review_status = 'approved')::int AS approved_count,
           COUNT(*) FILTER (WHERE mei.needs_reverification = TRUE)::int AS needs_reverification_count
-        FROM payer_manuals pm
-        JOIN manual_extraction_items mei ON mei.manual_id = pm.id
+        FROM payer_source_documents pm
+        JOIN manual_extraction_items mei ON mei.source_document_id = pm.id
         WHERE mei.review_status = 'approved'
-        GROUP BY pm.payer_name, pm.payer_id, mei.section_type
+        GROUP BY pm.document_name, pm.payer_id, mei.section_type
         ORDER BY last_verified ASC NULLS FIRST
       `);
       res.json(rows);
@@ -11023,12 +11166,12 @@ Warmly,
       // Forward to existing validation sweep
       const { rows } = await db.query(`
         SELECT
-          mei.id AS item_id, pm.payer_name, mei.section_type,
+          mei.id AS item_id, pm.document_name AS payer_name, mei.section_type,
           mei.extracted_json->>'days' AS extracted_days,
           mei.review_status, mei.needs_reverification,
           COALESCE(mei.last_verified_at, mei.reviewed_at) AS last_verified
         FROM manual_extraction_items mei
-        JOIN payer_manuals pm ON pm.id = mei.manual_id
+        JOIN payer_source_documents pm ON pm.id = mei.source_document_id
         WHERE mei.section_type = 'timely_filing'
           AND mei.review_status = 'approved'
           AND (mei.extracted_json->>'days')::numeric NOT BETWEEN 60 AND 365
@@ -11069,7 +11212,7 @@ Warmly,
       if (!rows.length) return res.status(404).json({ error: "Not found" });
 
       // Write history
-      const { rows: full } = await db.query(`SELECT mei.*, pm.payer_name FROM manual_extraction_items mei JOIN payer_manuals pm ON pm.id = mei.manual_id WHERE mei.id = $1`, [req.params.id]);
+      const { rows: full } = await db.query(`SELECT mei.*, pm.document_name AS payer_name FROM manual_extraction_items mei JOIN payer_source_documents pm ON pm.id = mei.source_document_id WHERE mei.id = $1`, [req.params.id]);
       if (full.length) {
         await db.query(`
           INSERT INTO payer_manual_extraction_history

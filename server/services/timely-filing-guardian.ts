@@ -78,7 +78,7 @@ export async function evaluateAllActiveClaims(): Promise<EvaluationStats> {
       mei.raw_snippet,
       mei.applies_to_plan_products
     FROM manual_extraction_items mei
-    JOIN payer_manuals pm ON pm.id = mei.manual_id
+    JOIN payer_source_documents pm ON pm.id = mei.source_document_id
     WHERE mei.section_type = 'timely_filing'
       AND mei.review_status = 'approved'
       AND pm.payer_id IS NOT NULL

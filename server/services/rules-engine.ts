@@ -338,8 +338,8 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
 
   const client = await pool.connect();
   try {
-    // ── 1. Payer manual extraction items ──────────────────────────────────
-    //   Join payer_manuals → manual_extraction_items where payer_id matches
+    // ── 1. Payer source document extraction items ──────────────────────────
+    //   Join payer_source_documents → manual_extraction_items where payer_id matches
     //   and review_status = 'approved'
     if (ctx.payerId) {
       const manualItems = await client.query(`
@@ -351,10 +351,10 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
           mei.applies_to_plan_products,
           mei.reviewed_by,
           mei.last_verified_at,
-          pm.payer_name,
+          pm.document_name AS payer_name,
           pm.source_url
         FROM manual_extraction_items mei
-        JOIN payer_manuals pm ON pm.id = mei.manual_id
+        JOIN payer_source_documents pm ON pm.id = mei.source_document_id
         WHERE pm.payer_id = $1
           AND mei.review_status = 'approved'
         ORDER BY mei.section_type, mei.created_at

@@ -31,7 +31,7 @@ async function run() {
     console.log("[seed-phase4] Starting (ALLOW_SYNTHETIC_PHASE4_SEED=true — synthetic fixture data)...");
 
     const { rows: check } = await client.query(
-      "SELECT COUNT(*)::int AS cnt FROM payer_manuals WHERE id = 'manual-p4-uhc-001'"
+      "SELECT COUNT(*)::int AS cnt FROM payer_source_documents WHERE id = 'manual-p4-uhc-001'"
     );
     if (check[0]?.cnt > 0) {
       console.log("[seed-phase4] Already seeded (manual-p4-uhc-001 exists). Skipping.");
@@ -39,32 +39,32 @@ async function run() {
     }
 
     await client.query(`
-      INSERT INTO payer_manuals (id, payer_name, source_url, status, uploaded_by, created_at, updated_at) VALUES
-      ('manual-p4-uhc-001',  'UnitedHealthcare Commercial',       'https://www.uhcprovider.com/content/dam/provider/docs/public/policies/comm-reimbursement/COMM-Billing-Coding-Guide.pdf', 'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-bcbs-001', 'Blue Cross Blue Shield (National)', 'https://www.bcbs.com/sites/default/files/file-attachments/health-of-america-report/HOA-Billing-Guidelines.pdf',       'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-cig-001',  'Cigna Commercial',                  'https://www.cigna.com/static/www-cigna-com/docs/health-care-providers/resources/clinical-payment-reimbursement-policies.pdf', 'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-hum-001',  'Humana Commercial',                 'https://www.humana.com/provider/medical-resources/billing-and-reimbursement/billing-coding-guidelines',              'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-cnt-001',  'Centene / WellCare',                'https://www.wellcare.com/en/Provider/Manuals-and-Guidelines',                                                         'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-mol-001',  'Molina Healthcare',                 'https://www.molinahealthcare.com/providers/resources/manuals/pdf/ProviderManual.pdf',                                 'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-ant-001',  'Elevance Health (Anthem)',           'https://www.anthem.com/provider/policies-and-guidelines/',                                                           'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-kai-001',  'Kaiser Permanente',                 'https://providers.kaiserpermanente.org/wps/portal/provider/portal',                                                   'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-htn-001',  'Health Net',                        'https://www.healthnet.com/portal/provider/content/providermanuals.action',                                            'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-ame-001',  'AmeriHealth Caritas',               'https://www.amerihealthcaritas.com/providers/resources/provider-manual.aspx',                                         'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-tuf-001',  'Tufts Health Plan',                 'https://tuftshealthplan.com/provider/provider-manual',                                                               'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-hcs-001',  'HCSC (Health Care Service Corp)',   'https://www.hcsc.com/providers/billing-and-claims',                                                                  'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-hig-001',  'Highmark',                          'https://www.highmarkprc.com/provider-reference-center.shtml',                                                        'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-cbc-001',  'Capital BlueCross',                 'https://www.capbluecross.com/wps/portal/cap/provider/billing-payment',                                               'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-mdc-001',  'Medica',                            'https://www.medica.com/providers/provider-manual',                                                                   'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-pri-001',  'Priority Health',                   'https://www.priorityhealth.com/provider/manuals-and-guides',                                                         'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-ibx-001',  'Independence Blue Cross',           'https://www.ibx.com/providers/forms-and-guidelines/billing-guidelines',                                              'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-osc-001',  'Oscar Health',                      'https://www.hioscar.com/health/provider-resources',                                                                  'completed', 'seed-phase4', NOW(), NOW()),
-      ('manual-p4-brt-001',  'Bright Health / Friday Health',     'https://www.brighthealthplan.com/providers/resources',                                                               'completed', 'seed-phase4', NOW(), NOW())
+      INSERT INTO payer_source_documents (id, document_name, source_url, status, uploaded_by, document_type, created_at, updated_at) VALUES
+      ('manual-p4-uhc-001',  'UnitedHealthcare Commercial',       'https://www.uhcprovider.com/content/dam/provider/docs/public/policies/comm-reimbursement/COMM-Billing-Coding-Guide.pdf', 'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-bcbs-001', 'Blue Cross Blue Shield (National)', 'https://www.bcbs.com/sites/default/files/file-attachments/health-of-america-report/HOA-Billing-Guidelines.pdf',       'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-cig-001',  'Cigna Commercial',                  'https://www.cigna.com/static/www-cigna-com/docs/health-care-providers/resources/clinical-payment-reimbursement-policies.pdf', 'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-hum-001',  'Humana Commercial',                 'https://www.humana.com/provider/medical-resources/billing-and-reimbursement/billing-coding-guidelines',              'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-cnt-001',  'Centene / WellCare',                'https://www.wellcare.com/en/Provider/Manuals-and-Guidelines',                                                         'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-mol-001',  'Molina Healthcare',                 'https://www.molinahealthcare.com/providers/resources/manuals/pdf/ProviderManual.pdf',                                 'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-ant-001',  'Elevance Health (Anthem)',           'https://www.anthem.com/provider/policies-and-guidelines/',                                                           'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-kai-001',  'Kaiser Permanente',                 'https://providers.kaiserpermanente.org/wps/portal/provider/portal',                                                   'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-htn-001',  'Health Net',                        'https://www.healthnet.com/portal/provider/content/providermanuals.action',                                            'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-ame-001',  'AmeriHealth Caritas',               'https://www.amerihealthcaritas.com/providers/resources/provider-manual.aspx',                                         'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-tuf-001',  'Tufts Health Plan',                 'https://tuftshealthplan.com/provider/provider-manual',                                                               'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-hcs-001',  'HCSC (Health Care Service Corp)',   'https://www.hcsc.com/providers/billing-and-claims',                                                                  'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-hig-001',  'Highmark',                          'https://www.highmarkprc.com/provider-reference-center.shtml',                                                        'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-cbc-001',  'Capital BlueCross',                 'https://www.capbluecross.com/wps/portal/cap/provider/billing-payment',                                               'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-mdc-001',  'Medica',                            'https://www.medica.com/providers/provider-manual',                                                                   'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-pri-001',  'Priority Health',                   'https://www.priorityhealth.com/provider/manuals-and-guides',                                                         'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-ibx-001',  'Independence Blue Cross',           'https://www.ibx.com/providers/forms-and-guidelines/billing-guidelines',                                              'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-osc-001',  'Oscar Health',                      'https://www.hioscar.com/health/provider-resources',                                                                  'completed', 'seed-phase4', 'admin_guide', NOW(), NOW()),
+      ('manual-p4-brt-001',  'Bright Health / Friday Health',     'https://www.brighthealthplan.com/providers/resources',                                                               'completed', 'seed-phase4', 'admin_guide', NOW(), NOW())
       ON CONFLICT (id) DO NOTHING
     `);
-    console.log("[seed-phase4] Inserted 19 payer_manuals");
+    console.log("[seed-phase4] Inserted 19 payer_source_documents");
 
     await client.query(`
-      INSERT INTO manual_extraction_items (id, manual_id, section_type, extracted_json, confidence, review_status, reviewed_by, reviewed_at, notes, created_at) VALUES
+      INSERT INTO manual_extraction_items (id, source_document_id, section_type, extracted_json, confidence, review_status, reviewed_by, reviewed_at, notes, created_at) VALUES
       ('p4-uhc-tf',  'manual-p4-uhc-001', 'timely_filing', '{"days":90,"exceptions":["COB: 27 months"]}',              0.95, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
       ('p4-bcb-tf',  'manual-p4-bcbs-001','timely_filing', '{"days":180,"exceptions":["COB: 27 months","corrected: 24 months from original denial"]}', 0.93, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
       ('p4-cig-tf',  'manual-p4-cig-001', 'timely_filing', '{"days":90,"exceptions":["claims in litigation: tolled"]}', 0.94, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
@@ -88,7 +88,7 @@ async function run() {
     `);
 
     await client.query(`
-      INSERT INTO manual_extraction_items (id, manual_id, section_type, extracted_json, confidence, review_status, reviewed_by, reviewed_at, notes, created_at) VALUES
+      INSERT INTO manual_extraction_items (id, source_document_id, section_type, extracted_json, confidence, review_status, reviewed_by, reviewed_at, notes, created_at) VALUES
       ('p4-uhc-pa',  'manual-p4-uhc-001', 'prior_auth', '{"requires_auth":true,"criteria":"UHC OptumHealth auth required before HH service delivery","cpt_codes":["G0299","G0300","G0151","G0152","G0153"]}', 0.93, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
       ('p4-bcb-pa',  'manual-p4-bcbs-001','prior_auth', '{"requires_auth":true,"criteria":"BCBS prior auth via AIM Specialty Health (most plans)","cpt_codes":["G0299","G0300"]}', 0.91, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
       ('p4-cig-pa',  'manual-p4-cig-001', 'prior_auth', '{"requires_auth":true,"criteria":"Cigna precertification via portal or phone","cpt_codes":["G0299","G0300","G0151","G0152","G0153"]}', 0.92, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
@@ -112,7 +112,7 @@ async function run() {
     `);
 
     await client.query(`
-      INSERT INTO manual_extraction_items (id, manual_id, section_type, extracted_json, confidence, review_status, reviewed_by, reviewed_at, notes, created_at) VALUES
+      INSERT INTO manual_extraction_items (id, source_document_id, section_type, extracted_json, confidence, review_status, reviewed_by, reviewed_at, notes, created_at) VALUES
       ('p4-uhc-mod', 'manual-p4-uhc-001', 'modifiers', '{"modifier_code":"GP","payer_rule":"GP(PT)/GO(OT)/GN(SLP) required on all therapy HCPCS under HH benefit"}',  0.91, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
       ('p4-bcb-mod', 'manual-p4-bcbs-001','modifiers', '{"modifier_code":"GP","payer_rule":"GP/GO/GN required; -59 for distinct same-day procedures"}',                0.90, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
       ('p4-cig-mod', 'manual-p4-cig-001', 'modifiers', '{"modifier_code":"GP","payer_rule":"GP/GO/GN required; -25 for E/M same-day procedure"}',                       0.89, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
@@ -136,7 +136,7 @@ async function run() {
     `);
 
     await client.query(`
-      INSERT INTO manual_extraction_items (id, manual_id, section_type, extracted_json, confidence, review_status, reviewed_by, reviewed_at, notes, created_at) VALUES
+      INSERT INTO manual_extraction_items (id, source_document_id, section_type, extracted_json, confidence, review_status, reviewed_by, reviewed_at, notes, created_at) VALUES
       ('p4-uhc-ap',  'manual-p4-uhc-001', 'appeals', '{"deadline_days":180,"level":"First Level Internal Appeal","submission_method":"UHC provider portal or written appeal"}', 0.93, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
       ('p4-bcb-ap',  'manual-p4-bcbs-001','appeals', '{"deadline_days":180,"level":"First Level Internal Appeal","submission_method":"BCBS plan portal or fax"}',              0.90, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
       ('p4-cig-ap',  'manual-p4-cig-001', 'appeals', '{"deadline_days":180,"level":"First Level Reconsideration","submission_method":"Cigna portal or fax"}',                  0.91, 'approved', 'seed-phase4', NOW(), NULL, NOW()),
@@ -174,13 +174,13 @@ async function run() {
     ];
     for (const [srcId, manualId] of p4Links) {
       await client.query(
-        `UPDATE payer_manual_sources SET linked_manual_id = $1, last_verified_date = NOW()::date, updated_at = NOW() WHERE id = $2`,
+        `UPDATE payer_manual_sources SET linked_source_document_id = $1, last_verified_date = NOW()::date, updated_at = NOW() WHERE id = $2`,
         [manualId, srcId]
       );
     }
     console.log("[seed-phase4] Linked 19 source registry entries");
 
-    console.log("[seed-phase4] Done. 19 payer_manuals + 76 extraction items created.");
+    console.log("[seed-phase4] Done. 19 payer_source_documents + 76 extraction items created.");
   } finally {
     client.release();
     await pool.end();

@@ -348,7 +348,7 @@ function JsonEditor({ sectionType, value, onChange }: { sectionType: SectionType
 
 interface ExtractionItem {
   id: string;
-  manual_id: string;
+  source_document_id: string;
   section_type: SectionType;
   raw_snippet: string | null;
   extracted_json: any;
@@ -383,6 +383,7 @@ interface PayerManual {
   rejected_count: number;
   pending_count: number;
   supplement_count: number;
+  document_type_label: string | null;
 }
 
 type ReviewPayload = { itemId: string; reviewStatus: string; notes?: string; extractedJson?: any; appliesToPlanProducts?: string[] };
@@ -395,6 +396,8 @@ interface PayerCoverageRow {
   notes: string | null;
   last_verified_date: string | null;
   linked_manual_id: string | null;
+  linked_source_document_id: string | null;
+  linked_document_name: string | null;
   manual_status: string | null;
   manual_ingested_at: string | null;
   manual_payer_id: string | null;
@@ -813,6 +816,7 @@ export default function PayerManualsPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [filterSection, setFilterSection] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterDocType, setFilterDocType] = useState<string>("all");
 
   const { data: manuals = [], isLoading } = useQuery<PayerManual[]>({
     queryKey: ["/api/admin/payer-manuals"],
@@ -1350,9 +1354,22 @@ export default function PayerManualsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-6">
         {/* Left: manual list */}
         <div className="space-y-2">
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Source Documents ({manuals.length})
-          </h2>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              Source Documents ({filterDocType === "all" ? manuals.length : manuals.filter(m => m.document_type === filterDocType).length})
+            </h2>
+            <Select value={filterDocType} onValueChange={setFilterDocType}>
+              <SelectTrigger className="h-7 w-36 text-xs" data-testid="select-filter-doc-type">
+                <SelectValue placeholder="All types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All types</SelectItem>
+                {(Object.keys(DOC_TYPE_LABELS) as DocumentType[]).map((dt) => (
+                  <SelectItem key={dt} value={dt}>{DOC_TYPE_LABELS[dt]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           {isLoading ? (
             <div className="py-8 text-center text-muted-foreground text-sm">Loading…</div>
           ) : manuals.length === 0 ? (
@@ -1366,7 +1383,7 @@ export default function PayerManualsPage() {
               </CardContent>
             </Card>
           ) : (
-            manuals.map((manual) => (
+            manuals.filter(m => filterDocType === "all" || m.document_type === filterDocType).map((manual) => (
               <button
                 key={manual.id}
                 onClick={() => setSelectedManualId(manual.id)}
@@ -1404,7 +1421,7 @@ export default function PayerManualsPage() {
                 {["admin_guide", "pa_list"].includes(manual.document_type || "admin_guide") && (
                   <div className="flex items-center gap-1 mt-1.5">
                     {sectionTypes.map((st) => {
-                      const hasApproved = items.some((i) => i.manual_id === manual.id && normalizeSectionType(i.section_type) === st && i.review_status === "approved");
+                      const hasApproved = items.some((i) => i.source_document_id === manual.id && normalizeSectionType(i.section_type) === st && i.review_status === "approved");
                       return (
                         <span
                           key={st}
