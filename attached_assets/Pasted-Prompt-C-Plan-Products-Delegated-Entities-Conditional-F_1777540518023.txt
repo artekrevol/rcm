@@ -1,0 +1,131 @@
+Prompt C — Plan Products + Delegated Entities (Conditional Form Activation)
+Context
+C0 shipped the activation foundation: practice_payer_enrollments, field_definitions, the getActivatedFieldsForContext resolver. C0 deliberately stopped short of adding any conditional fields — every seeded field has always_required = TRUE and activated_by_rule_kinds = []. Universal baseline only.
+Prompt C populates the conditional layer. It adds:
+
+A structured plan_products reference table replacing free-form JSONB arrays
+A delegated_entities table for IPAs / medical groups
+4 new conditional fields in field_definitions: patient_plan_product, patient_pcp_id, patient_pcp_referral_id, patient_delegated_entity_id
+The wiring from rules → fields, so when an extraction item with rule_kind = 'referrals' is approved for a payer + plan_product, the resolver returns patient_pcp_referral_id as activated
+The patient form (and only the patient form — claim wizard wiring is a smaller follow-up) reading from the resolver and rendering fields conditionally
+
+Acceptance: the Screen A → B → C demo works end-to-end with real data.
+What Prompt C delivers
+
+plan_products reference table seeded with the structured plan-product taxonomy.
+delegated_entities table seeded with placeholder IPA records (real data populated by separate ingestion).
+4 new field_definitions rows with activated_by_rule_kinds arrays populated.
+manual_extraction_items schema gains a structured applies_to_plan_products: VARCHAR[] column (replacing JSONB usage where applicable) — backwards compatible with existing JSONB array reads.
+Patient form rewired to call GET /api/practice/activated-fields on payer change and render the returned field set.
+UHC Capitation/Delegation supplement ingested as a supplement document_type, with at least 1 referrals rule and 1 delegation rule approved in the corpus, providing real demo data for the Screen B → C transition.
+
+Build plan — 7 tasks
+T1 — plan_products reference table
+Create plan_products:
+code                     VARCHAR PRIMARY KEY
+label                    VARCHAR NOT NULL
+parent_plan_family       VARCHAR NOT NULL    (Commercial / Medicare Advantage / Individual Exchange / Medicaid)
+plan_type                VARCHAR NOT NULL    (HMO / PPO / POS / EPO / Indemnity / Capitated / Other)
+requires_pcp             BOOLEAN NOT NULL DEFAULT FALSE
+requires_referral        BOOLEAN NOT NULL DEFAULT FALSE
+is_government            BOOLEAN NOT NULL DEFAULT FALSE
+regulatory_basis         VARCHAR NULL
+sort_order               INTEGER NOT NULL DEFAULT 0
+active                   BOOLEAN NOT NULL DEFAULT TRUE
+Seed with this minimum set (extend later as needed):
+codelabelparent_plan_familyplan_typerequires_pcprequires_referralis_governmentcommercial_hmoCommercial HMOCommercialHMOtruetruefalsecommercial_ppoCommercial PPOCommercialPPOfalsefalsefalsecommercial_posCommercial POSCommercialPOStruefalsefalsecommercial_epoCommercial EPOCommercialEPOfalsefalsefalsema_hmoMedicare Advantage HMOMedicare AdvantageHMOtruetruetruema_ppoMedicare Advantage PPOMedicare AdvantagePPOfalsefalsetruema_hmo_posMedicare Advantage HMO-POSMedicare AdvantageHMOtruetruetruema_dsnpMedicare Advantage D-SNPMedicare AdvantageHMOtruetruetruema_csnpMedicare Advantage C-SNPMedicare AdvantageHMOtruetruetruema_isnpMedicare Advantage I-SNPMedicare AdvantageHMOtruetruetrueexchange_hmoIndividual Exchange HMOIndividual ExchangeHMOtruetruefalseexchange_ppoIndividual Exchange PPOIndividual ExchangePPOfalsefalsefalsemedicare_ffsMedicare Fee-for-ServiceMedicare AdvantageOtherfalsefalsetruemedicaid_mcoMedicaid MCOMedicaidCapitatedtruetruetruemedicaid_ffsMedicaid Fee-for-ServiceMedicaidOtherfalsefalsetruetricareTRICAREMedicare AdvantagePPOfalsefalsetrueva_ccnVA Community CareMedicare AdvantageOtherfalsefalsetrue
+Add a payer_supported_plan_products join table tracking which plan_products are valid per payer:
+payer_id                 VARCHAR REFERENCES payers(id) ON DELETE CASCADE
+plan_product_code        VARCHAR REFERENCES plan_products(code) ON DELETE RESTRICT
+PRIMARY KEY (payer_id, plan_product_code)
+Seed initially based on what each payer reasonably offers — UHC gets all commercial + MA + exchange; Medicare gets only medicare_ffs; TriWest gets only va_ccn; etc.
+Update practice_payer_enrollments.plan_product_code to FK against plan_products.code (currently free-text). Existing enrollments where this is NULL stay NULL — NULL still means "all plan products."
+T2 — delegated_entities table
+Create delegated_entities:
+id                       UUID PRIMARY KEY
+name                     VARCHAR NOT NULL
+entity_type              VARCHAR NOT NULL    (IPA / Medical_Group / ACO / Other)
+tax_id                   VARCHAR NULL
+state                    VARCHAR(2) NULL
+claims_address           TEXT NULL
+claims_payer_id_override VARCHAR NULL    (the EDI payer ID if claims route to delegate, not parent payer)
+active                   BOOLEAN NOT NULL DEFAULT TRUE
+notes                    TEXT NULL
+And payer_delegated_entities join:
+payer_id                 VARCHAR REFERENCES payers(id) ON DELETE CASCADE
+delegated_entity_id      UUID REFERENCES delegated_entities(id) ON DELETE CASCADE
+plan_product_code        VARCHAR NULL REFERENCES plan_products(code) ON DELETE RESTRICT
+state                    VARCHAR(2) NULL
+PRIMARY KEY (payer_id, delegated_entity_id, COALESCE(plan_product_code, ''), COALESCE(state, ''))
+Seed with 2-3 placeholder IPAs for demo purposes — e.g., "Sample California IPA" linked to UHC + Medi-Cal MCO, state = CA. Real data ingestion is out of scope for C; this just makes the form testable.
+T3 — Add 4 conditional field_definitions
+Insert into field_definitions:
+codelabelapplies_todata_typealways_requiredactivated_by_rule_kindspatient_plan_productPlan Productpatientenumfalse["referrals", "prior_auth", "modifiers_and_liability", "payer_specific_edits"]patient_pcp_idPCPpatientuuidfalse["referrals"]patient_pcp_referral_idPCP Referral #patientstringfalse["referrals"]patient_delegated_entity_idDelegated Medical Group / IPApatientuuidfalse["referrals"] (initially — extend later for capitation/delegation rule kinds)
+Note: patient_plan_product activates broadly because most rule kinds are scoped by plan product. Once a payer has any non-universal rule, the practice needs to assign a plan_product to the patient.
+T4 — Resolver enhancement
+Update getActivatedFieldsForContext from C0 to handle the corpus query path that was a stub. Specifically:
+
+Given (organizationId, payerId, planProductCode, delegatedEntityId, serviceDate), query approved extraction items where:
+
+The source document belongs to this payer
+The extraction item's applies_to_plan_products includes the planProductCode or ["all"]
+The service date falls within effective_start/effective_end (effective_end NULL = currently in effect)
+
+
+Collect distinct rule_kind values from matching items.
+For each field_definition where activated_by_rule_kinds overlaps with the collected rule kinds, add to the activated set.
+Return.
+
+Edge case: if planProductCode is NULL but the payer has any rules in the corpus, return patient_plan_product as activated (the resolver tells the form "you need to pick a plan product before I can tell you what else is needed"). This is the chained-disclosure pattern — picking a plan_product re-fires the resolver and reveals the next layer.
+T5 — Patient form rewiring
+Patient creation/edit form (/clients/new and /clients/:id/edit):
+
+On payer field change → fire GET /api/practice/activated-fields?payerId=X → render the returned field set.
+If patient_plan_product is activated → show plan product dropdown populated from payer_supported_plan_products.
+On plan_product change → re-fire the resolver with planProductCode set → render the (possibly expanded) field set.
+If patient_delegated_entity_id is activated → show IPA dropdown populated from payer_delegated_entities filtered by (payer, plan_product, state).
+If patient_pcp_id and patient_pcp_referral_id are activated → show PCP and referral input fields with helper text: "Required for HMO plans. Missing PCP referral may result in claim denial."
+
+Animation/UX: when the form expands or contracts, fade the new/removed fields with a 200ms transition. The visual continuity is the demo's punchline.
+Add a "Routing Preview" pane at the bottom of the form showing what the engine knows: "Claims for this patient will be routed to: [payer or delegated entity]." When delegated_entity is selected with a claims_payer_id_override, this pane updates accordingly.
+Wire this only into the patient form. Claim wizard wiring is a separate prompt — keep C focused.
+T6 — Ingest UHC Capitation/Delegation supplement (real demo data)
+Manual operation, scripted:
+
+Download the 2026 UHC Administrative Guide PDF.
+Extract pages 182–251 (the Capitation/Delegation supplement section) as a separate PDF — this fits well under the 100-page Claude limit.
+Upload as a new payer_source_documents row with document_type = 'supplement', parent_document_id pointing to the existing UHC admin_guide row (create the parent first if it doesn't exist).
+Run extraction.
+Review and approve at least one rule in each of these kinds: referrals, prior_auth, appeals. Set applies_to_plan_products = ["ma_hmo", "ma_dsnp"] on referrals rules.
+Confirm the Patient form, when payer is set to UHC and plan_product is set to "Medicare Advantage HMO," now shows the PCP and referral fields conditionally.
+
+This is the real-data backbone of the demo. Without it, the form has nothing to activate against.
+T7 — Acceptance test extension + 10-row migrated-modifier check
+Extend scripts/verify-c0.ts (or write a new verify-c.ts):
+
+Conditional activation works: Create a test patient. Set payer = UHC. Confirm form initially shows universal fields plus patient_plan_product. Set plan_product = commercial_hmo. Confirm form expands to show patient_pcp_id, patient_pcp_referral_id. Set plan_product = commercial_ppo. Confirm those fields disappear.
+Delegation routing: Set payer = UHC, plan_product = ma_hmo, state on patient = CA. Confirm patient_delegated_entity_id dropdown appears and is populated with the seeded IPA. Selecting it updates the Routing Preview pane.
+Non-enrolled payer: Confirm a payer the org has not enrolled returns no conditional fields.
+10 migrated modifier rows: Open the admin payer-source-documents page, navigate to the document with the migrated modifier rules, confirm all 10 render correctly with the new conditional-liability UI fields visible (liability_assignment, conditions_required, conditions_excluded, appeal_path_if_denied). They stay at needs_reverification = TRUE — this is verifying the UI renders them, not re-reviewing them.
+
+Report all test results in the C closeout note.
+What Prompt C does NOT touch
+
+Claim wizard wiring (separate, smaller prompt after C)
+Effective-date enforcement on rules (Prompt D)
+Real ingestion of more delegated entities (data work, not engineering)
+Re-review of the 10 migrated modifier rules (Rosemary's first review session, post-May 12)
+Reimbursement policies, medical policies, bulletins (Phase 2/3)
+
+Verification before greenlight
+
+plan_products and delegated_entities tables exist, are seeded, FKs are correct.
+Patient form expands and contracts as payer/plan_product change, with no console errors.
+UHC supplement is ingested with parent_document_id pointing at the UHC admin_guide.
+At least one referrals rule and one delegation rule are approved in the corpus and visible to the resolver.
+The 10 migrated modifier rows render in the new UI without missing-field errors.
+Verification script reports pass/fail per check, like C0's verify script did.
+
+Calendar
+3 working days. T1 + T2 + T3 day 1 (schema). T4 + T5 day 2 (resolver + form). T6 + T7 day 3 (UHC supplement + acceptance).
+Confirm the plan, especially the seeded plan_product list and the UHC supplement extraction approach. Greenlight to start.
