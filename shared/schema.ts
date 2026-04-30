@@ -44,6 +44,7 @@ export const leads = pgTable("leads", {
   serviceNeeded: text("service_needed"),
   insuranceCarrier: text("insurance_carrier"),
   memberId: text("member_id"),
+  dob: text("dob"),
   planType: text("plan_type"),
   bestTimeToCall: text("best_time_to_call"),
   notes: text("notes"),

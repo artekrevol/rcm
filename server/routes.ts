@@ -1640,6 +1640,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_comm_locks_lead ON comm_locks(lead_id, released_at, expires_at)`);
 
+    // Add dob column to leads (needed by VOB step — transcript extractor captures it from the call)
+    if (!(await seederLog('column', 'leads', 'dob'))) {
+      await pool.query(`ALTER TABLE leads ADD COLUMN dob TEXT`);
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -6789,16 +6794,34 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             console.log("[vapi-webhook] Extracted from transcript:", extracted);
 
             // Update lead with extracted insurance data
-            if (extracted.carrier || extracted.memberId || extracted.dob) {
+            if (extracted.carrier || extracted.memberId || extracted.dob || extracted.state || extracted.serviceType || extracted.consent !== null) {
               await pool.query(
                 `UPDATE leads SET
-                   insurance_carrier = COALESCE($1, insurance_carrier),
-                   insurance_member_id = COALESCE($2, insurance_member_id),
-                   date_of_birth = COALESCE($3, date_of_birth),
-                   updated_at = NOW()
-                 WHERE id = $4`,
-                [extracted.carrier, extracted.memberId, extracted.dob, flowLeadId]
+                   insurance_carrier  = COALESCE($1, insurance_carrier),
+                   member_id          = COALESCE($2, member_id),
+                   dob                = COALESCE($3, dob),
+                   state              = COALESCE($4, state),
+                   service_needed     = COALESCE($5, service_needed),
+                   consent_to_call    = COALESCE($6, consent_to_call),
+                   updated_at         = NOW()
+                 WHERE id = $7`,
+                [
+                  extracted.carrier   || null,
+                  extracted.memberId  || null,
+                  extracted.dob       || null,
+                  extracted.state     || null,
+                  extracted.serviceType || null,
+                  extracted.consent !== null ? extracted.consent : null,
+                  flowLeadId,
+                ]
               );
+              console.log("[vapi-webhook] Lead updated with extracted fields:", {
+                carrier: extracted.carrier,
+                memberId: extracted.memberId,
+                state: extracted.state,
+                serviceType: extracted.serviceType,
+                consent: extracted.consent,
+              });
             }
 
             const outcome = extracted.carrier && extracted.memberId
