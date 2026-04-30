@@ -1,0 +1,321 @@
+Crawler Kit — UHC Adapter (Demo-Critical Build)
+Context and stakes
+The Rosemary meeting needs a live crawler demo running against real UHC content as the headline differentiator. The cascade demo proves the product UI. The crawler proves the operational engine behind it. Without the crawler, the meeting risks regressing because all engineering since the last meeting has been schema/infrastructure work invisible to a non-technical viewer.
+This is a focused build scoped to UHC only. Other payers and document types are explicitly out of scope and come in subsequent prompts. The architecture must support N payers via the adapter pattern; we just only ship the UHC adapter in this prompt.
+Critical constraint: start only after B2 is fully closed and verified. The crawler must not share files, services, or schema migrations with B2's in-flight work. If B2 has any open verification questions, those resolve first.
+Architecture
+Per-payer adapter pattern. All scrapers in server/scrapers/, each implementing the same interface. Common types in server/scrapers/types.ts. UHC-specific implementation in server/scrapers/uhc.ts.
+typescript// server/scrapers/types.ts
+
+export interface PayerScraper {
+  payer_code: string;
+  payer_name: string;
+  
+  list_documents(opts?: { since?: Date }): Promise<DocumentManifest[]>;
+  fetch_document(url: string): Promise<FetchResult>;
+  list_bulletins(opts?: { since?: Date }): Promise<BulletinManifest[]>;
+}
+
+export interface DocumentManifest {
+  url: string;
+  document_type: 'admin_guide' | 'supplement' | 'pa_list' | 'bulletin';
+  document_name: string;
+  last_modified?: Date;
+  content_hash?: string;
+  discovered_at: Date;
+  parent_document_url?: string;  // links supplements to their admin_guide
+}
+
+export interface FetchResult {
+  content: Buffer;
+  mimetype: string;
+  final_url: string;  // after redirects
+  fetched_at: Date;
+}
+
+export interface BulletinManifest {
+  url: string;
+  title: string;
+  published_at: Date;
+  summary?: string;
+  announces_changes_to?: string[];  // URLs of documents this bulletin updates, when discoverable
+}
+
+export interface ScrapeReport {
+  payer_code: string;
+  started_at: Date;
+  completed_at: Date;
+  documents_discovered: number;
+  documents_new: number;
+  documents_updated: number;
+  documents_unchanged: number;
+  bulletins_discovered: number;
+  errors: { url: string; error: string }[];
+  used_fallback: boolean;  // true if live scrape failed and cached result was served
+}
+Build plan — 7 tasks
+T1 — Schema additions
+Add columns to payer_source_documents:
+sqlALTER TABLE payer_source_documents
+  ADD COLUMN IF NOT EXISTS source_acquisition_method VARCHAR NOT NULL DEFAULT 'manual_upload',
+  ADD COLUMN IF NOT EXISTS source_url_canonical VARCHAR,
+  ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64),
+  ADD COLUMN IF NOT EXISTS last_scraped_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS scrape_status VARCHAR;
+
+ALTER TABLE payer_source_documents
+  ADD CONSTRAINT chk_source_acquisition_method
+  CHECK (source_acquisition_method IN ('manual_upload', 'scraped', 'bulletin_triggered', 'manus_agent', 'cms_structured'));
+
+ALTER TABLE payer_source_documents
+  ADD CONSTRAINT chk_scrape_status
+  CHECK (scrape_status IS NULL OR scrape_status IN ('success', 'unchanged', 'error', 'auth_required', 'rate_limited', 'circuit_open'));
+
+CREATE INDEX IF NOT EXISTS idx_psd_source_url_canonical ON payer_source_documents(source_url_canonical) WHERE source_url_canonical IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_psd_acquisition ON payer_source_documents(source_acquisition_method);
+Create a new table for tracking scrape runs:
+sqlCREATE TABLE IF NOT EXISTS scrape_runs (
+  id UUID PRIMARY KEY,
+  payer_code VARCHAR NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  status VARCHAR NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running', 'success', 'partial', 'failed', 'circuit_open')),
+  report JSONB,
+  triggered_by VARCHAR NOT NULL  -- 'manual_admin', 'cron', 'demo_button'
+    CHECK (triggered_by IN ('manual_admin', 'cron', 'demo_button')),
+  triggered_by_user_id VARCHAR,
+  used_fallback BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+CREATE INDEX IF NOT EXISTS idx_scrape_runs_payer ON scrape_runs(payer_code, started_at DESC);
+Create a circuit-breaker state table:
+sqlCREATE TABLE IF NOT EXISTS scraper_circuit_state (
+  payer_code VARCHAR PRIMARY KEY,
+  state VARCHAR NOT NULL DEFAULT 'closed'
+    CHECK (state IN ('closed', 'open', 'half_open')),
+  consecutive_errors INTEGER NOT NULL DEFAULT 0,
+  last_error_at TIMESTAMPTZ,
+  opened_at TIMESTAMPTZ,
+  reopens_at TIMESTAMPTZ,
+  notes TEXT
+);
+T2 — Scraper runtime infrastructure
+Install Playwright (npm install playwright) and run npx playwright install chromium.
+Create server/scrapers/runtime.ts exposing:
+typescriptexport async function withBrowser<T>(
+  fn: (page: Page) => Promise<T>,
+  opts?: { timeoutMs?: number; userAgent?: string }
+): Promise<T>;
+
+export async function rateLimit(payer_code: string): Promise<void>;
+export function resetRateLimit(payer_code: string): void;
+
+export async function checkCircuit(payer_code: string): Promise<'closed' | 'open' | 'half_open'>;
+export async function recordSuccess(payer_code: string): Promise<void>;
+export async function recordError(payer_code: string, error: Error): Promise<void>;
+export async function resetCircuit(payer_code: string, reason: string): Promise<void>;
+Behavior:
+
+Browser config: Chromium headless. User-Agent: ClaimShieldHealth/1.0 (compliance-research; contact@claimshield.health). Default navigation timeout 30 seconds. Disable resource loading for images/fonts/media to speed up parsing (only HTML and JSON needed).
+Rate limiter: in-memory token bucket per payer_code. Default: 1 request per 4 seconds. Configurable per adapter via constructor option.
+Circuit breaker: persisted in scraper_circuit_state. After 5 consecutive errors within a 10-minute window, transition state to open, set reopens_at = now() + 24 hours. While open, all calls return early with circuit_open. Half-open state on first attempt after reopens_at. Successful call closes the circuit.
+Robots.txt pre-flight: before any session, fetch ${payer_domain}/robots.txt, cache for 24 hours per payer. Log if intended URLs are disallowed but do not block (document this decision in code comments — we're identifying ourselves honestly with our User-Agent and respecting rate limits, so blocking ourselves on robots.txt heuristics is over-cautious for compliance research crawling).
+
+T3 — UHC adapter implementation
+Build server/scrapers/uhc.ts implementing PayerScraper. Specific URLs:
+Admin guide and supplements:
+
+Entry: https://www.uhcprovider.com/en/admin-guides.html
+Parse the page for links to current administrative guides and supplements.
+Match link text patterns:
+
+/Administrative Guide/i → document_type: 'admin_guide'
+/Supplement/i → document_type: 'supplement'
+
+
+Capture document_name from link text.
+
+Prior Authorization List:
+
+Entry: https://www.uhcprovider.com/en/prior-auth-advance-notification.html
+Look for the current "Advance Notification and Plan Requirement Resources" PDF link.
+document_type: 'pa_list'
+
+Bulletins (Network News):
+
+Entry: https://www.uhcprovider.com/en/resource-library/news.html
+Parse for posts published within since (default: last 90 days).
+Each post becomes a BulletinManifest.
+
+Critical implementation notes:
+
+UHC's site is JavaScript-rendered for navigation. Playwright handles this; basic fetch will return empty pages.
+The admin guides page changes structure year-over-year. Make the parser resilient — match on link text patterns and href containing .pdf, not on hardcoded DOM positions.
+PDF URLs on UHC's CDN sometimes redirect through download handlers. fetch_document follows redirects (Playwright default) and captures the final_url.
+PDFs exceeding Claude's 100-page vision limit are out of scope for fixing here — the existing extraction pipeline already handles oversized PDFs with a clear error message. The crawler just fetches; the existing pipeline's size handling is unchanged.
+Hash strategy: SHA-256 of the raw fetched bytes. Compute during fetch_document and return as part of FetchResult (extend the type to include content_hash).
+
+Add an in-process fallback cache at server/scrapers/uhc-fallback-cache.ts:
+
+Stores the result of the most recent successful list_documents() and a sample fetch_document() for the Capitation/Delegation Supplement.
+Updated automatically on every successful run.
+Used as a fallback when live scraping fails during the demo path (T4 handles the fallback orchestration).
+This is critical: if UHC's site is slow or returns errors during the demo, the fallback ensures the demo still completes successfully. The demo button surfaces a small badge ("Cached") when fallback is used, so the user sees what happened — but the demo still works.
+
+T4 — Discovery + ingestion job
+Create server/jobs/scrape-payer-documents.ts:
+typescriptexport async function scrapePayerDocuments(
+  payer_code: string,
+  opts?: {
+    since?: Date;
+    dryRun?: boolean;
+    allowFallback?: boolean;     // default true; demo button always uses true
+    triggeredBy?: 'manual_admin' | 'cron' | 'demo_button';
+    userId?: string;
+  }
+): Promise<ScrapeReport>;
+Algorithm:
+
+Insert row into scrape_runs with status = 'running'.
+Check circuit breaker. If open: return early, status circuit_open, mark scrape_runs.status = 'circuit_open'.
+Resolve scraper for payer_code (only 'uhc' registered for now; throw with clear error if unknown).
+Try scraper.list_documents({ since }). On success, proceed to step 5. On failure: if allowFallback, load the fallback cache and proceed with cached manifest, set used_fallback = true. If !allowFallback, record error and abort.
+For each manifest entry, look up by source_url_canonical in payer_source_documents:
+
+Not in DB: call scraper.fetch_document(url). Compute SHA-256. INSERT new payer_source_documents row with:
+
+source_acquisition_method = 'scraped'
+source_url_canonical = url
+content_hash = sha256
+scrape_status = 'success'
+last_scraped_at = now()
+status = 'pending' (existing column — triggers extraction)
+payer_id = (SELECT id FROM payers WHERE LOWER(name) LIKE 'united%' LIMIT 1) — for UHC; resolved per adapter
+
+
+For supplements: also resolve parent_document_id by matching the manifest's parent_document_url against existing source_url_canonical. NULL if not found yet (will be backfilled on a subsequent run).
+Trigger extraction by calling the existing manual-extractor function directly (not via HTTP).
+In DB, hash matches: UPDATE last_scraped_at = now(), scrape_status = 'unchanged'. No re-extraction.
+In DB, hash differs (new version published): Mark prior row as superseded by setting status = 'superseded', effective_end = today - 1. INSERT new row as above with parent_document_id = prior.id (so version history is traceable). Trigger extraction. UPDATE all extraction items belonging to the prior version: needs_reverification = TRUE, append note: "Superseded by document version scraped at [timestamp]. Re-review required.".
+
+
+Try scraper.list_bulletins({ since }). For each new bulletin URL not already in DB:
+
+INSERT payer_source_documents with document_type = 'bulletin', source_acquisition_method = 'bulletin_triggered'. Do not auto-trigger extraction (bulletin extraction logic is out of scope; rows queue for admin review).
+
+
+UPDATE scrape_runs row: completed_at, status (success / partial / failed depending on errors), report (full JSONB), used_fallback.
+On any error path: recordError(payer_code, err) to drive circuit breaker.
+Return ScrapeReport.
+
+Concurrency: a payer can have only one running scrape at a time. If a second call comes in while one is running, return early with status: 'already_running' in the report.
+T5 — API endpoints
+All require requireSuperAdmin except where noted:
+
+POST /api/admin/scrapers/run — body { payer_code, dryRun?, allowFallback? }. Triggers scrape. Returns { run_id, status: 'running' }. Response is fast; report polled separately.
+GET /api/admin/scrapers/runs/:run_id — returns latest state of scrape_runs row including report when complete.
+GET /api/admin/scrapers/runs/:run_id/stream — Server-Sent Events endpoint streaming progress messages as the scrape executes. Used by the Live Demo button. Messages include: discovered_documents, fetching_document, extracting_rules, complete. Each message has { stage, message, payload? }.
+GET /api/admin/scrapers/status — returns per-payer status: circuit state, last successful run timestamp, documents tracked count, last 5 run summaries.
+POST /api/admin/scrapers/circuit/:payer_code/reset — manual circuit reset. Logs the reset reason.
+GET /api/admin/scrapers/discoveries — paginated feed of newly-discovered documents in the last N days (default 30), filterable by payer + document_type.
+
+T6 — Admin UI
+Create page /admin/scrapers (new top-level admin page, linked from the existing admin nav):
+Section 1 — Configured scrapers (table):
+
+Columns: Payer, Last Run, Documents Tracked, Circuit State, Actions.
+Per-row "Run scraper" button (admin-only) and "Reset circuit" button (only when state ≠ closed).
+Circuit state shown as colored badge: green (closed), red (open), amber (half_open).
+
+Section 2 — Live Demo button (the centerpiece):
+
+Large prominent card titled "Live UHC Crawler Demo."
+Single button: "Run Live Demo." Click triggers POST /api/admin/scrapers/run with triggeredBy: 'demo_button', allowFallback: true.
+Opens an SSE connection. Streams progress through 5 visual stages, each with friendly messages:
+
+"Discovering documents on UHCprovider.com..."
+"Found N documents. Comparing against existing corpus..." (showing the count)
+"Fetching new/updated document: [name]..." (per document)
+"Extracting payer rules from document..." (per extraction)
+"Demo complete. Discovered N new documents, updated M, identified P new rules for review."
+
+
+Each stage shows a checkmark when complete, with timing.
+At the end, a "View results" link jumps to the discoveries feed filtered to this run's documents.
+Small "Cached" badge appears next to the title if the fallback was used. (You and Rosemary know what it means; she'll trust the resilience signal more than she'd be put off by it.)
+
+Section 3 — Discovery feed:
+
+Timeline of newly-discovered documents in the last 30 days. Sortable by payer, document_type, discovered_at.
+Each row: payer name, document name, document type chip, discovered timestamp, source URL link, "View extractions" link to source document detail page.
+
+Section 4 — Run history:
+
+Last 20 scrape runs across all payers.
+Per-run: payer, started_at, status badge, documents new/updated/unchanged counts, errors count, used_fallback indicator.
+Click a row to expand the full ScrapeReport JSON.
+
+Demo polish notes (these matter — they're the difference between a flat demo and the headline moment):
+
+The progress messages must feel narrative, not technical. "Discovering documents on UHCprovider.com..." is good. "GET request to https://uhcprovider.com/admin-guides.html returned 200" is bad.
+Animate stage transitions with the same FadeField pattern from C. Visual continuity with the cascade demo matters; both demos should feel like they belong to the same product.
+Each stage should take at least 2 seconds (artificially delay if needed) so the eye can track the progress. A demo that completes in 800ms feels broken even if it isn't.
+When the run completes, show the count of new extraction items in a callout: "3 new rules ready for review." Click jumps to the review queue with those items pre-filtered.
+
+T7 — Verification
+Write scripts/verify-crawler.ts testing:
+
+Robots.txt fetch: the runtime fetches and caches UHC's robots.txt without error. Cache returns same result on second call within TTL.
+List documents (live): scraper.list_documents() returns ≥5 manifest entries (admin guide, ≥3 supplements, ≥1 PA list). If UHC's site changes structure, this test surfaces it immediately.
+List documents (fallback): with the live scrape mocked to fail, list_documents returns the cached fallback manifest (≥5 entries).
+Fetch document: scraper.fetch_document(url) for the Capitation/Delegation Supplement returns content with mimetype = 'application/pdf' and size >500KB. Hash is SHA-256 hex format.
+Hash stability: running fetch_document twice on the same URL produces identical hashes.
+Discovery job dryRun: scrapePayerDocuments('uhc', { dryRun: true }) returns a populated ScrapeReport without writing to payer_source_documents. Counts > 0.
+Discovery job live (first run): scrapePayerDocuments('uhc') writes new rows. Returns documents_new > 0.
+Discovery job idempotent: re-running immediately produces documents_new == 0, documents_unchanged == previous documents_new.
+Extraction triggered: newly-scraped documents have at least one extraction item created via the existing pipeline within 5 minutes of scrape completion.
+Circuit breaker open: simulate 5 consecutive errors. Verify circuit transitions to open and subsequent calls return early.
+Circuit breaker reset: manual reset endpoint clears the state. Subsequent calls proceed normally.
+Rate limiting: five rapid fetch_document calls take ≥16 seconds total (4-second gaps between each).
+Demo button end-to-end: simulating a click on the Live Demo button produces a complete SSE stream with all 5 stages, completes successfully, and surfaces the new extraction items in the review queue with [uhc_scraped] traceable to the run_id.
+Fallback path triggers correctly: with the live scrape mocked to fail mid-run, the demo button still completes successfully and the resulting report has used_fallback = true.
+Source provenance correct: every newly-scraped row has source_acquisition_method = 'scraped', populated source_url_canonical, content_hash, last_scraped_at, and scrape_status.
+Existing manual-upload rows untouched: running the scraper does not modify any pre-existing rows where source_acquisition_method = 'manual_upload'. (This is the contract that lets manual upload remain a first-class path.)
+
+Report all 16 results.
+Manus migration tagging (one-time SQL, runs at end of build)
+Execute as a one-off cleanup at the end of T7:
+sql-- Tag any documents that came from Manus extraction with the right provenance
+UPDATE payer_source_documents
+SET source_acquisition_method = 'manus_agent'
+WHERE notes ILIKE '%manus%'
+   OR notes ILIKE '%[demo_seed]%'
+   AND source_acquisition_method = 'manual_upload';
+Adjust the WHERE clause if the existing demo-seed rows or Manus rows have different identifying markers — Replit, inspect notes contents and confirm before running.
+What this prompt does NOT do
+
+Other payers (Aetna, Cigna, BCBS, Humana). Same adapter pattern, separate prompts.
+Reimbursement policies and medical policies. Different ingestion pipeline. Separate prompt.
+Login/credential handling. UHC's public docs don't require it; other payers will. Separate prompt when first credentialed payer is added.
+Scheduled cron refresh. Manual trigger and demo button only. Cron job comes after the meeting and proves out the daily refresh story.
+Production-grade rate limiting (Redis-backed). In-memory is correct for single-instance deploy; Redis migration is a follow-up when multi-instance is needed.
+Bulletin extraction pipeline. Bulletins are discovered and stored; extraction logic for them is a separate prompt.
+Backfilling parent_document_id for orphaned supplements after first scrape. The first scrape may discover supplements before their admin_guide. A second scrape will have both rows present and can resolve. Acceptable.
+
+Failure-mode requirements (do not skip)
+
+Live scrape failure must not break the demo. The fallback cache exists for one reason: the demo button always succeeds. Test this explicitly in T7.15.
+Circuit breaker triggering must not require code intervention. A blocked IP or a UHC site change should pause scraping for 24 hours, alert the admin via the status endpoint, and not require redeployment to recover.
+No silent failures. Every error path must either be reported in the ScrapeReport or surfaced in the SSE stream. If a fetch fails silently, the admin has no signal anything's wrong, and the corpus drifts.
+Idempotency. Running the same scrape twice must produce no duplicate rows, no duplicate extraction triggers, no duplicate runs in flight.
+
+Confirmation needed before start
+
+Confirm B2 is fully closed and verified (all checks pass).
+Validate the architecture: per-payer adapter pattern, Playwright runtime, in-memory rate limit, persistent circuit breaker, fallback cache. Push back if you'd structure differently.
+Confirm UHC's specific URLs (admin-guides.html, prior-auth-advance-notification.html, news.html) resolve and have the expected structure. If structure has changed since the spec was written, surface alternatives now, not mid-build.
+Confirm the Playwright install adds acceptable size to the deploy bundle (Chromium is ~280MB). If this is a concern, propose alternatives (e.g., playwright-core with system Chromium).
+
+Reply with confirmations and any pushback. Greenlight to start once B2 closes.
+
