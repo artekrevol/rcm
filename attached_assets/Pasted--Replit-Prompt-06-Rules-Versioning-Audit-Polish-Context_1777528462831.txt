@@ -1,0 +1,244 @@
+# Replit Prompt 06 — Rules Versioning + Audit Polish
+
+## Context
+
+After Prompts 1-5, the rules engine is real, queryable, and powering live features. But there's a subtle problem: rules change over time. Aetna updates its provider manual quarterly. CMS releases new NCCI editions. Plan product mappings get refined. When a rule changes, claims evaluated under the old rule should NOT retroactively reclassify against the new rule — that breaks audit trails and can mask real problems.
+
+This prompt adds rule versioning, snapshots rule state at claim creation, and adds the admin polish to make the rules database defensible (which becomes the basis for Rosemary's role and the investor narrative).
+
+This is the last prompt in the sequence. After this lands, the rules engine is production-grade.
+
+## Standing constraints
+
+- No live Stedi submissions during verification
+- Commit messages must include verification queries WITH their actual results
+- All schema migrations must be idempotent
+
+## Tasks
+
+### Task 1 — Rule snapshots on claim creation
+
+When a claim is created, snapshot the rules that applied to it. Add to `claims`:
+
+```sql
+ALTER TABLE claims 
+ADD COLUMN IF NOT EXISTS rules_snapshot JSONB,
+ADD COLUMN IF NOT EXISTS rules_engine_version TEXT,
+ADD COLUMN IF NOT EXISTS ncci_version_at_creation TEXT;
+```
+
+The `rules_snapshot` JSONB contains:
+
+```json
+{
+  "snapshot_taken_at": "2026-04-28T20:00:00Z",
+  "applied_rules": [
+    {
+      "rule_id": "uuid",
+      "rule_type": "timely_filing",
+      "section_type": "timely_filing",
+      "value": 120,
+      "source_extraction_id": "uuid",
+      "manual_id": "uuid",
+      "approved_at": "2026-04-15T14:00:00Z",
+      "approved_by": "rosemary@example.com"
+    },
+    ...
+  ],
+  "ncci_version": "2026Q2",
+  "rules_engine_version": "1.0.0"
+}
+```
+
+When the claim is later re-evaluated (Timely Filing Guardian re-runs, risk engine re-fires), the system uses the SNAPSHOT first. Only if the snapshot is missing does it fall back to current rules. This preserves audit integrity.
+
+### Task 2 — Rules history table
+
+When a payer manual extraction is approved, edited, or rejected, write to a history table:
+
+```sql
+CREATE TABLE IF NOT EXISTS payer_manual_extraction_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  extraction_id UUID NOT NULL REFERENCES payer_manual_extractions(id) ON DELETE CASCADE,
+  
+  changed_at TIMESTAMP DEFAULT NOW(),
+  changed_by TEXT NOT NULL,
+  change_type TEXT NOT NULL CHECK (change_type IN ('created', 'edited', 'approved', 'rejected', 'reopened', 'data_corrected')),
+  
+  -- Snapshot of the row state after the change
+  state_snapshot JSONB NOT NULL,
+  
+  change_notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_extraction_history_extraction 
+  ON payer_manual_extraction_history (extraction_id, changed_at);
+```
+
+Every state-changing operation on extractions writes a row. This is the audit trail Rosemary's name appears on.
+
+### Task 3 — Rules database admin dashboard
+
+Build a rules database admin view at `/admin/rules-database`. Sections:
+
+**A. Overview cards:**
+- Total approved rules across all payers and section types
+- Approved rules per section_type (timely filing, prior auth, modifier, appeals, CCI)
+- Pending review count
+- Rejected count
+- Rules added/changed in the last 7 days
+- Coverage % across the top 20 source registry payers
+
+**B. Rule freshness table:**
+- Each payer × section_type cell shows: last verified date, days since last verification, source manual version
+- Color-coded: green if < 90 days, amber if 90-180 days, red if > 180 days
+- Click any cell → opens that rule for review
+
+**C. Rule activity log:**
+- Last 50 rule changes from `payer_manual_extraction_history`
+- Filter by user, payer, change type
+- Each entry shows: timestamp, user, change type, payer name, section type, summary of change
+
+**D. Top contributors leaderboard (rules approved):**
+- Per user: count of rules approved, count of rules edited
+- This is where Rosemary's name appears prominently
+- Useful both for accountability and for the May 12 demo
+
+**E. CMS validation panel:**
+- Per the existing CMS validation sweep from Phase 4: which rules conflict with CMS reference values
+- Filterable, sortable, with "Mark as resolved" action
+
+### Task 4 — Per-rule provenance view
+
+When viewing any individual approved rule (in the existing extraction items UI), expand the metadata panel to show:
+
+- Source manual (with link to original PDF if stored)
+- Source page number
+- Exact quote (verbatim from manual)
+- Confidence score from Claude
+- Approved by (user name + role)
+- Approved at (timestamp)
+- Last edited by (if edited)
+- Edit history button → opens timeline view from `payer_manual_extraction_history`
+
+This is the "how do we know this rule is right" surface. Defensibility 101.
+
+### Task 5 — Re-verification workflow
+
+Add a way to flag rules for re-verification when their underlying manual gets updated:
+
+When the cron job that re-ingests payer manuals runs (existing functionality), it should:
+
+1. Compare new extracted text against the current approved rule's source quote
+2. If the text has changed materially (different deadline value, different code list, different phrasing), mark the existing rule with status `needs_reverification`
+3. Surface in the admin dashboard: "12 rules need re-verification due to manual updates"
+
+Reviewers can then look at the new vs old, decide if the rule needs to be updated, and either approve the new value or extend the existing rule's validity.
+
+This is what keeps the database from going stale. Without it, rules drift away from reality.
+
+### Task 6 — Public-facing source citation (optional but recommended)
+
+When a rule fires in the wizard or in the Filing Alerts page, the user can click "View source" to see:
+
+- Manual title and effective date
+- Page number
+- Exact quote
+- Reviewer who approved (e.g., "Approved by Rosemary Gammon, PAHM, on 2026-05-04")
+
+The reviewer's name and credential being visible to end users makes the system feel substantive — not a black box. This is also a marketing surface (every rule cites a real expert).
+
+If a rule was approved by an automated process (e.g., CCI edits from CMS direct ingest), the citation is "CMS NCCI 2026Q2" instead of a person.
+
+### Task 7 — Verification queries
+
+After deploy, run against `PRODUCTION_READONLY_DATABASE_URL`:
+
+```sql
+-- Schema check  
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'claims'
+  AND column_name IN ('rules_snapshot', 'rules_engine_version', 'ncci_version_at_creation');
+
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'payer_manual_extraction_history'
+ORDER BY ordinal_position;
+
+-- Rules freshness summary
+SELECT 
+  EXTRACT(DAY FROM NOW() - last_verified_at) AS days_since_verification_bucket,
+  COUNT(*) AS rule_count
+FROM payer_manual_extractions
+WHERE review_status = 'approved'
+GROUP BY days_since_verification_bucket
+ORDER BY days_since_verification_bucket;
+
+-- Recent rule changes
+SELECT 
+  changed_at::date AS change_date,
+  change_type,
+  COUNT(*) 
+FROM payer_manual_extraction_history
+WHERE changed_at > NOW() - INTERVAL '14 days'
+GROUP BY change_date, change_type
+ORDER BY change_date DESC;
+
+-- Snapshot adoption (claims created with snapshots)
+SELECT 
+  COUNT(*) FILTER (WHERE rules_snapshot IS NOT NULL) AS with_snapshot,
+  COUNT(*) FILTER (WHERE rules_snapshot IS NULL) AS without_snapshot,
+  COUNT(*) AS total
+FROM claims
+WHERE created_at > NOW() - INTERVAL '7 days';
+```
+
+## Acceptance
+
+- New columns on claims for snapshots
+- `payer_manual_extraction_history` table exists
+- Every rule change writes a history row
+- Admin rules database dashboard functional
+- Per-rule provenance panel shows source attribution
+- Re-verification workflow flags drift when manuals are re-ingested  
+- "View source" citation appears in user-facing rule violations
+- Rules engine consults snapshot first, falls back to current state
+
+## What NOT to do in this prompt
+
+- Do not migrate the entire history of past rule changes retroactively. Going forward only.
+- Do not delete old extraction items when new versions are approved. Keep both with version markers.
+- Do not show users the full history log on the public side. Just the citation. History is admin-only.
+
+## Output expected from Replit
+
+1. List of files modified
+2. SQL migrations with rollback
+3. Verification query results from Task 7
+4. Screenshots:
+   - `/admin/rules-database` dashboard with all sections
+   - Per-rule provenance panel
+   - Edit history timeline for one rule
+   - User-facing "View source" citation in a wizard violation
+   - Re-verification flag on an outdated rule
+
+## What this completes
+
+After this prompt lands, the rules engine has:
+
+- Structured ingestion (Phase 4 work + Prompt 2's CCI)
+- Plan product scoping (Prompt 1)
+- Risk engine consumption (Prompt 3)
+- Live agent enforcement (Prompt 4)
+- Plan-product-conditional features (Prompt 5)
+- Versioning, history, provenance (this prompt)
+
+The full sequence is shippable, defensible, and operationally complete. From here, the next phases are:
+
+- Prior Auth Agent (separate dedicated prompt)
+- Denial Recovery Agent (after pilot has real ERA data)
+- More extraction prompts (CMS LCDs, payer-specific medical policies)
+- Specialty-aware extensions (after base engine has been pressure-tested)
+
+Those are roadmap items, not part of this sequence.

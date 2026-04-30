@@ -2250,6 +2250,23 @@ export default function ClaimWizard() {
                   <blockquote className="border-l-4 border-primary pl-3 py-2 bg-muted/50 rounded text-sm text-muted-foreground italic leading-relaxed">
                     {sourceViewViolation.sourceQuote}
                   </blockquote>
+                  {(sourceViewViolation as any).reviewedBy && (
+                    <div className="flex items-center gap-3 flex-wrap text-xs text-muted-foreground border-t pt-2">
+                      <span className="flex items-center gap-1">
+                        <span className="font-medium text-foreground">Approved by:</span> {(sourceViewViolation as any).reviewedBy}
+                      </span>
+                      {(sourceViewViolation as any).lastVerifiedAt && (
+                        <span className="flex items-center gap-1">
+                          <span className="font-medium text-foreground">Verified:</span>{" "}
+                          {(() => {
+                            try {
+                              return new Date((sourceViewViolation as any).lastVerifiedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                            } catch { return (sourceViewViolation as any).lastVerifiedAt; }
+                          })()}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {sourceViewViolation.fixSuggestion && (
                     <p className="text-sm text-muted-foreground">
                       <span className="font-medium text-foreground">Fix: </span>

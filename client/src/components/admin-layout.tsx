@@ -6,6 +6,7 @@ import {
   Shield,
   BookOpen,
   Wrench,
+  Database,
 } from "lucide-react";
 import {
   Sidebar,
@@ -80,6 +81,14 @@ function AdminSidebar() {
                   <Link href="/admin/payer-manuals" data-testid="nav-admin-payer-manuals">
                     <BookOpen className="h-5 w-5" />
                     <span>Payer Manuals</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={location === "/admin/rules-database"}>
+                  <Link href="/admin/rules-database" data-testid="nav-admin-rules-database">
+                    <Database className="h-5 w-5" />
+                    <span>Rules Database</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

@@ -4,8 +4,10 @@ import { format } from "date-fns";
 import {
   FileText, Plus, Play, CheckCircle2, XCircle, Clock, AlertCircle,
   ChevronDown, ChevronRight, ExternalLink, Trash2, RefreshCw, Pencil,
-  BookOpen, Zap, Upload, Link2, Database, BarChart3, List,
+  BookOpen, Zap, Upload, Link2, Database, BarChart3, List, History,
+  ShieldAlert, User, CalendarCheck, RotateCcw,
 } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +27,7 @@ import {
 } from "@/components/ui/table";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 type SectionType = "timely_filing" | "prior_auth" | "modifiers" | "appeals";
 
@@ -358,6 +361,16 @@ function coverageDot(approved: boolean, reviewed: boolean, label: string) {
   );
 }
 
+const CHANGE_TYPE_LABELS: Record<string, string> = {
+  approved: "Approved",
+  rejected: "Rejected",
+  edited: "Edited",
+  data_corrected: "Data Corrected",
+  reopened: "Re-opened",
+  needs_reverification: "Flagged for Re-verification",
+  created: "Created",
+};
+
 function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview: (p: ReviewPayload) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -368,6 +381,26 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
       ? item.applies_to_plan_products
       : []
   );
+  const [showHistory, setShowHistory] = useState(false);
+  const { toast } = useToast();
+
+  const { data: itemHistory = [], isLoading: historyLoading } = useQuery<any[]>({
+    queryKey: ["/api/admin/extraction-items", item.id, "history"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/extraction-items/${item.id}/history`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: showHistory,
+  });
+
+  const reverifyMutation = useMutation({
+    mutationFn: () => apiRequest("PATCH", `/api/admin/extraction-items/${item.id}/reverify`, {}),
+    onSuccess: () => {
+      toast({ title: "Flagged for re-verification" });
+    },
+  });
+
   const isPending = item.review_status === "pending";
   const isNotFound = item.review_status === "not_found";
 
@@ -501,6 +534,47 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
         </div>
       )}
 
+      {/* Provenance panel (approved items) */}
+      {item.review_status === "approved" && (
+        <div className="mt-2 px-2 py-1.5 bg-background/50 rounded border border-dashed flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          {item.reviewed_by && (
+            <span className="flex items-center gap-1">
+              <User className="h-3 w-3" />
+              {item.reviewed_by}
+            </span>
+          )}
+          {(item as any).last_verified_at && (
+            <span className="flex items-center gap-1">
+              <CalendarCheck className="h-3 w-3" />
+              Verified {formatDistanceToNow(new Date((item as any).last_verified_at), { addSuffix: true })}
+            </span>
+          )}
+          {(item as any).needs_reverification && (
+            <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
+              <ShieldAlert className="h-3 w-3" /> Needs re-verification
+            </span>
+          )}
+          <button
+            className="ml-auto flex items-center gap-1 hover:text-foreground transition-colors"
+            onClick={() => setShowHistory(true)}
+            data-testid={`button-history-${item.id}`}
+          >
+            <History className="h-3 w-3" /> Rule history
+          </button>
+          {item.review_status === "approved" && !(item as any).needs_reverification && (
+            <button
+              className="flex items-center gap-1 hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+              onClick={() => reverifyMutation.mutate()}
+              disabled={reverifyMutation.isPending}
+              data-testid={`button-reverify-${item.id}`}
+            >
+              <RotateCcw className="h-3 w-3" />
+              {reverifyMutation.isPending ? "Flagging…" : "Flag for re-verify"}
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Actions */}
       {isPending && !isNotFound && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -564,6 +638,58 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
           </Button>
         </div>
       )}
+
+      {/* Rule History Dialog */}
+      <Dialog open={showHistory} onOpenChange={setShowHistory}>
+        <DialogContent className="max-w-lg" data-testid={`dialog-history-${item.id}`}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <History className="h-4 w-4" />
+              Rule History — {SECTION_LABELS[item.section_type as SectionType] || item.section_type}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1 max-h-[400px] overflow-y-auto">
+            {historyLoading ? (
+              <div className="flex justify-center py-6"><span className="text-sm text-muted-foreground">Loading history…</span></div>
+            ) : itemHistory.length === 0 ? (
+              <div className="py-6 text-center text-sm text-muted-foreground">No change history recorded for this rule yet.</div>
+            ) : (
+              itemHistory.map((h: any, i: number) => (
+                <div key={h.id || i} className="flex items-start gap-3 py-2 border-b last:border-0" data-testid={`history-entry-${i}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${
+                        h.change_type === "approved" ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" :
+                        h.change_type === "rejected" ? "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" :
+                        h.change_type === "edited" ? "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300" :
+                        h.change_type === "needs_reverification" ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" :
+                        "bg-muted text-muted-foreground"
+                      }`}>
+                        {CHANGE_TYPE_LABELS[h.change_type] || h.change_type}
+                      </span>
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <User className="h-3 w-3" />{h.changed_by}
+                      </span>
+                    </div>
+                    {h.change_notes && (
+                      <p className="text-xs text-muted-foreground italic mt-0.5">"{h.change_notes}"</p>
+                    )}
+                    {h.snapshot_json && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5 font-mono truncate">{JSON.stringify(h.snapshot_json)}</p>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0" title={h.changed_at ? format(new Date(h.changed_at), "PPpp") : ""}>
+                    {h.changed_at ? formatDistanceToNow(new Date(h.changed_at), { addSuffix: true }) : ""}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setShowHistory(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

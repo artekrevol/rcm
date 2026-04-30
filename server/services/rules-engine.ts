@@ -54,6 +54,8 @@ export interface RuleViolation {
   sourcePage: number | null;
   sourceQuote: string | null;
   payerSpecific: boolean;
+  reviewedBy?: string | null;
+  lastVerifiedAt?: string | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -347,6 +349,8 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
           mei.raw_snippet,
           mei.extracted_json,
           mei.applies_to_plan_products,
+          mei.reviewed_by,
+          mei.last_verified_at,
           pm.payer_name,
           pm.source_url
         FROM manual_extraction_items mei
@@ -385,6 +389,8 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
               sourcePage: ej.source_page || null,
               sourceQuote: item.raw_snippet || null,
               payerSpecific: true,
+              reviewedBy: item.reviewed_by || null,
+              lastVerifiedAt: item.last_verified_at ? String(item.last_verified_at) : null,
             });
           } else if (daysRemaining <= 30) {
             violations.push({
@@ -396,6 +402,8 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
               sourcePage: ej.source_page || null,
               sourceQuote: item.raw_snippet || null,
               payerSpecific: true,
+              reviewedBy: item.reviewed_by || null,
+              lastVerifiedAt: item.last_verified_at ? String(item.last_verified_at) : null,
             });
           } else if (daysRemaining <= days * 0.2) {
             // Within 20% of deadline
@@ -408,6 +416,8 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
               sourcePage: ej.source_page || null,
               sourceQuote: item.raw_snippet || null,
               payerSpecific: true,
+              reviewedBy: item.reviewed_by || null,
+              lastVerifiedAt: item.last_verified_at ? String(item.last_verified_at) : null,
             });
           }
         }
@@ -439,6 +449,8 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
               sourcePage: ej.source_page || null,
               sourceQuote: item.raw_snippet || null,
               payerSpecific: true,
+              reviewedBy: item.reviewed_by || null,
+              lastVerifiedAt: item.last_verified_at ? String(item.last_verified_at) : null,
             });
           }
         }
@@ -468,6 +480,8 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
               sourcePage: ej.source_page || null,
               sourceQuote: item.raw_snippet || null,
               payerSpecific: true,
+              reviewedBy: item.reviewed_by || null,
+              lastVerifiedAt: item.last_verified_at ? String(item.last_verified_at) : null,
             });
           }
         }

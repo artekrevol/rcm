@@ -1756,6 +1756,46 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS pcp_referral_check_status TEXT CHECK (pcp_referral_check_status IN ('not_required','present_valid','present_expired','present_used_up','missing','unknown') OR pcp_referral_check_status IS NULL)`).catch(() => {});
     }
 
+    // ── Prompt 06: Rules Versioning ──────────────────────────────────────────
+    if (!(await seederLog('column', 'claims', 'rules_snapshot'))) {
+      await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS rules_snapshot JSONB`);
+    }
+    if (!(await seederLog('column', 'claims', 'rules_engine_version'))) {
+      await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS rules_engine_version TEXT`);
+    }
+    if (!(await seederLog('column', 'claims', 'ncci_version_at_creation'))) {
+      await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS ncci_version_at_creation TEXT`);
+    }
+
+    // Extraction history table
+    if (!(await seederLog('table', 'payer_manual_extraction_history'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS payer_manual_extraction_history (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          extraction_id VARCHAR NOT NULL,
+          changed_at TIMESTAMP DEFAULT NOW(),
+          changed_by TEXT NOT NULL,
+          change_type TEXT NOT NULL CHECK (change_type IN ('created','edited','approved','rejected','reopened','data_corrected','needs_reverification')),
+          state_snapshot JSONB NOT NULL,
+          change_notes TEXT,
+          payer_name TEXT,
+          section_type TEXT
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_extraction_history_extraction ON payer_manual_extraction_history (extraction_id, changed_at DESC)`).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_extraction_history_changed_at ON payer_manual_extraction_history (changed_at DESC)`).catch(() => {});
+    }
+
+    // Extra columns on manual_extraction_items
+    if (!(await seederLog('column', 'manual_extraction_items', 'last_verified_at'))) {
+      await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMP`);
+      // Backfill: set last_verified_at = reviewed_at for already-approved items
+      await pool.query(`UPDATE manual_extraction_items SET last_verified_at = reviewed_at WHERE review_status = 'approved' AND reviewed_at IS NOT NULL`).catch(() => {});
+    }
+    if (!(await seederLog('column', 'manual_extraction_items', 'needs_reverification'))) {
+      await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS needs_reverification BOOLEAN DEFAULT FALSE`);
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -3450,6 +3490,43 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
         [crypto.randomUUID(), claimId, patientId, 'created', 'Claim draft created via wizard', (req.user as any)?.id || null]
       );
+
+      // ── Prompt 06: snapshot rules state at claim creation ────────────────────
+      try {
+        const [{ rows: approvedRules }, { rows: ncciRows }] = await Promise.all([
+          db.query(`
+            SELECT mei.id, mei.section_type, mei.extracted_json, mei.reviewed_by, mei.reviewed_at,
+                   pm.payer_id AS manual_payer_id, pm.payer_name
+            FROM manual_extraction_items mei
+            JOIN payer_manuals pm ON pm.id = mei.manual_id
+            WHERE mei.review_status = 'approved'
+              AND pm.payer_id = $1
+            ORDER BY mei.reviewed_at DESC
+          `, [p.payer_id || null]).catch(() => ({ rows: [] })),
+          db.query(`SELECT MAX(ncci_version) AS latest FROM cci_edits`).catch(() => ({ rows: [{ latest: null }] })),
+        ]);
+
+        const ncciVersion = ncciRows[0]?.latest || null;
+        const snapshot = {
+          snapshot_taken_at: now.toISOString(),
+          applied_rules: approvedRules.map((r: any) => ({
+            rule_id: r.id,
+            rule_type: r.section_type,
+            section_type: r.section_type,
+            value: r.extracted_json,
+            approved_at: r.reviewed_at,
+            approved_by: r.reviewed_by,
+          })),
+          ncci_version: ncciVersion,
+          rules_engine_version: "1.0.0",
+        };
+        await db.query(
+          `UPDATE claims SET rules_snapshot = $1::jsonb, rules_engine_version = $2, ncci_version_at_creation = $3 WHERE id = $4`,
+          [JSON.stringify(snapshot), "1.0.0", ncciVersion, claimId]
+        );
+      } catch (snapErr: any) {
+        console.warn('[Snapshot] Failed to snapshot rules for claim', claimId, snapErr?.message);
+      }
 
       res.status(201).json({ claimId, encounterId });
     } catch (err: any) {
@@ -9780,6 +9857,45 @@ Warmly,
         }
       }
 
+      // ── Prompt 06: write history row + update last_verified_at ─────────────
+      try {
+        // Map review_status to change_type
+        const changeTypeMap: Record<string, string> = {
+          approved: "approved",
+          rejected: "rejected",
+          pending: "reopened",
+          not_found: "rejected",
+        };
+        const changeType = extractedJson ? "data_corrected" : (changeTypeMap[reviewStatus] || "edited");
+
+        const { rows: manualForHistory } = await db.query(
+          "SELECT payer_name FROM payer_manuals WHERE id = $1", [item.manual_id]
+        ).catch(() => ({ rows: [] })) as any;
+
+        await db.query(`
+          INSERT INTO payer_manual_extraction_history
+            (extraction_id, changed_by, change_type, state_snapshot, change_notes, payer_name, section_type)
+          VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+        `, [
+          item.id,
+          user?.email || 'system',
+          changeType,
+          JSON.stringify({ ...item, review_status: reviewStatus }),
+          notes || null,
+          (manualForHistory as any[])[0]?.payer_name || null,
+          item.section_type,
+        ]);
+
+        // Update last_verified_at when approved
+        if (reviewStatus === "approved") {
+          await db.query(
+            `UPDATE manual_extraction_items SET last_verified_at = NOW() WHERE id = $1`, [item.id]
+          );
+        }
+      } catch (histErr: any) {
+        console.warn('[History] Failed to write extraction history:', histErr?.message);
+      }
+
       res.json({ ...item, sideEffectErrors: sideEffectErrors.length > 0 ? sideEffectErrors : undefined });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -10628,6 +10744,207 @@ Warmly,
           AND modifier_indicator != '9'
       `, [codes]);
       res.json(result.rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Prompt 06: Rules Database Admin API ──────────────────────────────────
+
+  app.get("/api/admin/rules-database/overview", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const [total, bySectionType, pending, rejected, recent, coverageRows, ncciRow] = await Promise.all([
+        db.query(`SELECT COUNT(*)::int AS cnt FROM manual_extraction_items WHERE review_status = 'approved'`),
+        db.query(`SELECT section_type, COUNT(*)::int AS cnt FROM manual_extraction_items WHERE review_status = 'approved' GROUP BY section_type ORDER BY cnt DESC`),
+        db.query(`SELECT COUNT(*)::int AS cnt FROM manual_extraction_items WHERE review_status = 'pending'`),
+        db.query(`SELECT COUNT(*)::int AS cnt FROM manual_extraction_items WHERE review_status = 'rejected'`),
+        db.query(`SELECT COUNT(*)::int AS cnt FROM manual_extraction_items WHERE review_status = 'approved' AND COALESCE(last_verified_at, reviewed_at) > NOW() - INTERVAL '7 days'`),
+        db.query(`
+          SELECT pms.payer_name, pm.id AS manual_id,
+                 COUNT(mei.id) FILTER (WHERE mei.review_status = 'approved')::int AS approved_count
+          FROM payer_manual_sources pms
+          LEFT JOIN payer_manuals pm ON pm.id = pms.linked_manual_id
+          LEFT JOIN manual_extraction_items mei ON mei.manual_id = pm.id
+          GROUP BY pms.payer_name, pm.id
+          ORDER BY pms.priority
+          LIMIT 20
+        `),
+        db.query(`SELECT MAX(ncci_version) AS latest, COUNT(*)::int AS total_edits FROM cci_edits`),
+      ]);
+
+      const totalApproved = total.rows[0]?.cnt || 0;
+      const coveredPayers = coverageRows.rows.filter((r: any) => (r.approved_count || 0) > 0).length;
+      const coveragePct = coverageRows.rows.length > 0
+        ? Math.round((coveredPayers / coverageRows.rows.length) * 100)
+        : 0;
+
+      res.json({
+        totalApproved,
+        bySectionType: bySectionType.rows,
+        pendingCount: pending.rows[0]?.cnt || 0,
+        rejectedCount: rejected.rows[0]?.cnt || 0,
+        recentChanges: recent.rows[0]?.cnt || 0,
+        coveragePct,
+        coveredPayers,
+        totalTopPayers: coverageRows.rows.length,
+        ncciVersion: ncciRow.rows[0]?.latest || null,
+        ncciTotalEdits: ncciRow.rows[0]?.total_edits || 0,
+        needsReverification: 0,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/admin/rules-database/freshness", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT
+          pm.payer_name,
+          pm.payer_id,
+          mei.section_type,
+          MAX(COALESCE(mei.last_verified_at, mei.reviewed_at)) AS last_verified,
+          EXTRACT(DAY FROM NOW() - MAX(COALESCE(mei.last_verified_at, mei.reviewed_at)))::int AS days_since,
+          COUNT(*) FILTER (WHERE mei.review_status = 'approved')::int AS approved_count,
+          COUNT(*) FILTER (WHERE mei.needs_reverification = TRUE)::int AS needs_reverification_count
+        FROM payer_manuals pm
+        JOIN manual_extraction_items mei ON mei.manual_id = pm.id
+        WHERE mei.review_status = 'approved'
+        GROUP BY pm.payer_name, pm.payer_id, mei.section_type
+        ORDER BY last_verified ASC NULLS FIRST
+      `);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/admin/rules-database/history", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { user: filterUser, payer: filterPayer, change_type: filterType } = req.query;
+      const conditions: string[] = [];
+      const params: any[] = [];
+      if (filterUser) { params.push(`%${filterUser}%`); conditions.push(`h.changed_by ILIKE $${params.length}`); }
+      if (filterPayer) { params.push(`%${filterPayer}%`); conditions.push(`h.payer_name ILIKE $${params.length}`); }
+      if (filterType) { params.push(filterType); conditions.push(`h.change_type = $${params.length}`); }
+      const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+      const { rows } = await db.query(`
+        SELECT h.id, h.extraction_id, h.changed_at, h.changed_by, h.change_type,
+               h.payer_name, h.section_type, h.change_notes,
+               h.state_snapshot->>'review_status' AS new_status
+        FROM payer_manual_extraction_history h
+        ${where}
+        ORDER BY h.changed_at DESC
+        LIMIT 100
+      `, params);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/admin/rules-database/leaderboard", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT
+          changed_by AS user_email,
+          COUNT(*) FILTER (WHERE change_type = 'approved')::int AS rules_approved,
+          COUNT(*) FILTER (WHERE change_type IN ('edited','data_corrected'))::int AS rules_edited,
+          MAX(changed_at) AS last_activity
+        FROM payer_manual_extraction_history
+        WHERE changed_by NOT IN ('system','admin','demo@claimshield.ai')
+        GROUP BY changed_by
+        UNION ALL
+        SELECT
+          changed_by AS user_email,
+          COUNT(*) FILTER (WHERE change_type = 'approved')::int AS rules_approved,
+          COUNT(*) FILTER (WHERE change_type IN ('edited','data_corrected'))::int AS rules_edited,
+          MAX(changed_at) AS last_activity
+        FROM payer_manual_extraction_history
+        WHERE changed_by IN ('system','admin','demo@claimshield.ai')
+        GROUP BY changed_by
+        ORDER BY rules_approved DESC, rules_edited DESC
+        LIMIT 20
+      `);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/admin/rules-database/cms-conflicts", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      // Forward to existing validation sweep
+      const { rows } = await db.query(`
+        SELECT
+          mei.id AS item_id, pm.payer_name, mei.section_type,
+          mei.extracted_json->>'days' AS extracted_days,
+          mei.review_status, mei.needs_reverification,
+          COALESCE(mei.last_verified_at, mei.reviewed_at) AS last_verified
+        FROM manual_extraction_items mei
+        JOIN payer_manuals pm ON pm.id = mei.manual_id
+        WHERE mei.section_type = 'timely_filing'
+          AND mei.review_status = 'approved'
+          AND (mei.extracted_json->>'days')::numeric NOT BETWEEN 60 AND 365
+        ORDER BY pm.payer_name
+      `);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Per-rule extraction history
+  app.get("/api/admin/extraction-items/:id/history", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT id, changed_at, changed_by, change_type, change_notes,
+               state_snapshot->>'review_status' AS status_after,
+               state_snapshot->>'extracted_json' AS extracted_snapshot
+        FROM payer_manual_extraction_history
+        WHERE extraction_id = $1
+        ORDER BY changed_at DESC
+      `, [req.params.id]);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Mark a rule as needs_reverification (manual trigger)
+  app.patch("/api/admin/extraction-items/:id/reverify", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(
+        `UPDATE manual_extraction_items SET needs_reverification = TRUE WHERE id = $1 RETURNING id, needs_reverification`,
+        [req.params.id]
+      );
+      if (!rows.length) return res.status(404).json({ error: "Not found" });
+
+      // Write history
+      const { rows: full } = await db.query(`SELECT mei.*, pm.payer_name FROM manual_extraction_items mei JOIN payer_manuals pm ON pm.id = mei.manual_id WHERE mei.id = $1`, [req.params.id]);
+      if (full.length) {
+        await db.query(`
+          INSERT INTO payer_manual_extraction_history
+            (extraction_id, changed_by, change_type, state_snapshot, change_notes, payer_name, section_type)
+          VALUES ($1, $2, 'needs_reverification', $3::jsonb, $4, $5, $6)
+        `, [
+          req.params.id,
+          (req.user as any)?.email || 'system',
+          JSON.stringify(full[0]),
+          'Flagged for re-verification',
+          full[0].payer_name,
+          full[0].section_type,
+        ]).catch(() => {});
+      }
+
+      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
