@@ -17,6 +17,7 @@ import ClinicDetail from "@/pages/admin/clinic-detail";
 import PayerManualsPage from "@/pages/admin/payer-manuals";
 import DataToolsPage from "@/pages/admin/data-tools";
 import RulesDatabasePage from "@/pages/admin/rules-database";
+import ScrapersPage from "@/pages/admin/scrapers";
 import ClinicHome from "@/pages/billing/clinic-home";
 
 import IntakeDashboard from "@/pages/intake/dashboard";
@@ -134,6 +135,11 @@ function Router() {
       <Route path="/admin/data-tools">
         <AuthGuard allowedRoles={["super_admin"]}>
           <DataToolsPage />
+        </AuthGuard>
+      </Route>
+      <Route path="/admin/scrapers">
+        <AuthGuard allowedRoles={["super_admin"]}>
+          <AdminLayout><ScrapersPage /></AdminLayout>
         </AuthGuard>
       </Route>
       <Route path="/admin">

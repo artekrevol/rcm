@@ -2417,6 +2417,73 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`ALTER TABLE payer_source_documents ADD COLUMN IF NOT EXISTS source_acquisition_method VARCHAR NOT NULL DEFAULT 'manual_upload'`);
     }
 
+    // ── Crawler kit — payer_source_documents new columns ─────────────────────
+    if (!(await seederLog('column', 'payer_source_documents', 'source_url_canonical'))) {
+      await pool.query(`ALTER TABLE payer_source_documents ADD COLUMN IF NOT EXISTS source_url_canonical VARCHAR`);
+    }
+    if (!(await seederLog('column', 'payer_source_documents', 'content_hash'))) {
+      await pool.query(`ALTER TABLE payer_source_documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)`);
+    }
+    if (!(await seederLog('column', 'payer_source_documents', 'last_scraped_at'))) {
+      await pool.query(`ALTER TABLE payer_source_documents ADD COLUMN IF NOT EXISTS last_scraped_at TIMESTAMPTZ`);
+    }
+    if (!(await seederLog('column', 'payer_source_documents', 'scrape_status'))) {
+      await pool.query(`ALTER TABLE payer_source_documents ADD COLUMN IF NOT EXISTS scrape_status VARCHAR`);
+    }
+    // CHECK constraints — idempotent via DO block
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TABLE payer_source_documents
+          ADD CONSTRAINT chk_source_acquisition_method
+          CHECK (source_acquisition_method IN ('manual_upload','scraped','bulletin_triggered','manus_agent','cms_structured'));
+      EXCEPTION WHEN duplicate_object THEN null; END $$
+    `);
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TABLE payer_source_documents
+          ADD CONSTRAINT chk_scrape_status
+          CHECK (scrape_status IS NULL OR scrape_status IN ('success','unchanged','error','auth_required','rate_limited','circuit_open'));
+      EXCEPTION WHEN duplicate_object THEN null; END $$
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_source_url_canonical ON payer_source_documents(source_url_canonical) WHERE source_url_canonical IS NOT NULL`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_acquisition ON payer_source_documents(source_acquisition_method)`);
+
+    // ── Crawler kit — scrape_runs table ──────────────────────────────────────
+    if (!(await seederLog('table', 'scrape_runs'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS scrape_runs (
+          id UUID PRIMARY KEY,
+          payer_code VARCHAR NOT NULL,
+          started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          completed_at TIMESTAMPTZ,
+          status VARCHAR NOT NULL DEFAULT 'running'
+            CHECK (status IN ('running','success','partial','failed','circuit_open','already_running')),
+          report JSONB,
+          triggered_by VARCHAR NOT NULL DEFAULT 'manual_admin'
+            CHECK (triggered_by IN ('manual_admin','cron','demo_button')),
+          triggered_by_user_id VARCHAR,
+          used_fallback BOOLEAN NOT NULL DEFAULT FALSE
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_scrape_runs_payer ON scrape_runs(payer_code, started_at DESC)`);
+    }
+
+    // ── Crawler kit — scraper_circuit_state table ─────────────────────────────
+    if (!(await seederLog('table', 'scraper_circuit_state'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS scraper_circuit_state (
+          payer_code VARCHAR PRIMARY KEY,
+          state VARCHAR NOT NULL DEFAULT 'closed'
+            CHECK (state IN ('closed','open','half_open')),
+          consecutive_errors INTEGER NOT NULL DEFAULT 0,
+          last_error_at TIMESTAMPTZ,
+          opened_at TIMESTAMPTZ,
+          reopens_at TIMESTAMPTZ,
+          notes TEXT
+        )
+      `);
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -11809,6 +11876,223 @@ Warmly,
       }
 
       res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Scraper API ─────────────────────────────────────────────────────────────
+
+  // POST /api/admin/scrapers/run
+  app.post("/api/admin/scrapers/run", requireSuperAdmin, async (req, res) => {
+    try {
+      const { payer_code, dryRun, allowFallback, triggeredBy } = req.body;
+      if (!payer_code) return res.status(400).json({ error: "payer_code required" });
+
+      const { scrapePayerDocuments, isInFlight } = await import("./jobs/scrape-payer-documents");
+
+      if (isInFlight(payer_code)) {
+        return res.json({ status: "already_running", payer_code });
+      }
+
+      const runId = crypto.randomUUID();
+
+      // Fire and forget — progress streamed via SSE
+      scrapePayerDocuments(payer_code, {
+        dryRun: dryRun ?? false,
+        allowFallback: allowFallback ?? true,
+        triggeredBy: triggeredBy ?? "manual_admin",
+        userId: (req.user as any)?.id,
+      }).catch(err => console.error("[scraper-api] run error:", err.message));
+
+      // Get the actual run_id from scrape_runs (inserted by job)
+      // Small delay to let the INSERT happen before returning
+      await new Promise(r => setTimeout(r, 200));
+      const { rows } = await pool.query<{ id: string }>(
+        `SELECT id FROM scrape_runs WHERE payer_code=$1 ORDER BY started_at DESC LIMIT 1`,
+        [payer_code]
+      );
+
+      res.json({ run_id: rows[0]?.id ?? runId, status: "running" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/admin/scrapers/runs/:run_id
+  app.get("/api/admin/scrapers/runs/:run_id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT * FROM scrape_runs WHERE id=$1`,
+        [req.params.run_id]
+      );
+      if (!rows.length) return res.status(404).json({ error: "Run not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/admin/scrapers/runs/:run_id/stream — SSE progress
+  app.get("/api/admin/scrapers/runs/:run_id/stream", requireSuperAdmin, async (req, res) => {
+    const { runId } = { runId: req.params.run_id };
+    const { registerSseListener, unregisterSseListener } = await import("./jobs/scrape-payer-documents");
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const send = (msg: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(msg)}\n\n`);
+    };
+
+    const listener = (msg: { stage: string; message: string; payload?: Record<string, unknown> }) => {
+      send({ ...msg });
+      if (msg.stage === "complete" || msg.stage === "circuit_open") {
+        cleanup();
+      }
+    };
+
+    const cleanup = () => {
+      unregisterSseListener(runId, listener);
+      res.end();
+    };
+
+    registerSseListener(runId, listener);
+    req.on("close", cleanup);
+
+    // Also check if run is already complete
+    const { rows } = await pool.query(
+      `SELECT status, report FROM scrape_runs WHERE id=$1`,
+      [runId]
+    );
+    if (rows.length && rows[0].status !== 'running') {
+      send({
+        stage: "complete",
+        message: "Run already completed.",
+        payload: rows[0].report ?? {},
+      });
+      cleanup();
+    }
+  });
+
+  // GET /api/admin/scrapers/status
+  app.get("/api/admin/scrapers/status", requireSuperAdmin, async (req, res) => {
+    try {
+      const { rows: circuits } = await pool.query(`SELECT * FROM scraper_circuit_state`);
+      const { rows: lastRuns } = await pool.query(`
+        SELECT DISTINCT ON (payer_code)
+          payer_code, id, started_at, completed_at, status, used_fallback,
+          report->>'documents_new' as documents_new,
+          report->>'documents_updated' as documents_updated,
+          report->>'documents_unchanged' as documents_unchanged
+        FROM scrape_runs ORDER BY payer_code, started_at DESC
+      `);
+      const { rows: docCounts } = await pool.query(`
+        SELECT source_acquisition_method, COUNT(*)::int as count
+        FROM payer_source_documents
+        WHERE source_acquisition_method = 'scraped'
+        GROUP BY 1
+      `);
+      // 7-day unlinked supplement warning
+      const { rows: unlinked } = await pool.query(`
+        SELECT COUNT(*)::int as count
+        FROM payer_source_documents
+        WHERE document_type = 'supplement'
+          AND parent_document_id IS NULL
+          AND source_acquisition_method = 'scraped'
+          AND created_at < NOW() - INTERVAL '7 days'
+      `);
+
+      const payers = ["uhc"];
+      const status = payers.map(code => ({
+        payer_code: code,
+        circuit: circuits.find(c => c.payer_code === code) ?? { state: 'closed', consecutive_errors: 0 },
+        last_run: lastRuns.find(r => r.payer_code === code) ?? null,
+        documents_tracked: docCounts.find(d => d.source_acquisition_method === 'scraped')?.count ?? 0,
+      }));
+
+      res.json({
+        scrapers: status,
+        unlinked_supplement_warning: (unlinked[0]?.count ?? 0) > 0
+          ? `${unlinked[0].count} supplement(s) have been unlinked for >7 days — URL year-prefix matching may need review`
+          : null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/scrapers/circuit/:payer_code/reset
+  app.post("/api/admin/scrapers/circuit/:payer_code/reset", requireSuperAdmin, async (req, res) => {
+    try {
+      const { reason } = req.body;
+      if (!reason) return res.status(400).json({ error: "reason required" });
+      const { resetCircuit } = await import("./scrapers/runtime");
+      await resetCircuit(req.params.payer_code, reason);
+      res.json({ success: true, payer_code: req.params.payer_code });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/admin/scrapers/runs — last 20 runs across all payers
+  app.get("/api/admin/scrapers/runs", requireSuperAdmin, async (req, res) => {
+    try {
+      const { rows } = await pool.query(`
+        SELECT id, payer_code, started_at, completed_at, status, used_fallback,
+               triggered_by, triggered_by_user_id,
+               report->>'documents_discovered' as documents_discovered,
+               report->>'documents_new' as documents_new,
+               report->>'documents_updated' as documents_updated,
+               report->>'documents_unchanged' as documents_unchanged,
+               report->>'bulletins_discovered' as bulletins_discovered,
+               jsonb_array_length(COALESCE(report->'errors','[]'::jsonb)) as error_count,
+               report
+        FROM scrape_runs
+        ORDER BY started_at DESC LIMIT 20
+      `);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/admin/scrapers/discoveries
+  app.get("/api/admin/scrapers/discoveries", requireSuperAdmin, async (req, res) => {
+    try {
+      const days = parseInt(req.query.days as string) || 30;
+      const payerCode = req.query.payer_code as string | undefined;
+      const docType = req.query.document_type as string | undefined;
+      const runId = req.query.run_id as string | undefined;
+
+      const conditions = [
+        `psd.source_acquisition_method IN ('scraped','bulletin_triggered')`,
+        `psd.created_at >= NOW() - INTERVAL '${days} days'`,
+      ];
+      const params: unknown[] = [];
+
+      if (payerCode) { params.push(payerCode); conditions.push(`p.name ILIKE '%' || $${params.length} || '%'`); }
+      if (docType) { params.push(docType); conditions.push(`psd.document_type = $${params.length}`); }
+      if (runId) { conditions.push(`psd.notes LIKE '%run_id:${runId}%'`); }
+
+      const { rows } = await pool.query(`
+        SELECT psd.id, psd.document_name, psd.document_type, psd.source_url_canonical,
+               psd.source_acquisition_method, psd.created_at, psd.scrape_status,
+               psd.content_hash, psd.last_scraped_at, psd.notes,
+               p.name as payer_name,
+               COUNT(mei.id)::int as extraction_count
+        FROM payer_source_documents psd
+        LEFT JOIN payers p ON p.id = psd.payer_id
+        LEFT JOIN manual_extraction_items mei ON mei.source_document_id = psd.id
+        WHERE ${conditions.join(" AND ")}
+        GROUP BY psd.id, p.name
+        ORDER BY psd.created_at DESC
+        LIMIT 100
+      `, params);
+
+      res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -7,6 +7,7 @@ import {
   BookOpen,
   Wrench,
   Database,
+  Radio,
 } from "lucide-react";
 import {
   Sidebar,
@@ -97,6 +98,14 @@ function AdminSidebar() {
                   <Link href="/admin/data-tools" data-testid="nav-admin-data-tools">
                     <Wrench className="h-5 w-5" />
                     <span>Data Tools</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={location === "/admin/scrapers"}>
+                  <Link href="/admin/scrapers" data-testid="nav-admin-scrapers">
+                    <Radio className="h-5 w-5" />
+                    <span>Crawler Engine</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
