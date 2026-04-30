@@ -390,9 +390,10 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 
 // ── Main extraction entry point ───────────────────────────────────────────────
 
-// All 14 kinds that run through the extraction loop.
-// risk_adjustment_hcc is seeded in rule_kinds for future use but skipped here.
-const ACTIVE_SECTION_TYPES: SectionType[] = [
+// Fallback list used when the caller does not pass activeSectionTypes.
+// The extraction route should always pass the DB-driven list instead so that
+// toggling rule_kinds.active_in_extraction requires no code change.
+export const FALLBACK_ACTIVE_SECTION_TYPES: SectionType[] = [
   "timely_filing",
   "prior_auth",
   "modifiers_and_liability",
@@ -410,7 +411,7 @@ const ACTIVE_SECTION_TYPES: SectionType[] = [
 ];
 
 export async function extractManualSections(
-  input: { url?: string; buffer?: Buffer; fileName?: string }
+  input: { url?: string; buffer?: Buffer; fileName?: string; activeSectionTypes?: SectionType[] }
 ): Promise<ManualText> {
   let fullText: string;
   if (input.buffer) {
@@ -429,7 +430,8 @@ export async function extractManualSections(
     throw new Error("Must provide either url or buffer");
   }
 
-  const sections: ExtractedSection[] = ACTIVE_SECTION_TYPES.map((st) => ({
+  const activeTypes = input.activeSectionTypes ?? FALLBACK_ACTIVE_SECTION_TYPES;
+  const sections: ExtractedSection[] = activeTypes.map((st) => ({
     sectionType: st,
     chunks: findRelevantChunks(fullText, st),
   }));

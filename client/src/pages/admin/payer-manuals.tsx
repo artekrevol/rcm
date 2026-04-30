@@ -29,7 +29,15 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 
-type SectionType = "timely_filing" | "prior_auth" | "modifiers" | "appeals";
+// B1 stopgap: modifiers_and_liability added; "modifiers" kept as legacy alias handled by normalizeSectionType.
+// B2 will do the full 15-kind rebuild.
+type SectionType = "timely_filing" | "prior_auth" | "modifiers" | "modifiers_and_liability" | "appeals";
+
+/** Map the legacy DB string "modifiers" → "modifiers_and_liability" so migrated rows render correctly. */
+function normalizeSectionType(raw: string): SectionType {
+  if (raw === "modifiers") return "modifiers_and_liability";
+  return raw as SectionType;
+}
 
 type DocumentType = "admin_guide" | "supplement" | "pa_list" | "reimbursement_policy" | "medical_policy" | "bulletin" | "contract" | "fee_schedule";
 
@@ -64,7 +72,8 @@ function docTypeBadge(type: string) {
 const SECTION_LABELS: Record<SectionType, string> = {
   timely_filing: "Timely Filing",
   prior_auth: "Prior Authorization",
-  modifiers: "Modifiers",
+  modifiers: "Modifiers (legacy)",
+  modifiers_and_liability: "Modifiers & Liability",
   appeals: "Appeals",
 };
 
@@ -72,6 +81,7 @@ const SECTION_COLORS: Record<SectionType, string> = {
   timely_filing: "bg-blue-50 border-blue-200 dark:bg-blue-950 dark:border-blue-800",
   prior_auth: "bg-amber-50 border-amber-200 dark:bg-amber-950 dark:border-amber-800",
   modifiers: "bg-purple-50 border-purple-200 dark:bg-purple-950 dark:border-purple-800",
+  modifiers_and_liability: "bg-purple-50 border-purple-200 dark:bg-purple-950 dark:border-purple-800",
   appeals: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
 };
 
@@ -79,6 +89,7 @@ const SECTION_BADGE: Record<SectionType, string> = {
   timely_filing: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
   prior_auth: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
   modifiers: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
+  modifiers_and_liability: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
   appeals: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
 };
 
@@ -119,10 +130,14 @@ function formatExtractedJson(json: any, sectionType: string): React.ReactNode {
     if (json.criteria) items.push({ label: "Criteria", value: json.criteria });
     if (json.cpt_codes?.length) items.push({ label: "Codes", value: json.cpt_codes.join(", ") });
     if (json.threshold_units) items.push({ label: "Threshold", value: `After ${json.threshold_units} units/visits` });
-  } else if (sectionType === "modifiers") {
+  } else if (sectionType === "modifiers" || sectionType === "modifiers_and_liability") {
     if (json.modifier_code) items.push({ label: "Modifier", value: json.modifier_code });
     if (json.description) items.push({ label: "Description", value: json.description });
+    if (json.liability_assignment) items.push({ label: "Liability", value: json.liability_assignment });
+    if (json.conditions_required?.length) items.push({ label: "Conditions required", value: json.conditions_required.join("; ") });
+    if (json.conditions_excluded?.length) items.push({ label: "Conditions excluded", value: json.conditions_excluded.join("; ") });
     if (json.payer_rule) items.push({ label: "Payer rule", value: json.payer_rule });
+    if (json.appeal_path_if_denied) items.push({ label: "Appeal path if denied", value: json.appeal_path_if_denied });
   } else if (sectionType === "appeals") {
     if (json.deadline_days) items.push({ label: "Deadline", value: `${json.deadline_days} days` });
     if (json.level) items.push({ label: "Level", value: json.level });
@@ -213,7 +228,7 @@ function JsonEditor({ sectionType, value, onChange }: { sectionType: SectionType
       </div>
     );
   }
-  if (sectionType === "modifiers") {
+  if (sectionType === "modifiers" || sectionType === "modifiers_and_liability") {
     return (
       <div className="space-y-2">
         <div>
@@ -235,6 +250,34 @@ function JsonEditor({ sectionType, value, onChange }: { sectionType: SectionType
           />
         </div>
         <div>
+          <Label className="text-xs">Liability assignment</Label>
+          <Input
+            value={value.liability_assignment || ""}
+            onChange={(e) => onChange({ ...value, liability_assignment: e.target.value })}
+            className="h-7 text-xs mt-0.5"
+            placeholder="member | provider | payer"
+            data-testid="input-edit-liability-assignment"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Conditions required (comma-separated)</Label>
+          <Input
+            value={(value.conditions_required || []).join(", ")}
+            onChange={(e) => onChange({ ...value, conditions_required: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-conditions-required"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Conditions excluded (comma-separated)</Label>
+          <Input
+            value={(value.conditions_excluded || []).join(", ")}
+            onChange={(e) => onChange({ ...value, conditions_excluded: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-conditions-excluded"
+          />
+        </div>
+        <div>
           <Label className="text-xs">Payer rule</Label>
           <Textarea
             value={value.payer_rule || ""}
@@ -242,6 +285,15 @@ function JsonEditor({ sectionType, value, onChange }: { sectionType: SectionType
             className="text-xs mt-0.5"
             rows={2}
             data-testid="textarea-edit-payer-rule"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Appeal path if denied</Label>
+          <Input
+            value={value.appeal_path_if_denied || ""}
+            onChange={(e) => onChange({ ...value, appeal_path_if_denied: e.target.value })}
+            className="h-7 text-xs mt-0.5"
+            data-testid="input-edit-appeal-path"
           />
         </div>
       </div>
@@ -472,13 +524,14 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
     onReview({ itemId: item.id, reviewStatus: "pending", notes: "Re-opened for re-review" });
   }
 
+  const normalizedType = normalizeSectionType(item.section_type);
   return (
-    <div className={`rounded-lg border p-3 ${SECTION_COLORS[item.section_type] || "bg-muted"}`} data-testid={`card-extraction-${item.id}`}>
+    <div className={`rounded-lg border p-3 ${SECTION_COLORS[normalizedType] || "bg-muted"}`} data-testid={`card-extraction-${item.id}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           {reviewStatusIcon(item.review_status)}
-          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${SECTION_BADGE[item.section_type] || ""}`}>
-            {SECTION_LABELS[item.section_type] || item.section_type}
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${SECTION_BADGE[normalizedType] || ""}`}>
+            {SECTION_LABELS[normalizedType] || item.section_type}
           </span>
           {confidenceBadge(item.confidence)}
           {item.applied_rule_id && (
@@ -493,13 +546,13 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
       {/* Structured fields — show edit form if in edit mode, else read-only view */}
       {item.extracted_json && !editMode && (
         <div className="mt-2">
-          {formatExtractedJson(item.extracted_json, item.section_type)}
+          {formatExtractedJson(item.extracted_json, normalizedType)}
         </div>
       )}
       {editMode && editedJson && (
         <div className="mt-2 bg-background/60 rounded p-2 border border-dashed">
           <p className="text-xs font-semibold text-muted-foreground mb-2">Editing extracted fields:</p>
-          <JsonEditor sectionType={item.section_type} value={editedJson} onChange={setEditedJson} />
+          <JsonEditor sectionType={normalizedType} value={editedJson} onChange={setEditedJson} />
         </div>
       )}
       {(editMode || isPending) && (
@@ -681,7 +734,7 @@ function ExtractionItemCard({ item, onReview }: { item: ExtractionItem; onReview
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               <History className="h-4 w-4" />
-              Rule History — {SECTION_LABELS[item.section_type as SectionType] || item.section_type}
+              Rule History — {SECTION_LABELS[normalizedType] || item.section_type}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-1 max-h-[400px] overflow-y-auto">
@@ -962,12 +1015,12 @@ export default function PayerManualsPage() {
   const selectedManual = manuals.find((m) => m.id === selectedManualId);
 
   const filteredItems = items.filter((item) => {
-    if (filterSection !== "all" && item.section_type !== filterSection) return false;
+    if (filterSection !== "all" && normalizeSectionType(item.section_type) !== filterSection) return false;
     if (filterStatus !== "all" && item.review_status !== filterStatus) return false;
     return true;
   });
 
-  const sectionTypes: SectionType[] = ["timely_filing", "prior_auth", "modifiers", "appeals"];
+  const sectionTypes: SectionType[] = ["timely_filing", "prior_auth", "modifiers_and_liability", "appeals"];
 
   const canAdd = addForm.payerName && (addMode === "url" ? !!addForm.sourceUrl : !!uploadFile)
     && (addForm.documentType === "supplement" ? !!addForm.parentDocumentId : true);
@@ -1350,7 +1403,7 @@ export default function PayerManualsPage() {
                 {["admin_guide", "pa_list"].includes(manual.document_type || "admin_guide") && (
                   <div className="flex items-center gap-1 mt-1.5">
                     {sectionTypes.map((st) => {
-                      const hasApproved = items.some((i) => i.manual_id === manual.id && i.section_type === st && i.review_status === "approved");
+                      const hasApproved = items.some((i) => i.manual_id === manual.id && normalizeSectionType(i.section_type) === st && i.review_status === "approved");
                       return (
                         <span
                           key={st}
@@ -1513,7 +1566,7 @@ export default function PayerManualsPage() {
               ) : (
                 <div className="space-y-3">
                   {sectionTypes.map((st) => {
-                    const sectionItems = filteredItems.filter((i) => i.section_type === st);
+                    const sectionItems = filteredItems.filter((i) => normalizeSectionType(i.section_type) === st);
                     if (sectionItems.length === 0) return null;
                     return (
                       <div key={st}>

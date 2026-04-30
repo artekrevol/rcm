@@ -9777,22 +9777,23 @@ Warmly,
       // Run async extraction
       setImmediate(async () => {
         try {
-          const { extractManualSections } = await import("./services/manual-extractor");
+          const { extractManualSections, FALLBACK_ACTIVE_SECTION_TYPES } = await import("./services/manual-extractor");
           const { extractSection } = await import("./services/claude-extractor");
+
+          // Read active section kinds from rule_kinds table so that Phase 3 activation
+          // (e.g. risk_adjustment_hcc) requires only a seeder change, not a code change.
+          const { rows: kindRows } = await db.query(
+            `SELECT code FROM rule_kinds WHERE active_in_extraction = TRUE ORDER BY sort_order`
+          );
+          const sectionTypes = kindRows.length > 0
+            ? kindRows.map((r: any) => r.code as string)
+            : FALLBACK_ACTIVE_SECTION_TYPES;
 
           // Use file buffer if uploaded, otherwise fetch from URL
           const extractInput = manual.file_content
-            ? { buffer: Buffer.from(manual.file_content), fileName: manual.file_name || "upload.pdf" }
-            : { url: manual.source_url };
+            ? { buffer: Buffer.from(manual.file_content), fileName: manual.file_name || "upload.pdf", activeSectionTypes: sectionTypes as any }
+            : { url: manual.source_url, activeSectionTypes: sectionTypes as any };
           const { sections } = await extractManualSections(extractInput);
-          // Prompt B1: all 14 active extraction kinds (risk_adjustment_hcc excluded — seeded only)
-          const sectionTypes = [
-            "timely_filing", "prior_auth", "modifiers_and_liability", "appeals",
-            "referrals", "coordination_of_benefits",
-            "payer_specific_edits", "edi_construction", "place_of_service",
-            "submission_timeframe", "decision_timeframe", "documentation_timeframe",
-            "notification_event", "member_notice",
-          ] as const;
 
           for (const section of sections) {
             if (section.chunks.length === 0) {
