@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +22,6 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Lead, InsertLead } from "@shared/schema";
 
-const leadSources = ["website", "phone", "referral", "marketing", "social_media", "caritas_web", "other"];
 const priorities = ["P0", "P1", "P2"];
 
 interface LeadFormDialogProps {
@@ -34,6 +33,11 @@ interface LeadFormDialogProps {
 
 export function LeadFormDialog({ open, onOpenChange, lead, mode }: LeadFormDialogProps) {
   const { toast } = useToast();
+
+  const { data: leadSourceOptions = [] } = useQuery<{ slug: string; label: string }[]>({
+    queryKey: ["/api/orgs/caritas/lead-sources"],
+    staleTime: 300_000,
+  });
 
   const [formData, setFormData] = useState<Partial<InsertLead>>({
     name: "",
@@ -213,9 +217,9 @@ export function LeadFormDialog({ open, onOpenChange, lead, mode }: LeadFormDialo
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {leadSources.map((source) => (
-                    <SelectItem key={source} value={source}>
-                      {source.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
+                  {leadSourceOptions.map((src) => (
+                    <SelectItem key={src.slug} value={src.slug}>
+                      {src.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

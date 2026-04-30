@@ -58,7 +58,6 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import type { Lead, InsertLead, Call } from "@shared/schema";
 
-const leadSources = ["website", "referral", "phone", "marketing", "physician_referral", "insurance_portal", "caritas_web"];
 
 type WorklistResponse = {
   rows: Lead[];
@@ -171,6 +170,12 @@ export default function DealsPage() {
   const urlParams = new URLSearchParams(searchStr);
   const urlStatus = urlParams.get("status");
   const { toast } = useToast();
+
+  const { data: leadSourceOptions = [] } = useQuery<{ slug: string; label: string }[]>({
+    queryKey: ["/api/orgs/caritas/lead-sources"],
+    staleTime: 300_000,
+  });
+
   const [createOpen, setCreateOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
@@ -447,9 +452,9 @@ export default function DealsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {leadSources.map((source) => (
-                        <SelectItem key={source} value={source}>
-                          {source.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
+                      {leadSourceOptions.map((src) => (
+                        <SelectItem key={src.slug} value={src.slug}>
+                          {src.label}
                         </SelectItem>
                       ))}
                     </SelectContent>

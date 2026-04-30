@@ -1,4 +1,5 @@
 import { pool } from "../db";
+import { CARITAS } from "../config/caritas-constants";
 
 export async function seedCaritasFlow(): Promise<void> {
   const existing = await pool.query(
@@ -37,7 +38,7 @@ export async function seedCaritasFlow(): Promise<void> {
       type: "sms",
       channel: "twilio",
       delay: 0,
-      body: "Hi {first_name}, this is Caritas Senior Care. We received your inquiry. A care coordinator will call you in the next 5 minutes.",
+      body: CARITAS.smsTemplates.welcome,
     },
     { order: 3, type: "wait", channel: null, delay: 3, body: null },
     {
@@ -60,14 +61,14 @@ export async function seedCaritasFlow(): Promise<void> {
       type: "sms",
       channel: "twilio",
       delay: 1440,
-      body: "Hi {first_name}, did you have a chance to think it over? Reply YES to book a consult.",
+      body: CARITAS.smsTemplates.voicemailFollowup,
     },
     {
       order: 8,
       type: "email",
       channel: "gmail",
       delay: 4320,
-      body: "Sending more info on Caritas Senior Care plans available in {state}.",
+      body: CARITAS.emailTemplates.nurture.body,
     },
   ];
 

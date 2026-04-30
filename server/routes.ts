@@ -23,6 +23,7 @@ import twilio from "twilio";
 import nodemailer from "nodemailer";
 import { triggerMatchingFlows } from "./services/flow-trigger";
 import { advanceToNextStep } from "./services/flow-step-executor";
+import { CARITAS } from "./config/caritas-constants";
 import { releaseLock, acquireLock } from "./services/comm-locks";
 import { extractInsuranceFromTranscript } from "./services/transcript-extractor";
 
@@ -7717,6 +7718,16 @@ Warmly,
       console.error("[GET /api/flows/:id] error:", err);
       res.status(500).json({ error: "Failed to load flow detail" });
     }
+  });
+
+  // GET /api/orgs/:slug/service-types — returns service type options for an org
+  app.get("/api/orgs/:slug/service-types", requireAuth, (req, res) => {
+    res.json(CARITAS.serviceTypes);
+  });
+
+  // GET /api/orgs/:slug/lead-sources — returns lead source options for an org
+  app.get("/api/orgs/:slug/lead-sources", requireAuth, (req, res) => {
+    res.json(CARITAS.leadSources);
   });
 
   // GET /api/flow-runs/active — all currently running flow_runs across all flows

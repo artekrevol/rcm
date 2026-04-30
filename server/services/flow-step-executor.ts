@@ -4,6 +4,7 @@ import { pool } from "../db";
 import { acquireLock, releaseLock } from "./comm-locks";
 import { logFlowEvent } from "./flow-events";
 import { checkEligibility, isStediConfigured } from "./stedi-eligibility";
+import { CARITAS } from "../config/caritas-constants";
 
 // ── Twilio / email config (mirror routes.ts inline pattern) ───────────────────
 const twilioClient =
@@ -27,7 +28,9 @@ function applyTemplateVars(
   template: string,
   vars: Record<string, string>
 ): string {
-  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? "");
+  return template
+    .replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? "")
+    .replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? "");
 }
 
 function formatPhone(phone: string): string {
@@ -424,18 +427,13 @@ export async function executeStep(
       const providerNpi = settingsResult.rows[0]?.primary_npi || "1234567890";
       const providerName = settingsResult.rows[0]?.practice_name || "Caritas Senior Care";
 
-      // Map common carrier names to Stedi trading partner IDs
+      // Map common carrier names to Stedi trading partner IDs using CARITAS.payerMappings
       const carrierToPayerId = (carrierName: string): string => {
         const n = carrierName.toLowerCase();
-        if (n.includes("aetna")) return "SX113";
-        if (n.includes("cigna")) return "62308";
-        if (n.includes("humana")) return "61101";
-        if (n.includes("bcbs") || n.includes("blue cross")) return "00630";
-        if (n.includes("united") || n.includes("uhc")) return "87726";
-        if (n.includes("anthem")) return "00630";
-        if (n.includes("molina")) return "MOLIN";
-        if (n.includes("medicare")) return "00010";
-        return "00010"; // Default to Medicare
+        for (const [key, id] of Object.entries(CARITAS.payerMappings)) {
+          if (n.includes(key.toLowerCase())) return id;
+        }
+        return "00010";
       };
 
       try {
