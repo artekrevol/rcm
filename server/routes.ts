@@ -7573,6 +7573,7 @@ Warmly,
   // GET /api/flows — list all flows with step counts and active/completed run counts
   app.get("/api/flows", requireRole("admin", "intake"), async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const result = await pool.query(`
         SELECT
           f.id,
@@ -7598,6 +7599,7 @@ Warmly,
   // GET /api/flows/:id — full flow detail with steps and recent runs
   app.get("/api/flows/:id", requireRole("admin", "intake"), async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const flow = await pool.query(`SELECT * FROM flows WHERE id = $1`, [req.params.id]);
       if (!flow.rows[0]) return res.status(404).json({ error: "Flow not found" });
 
@@ -7640,6 +7642,7 @@ Warmly,
   // GET /api/flow-runs/active — all currently running flow_runs across all flows
   app.get("/api/flow-runs/active", requireRole("admin", "intake"), async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const result = await pool.query(`
         SELECT
           fr.id,

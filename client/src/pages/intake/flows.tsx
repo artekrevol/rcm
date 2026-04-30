@@ -49,16 +49,18 @@ function formatDistance(date: Date): string {
 export default function FlowsPage() {
   const [, setLocation] = useLocation();
 
-  const { data: flows, isLoading } = useQuery<any[]>({
+  const { data: rawFlows, isLoading } = useQuery<any>({
     queryKey: ["/api/flows"],
     queryFn: () => fetch("/api/flows").then((r) => r.json()),
   });
+  const flows: any[] = Array.isArray(rawFlows) ? rawFlows : [];
 
-  const { data: activeRuns } = useQuery<any[]>({
+  const { data: rawActiveRuns } = useQuery<any>({
     queryKey: ["/api/flow-runs/active"],
     queryFn: () => fetch("/api/flow-runs/active").then((r) => r.json()),
     refetchInterval: 5000,
   });
+  const activeRuns: any[] = Array.isArray(rawActiveRuns) ? rawActiveRuns : [];
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -76,7 +78,7 @@ export default function FlowsPage() {
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-semibold" data-testid="text-active-flows">
-              {flows?.filter((f) => f.is_active).length ?? 0}
+              {flows.filter((f) => f.is_active).length}
             </div>
             <div className="text-sm text-muted-foreground mt-1">Active flows</div>
           </CardContent>
@@ -84,7 +86,7 @@ export default function FlowsPage() {
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-semibold" data-testid="text-leads-in-flow">
-              {activeRuns?.length ?? 0}
+              {activeRuns.length}
             </div>
             <div className="text-sm text-muted-foreground mt-1">Leads currently in a flow</div>
           </CardContent>
@@ -92,7 +94,7 @@ export default function FlowsPage() {
         <Card>
           <CardContent className="pt-6">
             <div className="text-2xl font-semibold" data-testid="text-completed-runs">
-              {flows?.reduce((sum, f) => sum + (f.completed_run_count || 0), 0) ?? 0}
+              {flows.reduce((sum, f) => sum + (f.completed_run_count || 0), 0)}
             </div>
             <div className="text-sm text-muted-foreground mt-1">Completed runs (all time)</div>
           </CardContent>
@@ -114,7 +116,7 @@ export default function FlowsPage() {
           </div>
         )}
 
-        {!isLoading && (!flows || flows.length === 0) && (
+        {!isLoading && flows.length === 0 && (
           <Card>
             <CardContent className="pt-6 text-center text-muted-foreground">
               No flows configured yet.
@@ -122,7 +124,7 @@ export default function FlowsPage() {
           </Card>
         )}
 
-        {flows?.map((flow) => (
+        {flows.map((flow) => (
           <Card
             key={flow.id}
             className="cursor-pointer hover:border-blue-400 transition-colors"
@@ -179,7 +181,7 @@ export default function FlowsPage() {
       </div>
 
       {/* Live Activity */}
-      {activeRuns && activeRuns.length > 0 && (
+      {activeRuns.length > 0 && (
         <div className="mt-10">
           <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
             <Activity className="h-5 w-5" />
@@ -199,7 +201,7 @@ export default function FlowsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {activeRuns.map((run) => {
+                  {activeRuns.map((run: any) => {
                     const Icon = STEP_TYPE_ICONS[run.current_step_type] || Activity;
                     const colorClass = STEP_TYPE_COLORS[run.current_step_type] || "bg-gray-50";
                     const nextActionDate = run.next_action_at ? new Date(run.next_action_at) : null;
