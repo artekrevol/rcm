@@ -1,0 +1,17 @@
+Blocker 1 — surrogate UUID PK with UNIQUE NULLS NOT DISTINCT if PG 15+, else surrogate UUID only. Check the Postgres version first and decide. If 15+, use the constraint — it gives us referential integrity that matches the intent ("a delegated entity is unique within a payer + plan_product + state context, treating NULLs as equal"). If pre-15, surrogate UUID PK only is fine for now, with a TODO note in the code referencing the PG-15 upgrade path. The compound uniqueness is nice-to-have for a join table that'll have a handful of rows in the next 6 months. Confirm the version in your reply along with which path you took.
+Blocker 2 — fallback accepted. The seeder approach is the right move. Specifically:
+
+Seeder checks if any approved referrals extraction items exist for any UHC source document.
+If none, seeder creates a placeholder UHC admin_guide source document (if one doesn't exist) and inserts 2–3 approved extraction items: one referrals rule for ma_hmo, one referrals rule for commercial_hmo, one prior_auth rule for ma_hmo (so we can demo plan-product-specific PA rules too).
+Each placeholder item should have notes: "[demo_seed] Placeholder rule for activation cascade demo. Replace with real extraction when UHC supplement is manually ingested." so they're identifiable and removable later.
+The seeder is idempotent — runs only when zero approved UHC referrals rules exist.
+
+Real UHC extraction stays available through the admin UI for whoever wants to do it manually. The seeder just guarantees the demo path works on a fresh environment.
+Scoping 1 — JSONB stays. Skip the type migration. Confirmed. The resolver doesn't care about the underlying storage; the JSONB @> operator handles the contains-array-element check correctly. The original spec was over-engineered on this point — drop it from C's scope.
+Scoping 2 — use your judgment to complete the taxonomy. The spec table that surfaced in your view was truncated, but the pattern is straightforward and you've got the codebase context to make consistent calls. For each row, set the flags using the rule: HMO/POS = requires_pcp = true, requires_referral = true; PPO/EPO/Indemnity = both false; Medicare/Medicaid/VA/TRICARE = is_government = true; Commercial/Exchange = is_government = false. The two edge cases:
+
+Medicaid MCO variants — set is_government = true, requires_pcp = true, requires_referral = true, plan_type = 'Capitated' (most state Medicaid MCOs operate this way). One generic medicaid_mco row is enough; state-specific variants can be added later.
+VA CCN — is_government = true, requires_pcp = false, requires_referral = false, plan_type = 'Other', regulatory_basis = 'VA Community Care'. The VA referral comes from VA itself, not a network PCP, so the platform's referral logic doesn't apply the same way.
+
+Use sort_order to group them logically: Commercial first (1–10), Medicare Advantage (11–20), Medicare FFS (21), Individual Exchange (22–30), Medicaid (31–40), TRICARE (41), VA CCN (42). Round numbers to make insertions easy later.
+Greenlit. Start the build.

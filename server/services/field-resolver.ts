@@ -119,14 +119,13 @@ async function _resolve(ctx: FieldResolverContext): Promise<ActivatedField[]> {
   if (planProductCode) params.push(JSON.stringify([planProductCode]));
 
   const corpusQuery = `
-    SELECT DISTINCT rk.code AS rule_kind, psd.id AS source_doc_id
+    SELECT DISTINCT mei.section_type AS rule_kind, psd.id AS source_doc_id
       FROM manual_extraction_items mei
       JOIN payer_source_documents psd ON psd.id = mei.source_document_id
-      JOIN rule_kinds rk ON rk.id::text = mei.rule_kind_id::text
-         OR rk.code = mei.section_type
       WHERE psd.payer_id = $2
         AND mei.review_status = 'approved'
         AND psd.organization_id = $1
+        AND mei.section_type IS NOT NULL
         ${planFilter}
   `;
 
@@ -180,6 +179,25 @@ async function _resolve(ctx: FieldResolverContext): Promise<ActivatedField[]> {
         source_documents: sourceDocIds,
       });
     }
+  }
+
+  // ── Chained-disclosure pattern ────────────────────────────────────────────
+  // If no planProductCode was provided but the payer has active corpus rules,
+  // the resolver can't yet determine which plan-specific fields to activate.
+  // Return universals + patient_plan_product only so the form prompts the user
+  // to select a plan product before revealing the next layer.
+  if (!planProductCode) {
+    const planProductField = conditionalFields.find((f) => f.code === "patient_plan_product");
+    if (planProductField) {
+      const chainedFields = [...universalFields, planProductField];
+      const seenChained = new Set<string>();
+      return chainedFields.filter((f) => {
+        if (seenChained.has(f.code)) return false;
+        seenChained.add(f.code);
+        return true;
+      });
+    }
+    // No patient_plan_product defined yet — fall through to full set
   }
 
   // Deduplicate by code (universal takes priority), sort by applies_to then code

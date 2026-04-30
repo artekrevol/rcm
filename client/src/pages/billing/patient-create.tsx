@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -15,7 +16,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { validateNPI } from "@shared/npi-validation";
-import { Loader2, ArrowLeft, AlertTriangle } from "lucide-react";
+import { Loader2, ArrowLeft, AlertTriangle, Info, Building2, GitBranch, User, FileText } from "lucide-react";
 
 const REFERRAL_SOURCES_CLINICAL = [
   "Physician office",
@@ -43,6 +44,60 @@ const REFERRAL_SOURCES_MARKETING = [
 const SEX_OPTIONS = ["Male", "Female", "Other"];
 const RELATIONSHIP_OPTIONS = ["Self", "Spouse", "Child", "Other"];
 
+interface ActivatedField {
+  code: string;
+  label: string;
+  applies_to: string;
+  data_type: string;
+  required: boolean;
+  activated_by: string[];
+}
+
+interface PlanProduct {
+  code: string;
+  label: string;
+  parent_plan_family: string;
+  plan_type: string;
+  requires_pcp: boolean;
+  requires_referral: boolean;
+  is_government: boolean;
+}
+
+interface DelegatedEntity {
+  id: string;
+  name: string;
+  entity_type: string;
+  state: string | null;
+  claims_payer_id_override: string | null;
+}
+
+function FadeField({ visible, children }: { visible: boolean; children: React.ReactNode }) {
+  const [mounted, setMounted] = useState(visible);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+    } else {
+      timerRef.current = setTimeout(() => setMounted(false), 220);
+    }
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [visible]);
+
+  if (!mounted && !visible) return null;
+  return (
+    <div
+      style={{
+        transition: "opacity 200ms ease, transform 200ms ease",
+        opacity: visible ? 1 : 0,
+        transform: visible ? "translateY(0)" : "translateY(-4px)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function PatientCreate() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -59,6 +114,10 @@ export default function PatientCreate() {
     phone: "", email: "", street: "", city: "", state: "", zip: "",
     secondaryPayerId: "", secondaryMemberId: "", secondaryGroupNumber: "",
     secondaryPlanName: "", secondaryRelationship: "Self",
+    planProductCode: "",
+    pcpId: "",
+    pcpReferralNumber: "",
+    delegatedEntityId: "",
   });
 
   const { data: providers = [] } = useQuery<any[]>({
@@ -78,6 +137,87 @@ export default function PatientCreate() {
       return res.json();
     },
   });
+
+  // ── Activated fields (resolver) ───────────────────────────────────────────
+  const activatedQuery = useQuery<ActivatedField[]>({
+    queryKey: ["/api/practice/activated-fields", form.payerId, form.planProductCode],
+    queryFn: async () => {
+      if (!form.payerId || form.payerId === "__custom__") return [];
+      const params = new URLSearchParams({ payerId: form.payerId });
+      if (form.planProductCode) params.set("planProductCode", form.planProductCode);
+      const res = await fetch(`/api/practice/activated-fields?${params}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: Boolean(form.payerId && form.payerId !== "__custom__"),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const activatedCodes = new Set((activatedQuery.data ?? []).map((f) => f.code));
+  const showPlanProduct = activatedCodes.has("patient_plan_product");
+  const showPcp = activatedCodes.has("patient_pcp_id");
+  const showPcpReferral = activatedCodes.has("patient_pcp_referral_id");
+  const showDelegatedEntity = activatedCodes.has("patient_delegated_entity_id");
+
+  // ── Payer plan products ───────────────────────────────────────────────────
+  const planProductsQuery = useQuery<PlanProduct[]>({
+    queryKey: ["/api/billing/payers", form.payerId, "plan-products"],
+    queryFn: async () => {
+      const res = await fetch(`/api/billing/payers/${form.payerId}/plan-products`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: Boolean(showPlanProduct && form.payerId && form.payerId !== "__custom__"),
+    staleTime: 10 * 60 * 1000,
+  });
+
+  // ── Delegated entities ────────────────────────────────────────────────────
+  const delegatedQuery = useQuery<DelegatedEntity[]>({
+    queryKey: ["/api/billing/payers", form.payerId, "delegated-entities", form.planProductCode, form.state],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (form.planProductCode) params.set("planProductCode", form.planProductCode);
+      if (form.state) params.set("state", form.state.toUpperCase().slice(0, 2));
+      const res = await fetch(`/api/billing/payers/${form.payerId}/delegated-entities?${params}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: Boolean(showDelegatedEntity && form.payerId && form.payerId !== "__custom__"),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  // When payer changes, clear plan product and downstream fields
+  function handlePayerChange(v: string) {
+    if (v === "__custom__") {
+      set({ payerId: "", insuranceCarrier: "", planProductCode: "", delegatedEntityId: "", pcpId: "", pcpReferralNumber: "" });
+    } else {
+      const payer = payers.find((p: any) => p.id === v);
+      set({ payerId: v, insuranceCarrier: payer?.name || "", planProductCode: "", delegatedEntityId: "", pcpId: "", pcpReferralNumber: "" });
+    }
+  }
+
+  // When plan product changes, clear downstream delegation/pcp fields
+  function handlePlanProductChange(v: string) {
+    set({ planProductCode: v, delegatedEntityId: "", pcpId: "", pcpReferralNumber: "" });
+  }
+
+  // ── Routing preview ───────────────────────────────────────────────────────
+  const selectedPayer = payers.find((p: any) => p.id === form.payerId);
+  const selectedDelegated = (delegatedQuery.data ?? []).find((d) => d.id === form.delegatedEntityId);
+  const selectedPlanProduct = (planProductsQuery.data ?? []).find((pp) => pp.code === form.planProductCode);
+
+  function getRoutingTarget() {
+    if (!form.payerId || form.payerId === "__custom__") return null;
+    if (selectedDelegated?.claims_payer_id_override) {
+      return `${selectedDelegated.name} (EDI ID: ${selectedDelegated.claims_payer_id_override})`;
+    }
+    if (selectedDelegated) {
+      return `${selectedDelegated.name} via ${selectedPayer?.name || "selected payer"}`;
+    }
+    return selectedPayer?.name || null;
+  }
+
+  const routingTarget = getRoutingTarget();
 
   const createMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -135,11 +275,15 @@ export default function PatientCreate() {
       secondaryGroupNumber: form.secondaryGroupNumber || null,
       secondaryPlanName: form.secondaryPlanName || null,
       secondaryRelationship: form.secondaryRelationship || null,
+      planProductCode: form.planProductCode || null,
+      delegatedEntityId: form.delegatedEntityId || null,
+      pcpId: form.pcpId || null,
+      pcpReferralNumber: form.pcpReferralNumber || null,
     });
   }
 
   const f = form;
-  const set = (updates: Partial<typeof form>) => setForm({ ...form, ...updates });
+  const set = (updates: Partial<typeof form>) => setForm((prev) => ({ ...prev, ...updates }));
 
   return (
     <div className="p-6 max-w-3xl space-y-6">
@@ -153,6 +297,7 @@ export default function PatientCreate() {
         </div>
       </div>
 
+      {/* Demographics */}
       <Card>
         <CardHeader>
           <CardTitle>Demographics</CardTitle>
@@ -217,6 +362,7 @@ export default function PatientCreate() {
         </CardContent>
       </Card>
 
+      {/* Insurance Information */}
       <Card>
         <CardHeader>
           <CardTitle>Insurance Information</CardTitle>
@@ -227,14 +373,7 @@ export default function PatientCreate() {
               <Label>Insurance Carrier</Label>
               <Select
                 value={f.payerId || "__custom__"}
-                onValueChange={(v) => {
-                  if (v === "__custom__") {
-                    set({ payerId: "", insuranceCarrier: "" });
-                  } else {
-                    const payer = payers.find((p: any) => p.id === v);
-                    set({ payerId: v, insuranceCarrier: payer?.name || "" });
-                  }
-                }}
+                onValueChange={handlePayerChange}
               >
                 <SelectTrigger data-testid="select-insurance-carrier">
                   <SelectValue placeholder="Select payer..." />
@@ -260,6 +399,113 @@ export default function PatientCreate() {
               <Input value={f.memberId} onChange={(e) => set({ memberId: e.target.value })} data-testid="input-member-id" />
             </div>
           </div>
+
+          {/* ── Plan Product (conditional) ── */}
+          <FadeField visible={showPlanProduct}>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="flex items-center gap-1.5">
+                  Plan Product
+                  <Badge variant="secondary" className="text-xs font-normal">Required for billing rules</Badge>
+                </Label>
+                {planProductsQuery.isLoading ? (
+                  <div className="flex items-center gap-2 h-10 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />Loading plan products…
+                  </div>
+                ) : (
+                  <Select value={f.planProductCode || "__none__"} onValueChange={(v) => handlePlanProductChange(v === "__none__" ? "" : v)}>
+                    <SelectTrigger data-testid="select-plan-product">
+                      <SelectValue placeholder="Select plan product…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Select plan product…</SelectItem>
+                      {(planProductsQuery.data ?? []).map((pp) => (
+                        <SelectItem key={pp.code} value={pp.code}>
+                          {pp.label}
+                          <span className="ml-1.5 text-xs text-muted-foreground">({pp.plan_type})</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            </div>
+          </FadeField>
+
+          {/* ── Delegated Entity (conditional) ── */}
+          <FadeField visible={showDelegatedEntity && Boolean(f.planProductCode)}>
+            <div className="grid grid-cols-1 gap-4">
+              <div className="space-y-2">
+                <Label className="flex items-center gap-1.5">
+                  <Building2 className="h-4 w-4 text-muted-foreground" />
+                  Delegated Medical Group / IPA
+                </Label>
+                {delegatedQuery.isLoading ? (
+                  <div className="flex items-center gap-2 h-10 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />Loading delegated entities…
+                  </div>
+                ) : (delegatedQuery.data ?? []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">No delegated entities on file for this payer / plan / state combination.</p>
+                ) : (
+                  <Select value={f.delegatedEntityId || "__none__"} onValueChange={(v) => set({ delegatedEntityId: v === "__none__" ? "" : v })}>
+                    <SelectTrigger data-testid="select-delegated-entity">
+                      <SelectValue placeholder="Select IPA / medical group…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">None / Not delegated</SelectItem>
+                      {(delegatedQuery.data ?? []).map((de) => (
+                        <SelectItem key={de.id} value={de.id}>
+                          {de.name}
+                          {de.state && <span className="ml-1.5 text-xs text-muted-foreground">({de.state})</span>}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            </div>
+          </FadeField>
+
+          {/* ── PCP fields (conditional) ── */}
+          <FadeField visible={showPcp || showPcpReferral}>
+            <div className="grid grid-cols-2 gap-4">
+              <FadeField visible={showPcp}>
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-1.5">
+                    <User className="h-4 w-4 text-muted-foreground" />
+                    PCP Name
+                  </Label>
+                  <Input
+                    value={f.pcpId}
+                    onChange={(e) => set({ pcpId: e.target.value })}
+                    placeholder="Primary Care Physician name"
+                    data-testid="input-pcp-id"
+                  />
+                </div>
+              </FadeField>
+              <FadeField visible={showPcpReferral}>
+                <div className="space-y-2">
+                  <Label className="flex items-center gap-1.5">
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                    PCP Referral #
+                  </Label>
+                  <Input
+                    value={f.pcpReferralNumber}
+                    onChange={(e) => set({ pcpReferralNumber: e.target.value })}
+                    placeholder="Referral authorization number"
+                    data-testid="input-pcp-referral-number"
+                  />
+                </div>
+              </FadeField>
+            </div>
+            {(showPcp || showPcpReferral) && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1.5 mt-2">
+                <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                Required for HMO plans. Missing PCP referral may result in claim denial.
+              </p>
+            )}
+          </FadeField>
+
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Group Number</Label>
@@ -286,6 +532,7 @@ export default function PatientCreate() {
         </CardContent>
       </Card>
 
+      {/* Secondary Insurance (COB) */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -339,9 +586,10 @@ export default function PatientCreate() {
         </CardContent>
       </Card>
 
+      {/* Referral & Provider */}
       <Card>
         <CardHeader>
-          <CardTitle>Referral & Provider</CardTitle>
+          <CardTitle>Referral &amp; Provider</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
@@ -408,6 +656,59 @@ export default function PatientCreate() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Routing Preview Pane */}
+      {form.payerId && form.payerId !== "__custom__" && (
+        <Card className="border-dashed">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
+              <GitBranch className="h-4 w-4" />
+              Claim Routing Preview
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {activatedQuery.isLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />Evaluating payer rules…
+              </div>
+            ) : (
+              <div className="space-y-2 text-sm" data-testid="routing-preview">
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground min-w-28">Claims route to:</span>
+                  <span className="font-medium" data-testid="text-routing-target">
+                    {routingTarget ?? <span className="text-muted-foreground italic">—</span>}
+                  </span>
+                </div>
+                {selectedPlanProduct && (
+                  <div className="flex items-start gap-2">
+                    <span className="text-muted-foreground min-w-28">Plan type:</span>
+                    <span className="font-medium">{selectedPlanProduct.label}</span>
+                    <div className="flex gap-1 flex-wrap">
+                      {selectedPlanProduct.requires_pcp && <Badge variant="outline" className="text-xs">PCP Required</Badge>}
+                      {selectedPlanProduct.requires_referral && <Badge variant="outline" className="text-xs">Referral Required</Badge>}
+                      {selectedPlanProduct.is_government && <Badge variant="outline" className="text-xs">Government</Badge>}
+                    </div>
+                  </div>
+                )}
+                {activatedCodes.size > 0 && (
+                  <div className="flex items-start gap-2">
+                    <span className="text-muted-foreground min-w-28">Active rules:</span>
+                    <span className="text-xs text-muted-foreground">
+                      {(activatedQuery.data ?? []).filter(f => !f.required).map(f => f.label).join(", ") || "Universal fields only"}
+                    </span>
+                  </div>
+                )}
+                {!form.planProductCode && showPlanProduct && (
+                  <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 text-xs">
+                    <Info className="h-3.5 w-3.5" />
+                    Select a plan product to see full field requirements for this payer.
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="flex justify-end gap-3">
         <Button variant="outline" onClick={() => navigate("/billing/patients")} data-testid="button-cancel">Cancel</Button>

@@ -2060,6 +2060,351 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_ppe_org_payer ON practice_payer_enrollments (organization_id, payer_id) WHERE disabled_at IS NULL`);
     }
 
+    // ── Prompt C T1: plan_products reference table ───────────────────────────
+    if (!(await seederLog('table', 'plan_products'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS plan_products (
+          code               VARCHAR PRIMARY KEY,
+          label              VARCHAR NOT NULL,
+          parent_plan_family VARCHAR NOT NULL,
+          plan_type          VARCHAR NOT NULL,
+          requires_pcp       BOOLEAN NOT NULL DEFAULT FALSE,
+          requires_referral  BOOLEAN NOT NULL DEFAULT FALSE,
+          is_government      BOOLEAN NOT NULL DEFAULT FALSE,
+          regulatory_basis   VARCHAR NULL,
+          sort_order         INTEGER NOT NULL DEFAULT 0,
+          active             BOOLEAN NOT NULL DEFAULT TRUE
+        )
+      `);
+      await pool.query(`
+        INSERT INTO plan_products (code, label, parent_plan_family, plan_type, requires_pcp, requires_referral, is_government, regulatory_basis, sort_order) VALUES
+          -- Commercial (1-10)
+          ('commercial_hmo',  'Commercial HMO',  'Commercial', 'HMO',       TRUE,  TRUE,  FALSE, NULL,                          1),
+          ('commercial_ppo',  'Commercial PPO',  'Commercial', 'PPO',       FALSE, FALSE, FALSE, NULL,                          2),
+          ('commercial_pos',  'Commercial POS',  'Commercial', 'POS',       TRUE,  FALSE, FALSE, NULL,                          3),
+          ('commercial_epo',  'Commercial EPO',  'Commercial', 'EPO',       FALSE, FALSE, FALSE, NULL,                          4),
+          -- Medicare Advantage (11-20)
+          ('ma_hmo',          'Medicare Advantage HMO',         'Medicare Advantage', 'HMO', TRUE,  TRUE,  TRUE,  'CMS MA Regulations', 11),
+          ('ma_ppo',          'Medicare Advantage PPO',         'Medicare Advantage', 'PPO', FALSE, FALSE, TRUE,  'CMS MA Regulations', 12),
+          ('ma_hmo_pos',      'Medicare Advantage HMO-POS',     'Medicare Advantage', 'HMO', TRUE,  TRUE,  TRUE,  'CMS MA Regulations', 13),
+          ('ma_dsnp',         'Medicare Advantage D-SNP',       'Medicare Advantage', 'HMO', TRUE,  TRUE,  TRUE,  'CMS SNP Regulations', 14),
+          -- Medicare FFS (21)
+          ('medicare_ffs',    'Traditional Medicare (FFS)',      'Medicare FFS',       'Indemnity', FALSE, FALSE, TRUE, 'SSA Title XVIII', 21),
+          -- Individual Exchange (22-30)
+          ('exchange_hmo',    'Individual Exchange HMO',         'Individual Exchange', 'HMO', TRUE,  TRUE,  FALSE, 'ACA §1311',         22),
+          ('exchange_ppo',    'Individual Exchange PPO',         'Individual Exchange', 'PPO', FALSE, FALSE, FALSE, 'ACA §1311',         23),
+          -- Medicaid (31-40)
+          ('medicaid_mco',    'Medicaid MCO',                    'Medicaid',           'Capitated', TRUE, TRUE,  TRUE,  'SSA Title XIX',  31),
+          ('medicaid_ffs',    'Medicaid Fee-for-Service',        'Medicaid',           'Indemnity', FALSE, FALSE, TRUE, 'SSA Title XIX',  32),
+          -- TRICARE (41)
+          ('tricare_prime',   'TRICARE Prime',                   'TRICARE',            'HMO',       TRUE,  TRUE,  TRUE,  '10 USC § 1074g', 41),
+          ('tricare_select',  'TRICARE Select',                  'TRICARE',            'PPO',       FALSE, FALSE, TRUE,  '10 USC § 1074g', 42),
+          -- VA CCN (43)
+          ('va_ccn',          'VA Community Care Network',       'VA CCN',             'Other',     FALSE, FALSE, TRUE,  'VA Community Care', 43)
+        ON CONFLICT (code) DO NOTHING
+      `);
+    }
+
+    // ── Prompt C T1: payer_supported_plan_products join table ────────────────
+    if (!(await seederLog('table', 'payer_supported_plan_products'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS payer_supported_plan_products (
+          payer_id          VARCHAR NOT NULL REFERENCES payers(id) ON DELETE CASCADE,
+          plan_product_code VARCHAR NOT NULL REFERENCES plan_products(code) ON DELETE RESTRICT,
+          PRIMARY KEY (payer_id, plan_product_code)
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pspp_payer ON payer_supported_plan_products (payer_id)`);
+
+      // Seed by payer name patterns
+      // Commercial payers → commercial plans
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        SELECT p.id, pp.code
+        FROM payers p
+        CROSS JOIN plan_products pp
+        WHERE pp.code IN ('commercial_hmo','commercial_ppo','commercial_pos','commercial_epo')
+          AND p.name ~* '(?i)(aetna|anthem|bcbs|blue cross|blue shield|cigna|humana|united|uhc|oscar|molina.*commercial|ambetter|bright|selecthealth|geisinger health|health alliance|healthfirst|tufts|ucare|umr|upmc|regence|premera|medical mutual|priority health|sanford|moda|emblem|fallon|dean|community health|capital blue|carefirst|alliance healthcare|beacon|aultcare|bluecross|multiplan)'
+          AND p.name !~* '(medicare|medicaid|medi-cal|tricare|champva|va ccn|supplement|railroad|workers comp|dental|vision|behavioral|eye)'
+        ON CONFLICT DO NOTHING
+      `);
+
+      // Medicare Advantage payers → MA plans
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        SELECT p.id, pp.code
+        FROM payers p
+        CROSS JOIN plan_products pp
+        WHERE pp.code IN ('ma_hmo','ma_ppo','ma_hmo_pos','ma_dsnp')
+          AND p.name ~* 'medicare advantage'
+        ON CONFLICT DO NOTHING
+      `);
+
+      // AARP Complete (MA) → MA plans
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        SELECT p.id, pp.code
+        FROM payers p
+        CROSS JOIN plan_products pp
+        WHERE pp.code IN ('ma_hmo','ma_ppo','ma_hmo_pos','ma_dsnp')
+          AND p.name ILIKE 'AARP Medicare Complete%'
+        ON CONFLICT DO NOTHING
+      `);
+
+      // Traditional Medicare / Medicare FFS payers
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        SELECT p.id, 'medicare_ffs'
+        FROM payers p
+        WHERE p.name ~* '(traditional medicare|medicare.*part a|medicare.*part b|medicare.*ffs|medicare.*railroad|medicare b.*railroad)'
+           OR p.name = 'Medicare (Traditional)'
+        ON CONFLICT DO NOTHING
+      `);
+
+      // UHC Commercial also gets exchange plans
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        SELECT p.id, pp.code
+        FROM payers p
+        CROSS JOIN plan_products pp
+        WHERE pp.code IN ('exchange_hmo','exchange_ppo')
+          AND p.name ~* '(ambetter|oscar health|bright health|united.*commercial|uhc.*commercial)'
+          AND p.name !~* '(medicare|medicaid|tricare)'
+        ON CONFLICT DO NOTHING
+      `);
+
+      // Medicaid payers → medicaid_mco
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        SELECT p.id, pp.code
+        FROM payers p
+        CROSS JOIN plan_products pp
+        WHERE pp.code IN ('medicaid_mco','medicaid_ffs')
+          AND p.name ~* '(medicaid|medi.cal|molina.*health|centene|caresource|amerihealth caritas|ambetter.*medicaid|healthkeepers|fidelis|sunshine health|superior health|peach state|buckeye|meridian.*health)'
+          AND p.name !~* '(commercial|advantage|supplement|exchange)'
+        ON CONFLICT DO NOTHING
+      `);
+
+      // TRICARE payers
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        SELECT p.id, pp.code
+        FROM payers p
+        CROSS JOIN plan_products pp
+        WHERE pp.code IN ('tricare_prime','tricare_select')
+          AND p.name ~* 'tricare'
+        ON CONFLICT DO NOTHING
+      `);
+
+      // VA CCN — TriWest + CHAMPVA
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        SELECT p.id, 'va_ccn'
+        FROM payers p
+        WHERE p.name ~* '(triwest|champva|va community care)'
+        ON CONFLICT DO NOTHING
+      `);
+
+      // UHC Commercial (explicitly) gets full commercial + exchange set
+      await pool.query(`
+        INSERT INTO payer_supported_plan_products (payer_id, plan_product_code)
+        VALUES
+          ('ba1316c1-60ea-41d6-80ae-cade2fb010f6', 'commercial_hmo'),
+          ('ba1316c1-60ea-41d6-80ae-cade2fb010f6', 'commercial_ppo'),
+          ('ba1316c1-60ea-41d6-80ae-cade2fb010f6', 'commercial_pos'),
+          ('ba1316c1-60ea-41d6-80ae-cade2fb010f6', 'commercial_epo'),
+          ('ba1316c1-60ea-41d6-80ae-cade2fb010f6', 'exchange_hmo'),
+          ('ba1316c1-60ea-41d6-80ae-cade2fb010f6', 'exchange_ppo'),
+          ('6de0c872-d01b-4ccd-819b-254d5e164440', 'ma_hmo'),
+          ('6de0c872-d01b-4ccd-819b-254d5e164440', 'ma_ppo'),
+          ('6de0c872-d01b-4ccd-819b-254d5e164440', 'ma_hmo_pos'),
+          ('6de0c872-d01b-4ccd-819b-254d5e164440', 'ma_dsnp')
+        ON CONFLICT DO NOTHING
+      `);
+    }
+
+    // ── Prompt C T1: Add FK on practice_payer_enrollments.plan_product_code ──
+    if (!(await seederLog('column', 'practice_payer_enrollments', 'plan_product_code_fk'))) {
+      // Add FK constraint if not already present (column exists, just not constrained)
+      await pool.query(`
+        ALTER TABLE practice_payer_enrollments
+          ADD CONSTRAINT fk_ppe_plan_product
+          FOREIGN KEY (plan_product_code) REFERENCES plan_products(code) ON DELETE RESTRICT
+      `).catch((e: any) => {
+        // 42710 = duplicate_object (constraint already exists) — safe to ignore
+        if (e.code !== '42710') console.warn('[SEEDER] practice_payer_enrollments FK skipped:', e.message);
+      });
+    }
+
+    // ── Prompt C T2: delegated_entities table ────────────────────────────────
+    if (!(await seederLog('table', 'delegated_entities'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS delegated_entities (
+          id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name                     VARCHAR NOT NULL,
+          entity_type              VARCHAR NOT NULL,
+          tax_id                   VARCHAR NULL,
+          state                    VARCHAR(2) NULL,
+          claims_address           TEXT NULL,
+          claims_payer_id_override VARCHAR NULL,
+          active                   BOOLEAN NOT NULL DEFAULT TRUE,
+          notes                    TEXT NULL
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_de_state ON delegated_entities (state) WHERE active = TRUE`);
+
+      // Seed 3 placeholder IPAs for demo
+      await pool.query(`
+        INSERT INTO delegated_entities (id, name, entity_type, state, notes) VALUES
+          ('a1000000-0000-0000-0000-000000000001', 'Sample California IPA',        'IPA',           'CA', '[demo_seed] Placeholder IPA for CA activation demo'),
+          ('a1000000-0000-0000-0000-000000000002', 'Sample California Medical Group','Medical_Group', 'CA', '[demo_seed] Placeholder medical group for CA delegation demo'),
+          ('a1000000-0000-0000-0000-000000000003', 'Sample Texas IPA',             'IPA',           'TX', '[demo_seed] Placeholder IPA for TX activation demo')
+        ON CONFLICT (id) DO NOTHING
+      `);
+    }
+
+    // ── Prompt C T2: payer_delegated_entities join table ─────────────────────
+    if (!(await seederLog('table', 'payer_delegated_entities'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS payer_delegated_entities (
+          id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          payer_id            VARCHAR NOT NULL REFERENCES payers(id) ON DELETE CASCADE,
+          delegated_entity_id UUID NOT NULL REFERENCES delegated_entities(id) ON DELETE CASCADE,
+          plan_product_code   VARCHAR NULL REFERENCES plan_products(code) ON DELETE RESTRICT,
+          state               VARCHAR(2) NULL,
+          UNIQUE NULLS NOT DISTINCT (payer_id, delegated_entity_id, plan_product_code, state)
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pde_payer ON payer_delegated_entities (payer_id)`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pde_payer_plan ON payer_delegated_entities (payer_id, plan_product_code)`);
+
+      // Seed: UHC Commercial + MA HMO → CA IPA, CA Medical Group
+      await pool.query(`
+        INSERT INTO payer_delegated_entities (payer_id, delegated_entity_id, plan_product_code, state) VALUES
+          ('ba1316c1-60ea-41d6-80ae-cade2fb010f6', 'a1000000-0000-0000-0000-000000000001', 'commercial_hmo', 'CA'),
+          ('ba1316c1-60ea-41d6-80ae-cade2fb010f6', 'a1000000-0000-0000-0000-000000000002', 'commercial_hmo', 'CA'),
+          ('6de0c872-d01b-4ccd-819b-254d5e164440', 'a1000000-0000-0000-0000-000000000001', 'ma_hmo',         'CA'),
+          ('6de0c872-d01b-4ccd-819b-254d5e164440', 'a1000000-0000-0000-0000-000000000003', NULL,             'TX')
+        ON CONFLICT DO NOTHING
+      `);
+    }
+
+    // ── Prompt C T3: 4 conditional field_definitions rows ────────────────────
+    await pool.query(`
+      INSERT INTO field_definitions (code, label, applies_to, data_type, always_required, activated_by_rule_kinds) VALUES
+        ('patient_plan_product',       'Plan Product',               'patient', 'enum',   FALSE, '["referrals","prior_auth","modifiers_and_liability","payer_specific_edits"]'),
+        ('patient_pcp_id',             'PCP',                        'patient', 'string', FALSE, '["referrals"]'),
+        ('patient_pcp_referral_id',    'PCP Referral #',             'patient', 'string', FALSE, '["referrals"]'),
+        ('patient_delegated_entity_id','Delegated Medical Group / IPA','patient','uuid',  FALSE, '["referrals"]')
+      ON CONFLICT (code) DO NOTHING
+    `);
+
+    // ── Prompt C: Seed demo org UHC enrollments (enables resolver demo) ──────
+    {
+      const demoOrgId = 'demo-org-001';
+      // Insert only if not already enrolled (handle NULL plan_product_code explicitly)
+      for (const payerId of ['ba1316c1-60ea-41d6-80ae-cade2fb010f6', '6de0c872-d01b-4ccd-819b-254d5e164440']) {
+        const { rows: existing } = await pool.query(`
+          SELECT 1 FROM practice_payer_enrollments
+          WHERE organization_id = $1 AND payer_id = $2 AND plan_product_code IS NULL AND disabled_at IS NULL
+        `, [demoOrgId, payerId]);
+        if (existing.length === 0) {
+          await pool.query(`
+            INSERT INTO practice_payer_enrollments
+              (id, organization_id, payer_id, plan_product_code, enrolled_at, notes)
+            VALUES
+              (gen_random_uuid(), $1, $2, NULL, NOW(), '[demo_seed] Auto-enrolled for conditional-field activation demo')
+          `, [demoOrgId, payerId]);
+        }
+      }
+    }
+
+    // ── Prompt C T4b: UHC demo seed (approved extraction items for resolver) ─
+    {
+      // Check if demo seed items already exist (idempotent by notes prefix)
+      const { rows: existingDemoItems } = await pool.query(`
+        SELECT COUNT(*)::int AS cnt
+        FROM manual_extraction_items
+        WHERE notes ILIKE '[demo_seed]%'
+      `);
+
+      if (existingDemoItems[0]?.cnt === 0) {
+        // Check for any existing approved UHC referrals rules first
+        const { rows: existingUhcRules } = await pool.query(`
+          SELECT COUNT(*)::int AS cnt
+          FROM manual_extraction_items mei
+          JOIN payer_source_documents psd ON psd.id = mei.source_document_id
+          WHERE psd.payer_id IN ('ba1316c1-60ea-41d6-80ae-cade2fb010f6','6de0c872-d01b-4ccd-819b-254d5e164440')
+            AND mei.review_status = 'approved'
+            AND mei.section_type = 'referrals'
+        `);
+
+        if (existingUhcRules[0]?.cnt === 0) {
+          // Find or create a supplement source document for UHC demo
+          let supplementId: string | null = null;
+          const { rows: existingSupp } = await pool.query(`
+            SELECT id FROM payer_source_documents
+            WHERE payer_id = 'ba1316c1-60ea-41d6-80ae-cade2fb010f6'
+              AND document_name ILIKE '%Demo Seed%'
+            LIMIT 1
+          `);
+          if (existingSupp.length > 0) {
+            supplementId = existingSupp[0].id;
+          } else {
+            const { rows: [newDoc] } = await pool.query(`
+              INSERT INTO payer_source_documents
+                (id, payer_id, document_name, document_type, source_url, status, created_at, organization_id, parent_document_id)
+              VALUES
+                (gen_random_uuid()::text,
+                 'ba1316c1-60ea-41d6-80ae-cade2fb010f6',
+                 'UHC Capitation & Delegation Supplement (Demo Seed)',
+                 'supplement',
+                 'https://www.uhcprovider.com/admin-guide-supplement',
+                 'completed',
+                 NOW(),
+                 (SELECT id FROM organizations LIMIT 1),
+                 'ea017017-c295-4d81-be0b-8892a9c147fc')
+              RETURNING id
+            `);
+            supplementId = newDoc?.id || null;
+          }
+
+          if (supplementId) {
+            // Insert 3 approved demo extraction items
+            await pool.query(`
+              INSERT INTO manual_extraction_items
+                (source_document_id, section_type, raw_snippet, applies_to_plan_products, review_status, notes, created_at)
+              VALUES
+                ($1, 'referrals', 'UHC HMO and MA HMO plans require a PCP referral for specialist services. Capitated medical groups are responsible for managing specialist utilization. Claims submitted without a valid PCP referral authorization number will be denied.',
+                 '["commercial_hmo","ma_hmo","ma_hmo_pos"]'::jsonb, 'approved',
+                 '[demo_seed] Placeholder referral rule for activation cascade demo. Replace with real extraction when UHC supplement is manually ingested.', NOW()),
+                ($1, 'referrals', 'IPA-delegated members must obtain referrals from their assigned IPA medical director. The IPA claims payer ID should be used as the billing payer for capitated encounters.',
+                 '["commercial_hmo","ma_hmo"]'::jsonb, 'approved',
+                 '[demo_seed] Placeholder delegation/referral rule. Replace with real extraction.', NOW()),
+                ($1, 'prior_auth', 'Prior authorization is required for outpatient surgical procedures, durable medical equipment, and home health services for all MA HMO and D-SNP members. Submit via UHC electronic authorization portal.',
+                 '["ma_hmo","ma_dsnp","ma_hmo_pos"]'::jsonb, 'approved',
+                 '[demo_seed] Placeholder prior auth rule for MA demo. Replace with real extraction.', NOW())
+            `, [supplementId]);
+            console.log('[SEEDER] UHC demo extraction items seeded (3 approved items)');
+          }
+        }
+      }
+    }
+
+    // ── Prompt C: New patient columns ────────────────────────────────────────
+    if (!(await seederLog('column', 'patients', 'plan_product_code'))) {
+      await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS plan_product_code VARCHAR REFERENCES plan_products(code) ON DELETE SET NULL`);
+    }
+    if (!(await seederLog('column', 'patients', 'delegated_entity_id'))) {
+      await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS delegated_entity_id UUID REFERENCES delegated_entities(id) ON DELETE SET NULL`);
+    }
+    if (!(await seederLog('column', 'patients', 'pcp_id'))) {
+      await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS pcp_id TEXT NULL`);
+    }
+    if (!(await seederLog('column', 'patients', 'pcp_referral_number'))) {
+      await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS pcp_referral_number TEXT NULL`);
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -5989,6 +6334,65 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // ── Prompt C: GET /api/billing/payers/:id/plan-products ─────────────────
+  app.get("/api/billing/payers/:id/plan-products", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(`
+        SELECT pp.*
+        FROM plan_products pp
+        JOIN payer_supported_plan_products pspp ON pspp.plan_product_code = pp.code
+        WHERE pspp.payer_id = $1 AND pp.active = TRUE
+        ORDER BY pp.sort_order, pp.label
+      `, [req.params.id]);
+      res.json(rows);
+    } catch (err: any) {
+      console.error('[API] payer plan-products error:', err.message);
+      res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  // ── Prompt C: GET /api/billing/payers/:id/delegated-entities ─────────────
+  app.get("/api/billing/payers/:id/delegated-entities", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { planProductCode, state } = req.query as Record<string, string>;
+      const db = await import("./db").then(m => m.pool);
+      const params: any[] = [req.params.id];
+      let filters = "";
+      if (planProductCode) {
+        params.push(planProductCode);
+        filters += ` AND (pde.plan_product_code = $${params.length} OR pde.plan_product_code IS NULL)`;
+      }
+      if (state) {
+        params.push(state);
+        filters += ` AND (pde.state = $${params.length} OR pde.state IS NULL)`;
+      }
+      const { rows } = await db.query(`
+        SELECT de.*, pde.plan_product_code AS linked_plan_product_code, pde.state AS linked_state
+        FROM delegated_entities de
+        JOIN payer_delegated_entities pde ON pde.delegated_entity_id = de.id
+        WHERE pde.payer_id = $1 AND de.active = TRUE
+          ${filters}
+        ORDER BY de.name
+      `, params);
+      res.json(rows);
+    } catch (err: any) {
+      console.error('[API] payer delegated-entities error:', err.message);
+      res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  // ── Prompt C: GET /api/billing/plan-products (all) ───────────────────────
+  app.get("/api/billing/plan-products", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(`SELECT * FROM plan_products WHERE active = TRUE ORDER BY sort_order, label`);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
   app.get("/api/billing/patients", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const search = (req.query.search as string || "").trim().toLowerCase();
@@ -6054,7 +6458,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         insuredName, relationshipToInsured, authorizationNumber, referringProviderName,
         referringProviderNpi, referralSource, referralPartnerName, defaultProviderId,
         serviceNeeded, phone, email, preferredName, state, planType, address, payerId,
-        secondaryPayerId, secondaryMemberId, secondaryGroupNumber, secondaryPlanName, secondaryRelationship
+        secondaryPayerId, secondaryMemberId, secondaryGroupNumber, secondaryPlanName, secondaryRelationship,
+        planProductCode, delegatedEntityId, pcpId, pcpReferralNumber
       } = req.body;
       if (!firstName?.trim() || !lastName?.trim() || !dob?.trim()) {
         return res.status(400).json({ error: "firstName, lastName, and dob are required" });
@@ -6074,6 +6479,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           service_needed, phone, email, preferred_name, state, plan_type, address, payer_id,
           secondary_payer_id, secondary_member_id, secondary_group_number, secondary_plan_name, secondary_relationship,
           street_address, city, zip_code,
+          plan_product_code, delegated_entity_id, pcp_id, pcp_referral_number,
           created_at
         ) VALUES (
           gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8,
@@ -6081,6 +6487,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           $17, $18, $19, $20, $21, $22, $23, $24,
           $25, $26, $27, $28, $29,
           $30, $31, $32,
+          $33, $34, $35, $36,
           NOW()
         ) RETURNING *`,
         [
@@ -6093,7 +6500,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           state || null, planType || null, address ? JSON.stringify(address) : null, payerId || null,
           secondaryPayerId || null, secondaryMemberId || null, secondaryGroupNumber || null,
           secondaryPlanName || null, secondaryRelationship || null,
-          address?.street || address?.street1 || null, address?.city || null, address?.zip || null
+          address?.street || address?.street1 || null, address?.city || null, address?.zip || null,
+          planProductCode || null, delegatedEntityId || null, pcpId || null, pcpReferralNumber || null
         ]
       );
       res.json(rows[0]);
@@ -6126,6 +6534,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         secondaryRelationship: "secondary_relationship",
         streetAddress: "street_address", city: "city", zipCode: "zip_code",
         planProduct: "plan_product",
+        planProductCode: "plan_product_code",
+        delegatedEntityId: "delegated_entity_id",
+        pcpId: "pcp_id",
+        pcpReferralNumber: "pcp_referral_number",
       };
       if (req.body.referringProviderNpi) {
         const { validateNPI } = await import("../shared/npi-validation");
