@@ -2495,6 +2495,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       `);
     }
 
+    // ── Crawler monitoring — scraper_monitor_log table ────────────────────────
+    if (!(await seederLog('table', 'scraper_monitor_log'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS scraper_monitor_log (
+          id UUID PRIMARY KEY,
+          event_type VARCHAR NOT NULL CHECK (event_type IN ('scrape_complete','synthetic_test')),
+          alert_level VARCHAR NOT NULL CHECK (alert_level IN ('info','warning','error')),
+          payer_code VARCHAR NOT NULL,
+          run_id VARCHAR,
+          payload JSONB NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_scraper_monitor_log_created
+        ON scraper_monitor_log(created_at DESC)
+      `);
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -12158,6 +12177,91 @@ Warmly,
       `, params);
 
       res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Crawler monitoring endpoints ──────────────────────────────────────────
+
+  // GET /api/admin/scrapers/monitor/log — last 50 monitor events
+  app.get("/api/admin/scrapers/monitor/log", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool } = await import("./db");
+      const limit = Math.min(parseInt(req.query.limit as string || "50"), 200);
+      const { rows } = await pool.query(`
+        SELECT id, event_type, alert_level, payer_code, run_id, payload, created_at
+        FROM scraper_monitor_log
+        ORDER BY created_at DESC LIMIT $1
+      `, [limit]);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/scrapers/monitor/assertions — re-run assertions on the most recent run
+  app.post("/api/admin/scrapers/monitor/assertions", requireSuperAdmin, async (req, res) => {
+    try {
+      const payerCode = (req.body.payer_code as string) || "uhc";
+      const { pool } = await import("./db");
+      const { rows } = await pool.query(`
+        SELECT id, report, status FROM scrape_runs
+        WHERE payer_code = $1 ORDER BY started_at DESC LIMIT 1
+      `, [payerCode]);
+      if (!rows.length) return res.status(404).json({ error: "No runs found for payer" });
+
+      const { runPostScrapeAssertions, determineAlertLevel, fireWebhook, logMonitorEvent } = await import("./services/scraper-monitor");
+      const run = rows[0];
+      const report = run.report ?? {};
+      report.payer_code = report.payer_code ?? payerCode;
+      report.errors = report.errors ?? [];
+
+      const assertions = await runPostScrapeAssertions(run.id, report, payerCode);
+      const alertLevel = determineAlertLevel(report, run.status, assertions);
+
+      const payload = {
+        type: "scrape_complete" as const,
+        alert_level: alertLevel,
+        payer_code: payerCode,
+        triggered_by: "manual_assertions",
+        run_id: run.id,
+        report,
+        assertions,
+        timestamp: new Date().toISOString(),
+        env: process.env.NODE_ENV ?? "development",
+      };
+
+      await Promise.all([fireWebhook(payload), logMonitorEvent(payload)]);
+      res.json({ success: true, alert_level: alertLevel, assertions });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/scrapers/monitor/synthetic-test — run synthetic E2E test now
+  app.post("/api/admin/scrapers/monitor/synthetic-test", requireSuperAdmin, async (req, res) => {
+    try {
+      const payerCode = (req.body.payer_code as string) || "uhc";
+      const { triggerSyntheticTestNow } = await import("./jobs/scraper-cron");
+      // Run async; respond immediately with acceptance, result goes to webhook + log
+      triggerSyntheticTestNow().catch(err =>
+        console.error("[monitor-api] Synthetic test error:", err.message)
+      );
+      res.json({ success: true, message: "Synthetic test started. Results will be logged and sent to webhook if configured." });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/scrapers/monitor/daily-scrape — trigger daily cron scrape now (admin/dev)
+  app.post("/api/admin/scrapers/monitor/daily-scrape", requireSuperAdmin, async (req, res) => {
+    try {
+      const { triggerDailyScrapeNow } = await import("./jobs/scraper-cron");
+      triggerDailyScrapeNow().catch(err =>
+        console.error("[monitor-api] Daily scrape trigger error:", err.message)
+      );
+      res.json({ success: true, message: "Daily cron scrape started for all configured payers." });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
