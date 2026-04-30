@@ -31,6 +31,36 @@ import { apiRequest } from "@/lib/queryClient";
 
 type SectionType = "timely_filing" | "prior_auth" | "modifiers" | "appeals";
 
+type DocumentType = "admin_guide" | "supplement" | "pa_list" | "reimbursement_policy" | "medical_policy" | "bulletin" | "contract" | "fee_schedule";
+
+const DOC_TYPE_LABELS: Record<DocumentType, string> = {
+  admin_guide: "Admin Guide",
+  supplement: "Supplement",
+  pa_list: "Prior Auth List",
+  reimbursement_policy: "Reimbursement Policy",
+  medical_policy: "Medical Policy",
+  bulletin: "Bulletin",
+  contract: "Contract",
+  fee_schedule: "Fee Schedule",
+};
+
+const DOC_TYPE_COLORS: Record<DocumentType, string> = {
+  admin_guide: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+  supplement: "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
+  pa_list: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+  reimbursement_policy: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200",
+  medical_policy: "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200",
+  bulletin: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+  contract: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200",
+  fee_schedule: "bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200",
+};
+
+function docTypeBadge(type: string) {
+  const label = DOC_TYPE_LABELS[type as DocumentType] || type;
+  const cls = DOC_TYPE_COLORS[type as DocumentType] || "bg-muted text-muted-foreground";
+  return <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide ${cls}`}>{label}</span>;
+}
+
 const SECTION_LABELS: Record<SectionType, string> = {
   timely_filing: "Timely Filing",
   prior_auth: "Prior Authorization",
@@ -290,10 +320,16 @@ interface PayerManual {
   error_message: string | null;
   uploaded_by: string | null;
   created_at: string;
+  document_type: DocumentType;
+  parent_document_id: string | null;
+  parent_document_name: string | null;
+  effective_start: string | null;
+  effective_end: string | null;
   item_count: number;
   approved_count: number;
   rejected_count: number;
   pending_count: number;
+  supplement_count: number;
 }
 
 type ReviewPayload = { itemId: string; reviewStatus: string; notes?: string; extractedJson?: any; appliesToPlanProducts?: string[] };
@@ -712,7 +748,13 @@ export default function PayerManualsPage() {
   const [activeTab, setActiveTab] = useState("manuals");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [addMode, setAddMode] = useState<"url" | "file">("url");
-  const [addForm, setAddForm] = useState({ payerName: "", payerId: "", sourceUrl: "" });
+  const [addForm, setAddForm] = useState({
+    payerName: "", payerId: "", sourceUrl: "",
+    documentType: "admin_guide" as DocumentType,
+    parentDocumentId: "",
+    effectiveStart: "",
+    effectiveEnd: "",
+  });
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [filterSection, setFilterSection] = useState<string>("all");
@@ -762,11 +804,21 @@ export default function PayerManualsPage() {
 
   const addMutation = useMutation({
     mutationFn: async () => {
+      const commonFields = {
+        documentType: addForm.documentType,
+        parentDocumentId: addForm.parentDocumentId || undefined,
+        effectiveStart: addForm.effectiveStart || undefined,
+        effectiveEnd: addForm.effectiveEnd || undefined,
+      };
       if (addMode === "file" && uploadFile) {
         const fd = new FormData();
         fd.append("payerName", addForm.payerName);
         if (addForm.payerId) fd.append("payerId", addForm.payerId);
         fd.append("file", uploadFile);
+        fd.append("documentType", commonFields.documentType);
+        if (commonFields.parentDocumentId) fd.append("parentDocumentId", commonFields.parentDocumentId);
+        if (commonFields.effectiveStart) fd.append("effectiveStart", commonFields.effectiveStart);
+        if (commonFields.effectiveEnd) fd.append("effectiveEnd", commonFields.effectiveEnd);
         const res = await fetch("/api/admin/payer-manuals", { method: "POST", body: fd, credentials: "include" });
         if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
         return res.json();
@@ -775,7 +827,7 @@ export default function PayerManualsPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ payerName: addForm.payerName, payerId: addForm.payerId, sourceUrl: addForm.sourceUrl }),
+          body: JSON.stringify({ payerName: addForm.payerName, payerId: addForm.payerId, sourceUrl: addForm.sourceUrl, ...commonFields }),
         });
         if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
         return res.json();
@@ -808,7 +860,7 @@ export default function PayerManualsPage() {
         toast({ title: "Manual added", description: "Click 'Run Extraction' to start AI processing." });
       }
       setShowAddDialog(false);
-      setAddForm({ payerName: "", payerId: "", sourceUrl: "" });
+      setAddForm({ payerName: "", payerId: "", sourceUrl: "", documentType: "admin_guide", parentDocumentId: "", effectiveStart: "", effectiveEnd: "" });
       setUploadFile(null);
       setSelectedManualId(manual.id);
     },
@@ -841,7 +893,7 @@ export default function PayerManualsPage() {
         return srcLower.split(/[\s\/\(\),]+/).filter((t: string) => t.length > 3).some((t: string) => pLower.includes(t));
       }) ?? null;
     }
-    setAddForm({ payerName: source.payer_name, payerId: matched?.id ?? "", sourceUrl: source.canonical_url || "" });
+    setAddForm({ payerName: source.payer_name, payerId: matched?.id ?? "", sourceUrl: source.canonical_url || "", documentType: "admin_guide", parentDocumentId: "", effectiveStart: "", effectiveEnd: "" });
     setAddMode("url");
     setUploadFile(null);
     setPendingSourceId(source.source_id);
@@ -917,7 +969,8 @@ export default function PayerManualsPage() {
 
   const sectionTypes: SectionType[] = ["timely_filing", "prior_auth", "modifiers", "appeals"];
 
-  const canAdd = addForm.payerName && (addMode === "url" ? !!addForm.sourceUrl : !!uploadFile);
+  const canAdd = addForm.payerName && (addMode === "url" ? !!addForm.sourceUrl : !!uploadFile)
+    && (addForm.documentType === "supplement" ? !!addForm.parentDocumentId : true);
   const summary = coverageData?.summary;
   const coveragePayers = coverageData?.payers || [];
   const lastIngested = coveragePayers
@@ -931,15 +984,15 @@ export default function PayerManualsPage() {
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2" data-testid="text-page-title">
             <BookOpen className="h-6 w-6 text-primary" />
-            Payer Manual Ingestion
+            Provider Guide Ingestion
           </h1>
           <p className="text-muted-foreground text-sm mt-0.5">
-            Extract billing rules from payer provider manuals using AI. Review and approve rules before they are applied.
+            Ingest and extract billing rules from payer source documents — admin guides, supplements, PA lists, policies, and more.
           </p>
         </div>
         <Button onClick={() => setShowAddDialog(true)} data-testid="button-add-manual">
           <Plus className="h-4 w-4 mr-2" />
-          Add Payer Manual
+          Add Source Document
         </Button>
       </div>
 
@@ -1121,7 +1174,7 @@ export default function PayerManualsPage() {
         <TabsList className="h-9">
           <TabsTrigger value="manuals" className="text-sm" data-testid="tab-manuals">
             <List className="h-4 w-4 mr-1.5" />
-            Manuals ({manuals.length})
+            Source Documents ({manuals.length})
           </TabsTrigger>
           <TabsTrigger value="registry" className="text-sm" data-testid="tab-registry">
             <Database className="h-4 w-4 mr-1.5" />
@@ -1244,7 +1297,7 @@ export default function PayerManualsPage() {
         {/* Left: manual list */}
         <div className="space-y-2">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Payer Manuals ({manuals.length})
+            Source Documents ({manuals.length})
           </h2>
           {isLoading ? (
             <div className="py-8 text-center text-muted-foreground text-sm">Loading…</div>
@@ -1252,9 +1305,9 @@ export default function PayerManualsPage() {
             <Card>
               <CardContent className="py-10 text-center">
                 <FileText className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                <p className="text-sm text-muted-foreground">No manuals ingested yet.</p>
+                <p className="text-sm text-muted-foreground">No source documents ingested yet.</p>
                 <Button variant="outline" size="sm" className="mt-3" onClick={() => setShowAddDialog(true)}>
-                  Add your first manual
+                  Add your first document
                 </Button>
               </CardContent>
             </Card>
@@ -1267,34 +1320,50 @@ export default function PayerManualsPage() {
                   selectedManualId === manual.id
                     ? "border-primary bg-primary/5"
                     : "border-border bg-card hover:border-primary/40"
-                }`}
+                } ${manual.parent_document_id ? "ml-4 border-l-2 border-l-violet-300 dark:border-l-violet-700" : ""}`}
                 data-testid={`card-manual-${manual.id}`}
               >
                 <div className="flex items-start justify-between gap-1">
-                  <p className="text-sm font-medium leading-tight">{manual.payer_name}</p>
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    {docTypeBadge(manual.document_type || "admin_guide")}
+                    <p className="text-sm font-medium leading-tight mt-0.5 truncate">{manual.payer_name}</p>
+                  </div>
                   {statusBadge(manual.status)}
                 </div>
+                {manual.parent_document_name && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                    <Link2 className="h-2.5 w-2.5" /> Under: {manual.parent_document_name}
+                  </p>
+                )}
+                {(manual.effective_start || manual.effective_end) && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Effective: {manual.effective_start ? format(new Date(manual.effective_start), "MMM d, yyyy") : "?"} — {manual.effective_end ? format(new Date(manual.effective_end), "MMM d, yyyy") : "current"}
+                  </p>
+                )}
                 <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground">
                   <span>{manual.approved_count} approved</span>
                   {manual.pending_count > 0 && <span className="text-amber-600">{manual.pending_count} pending</span>}
                   {manual.rejected_count > 0 && <span className="text-red-500">{manual.rejected_count} rejected</span>}
+                  {manual.supplement_count > 0 && <span className="text-violet-600">{manual.supplement_count} supplement{manual.supplement_count !== 1 ? "s" : ""}</span>}
                 </div>
-                {/* Section coverage dots */}
-                <div className="flex items-center gap-1 mt-1.5">
-                  {sectionTypes.map((st) => {
-                    const hasApproved = items.some((i) => i.manual_id === manual.id && i.section_type === st && i.review_status === "approved");
-                    return (
-                      <span
-                        key={st}
-                        title={SECTION_LABELS[st]}
-                        className={`h-2 w-2 rounded-full ${hasApproved ? "bg-green-500" : "bg-muted-foreground/30"}`}
-                      />
-                    );
-                  })}
-                  <span className="text-xs text-muted-foreground ml-1">coverage</span>
-                </div>
+                {/* Section coverage dots — only for admin_guide and pa_list types */}
+                {["admin_guide", "pa_list"].includes(manual.document_type || "admin_guide") && (
+                  <div className="flex items-center gap-1 mt-1.5">
+                    {sectionTypes.map((st) => {
+                      const hasApproved = items.some((i) => i.manual_id === manual.id && i.section_type === st && i.review_status === "approved");
+                      return (
+                        <span
+                          key={st}
+                          title={SECTION_LABELS[st]}
+                          className={`h-2 w-2 rounded-full ${hasApproved ? "bg-green-500" : "bg-muted-foreground/30"}`}
+                        />
+                      );
+                    })}
+                    <span className="text-xs text-muted-foreground ml-1">coverage</span>
+                  </div>
+                )}
                 <p className="text-xs text-muted-foreground mt-1">
-                  {manual.file_name ? manual.file_name : manual.source_url ? "URL manual" : "—"} · Added {format(new Date(manual.created_at), "MMM d, yyyy")}
+                  {manual.file_name ? manual.file_name : manual.source_url ? "URL source" : "—"} · Added {format(new Date(manual.created_at), "MMM d, yyyy")}
                 </p>
               </button>
             ))
@@ -1317,7 +1386,21 @@ export default function PayerManualsPage() {
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {docTypeBadge(selectedManual.document_type || "admin_guide")}
+                        {selectedManual.parent_document_name && (
+                          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <Link2 className="h-2.5 w-2.5" /> Under: {selectedManual.parent_document_name}
+                          </span>
+                        )}
+                      </div>
                       <CardTitle className="text-base">{selectedManual.payer_name}</CardTitle>
+                      {(selectedManual.effective_start || selectedManual.effective_end) && (
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                          <CalendarCheck className="h-3 w-3" />
+                          Effective: {selectedManual.effective_start ? format(new Date(selectedManual.effective_start), "MMM d, yyyy") : "—"} — {selectedManual.effective_end ? format(new Date(selectedManual.effective_end), "MMM d, yyyy") : "current"}
+                        </p>
+                      )}
                       {selectedManual.source_url && (
                         <a
                           href={selectedManual.source_url}
@@ -1705,29 +1788,73 @@ export default function PayerManualsPage() {
 
       {/* Add Manual Dialog */}
       <Dialog open={showAddDialog} onOpenChange={(open) => { setShowAddDialog(open); if (!open) setPendingSourceId(null); }}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Add Payer Manual</DialogTitle>
+            <DialogTitle>Add Source Document</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-1">
+
+            {/* Document Type */}
             <div className="space-y-1.5">
-              <Label htmlFor="pm-payer-name">Payer Name *</Label>
+              <Label htmlFor="pm-doc-type">Document Type *</Label>
+              <Select value={addForm.documentType} onValueChange={(v) => setAddForm({ ...addForm, documentType: v as DocumentType, parentDocumentId: v !== "supplement" ? "" : addForm.parentDocumentId })}>
+                <SelectTrigger id="pm-doc-type" data-testid="select-doc-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.entries(DOC_TYPE_LABELS) as [DocumentType, string][]).map(([val, label]) => (
+                    <SelectItem key={val} value={val}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {addForm.documentType === "admin_guide" && "Main billing/administrative guide published by the payer."}
+                {addForm.documentType === "supplement" && "Payer-specific supplement or affiliate addendum (e.g. Empire Plan, Oxford, NHP). Requires a parent admin guide."}
+                {addForm.documentType === "pa_list" && "Structured prior authorization CPT/HCPCS code list — separate from the admin guide, updated monthly."}
+                {addForm.documentType === "reimbursement_policy" && "Reimbursement/payment policy document covering specific billing scenarios (Modifier 25, 59, bundling, etc)."}
+                {addForm.documentType === "medical_policy" && "Medical necessity or coverage policy defining clinical criteria for services."}
+                {addForm.documentType === "bulletin" && "Monthly or quarterly update bulletin announcing rule changes."}
+                {addForm.documentType === "contract" && "Participation agreement or contract — timely filing and fee schedules may override the admin guide."}
+                {addForm.documentType === "fee_schedule" && "Published fee schedule for reimbursement rates."}
+              </p>
+            </div>
+
+            {/* Parent document — only for supplements */}
+            {addForm.documentType === "supplement" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="pm-parent">Parent Admin Guide *</Label>
+                <Select value={addForm.parentDocumentId} onValueChange={(v) => setAddForm({ ...addForm, parentDocumentId: v })}>
+                  <SelectTrigger id="pm-parent" data-testid="select-parent-document">
+                    <SelectValue placeholder="Select the parent admin guide…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {manuals.filter((m) => m.document_type === "admin_guide").map((m) => (
+                      <SelectItem key={m.id} value={m.id}>{m.payer_name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="pm-payer-name">Payer / Document Name *</Label>
               <Input
                 id="pm-payer-name"
                 value={addForm.payerName}
                 onChange={(e) => setAddForm({ ...addForm, payerName: e.target.value })}
-                placeholder="e.g. UnitedHealthcare Commercial"
+                placeholder="e.g. UnitedHealthcare Commercial — 2026 Admin Guide"
                 data-testid="input-payer-name"
               />
             </div>
+
             <div className="space-y-1.5">
-              <Label htmlFor="pm-payer-id">Link to Payer (optional)</Label>
+              <Label htmlFor="pm-payer-id">Link to Payer Record (optional)</Label>
               <Select value={addForm.payerId} onValueChange={(v) => setAddForm({ ...addForm, payerId: v })}>
                 <SelectTrigger id="pm-payer-id" data-testid="select-payer-id">
                   <SelectValue placeholder="Select existing payer record…" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None / new payer</SelectItem>
+                  <SelectItem value="">None / unlisted payer</SelectItem>
                   {payers.map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                   ))}
@@ -1736,9 +1863,37 @@ export default function PayerManualsPage() {
               <p className="text-xs text-muted-foreground">Linking allows approved timely filing rules to auto-update the payer record.</p>
             </div>
 
+            {/* Effective dates */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="pm-eff-start">Effective From</Label>
+                <Input
+                  id="pm-eff-start"
+                  type="date"
+                  value={addForm.effectiveStart}
+                  onChange={(e) => setAddForm({ ...addForm, effectiveStart: e.target.value })}
+                  data-testid="input-effective-start"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pm-eff-end">Effective Through</Label>
+                <Input
+                  id="pm-eff-end"
+                  type="date"
+                  value={addForm.effectiveEnd}
+                  onChange={(e) => setAddForm({ ...addForm, effectiveEnd: e.target.value })}
+                  placeholder="Leave blank = currently in effect"
+                  data-testid="input-effective-end"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground -mt-2">
+              Set the date range this document governs. Claims with service dates in range will be evaluated against these rules. Leave "Effective Through" blank for currently-active documents.
+            </p>
+
             {/* Source mode toggle */}
             <div className="space-y-2">
-              <Label>Manual source</Label>
+              <Label>Document source</Label>
               <div className="flex gap-2">
                 <Button
                   type="button"
@@ -1763,7 +1918,7 @@ export default function PayerManualsPage() {
 
             {addMode === "url" ? (
               <div className="space-y-1.5">
-                <Label htmlFor="pm-url">Manual URL *</Label>
+                <Label htmlFor="pm-url">Document URL *</Label>
                 <Input
                   id="pm-url"
                   type="url"
@@ -1772,11 +1927,11 @@ export default function PayerManualsPage() {
                   placeholder="https://payer.com/billing-guidelines.pdf"
                   data-testid="input-source-url"
                 />
-                <p className="text-xs text-muted-foreground">Supports HTML pages and text-layer PDFs. Image-only PDFs are not supported.</p>
+                <p className="text-xs text-muted-foreground">Supports HTML pages and text-layer PDFs. Image-only PDFs require Claude vision (ANTHROPIC_API_KEY).</p>
               </div>
             ) : (
               <div className="space-y-1.5">
-                <Label>PDF File *</Label>
+                <Label>PDF / HTML File *</Label>
                 <div
                   className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors"
                   onClick={() => fileInputRef.current?.click()}
@@ -1785,7 +1940,7 @@ export default function PayerManualsPage() {
                   {uploadFile ? (
                     <p className="text-sm text-foreground">{uploadFile.name} ({(uploadFile.size / 1024).toFixed(0)} KB)</p>
                   ) : (
-                    <p className="text-sm text-muted-foreground">Click to select a PDF file (max 20 MB)</p>
+                    <p className="text-sm text-muted-foreground">Click to select a file (max 20 MB)</p>
                   )}
                 </div>
                 <input
@@ -1806,7 +1961,7 @@ export default function PayerManualsPage() {
               disabled={addMutation.isPending || !canAdd}
               data-testid="button-submit-add-manual"
             >
-              {addMutation.isPending ? "Adding…" : "Add Manual"}
+              {addMutation.isPending ? "Adding…" : "Add Document"}
             </Button>
           </DialogFooter>
         </DialogContent>

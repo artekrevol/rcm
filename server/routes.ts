@@ -1322,6 +1322,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       )
     `);
     await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS file_content BYTEA`);
+    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS document_type VARCHAR NOT NULL DEFAULT 'admin_guide'`);
+    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS parent_document_id VARCHAR REFERENCES payer_manuals(id) ON DELETE SET NULL`);
+    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS effective_start DATE`);
+    await pool.query(`ALTER TABLE payer_manuals ADD COLUMN IF NOT EXISTS effective_end DATE`);
+    await pool.query(`UPDATE payer_manuals SET document_type = 'admin_guide' WHERE document_type IS NULL OR document_type = ''`).catch(() => {});
 
     await seederLog('table', 'manual_extraction_items');
     await pool.query(`
@@ -9575,13 +9580,16 @@ Warmly,
       const { pool: db } = await import("./db");
       const { rows } = await db.query(`
         SELECT pm.*, p.name AS payer_record_name,
+          parent.payer_name AS parent_document_name,
           (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id) AS item_count,
           (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'approved') AS approved_count,
           (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'rejected') AS rejected_count,
-          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'pending') AS pending_count
+          (SELECT COUNT(*)::int FROM manual_extraction_items WHERE manual_id = pm.id AND review_status = 'pending') AS pending_count,
+          (SELECT COUNT(*)::int FROM payer_manuals WHERE parent_document_id = pm.id) AS supplement_count
         FROM payer_manuals pm
         LEFT JOIN payers p ON pm.payer_id = p.id
-        ORDER BY pm.created_at DESC
+        LEFT JOIN payer_manuals parent ON pm.parent_document_id = parent.id
+        ORDER BY pm.payer_name ASC, pm.document_type ASC, pm.effective_start DESC NULLS LAST, pm.created_at DESC
       `);
       res.json(rows);
     } catch (err: any) {
@@ -9597,11 +9605,18 @@ Warmly,
       try {
         const { pool: db } = await import("./db");
         const { validateManualUrl } = await import("./services/manual-extractor");
-        const { payerName, payerId, sourceUrl } = req.body;
+        const { payerName, payerId, sourceUrl, documentType, parentDocumentId, effectiveStart, effectiveEnd } = req.body;
         if (!payerName) return res.status(400).json({ error: "payerName is required" });
 
         const file = (req as any).file as Express.Multer.File | undefined;
         if (!file && !sourceUrl) return res.status(400).json({ error: "sourceUrl or file upload is required" });
+
+        // Validate document type
+        const VALID_DOC_TYPES = ["admin_guide", "supplement", "pa_list", "reimbursement_policy", "medical_policy", "bulletin", "contract", "fee_schedule"];
+        const docType = documentType || "admin_guide";
+        if (!VALID_DOC_TYPES.includes(docType)) {
+          return res.status(400).json({ error: `Invalid documentType. Must be one of: ${VALID_DOC_TYPES.join(", ")}` });
+        }
 
         // SSRF guard — validate URL if provided
         if (sourceUrl) {
@@ -9612,8 +9627,8 @@ Warmly,
 
         const user = req.user as any;
         const { rows } = await db.query(`
-          INSERT INTO payer_manuals (payer_name, payer_id, source_url, file_name, file_content, status, uploaded_by)
-          VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+          INSERT INTO payer_manuals (payer_name, payer_id, source_url, file_name, file_content, status, uploaded_by, document_type, parent_document_id, effective_start, effective_end)
+          VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)
           RETURNING *
         `, [
           payerName,
@@ -9622,6 +9637,10 @@ Warmly,
           file?.originalname || null,
           file?.buffer || null,
           user?.email || 'admin',
+          docType,
+          parentDocumentId || null,
+          effectiveStart || null,
+          effectiveEnd || null,
         ]);
 
         res.json(rows[0]);
