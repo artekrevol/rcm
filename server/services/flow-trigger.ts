@@ -35,6 +35,16 @@ export async function triggerMatchingFlows(lead: LeadForTrigger): Promise<void> 
 
       if (!matches) continue;
 
+      // Deduplication — skip if lead already has an active run for this flow
+      const existing = await pool.query(
+        `SELECT id FROM flow_runs WHERE flow_id = $1 AND lead_id = $2 AND status = 'running' LIMIT 1`,
+        [flow.id, lead.id]
+      );
+      if (existing.rows.length > 0) {
+        console.log(`[flow-trigger] Skipping flow '${flow.name}' — lead ${lead.id} already has an active run`);
+        continue;
+      }
+
       // Get the first step of this flow to compute next_action_at
       const firstStep = await pool.query(
         `SELECT id, step_order, delay_minutes

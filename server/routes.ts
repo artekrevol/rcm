@@ -7577,6 +7577,74 @@ Warmly,
     }
   });
 
+  // POST /api/leads/:id/trigger-flow — manually enroll a lead into matching flows
+  app.post("/api/leads/:id/trigger-flow", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const leadId = req.params.id;
+      const lead = await storage.getLead(leadId);
+      if (!lead) return res.status(404).json({ error: "Lead not found" });
+
+      // Deduplication: block if an active run already exists for any flow on this lead
+      const activeCheck = await pool.query(
+        `SELECT id FROM flow_runs WHERE lead_id = $1 AND status = 'running' LIMIT 1`,
+        [leadId]
+      );
+      if (activeCheck.rows.length > 0) {
+        return res.status(409).json({
+          error: "Lead is already enrolled in an active flow",
+          flowRunId: activeCheck.rows[0].id,
+        });
+      }
+
+      // Find all active flows — either match trigger conditions OR allow any if caller passes flowId
+      const { flowId } = req.body as { flowId?: string };
+      let flows;
+      if (flowId) {
+        flows = await pool.query(
+          `SELECT id, name, trigger_conditions FROM flows WHERE id = $1 AND is_active = true`,
+          [flowId]
+        );
+      } else {
+        flows = await pool.query(
+          `SELECT id, name, trigger_conditions FROM flows WHERE is_active = true`
+        );
+      }
+
+      let enrolled = 0;
+      for (const flow of flows.rows) {
+        const firstStep = await pool.query(
+          `SELECT delay_minutes FROM flow_steps WHERE flow_id = $1 ORDER BY step_order ASC LIMIT 1`,
+          [flow.id]
+        );
+        const delayMs = ((firstStep.rows[0]?.delay_minutes) || 0) * 60 * 1000;
+        const nextActionAt = new Date(Date.now() + delayMs);
+
+        const runResult = await pool.query(
+          `INSERT INTO flow_runs (flow_id, lead_id, status, current_step_index, next_action_at, organization_id)
+           VALUES ($1, $2, 'running', 0, $3, $4) RETURNING id`,
+          [flow.id, leadId, nextActionAt, (lead as any).organizationId || (lead as any).organization_id || null]
+        );
+        const { logFlowEvent } = await import("./services/flow-events");
+        await logFlowEvent(runResult.rows[0].id, "flow_started", {
+          message: `Flow '${flow.name}' manually started for lead ${leadId}`,
+          leadId,
+          flowId: flow.id,
+          triggeredBy: "manual",
+        });
+        enrolled++;
+      }
+
+      if (enrolled === 0) {
+        return res.status(404).json({ error: "No active flows found" });
+      }
+
+      res.json({ enrolled, message: `Lead enrolled in ${enrolled} flow(s)` });
+    } catch (err) {
+      console.error("[trigger-flow] error:", err);
+      res.status(500).json({ error: "Failed to trigger flow" });
+    }
+  });
+
   // GET /api/flows — list all flows with step counts and active/completed run counts
   app.get("/api/flows", requireRole("admin", "intake"), async (req, res) => {
     try {
