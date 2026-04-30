@@ -197,21 +197,61 @@ export async function ingestCsvBuffer(
   return stats;
 }
 
-export async function ingestFromCms(): Promise<IngestStats> {
-  const { year, quarter } = currentQuarter();
+function previousQuarter(year: number, quarter: number): { year: number; quarter: number } {
+  if (quarter === 1) return { year: year - 1, quarter: 4 };
+  return { year, quarter: quarter - 1 };
+}
+
+async function isVersionAlreadyLoaded(version: string): Promise<boolean> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM cci_edits WHERE ncci_version = $1 LIMIT 1`,
+      [version]
+    );
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function tryDownload(year: number, quarter: number): Promise<{ zipPath: string; version: string } | null> {
   const version = ncciVersion(year, quarter);
   const url = cmsZipUrl(year, quarter);
-  const tmpDir = os.tmpdir();
-  const zipPath = path.join(tmpDir, `cci_${version}.zip`);
-
-  console.log(`[cci-ingest] Downloading ${url}`);
-
+  const zipPath = path.join(os.tmpdir(), `cci_${version}.zip`);
+  console.log(`[cci-ingest] Trying ${url}`);
   try {
     await downloadFile(url, zipPath);
-  } catch (err: any) {
-    const msg = `CMS NCCI quarterly file download failed (${err.message}). Manual upload required at /admin/data-tools/cci-upload.`;
-    console.error("[cci-ingest]", msg);
+    return { zipPath, version };
+  } catch {
+    return null;
+  }
+}
+
+export async function ingestFromCms(): Promise<IngestStats> {
+  const { year, quarter } = currentQuarter();
+  const tmpDir = os.tmpdir();
+
+  // Try current quarter first, then fall back to previous quarter if CMS hasn't published yet.
+  let resolved = await tryDownload(year, quarter);
+  if (!resolved) {
+    const prev = previousQuarter(year, quarter);
+    console.log(`[cci-ingest] Current quarter (${year}Q${quarter}) not available — trying previous quarter (${prev.year}Q${prev.quarter})`);
+    resolved = await tryDownload(prev.year, prev.quarter);
+  }
+
+  if (!resolved) {
+    const msg = `CMS NCCI file unavailable for ${year}Q${quarter} and ${previousQuarter(year, quarter).year}Q${previousQuarter(year, quarter).quarter}. Manual upload required at /admin/data-tools/cci-upload.`;
+    console.warn(`[cci-ingest] ${msg}`);
     throw new Error(msg);
+  }
+
+  const { zipPath, version } = resolved;
+
+  // Skip silently if this version is already fully loaded in the DB.
+  if (await isVersionAlreadyLoaded(version)) {
+    console.log(`[cci-ingest] Version ${version} already loaded — skipping ingest.`);
+    await unlink(zipPath).catch(() => {});
+    return { inserted: 0, updated: 0, skipped: 0, errors: 0, version, sourceFile: "already_loaded" };
   }
 
   const extractDir = path.join(tmpDir, `cci_${version}`);
