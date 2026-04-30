@@ -1673,6 +1673,49 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_cci_edits_active ON cci_edits (column_1_code, column_2_code) WHERE deletion_date IS NULL`);
     }
 
+    // ── Timely Filing Guardian — claims columns (Prompt 04 T1) ─────────────────
+    await seederLog('column', 'claims', 'timely_filing_deadline');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS timely_filing_deadline DATE`).catch(() => {});
+    await seederLog('column', 'claims', 'timely_filing_days_remaining');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS timely_filing_days_remaining INTEGER`).catch(() => {});
+    await seederLog('column', 'claims', 'timely_filing_status');
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TABLE claims ADD COLUMN IF NOT EXISTS timely_filing_status TEXT;
+        ALTER TABLE claims DROP CONSTRAINT IF EXISTS chk_timely_filing_status;
+        ALTER TABLE claims ADD CONSTRAINT chk_timely_filing_status
+          CHECK (timely_filing_status IN ('safe','caution','urgent','critical','expired') OR timely_filing_status IS NULL);
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
+    `).catch(() => {});
+    await seederLog('column', 'claims', 'timely_filing_last_evaluated_at');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS timely_filing_last_evaluated_at TIMESTAMP`).catch(() => {});
+
+    // ── Timely Filing Guardian — alerts table (Prompt 04 T1) ───────────────────
+    if (!(await seederLog('table', 'timely_filing_alerts'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS timely_filing_alerts (
+          id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+          claim_id VARCHAR NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+          organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          alert_status TEXT NOT NULL,
+          days_remaining INTEGER NOT NULL,
+          deadline_date DATE NOT NULL,
+          alert_method TEXT NOT NULL DEFAULT 'in_app',
+          alert_sent_at TIMESTAMP DEFAULT NOW(),
+          alert_acknowledged_at TIMESTAMP,
+          alert_acknowledged_by TEXT,
+          snoozed_until TIMESTAMP,
+          UNIQUE (claim_id, alert_status)
+        )
+      `);
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_tf_alerts_org_unack
+          ON timely_filing_alerts (organization_id, alert_acknowledged_at)
+          WHERE alert_acknowledged_at IS NULL
+      `).catch(() => {});
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -2138,6 +2181,139 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       res.json({ lastUpdated: rows[0]?.oldest_update || null });
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  // ── Timely Filing Alerts (Prompt 04 T5) ───────────────────────────────────
+  app.get("/api/billing/filing-alerts", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { payer_id, status: filterStatus, page = "1", page_size = "50" } = req.query;
+
+      let where = `tfa.organization_id = $1 AND tfa.alert_acknowledged_at IS NULL`;
+      const params: any[] = [orgId];
+
+      // Exclude snoozed alerts that are still within snooze window
+      where += ` AND (tfa.snoozed_until IS NULL OR tfa.snoozed_until < NOW())`;
+
+      if (filterStatus) { where += ` AND tfa.alert_status = $${params.length + 1}`; params.push(filterStatus); }
+      if (payer_id) { where += ` AND p.id = $${params.length + 1}`; params.push(payer_id); }
+
+      const countRes = await db.query(
+        `SELECT COUNT(*) FROM timely_filing_alerts tfa
+         LEFT JOIN claims c ON c.id = tfa.claim_id
+         LEFT JOIN payers p ON p.id = c.payer_id
+         WHERE ${where}`, params
+      );
+
+      const pageNum = Math.max(1, parseInt(page as string));
+      const pageSize = Math.min(100, parseInt(page_size as string) || 50);
+      const offset = (pageNum - 1) * pageSize;
+
+      const rows = await db.query(`
+        SELECT
+          tfa.id, tfa.claim_id, tfa.alert_status, tfa.days_remaining,
+          tfa.deadline_date, tfa.alert_sent_at, tfa.snoozed_until,
+          c.status AS claim_status, c.service_date, c.amount,
+          c.plan_product, c.payer AS payer_name_legacy,
+          c.updated_at AS last_activity_at,
+          pat.first_name || ' ' || pat.last_name AS patient_name,
+          p.name AS payer_name,
+          p.id AS payer_id
+        FROM timely_filing_alerts tfa
+        JOIN claims c ON c.id = tfa.claim_id
+        LEFT JOIN patients pat ON pat.id = c.patient_id
+        LEFT JOIN payers p ON p.id = c.payer_id
+        WHERE ${where}
+        ORDER BY tfa.days_remaining ASC NULLS LAST
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+      `, [...params, pageSize, offset]);
+
+      // Count summary
+      const summaryRes = await db.query(`
+        SELECT alert_status, COUNT(*) AS cnt
+        FROM timely_filing_alerts tfa
+        WHERE tfa.organization_id = $1
+          AND tfa.alert_acknowledged_at IS NULL
+          AND (tfa.snoozed_until IS NULL OR tfa.snoozed_until < NOW())
+        GROUP BY alert_status
+      `, [orgId]);
+
+      const summary: Record<string, number> = {};
+      for (const r of summaryRes.rows) summary[r.alert_status] = parseInt(r.cnt);
+
+      res.json({
+        alerts: rows.rows,
+        total: parseInt(countRes.rows[0].count),
+        summary,
+        page: pageNum,
+        pageSize,
+      });
+    } catch (err: any) {
+      console.error("[Filing Alerts] GET error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/filing-alerts/:id/acknowledge", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const userId = (req.user as any)?.id;
+      const result = await db.query(`
+        UPDATE timely_filing_alerts
+        SET alert_acknowledged_at = NOW(), alert_acknowledged_by = $1
+        WHERE id = $2
+        RETURNING id
+      `, [userId, req.params.id]);
+      if (result.rowCount === 0) return res.status(404).json({ error: "Alert not found" });
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/billing/filing-alerts/:id/snooze", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const days = parseInt(req.body?.days || "7", 10);
+      const result = await db.query(`
+        UPDATE timely_filing_alerts
+        SET snoozed_until = NOW() + ($1 || ' days')::interval
+        WHERE id = $2
+        RETURNING id
+      `, [days, req.params.id]);
+      if (result.rowCount === 0) return res.status(404).json({ error: "Alert not found" });
+      res.json({ ok: true, snoozedDays: days });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Manual re-evaluate a single claim's timely filing status
+  app.post("/api/billing/claims/:id/timely-filing-evaluate", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const claimRes = await db.query(
+        `SELECT c.id FROM claims c WHERE c.id = $1 AND c.organization_id = $2`,
+        [req.params.id, orgId]
+      );
+      if (claimRes.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
+
+      // Inline single-claim evaluation (reuse guardian logic for the org)
+      const { evaluateAllActiveClaims } = await import("./services/timely-filing-guardian");
+      const stats = await evaluateAllActiveClaims();
+
+      // Fetch updated timely filing data for this claim
+      const updated = await db.query(
+        `SELECT timely_filing_status, timely_filing_deadline, timely_filing_days_remaining, timely_filing_last_evaluated_at
+         FROM claims WHERE id = $1`, [req.params.id]
+      );
+      res.json({ ok: true, claim: updated.rows[0], stats });
+    } catch (err: any) {
+      console.error("[Filing Evaluate] Error:", err);
+      res.status(500).json({ error: err.message });
     }
   });
 

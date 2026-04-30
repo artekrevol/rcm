@@ -18,6 +18,7 @@ import {
   CreditCard,
   ListChecks,
   Building2,
+  AlarmClock,
 } from "lucide-react";
 import {
   Sidebar,
@@ -32,7 +33,9 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/use-auth";
+import { useQuery } from "@tanstack/react-query";
 
 const billingNavItems = [
   { title: "Dashboard", url: "/billing/dashboard", icon: LayoutDashboard },
@@ -41,6 +44,7 @@ const billingNavItems = [
   { title: "Claims", url: "/billing/claims", icon: FileText },
   { title: "Claim Tracker", url: "/billing/claim-tracker", icon: Radar },
   { title: "Follow-Up Queue", url: "/billing/follow-up", icon: ListChecks },
+  { title: "Filing Alerts", url: "/billing/filing-alerts", icon: AlarmClock, badge: true },
   { title: "Prior Auth", url: "/billing/claims/prior-auth", icon: ShieldCheck },
   { title: "ERA Posting", url: "/billing/era", icon: CreditCard },
   { title: "Code Lookup", url: "/billing/codes", icon: BookOpen },
@@ -51,7 +55,7 @@ const billingNavItems = [
   { title: "Reports", url: "/billing/reports", icon: BarChart3 },
   { title: "Settings", url: "/billing/settings", icon: Settings },
   { title: "User Management", url: "/billing/settings/users", icon: UserCog, adminOnly: true },
-] as const;
+];
 
 export function BillingSidebar() {
   const [location] = useLocation();
@@ -60,6 +64,21 @@ export function BillingSidebar() {
   const initials = user?.name
     ? user.name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2)
     : "BL";
+
+  const { data: alertSummary } = useQuery<{ summary: Record<string, number> }>({
+    queryKey: ["/api/billing/filing-alerts"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/filing-alerts?page_size=1", { credentials: "include" });
+      if (!res.ok) return { summary: {} };
+      return res.json();
+    },
+    refetchInterval: 120_000,
+    staleTime: 60_000,
+  });
+
+  const unacknowledgedCount = alertSummary?.summary
+    ? Object.values(alertSummary.summary).reduce((a, b) => a + b, 0)
+    : 0;
 
   return (
     <Sidebar>
@@ -85,8 +104,10 @@ export function BillingSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {billingNavItems
-                .filter((item) => !("adminOnly" in item && item.adminOnly) || user?.role === "admin")
-                .map((item) => (
+                .filter((item) => !("adminOnly" in item && (item as any).adminOnly) || user?.role === "admin")
+                .map((item) => {
+                const hasBadge = (item as any).badge && unacknowledgedCount > 0;
+                return (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild
@@ -97,11 +118,20 @@ export function BillingSidebar() {
                   >
                     <Link href={item.url} data-testid={`nav-billing-${item.title.toLowerCase().replace(/\s+/g, "-")}`}>
                       <item.icon className="h-5 w-5" />
-                      <span>{item.title}</span>
+                      <span className="flex-1">{item.title}</span>
+                      {hasBadge && (
+                        <Badge
+                          className="bg-red-600 text-white text-[10px] h-4 min-w-4 px-1 ml-auto"
+                          data-testid="badge-filing-alerts-count"
+                        >
+                          {unacknowledgedCount > 99 ? "99+" : unacknowledgedCount}
+                        </Badge>
+                      )}
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-              ))}
+                );
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

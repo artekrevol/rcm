@@ -45,6 +45,7 @@ import RulesPage from "@/pages/rules";
 import ClaimTrackerPage from "@/pages/billing/claim-tracker";
 import ERAPage from "@/pages/billing/era";
 import FollowUpPage from "@/pages/billing/follow-up";
+import FilingAlertsPage from "@/pages/billing/filing-alerts";
 
 function Router() {
   return (
@@ -195,6 +196,11 @@ function Router() {
       <Route path="/billing/follow-up">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><FollowUpPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/filing-alerts">
+        <AuthGuard allowedRoles={["admin", "rcm_manager", "biller"]}>
+          <BillingLayout><FilingAlertsPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/era">

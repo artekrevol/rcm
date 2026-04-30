@@ -49,6 +49,8 @@ import {
   ChevronRight,
   Pencil,
   CheckCircle,
+  AlarmClock,
+  BellOff,
 } from "lucide-react";
 import { format, differenceInDays, formatDistanceToNow } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
@@ -76,6 +78,166 @@ const CARC_MAP: Record<string, { rootCause: string; action: string; fixField?: s
   "N286":  { rootCause: "Referring/ordering provider NPI is missing or invalid", action: "Verify provider NPI with NPPES registry and resubmit", fixField: "ordering_provider_id" },
   "B15":   { rootCause: "Payment adjusted for no prior authorization", action: "Obtain retroactive authorization from payer or file appeal with authorization proof" },
 };
+
+function TimelyFilingWidget({ claim }: { claim: any }) {
+  const { toast } = useToast();
+  const tfStatus: string | null = claim.timely_filing_status ?? null;
+  const daysRemaining: number | null = claim.timely_filing_days_remaining ?? null;
+  const deadlineDate: string | null = claim.timely_filing_deadline ?? null;
+  const lastEvaluated: string | null = claim.timely_filing_last_evaluated_at ?? null;
+
+  const reEvalMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/billing/claims/${claim.id}/timely-filing-evaluate`, {}),
+    onSuccess: () => {
+      toast({ title: "Evaluation triggered", description: "Timely filing status will refresh shortly." });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/claims", claim.id] });
+    },
+    onError: () => toast({ title: "Re-evaluation failed", variant: "destructive" }),
+  });
+
+  const snoozeMutation = useMutation({
+    mutationFn: async () => {
+      const alertsRes = await fetch(`/api/billing/filing-alerts?claim_id=${claim.id}`, { credentials: "include" });
+      if (!alertsRes.ok) throw new Error("No alerts found");
+      const data = await alertsRes.json();
+      const alert = data.alerts?.[0];
+      if (!alert) throw new Error("No active alert for this claim");
+      return apiRequest("POST", `/api/billing/filing-alerts/${alert.id}/snooze`, { days: 7 });
+    },
+    onSuccess: () => toast({ title: "Alert snoozed for 7 days" }),
+    onError: () => toast({ title: "Snooze failed — no active alert found", variant: "destructive" }),
+  });
+
+  if (!tfStatus || tfStatus === "safe") {
+    if (!tfStatus) return null;
+    return (
+      <Card className="border-green-200 dark:border-green-800 bg-green-50/30 dark:bg-green-950/10" data-testid="card-timely-filing-safe">
+        <CardHeader className="pb-1">
+          <CardTitle className="text-sm font-medium text-green-700 dark:text-green-400 flex items-center gap-2">
+            <AlarmClock className="h-4 w-4" />
+            Timely Filing
+            <Badge className="ml-auto bg-green-600 text-white text-[10px]">SAFE</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pb-3">
+          <p className="text-xs text-muted-foreground">
+            {daysRemaining != null ? `${daysRemaining} days remaining` : "Deadline on track"}
+            {deadlineDate && ` · Deadline ${format(new Date(deadlineDate), "MMM d, yyyy")}`}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const statusConfig: Record<string, { label: string; color: string; borderClass: string; bgClass: string; textClass: string }> = {
+    caution: {
+      label: "CAUTION",
+      color: "bg-blue-600",
+      borderClass: "border-blue-200 dark:border-blue-800",
+      bgClass: "bg-blue-50/30 dark:bg-blue-950/10",
+      textClass: "text-blue-700 dark:text-blue-400",
+    },
+    urgent: {
+      label: "URGENT",
+      color: "bg-amber-500",
+      borderClass: "border-amber-200 dark:border-amber-700",
+      bgClass: "bg-amber-50/40 dark:bg-amber-950/10",
+      textClass: "text-amber-700 dark:text-amber-400",
+    },
+    critical: {
+      label: "CRITICAL",
+      color: "bg-red-600",
+      borderClass: "border-red-300 dark:border-red-800",
+      bgClass: "bg-red-50/50 dark:bg-red-950/20",
+      textClass: "text-red-700 dark:text-red-400",
+    },
+    expired: {
+      label: "EXPIRED",
+      color: "bg-gray-700",
+      borderClass: "border-gray-400 dark:border-gray-600",
+      bgClass: "bg-gray-50/50 dark:bg-gray-900/20",
+      textClass: "text-gray-700 dark:text-gray-300",
+    },
+  };
+
+  const cfg = statusConfig[tfStatus] ?? statusConfig.caution;
+
+  return (
+    <Card className={`${cfg.borderClass} ${cfg.bgClass}`} data-testid="card-timely-filing">
+      <CardHeader className="pb-1">
+        <CardTitle className={`text-sm font-medium ${cfg.textClass} flex items-center gap-2`}>
+          <AlarmClock className="h-4 w-4" />
+          Timely Filing
+          <Badge className={`ml-auto ${cfg.color} text-white text-[10px]`} data-testid="badge-tf-status">
+            {cfg.label}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pb-3 space-y-3">
+        <div className="space-y-1.5">
+          {daysRemaining != null && (
+            <p className={`text-xl font-bold ${cfg.textClass}`} data-testid="text-tf-days">
+              {tfStatus === "expired"
+                ? `${Math.abs(daysRemaining)} days overdue`
+                : `${daysRemaining} days remaining`}
+            </p>
+          )}
+          {deadlineDate && (
+            <p className="text-xs text-muted-foreground" data-testid="text-tf-deadline">
+              Payer deadline: {format(new Date(deadlineDate), "MMMM d, yyyy")}
+            </p>
+          )}
+          {lastEvaluated && (
+            <p className="text-xs text-muted-foreground">
+              Evaluated {formatDistanceToNow(new Date(lastEvaluated), { addSuffix: true })}
+            </p>
+          )}
+        </div>
+
+        {tfStatus === "expired" && (
+          <div className="rounded-md bg-gray-800 text-gray-100 text-xs p-2 leading-relaxed">
+            This claim has passed its timely filing window. Options: write-off or appeal with late-filing cause documentation.
+          </div>
+        )}
+
+        {tfStatus === "critical" && (
+          <div className="rounded-md bg-red-100 dark:bg-red-950/40 text-red-800 dark:text-red-200 text-xs p-2">
+            Immediate action required — submit or appeal before the deadline passes.
+          </div>
+        )}
+
+        <div className="flex gap-2 flex-wrap pt-1">
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-xs h-7 px-2"
+            onClick={() => reEvalMutation.mutate()}
+            disabled={reEvalMutation.isPending}
+            data-testid="button-tf-reeval"
+          >
+            {reEvalMutation.isPending
+              ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+              : <RefreshCw className="h-3 w-3 mr-1" />}
+            Re-evaluate
+          </Button>
+          {tfStatus !== "expired" && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-xs h-7 px-2"
+              onClick={() => snoozeMutation.mutate()}
+              disabled={snoozeMutation.isPending}
+              data-testid="button-tf-snooze"
+            >
+              <BellOff className="h-3 w-3 mr-1" />
+              Snooze 7d
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function getDenialInfo(reasonCode: string) {
   const normalized = reasonCode?.trim().toUpperCase();
@@ -618,6 +780,8 @@ export default function ClaimDetailPage() {
           {(claim.status === "denied" || claim.status === "appealed") && (
             <DenialRecoveryPanel claimId={claim.id} claimStatus={claim.status} onNavigate={setLocation} />
           )}
+
+          <TimelyFilingWidget claim={claim} />
 
           <Card>
             <CardHeader className="pb-2">

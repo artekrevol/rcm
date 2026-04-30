@@ -1,0 +1,239 @@
+# Replit Prompt 04 — Timely Filing Guardian Agent
+
+## Context
+
+After Prompt 3, the rules engine returns timely filing violations at claim creation. But that only catches problems at the front end. The other half of timely filing risk is claims that are submitted on time but languish in pending status, denied status, or stuck in resubmission cycles — silently aging toward their filing deadline without anyone noticing.
+
+The Timely Filing Guardian is a daily background agent that monitors every active claim and surfaces those approaching their payer-specific deadline. It's the first agent to ship in the rules-engine architecture and the simplest because the logic is deterministic (no LLM judgment required).
+
+This is also the agent that becomes the centerpiece of the May 12 demo with Rosemary. "Here's a claim. The rules engine knows the deadline. The agent surfaced it 30 days before expiration. The biller knows what to do. This claim doesn't expire."
+
+## Standing constraints
+
+- No live Stedi submissions during verification
+- Commit messages must include verification queries WITH their actual results
+- All schema migrations must be idempotent
+- Agent runs on a cron job; ensure it doesn't double-fire if a deploy happens mid-run
+
+## Tasks
+
+### Task 1 — Schema for tracking
+
+Add columns to `claims` table:
+
+```sql
+ALTER TABLE claims 
+ADD COLUMN IF NOT EXISTS timely_filing_deadline DATE,
+ADD COLUMN IF NOT EXISTS timely_filing_days_remaining INTEGER,
+ADD COLUMN IF NOT EXISTS timely_filing_status TEXT 
+  CHECK (timely_filing_status IN ('safe', 'caution', 'urgent', 'critical', 'expired') OR timely_filing_status IS NULL),
+ADD COLUMN IF NOT EXISTS timely_filing_last_evaluated_at TIMESTAMP;
+```
+
+Status mapping based on days_remaining:
+- `safe`: > 60 days remaining
+- `caution`: 31-60 days
+- `urgent`: 8-30 days
+- `critical`: 1-7 days
+- `expired`: ≤ 0 days
+
+Create a separate table for alert history (for audit trail and de-duplication):
+
+```sql
+CREATE TABLE IF NOT EXISTS timely_filing_alerts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  claim_id UUID NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  
+  alert_status TEXT NOT NULL,         -- the status when alert fired
+  days_remaining INTEGER NOT NULL,
+  deadline_date DATE NOT NULL,
+  
+  alert_method TEXT NOT NULL,         -- 'in_app' | 'email' | 'both'
+  alert_sent_at TIMESTAMP DEFAULT NOW(),
+  alert_acknowledged_at TIMESTAMP,
+  alert_acknowledged_by TEXT,         -- user_id who marked acknowledged
+  
+  -- Prevent duplicate alerts for the same status threshold
+  UNIQUE (claim_id, alert_status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tf_alerts_org_unack 
+  ON timely_filing_alerts (organization_id, alert_acknowledged_at) 
+  WHERE alert_acknowledged_at IS NULL;
+```
+
+### Task 2 — Daily evaluation job
+
+Create `server/services/timely-filing-guardian.ts` with:
+
+```typescript
+export async function evaluateAllActiveClaims(): Promise<EvaluationStats>
+```
+
+The function:
+
+1. Queries all claims where status IN ('draft', 'submitted', 'pending', 'denied', 'resubmitted') — basically anything not in a terminal state
+2. For each claim, looks up the payer's timely filing days from `payer_manual_extractions` where `section_type = 'timely_filing'` and `review_status = 'approved'`
+3. If multiple rows match (different rules per plan_product), picks the one matching the claim's plan_product, falling back to the "all" rule
+4. If no rule found for the payer, uses a default of 365 days (Medicare's standard) but logs a warning that this payer needs manual review
+5. Calculates `deadline = service_date + timely_filing_days`
+6. Calculates `days_remaining = deadline - today`
+7. Determines status from the mapping above
+8. Updates the claim's timely_filing_* columns
+9. If the new status is at or below the threshold for an alert (caution and worse), creates a row in `timely_filing_alerts` (UNIQUE constraint prevents duplicates per claim per status)
+
+Schedule via cron: every day at 6 AM UTC.
+
+### Task 3 — In-app alerts surface
+
+Add a new top-level navigation item: **"Filing Alerts"** with a badge showing unacknowledged count.
+
+The Filing Alerts page lists all alerts where `alert_acknowledged_at IS NULL`, grouped by severity:
+
+- **CRITICAL** — claims with ≤ 7 days. Red header. Shows count, claim list. Each claim has a "Take Action" button.
+- **URGENT** — claims with 8-30 days. Amber header.
+- **CAUTION** — claims with 31-60 days. Blue header.
+- **EXPIRED** — claims past deadline. Black header. Special action: "Mark as written off" or "File late with cause documentation."
+
+For each alert row:
+- Patient name, claim ID, payer name, plan product
+- Service date and deadline date
+- Days remaining (or days overdue if expired)
+- Last activity timestamp
+- "Take Action" button → opens the claim
+- "Acknowledge" button → sets `alert_acknowledged_at` (clears from list but preserved in audit table)
+- "Snooze 7 days" button → re-fires alert in a week if still unresolved
+
+The page should also have a filter: by org (for multi-tenant admins), by payer, by status, by service date range.
+
+### Task 4 — Email digests
+
+Once a day after the evaluation job completes, send email digests:
+
+**To biller users (role: biller)**:
+- Subject: "Filing Alerts — [N] claims need attention"
+- Body: count by severity, top 5 most urgent claims with deadline dates, link to the in-app filing alerts page
+- Only sent if there are critical or urgent alerts; suppress otherwise to avoid noise
+
+**To admin users (role: admin, rcm_manager)**:
+- Subject: "Daily Filing Risk Report"
+- Body: counts by org (if multi-tenant), counts by severity, list of payers with unmapped rules
+- Sent daily even if no alerts (so admins notice when the daily job stops working)
+
+Use Gmail or your existing email service. If email isn't configured, skip silently with a log warning — don't block the in-app surface.
+
+### Task 5 — Claim-level filing widget
+
+On the claim detail page, add a small widget showing:
+
+- Current days_remaining
+- Deadline date  
+- Status badge (matching the colors)
+- "Last evaluated: 6 hours ago" timestamp
+- "Re-evaluate now" button (manual trigger for admins to test or after manual data changes)
+
+If no rule found for the payer:
+
+> ⚠️ Timely filing deadline not configured for {payer_name}. Using Medicare default (365 days). [Configure rule]
+
+The "Configure rule" link goes to `/admin/payer-manuals` filtered to that payer.
+
+### Task 6 — Activity log integration
+
+Every time the agent updates a claim's status, log it in the existing claim activity log:
+
+```
+Type: Timely Filing Update
+Notes: "Status changed from {old_status} to {new_status}. {N} days remaining until {payer_name} deadline ({date}). Rule source: {payer_manual_extractions.id}, page {source_page}."
+```
+
+Don't log if status didn't change (avoid log spam from daily reruns).
+
+### Task 7 — Verification queries
+
+After first successful run, query against `PRODUCTION_READONLY_DATABASE_URL`:
+
+```sql
+-- Stats from the daily job
+SELECT 
+  timely_filing_status,
+  COUNT(*) AS claim_count
+FROM claims 
+WHERE timely_filing_status IS NOT NULL
+GROUP BY timely_filing_status
+ORDER BY timely_filing_status;
+
+-- Active alerts
+SELECT 
+  alert_status, 
+  COUNT(*) AS active_alerts
+FROM timely_filing_alerts
+WHERE alert_acknowledged_at IS NULL
+GROUP BY alert_status;
+
+-- Payers without timely filing rules
+SELECT DISTINCT 
+  c.payer_id, 
+  p.name AS payer_name,
+  COUNT(c.id) AS unevaluated_claims
+FROM claims c
+LEFT JOIN payers p ON p.id = c.payer_id
+WHERE c.timely_filing_deadline IS NULL
+  AND c.status IN ('draft', 'submitted', 'pending', 'denied', 'resubmitted')
+GROUP BY c.payer_id, p.name
+ORDER BY unevaluated_claims DESC;
+
+-- Recent alert activity (audit check)
+SELECT 
+  date_trunc('day', alert_sent_at) AS day,
+  alert_status,
+  COUNT(*) AS alerts_fired
+FROM timely_filing_alerts
+WHERE alert_sent_at > NOW() - INTERVAL '7 days'
+GROUP BY day, alert_status
+ORDER BY day DESC;
+```
+
+Include actual results in the commit message.
+
+## Acceptance
+
+- Cron job runs daily at 6 AM UTC, completes successfully
+- Every active claim has timely_filing_* columns populated
+- `timely_filing_alerts` table has rows for claims at caution/urgent/critical/expired
+- Filing Alerts navigation page works and shows grouped unacknowledged alerts
+- Email digests send (if email is configured)
+- Claim detail page shows the widget
+- Activity log captures status changes
+- All verification queries return expected data
+
+## What NOT to do in this prompt
+
+- Do not auto-resubmit claims at expiration. Surface, don't decide.
+- Do not auto-send emails to patients or payers. This is an internal alert tool only.
+- Do not assume timely filing rules are always present. Handle the "no rule found" case with the Medicare default + warning.
+- Do not write to claim records via the agent except for the timely_filing_* columns and activity log entries. Keep the agent's blast radius narrow.
+
+## Output expected from Replit
+
+1. List of files modified
+2. SQL migrations with rollback
+3. Verification query results from Task 7
+4. Screenshots:
+   - Filing Alerts navigation page with grouped severity sections
+   - A claim detail page with the filing widget
+   - The claim activity log showing a Timely Filing Update entry
+   - One example email digest (with sample data)
+5. Cron job configuration confirmed (deploy logs showing the schedule)
+
+## Demo flow this enables (for May 12 prep)
+
+After this lands, the demo arc becomes:
+
+1. Open Filing Alerts → "Here are 23 claims approaching their deadline this week."
+2. Click into a CRITICAL alert → "This claim was submitted to Aetna 110 days ago. Aetna's timely filing window is 120 days. We have 10 days. Without this surface, the biller would have lost it."
+3. Click "View source" on the rule → "The 120-day window came from Aetna's provider manual, page 47, approved by Rosemary on May 5."
+4. Show the audit trail → "Every alert is logged. Every rule has a citation. Nothing happens by magic."
+
+That's the moment the rules engine stops being theoretical.
