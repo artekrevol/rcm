@@ -1,6 +1,13 @@
 import { chromium } from "playwright";
 
 const BASE = "http://localhost:5000";
+const EMAIL = process.env.SCREENSHOT_EMAIL;
+const PASSWORD = process.env.SCREENSHOT_PASSWORD;
+
+if (!EMAIL || !PASSWORD) {
+  console.error("Missing SCREENSHOT_EMAIL or SCREENSHOT_PASSWORD environment variables.");
+  process.exit(1);
+}
 
 async function run() {
   const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });

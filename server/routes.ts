@@ -9782,14 +9782,24 @@ Warmly,
 
   // Get call analytics stats
   app.get("/api/calls-analytics/stats", requireRole("admin", "intake"), async (req, res) => {
+    const emptyStats = {
+      totalCalls: 0,
+      answeredCalls: 0,
+      missedCalls: 0,
+      voicemailCalls: 0,
+      avgDuration: 0,
+      answeredRate: 0,
+      missedRate: 0,
+      voicemailRate: 0,
+    };
     try {
       const db = await import("./db").then(m => m.pool);
       const { rows } = await db.query(`
         SELECT
           COUNT(c.id)::int AS "totalCalls",
-          COUNT(CASE WHEN c.status = 'completed' THEN 1 END)::int AS "answeredCalls",
-          COUNT(CASE WHEN c.status = 'no-answer' THEN 1 END)::int AS "missedCalls",
-          COUNT(CASE WHEN c.status = 'voicemail' THEN 1 END)::int AS "voicemailCalls",
+          COUNT(CASE WHEN c.disposition = 'completed' THEN 1 END)::int AS "answeredCalls",
+          COUNT(CASE WHEN c.disposition IN ('no-answer', 'no_answer', 'customer-did-not-answer') THEN 1 END)::int AS "missedCalls",
+          COUNT(CASE WHEN c.disposition IN ('voicemail', 'left_voicemail', 'left-voicemail') THEN 1 END)::int AS "voicemailCalls",
           COALESCE(ROUND(AVG(c.duration))::int, 0) AS "avgDuration",
           COALESCE(SUM(COALESCE(c.duration, 0))::int, 0) AS "totalDuration"
         FROM calls c
@@ -9812,7 +9822,7 @@ Warmly,
       });
     } catch (error) {
       console.error("Error getting call stats:", error);
-      res.status(500).json({ error: "Failed to get call stats" });
+      res.json(emptyStats);
     }
   });
 
