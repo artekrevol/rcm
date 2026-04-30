@@ -9856,8 +9856,8 @@ Warmly,
       const { reviewStatus, notes, extractedJson, appliesToPlanProducts } = req.body;
       const user = req.user as any;
 
-      if (!["approved", "rejected", "pending", "not_found"].includes(reviewStatus)) {
-        return res.status(400).json({ error: "reviewStatus must be approved, rejected, pending, or not_found" });
+      if (!["approved", "rejected", "pending", "not_found", "needs_reverification"].includes(reviewStatus)) {
+        return res.status(400).json({ error: "reviewStatus must be approved, rejected, pending, not_found, or needs_reverification" });
       }
 
       // Build param list dynamically — keep id as the last param so WHERE $N is always correct

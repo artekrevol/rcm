@@ -1,0 +1,140 @@
+Prompt A — Multi-Document Source Schema Refactor
+Context
+Currently payer_manuals is a 1:1 table — one ingested document per row, tied directly to a payer_id. This works for small payers like TriWest where everything lives in one document. It breaks for Tier-1 commercial payers like UnitedHealthcare, which have:
+
+1 master administrative guide (484 pages)
+11+ supplements (Empire Plan, Oxford, NHP, Mid-Atlantic, Peoples Health, Preferred Care Network, OneNet PPO, Capitation/Delegation, Oxford Level Funded, Sanitas, Kelsey-Seybold)
+1 separately-maintained Prior Authorization List (updated monthly, lives at a different URL)
+Hundreds of reimbursement policies (each a separate document)
+Thousands of medical policies (each a separate document)
+Monthly bulletins announcing changes to any of the above
+
+Prompt A reorganizes the schema so a payer can have N source documents of varying types, each with its own effective date range and provenance, and each carrying extraction items keyed to the document — not the payer. This unlocks every subsequent build (B2, C0, C, and the Phase 2/3 work on reimbursement policies + medical policies).
+What Prompt A delivers
+
+New payer_source_documents table replacing payer_manuals, with document_type taxonomy, parent/child document relationships, and effective-date semantics.
+Migration of all existing payer_manuals rows to payer_source_documents with document_type = 'admin_guide', preserving every existing extraction item with its current FK linkage redirected.
+Updated extraction pipeline that writes to the new schema natively (B1's work in claude-extractor.ts and manual-extractor.ts continues to function unchanged at the rule-kind level — only the parent table changes).
+Coverage matrix and admin UI updated to roll up from documents → payer.
+Every existing API endpoint preserved; route handlers internally translate to the new schema.
+
+Build plan — 6 tasks
+T1 — Schema migration
+Create payer_source_documents table with these columns:
+id                       UUID PRIMARY KEY
+payer_id                 UUID NOT NULL REFERENCES payers(id) ON DELETE CASCADE
+document_type            VARCHAR NOT NULL REFERENCES document_types(code)
+parent_document_id       UUID NULL REFERENCES payer_source_documents(id) ON DELETE SET NULL
+document_name            VARCHAR NOT NULL
+source_url               VARCHAR NULL
+file_content             BYTEA NULL
+file_name                VARCHAR NULL
+document_version         VARCHAR NULL    (e.g. "2026.1", "April 2026")
+effective_start          DATE NULL
+effective_end            DATE NULL
+status                   VARCHAR NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending','processing','ready_for_review','completed','failed','superseded'))
+last_verified_date       DATE NULL
+created_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+notes                    TEXT NULL
+Create document_types reference table seeded with 8 rows:
+codelabeltypical_update_cadenceactive_for_extractionadmin_guideAdministrative GuideannualtruesupplementSupplement to Admin Guideannualtruepa_listPrior Authorization Listmonthlytruereimbursement_policyReimbursement Policyquarterlyfalse (Phase 2)medical_policyMedical Policymonthlyfalse (Phase 2)bulletinUpdate Bulletinmonthlyfalse (Phase 3)contractProvider Contract / Agreementper-contractfalse (Phase 3)fee_scheduleFee Scheduleannualfalse (Phase 3)
+Add foreign key with ON UPDATE CASCADE ON DELETE RESTRICT from payer_source_documents.document_type to document_types.code.
+Indexes:
+
+idx_psd_payer on (payer_id, document_type)
+idx_psd_parent on (parent_document_id) where parent_document_id IS NOT NULL
+idx_psd_effective on (payer_id, effective_start, effective_end)
+idx_psd_status on (status) where status IN ('pending', 'processing', 'ready_for_review')
+
+T2 — Migration script
+Single transactional migration:
+
+Create new tables (document_types, payer_source_documents).
+Seed document_types with the 8 rows above.
+For every existing payer_manuals row, INSERT a corresponding payer_source_documents row with document_type = 'admin_guide', copying all fields (id stays the same so foreign keys don't break), and setting effective_start = NULL, effective_end = NULL (to be backfilled by reviewer).
+Update manual_extraction_items — rename column manual_id to source_document_id. The FK target changes from payer_manuals(id) to payer_source_documents(id). Because we preserved IDs in step 3, no row data has to change.
+Update payer_manual_sources — rename column linked_manual_id to linked_source_document_id, same FK retarget.
+Update payer_manual_extraction_history — change column manual_id (if present) to source_document_id. Same FK retarget. Preserve all historical rows.
+Drop payer_manuals table at the end of the same transaction. Roll back on any error.
+
+Verification queries to run before COMMIT and abort if any fail:
+
+Count of payer_source_documents matches pre-migration count of payer_manuals
+Count of manual_extraction_items is unchanged
+No orphan rows in manual_extraction_items (every source_document_id has a parent)
+No orphan rows in payer_manual_extraction_history
+
+T3 — API rename + compatibility layer
+Update API routes:
+
+GET /api/admin/payer-manuals → internally queries payer_source_documents WHERE document_type = 'admin_guide' for backwards compatibility. Add new endpoint GET /api/admin/payer-source-documents that returns all document types with optional ?document_type= filter.
+POST /api/admin/payer-manuals → accepts an optional document_type field (defaults to admin_guide to preserve current behavior). Writes to payer_source_documents.
+DELETE /api/admin/payer-manuals/:id → deletes from payer_source_documents. Keep working.
+POST /api/admin/payer-manuals/:id/process → unchanged externally; internally queries the new table.
+GET /api/admin/payer-manuals/:id/items → unchanged externally.
+PATCH /api/admin/payer-manual-items/:id → unchanged externally.
+GET /api/admin/payer-manual-coverage → updated to roll up from documents to payer (a payer with 1 admin_guide + 1 supplement + 1 pa_list now has 3 documents contributing to the matrix).
+GET /api/admin/payer-manual-coverage/validate → unchanged externally.
+
+Add new endpoints:
+
+GET /api/admin/document-types — returns the 8 document_type rows, used by frontend dropdowns.
+POST /api/admin/payer-source-documents — create with explicit document_type. Required for ingesting supplements and pa_lists.
+PATCH /api/admin/payer-source-documents/:id/parent — link a child document (e.g. a supplement) to its parent (the admin_guide).
+
+T4 — Extraction pipeline (manual-extractor.ts) update
+The pipeline already writes to manual_extraction_items.manual_id (now source_document_id). Only two changes:
+
+Update all variable names and parameter names from manualId to sourceDocumentId. Internal refactor only, no behavior change.
+The chunk relevance scorer should accept an optional document_type parameter. For admin_guide, use the current 14 keyword arrays. For pa_list, the keyword scorer is bypassed entirely — pa_list documents are processed by a different code path (don't build it in this prompt; just stub extractPaList() with a throw new Error('pa_list extraction not yet implemented — Prompt PA-LIST will deliver')). For supplement, use the same 14 keyword arrays as admin_guide (supplements look like mini admin guides).
+
+T5 — Frontend (admin pages)
+Two admin pages need updates:
+/admin/payer-manuals (existing page):
+
+Page title becomes "Payer Source Documents" but the URL stays as /admin/payer-manuals for now.
+Add a column "Document Type" with a colored chip (admin_guide = blue, supplement = teal, pa_list = orange, others = gray).
+Add a filter dropdown above the list: "All types | Admin guides only | Supplements only | PA lists only".
+When viewing a single document's items, show breadcrumb "[Payer Name] › [Document Type] › [Document Name]".
+For supplements, show a "Parent document: [link]" badge near the title.
+
+/admin/payer-manual-sources (the registry tab):
+
+Each top-20 payer row now shows a sub-list of its source documents (rather than a single linked_manual_id). Format: small icons per document_type with the count of approved items per document.
+
+Coverage matrix (/admin/payer-manuals coverage tab):
+
+The 4-column rule-kind matrix now rolls up across all documents for a payer. A payer with admin_guide (timely_filing approved) + supplement (timely_filing approved for HMO only) shows green in the timely_filing column with a small "(2 sources)" indicator.
+
+T6 — Documentation + replit.md update
+Update replit.md with a section "Source Document Architecture" describing:
+
+The 1:N payer → source documents relationship
+The 8 document_types and their update cadences
+How parent_document_id chains supplements to admin_guides
+The effective_start / effective_end date semantics
+How the migration preserved all existing data
+
+Verification before greenlight
+Before commit, run and report:
+
+Migration verification:  Count of pre-migration payer_manuals vs post-migration payer_source_documents WHERE document_type = 'admin_guide'. Must match exactly.
+Extraction items integrity: SELECT COUNT(*) FROM manual_extraction_items WHERE source_document_id NOT IN (SELECT id FROM payer_source_documents). Must return 0.
+API smoke test: GET /api/admin/payer-manuals still returns the existing list. POST /api/admin/payer-source-documents with document_type = 'supplement' and a parent_document_id creates a child document linked to its parent.
+Pipeline smoke test: Trigger extraction on the existing TriWest admin_guide row. The extraction items continue to be created against the same source_document_id (which equals the old manual_id).
+Frontend smoke test: The existing payer-manuals page renders without errors. Document type chips appear correctly. Filter dropdown narrows results.
+
+What Prompt A does NOT touch
+
+No changes to claude-extractor.ts (the 14 rule-kind prompts from B1 are unchanged).
+No changes to the rules engine evaluation logic.
+No changes to the patient form, claim wizard, or any practice-facing UI.
+No actual ingestion of new document types — pa_list, supplement, etc. become possible after Prompt A but a separate prompt actually exercises them.
+No effective-date enforcement on rule evaluation yet — the columns exist on documents but rule-evaluation joining on effective dates is Prompt D.
+No changes to practice_payer_enrollments or activation logic — that's Prompt C0.
+
+Calendar
+Estimated 3 working days for a focused build. T1 + T2 (schema + migration) on day 1. T3 + T4 (API + pipeline) on day 2. T5 + T6 (frontend + docs) on day 3.
+Confirm the plan and the migration approach. Greenlight to start once confirmed.

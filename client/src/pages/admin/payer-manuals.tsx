@@ -2,7 +2,7 @@ import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
-  FileText, Plus, Play, CheckCircle2, XCircle, Clock, AlertCircle,
+  FileText, Plus, Play, CheckCircle2, XCircle, Clock, AlertCircle, AlertTriangle,
   ChevronDown, ChevronRight, ExternalLink, Trash2, RefreshCw, Pencil,
   BookOpen, Zap, Upload, Link2, Database, BarChart3, List, History,
   ShieldAlert, User, CalendarCheck, RotateCcw,
@@ -109,6 +109,7 @@ function reviewStatusIcon(status: string) {
   if (status === "approved") return <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />;
   if (status === "rejected") return <XCircle className="h-4 w-4 text-red-500 shrink-0" />;
   if (status === "not_found") return <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />;
+  if (status === "needs_reverification") return <AlertTriangle className="h-4 w-4 text-orange-500 shrink-0" />;
   return <Clock className="h-4 w-4 text-amber-500 shrink-0" />;
 }
 
@@ -1537,6 +1538,7 @@ export default function PayerManualsPage() {
                   <SelectContent>
                     <SelectItem value="all">All statuses</SelectItem>
                     <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="needs_reverification">Needs re-verification</SelectItem>
                     <SelectItem value="approved">Approved</SelectItem>
                     <SelectItem value="rejected">Rejected</SelectItem>
                     <SelectItem value="not_found">Not found</SelectItem>
