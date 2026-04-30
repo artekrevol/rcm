@@ -1846,6 +1846,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_run_events_run ON flow_run_events(flow_run_id)`);
 
+    // One-time: mark stuck flow run as failed so the orchestrator stops retrying it
+    await pool.query(`
+      UPDATE flow_runs SET status = 'failed', updated_at = NOW()
+      WHERE id = 'e548ff29-afe6-4df0-947c-c4790835e364' AND status != 'failed'
+    `);
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS comm_locks (
         id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -7880,23 +7886,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return state ? (stateTimezones[state] || "Unknown") : "Unknown";
     };
 
-    const replitDomains = process.env.REPLIT_DOMAINS;
-    const appUrl = process.env.APP_URL
-      || (replitDomains ? `https://${replitDomains.split(",")[0]}` : null)
-      || "https://www.claimshield.health";
-
     return {
       assistantId,
       phoneNumberId,
       customer: {
         number: formatToE164(lead.phone),
         name: lead.name || "Patient",
-      },
-      server: {
-        url: `${appUrl}/api/vapi/webhook`,
-        ...(process.env.VAPI_WEBHOOK_SECRET
-          ? { secret: process.env.VAPI_WEBHOOK_SECRET }
-          : {}),
       },
       metadata: {
         leadId: lead.id,

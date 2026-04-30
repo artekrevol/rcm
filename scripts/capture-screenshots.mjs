@@ -9,8 +9,11 @@ async function run() {
 
   await page.goto(`${BASE}/auth/login`);
   await page.waitForTimeout(2000);
-  await page.fill('[data-testid="input-email"]', "abeer@tekrevol.com");
-  await page.fill('[data-testid="input-password"]', "Apps@1986N");
+  const email = process.env.SCREENSHOT_EMAIL;
+  const password = process.env.SCREENSHOT_PASSWORD;
+  if (!email || !password) throw new Error("SCREENSHOT_EMAIL and SCREENSHOT_PASSWORD env vars are required");
+  await page.fill('[data-testid="input-email"]', email);
+  await page.fill('[data-testid="input-password"]', password);
   await page.click('button[type="submit"]');
   await page.waitForURL(/^http:\/\/localhost:5000\/(?!auth)/, { timeout: 20000 });
   console.log("Logged in:", page.url());

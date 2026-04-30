@@ -299,26 +299,12 @@ export async function executeStep(
       const lFirstName = lead.first_name || nameParts[0] || "Unknown";
       const lLastName = lead.last_name || nameParts.slice(1).join(" ") || "";
 
-      // Determine the server URL so Vapi webhooks always return to this instance
-      // regardless of whether the call was initiated from dev or production.
-      const replitDomains = process.env.REPLIT_DOMAINS; // e.g. "www.claimshield.health,abc.replit.dev"
-      const appUrl = process.env.APP_URL
-        || (replitDomains ? `https://${replitDomains.split(",")[0]}` : null)
-        || "https://www.claimshield.health";
-      const vapiServerUrl = `${appUrl}/api/vapi/webhook`;
-
       const vapiPayload = {
         assistantId,
         phoneNumberId,
         customer: {
           number: formatPhone(lead.phone),
           name: lead.name || "Patient",
-        },
-        server: {
-          url: vapiServerUrl,
-          ...(process.env.VAPI_WEBHOOK_SECRET
-            ? { secret: process.env.VAPI_WEBHOOK_SECRET }
-            : {}),
         },
         metadata: {
           leadId,
@@ -388,6 +374,7 @@ export async function executeStep(
       }
 
       const callData = await response.json();
+      console.log(`[flow-step-executor] Vapi call created: vapi_call_id=${callData.id}`);
       await pool.query(
         `INSERT INTO calls
            (id, lead_id, vapi_call_id, transcript, summary, disposition, organization_id)
