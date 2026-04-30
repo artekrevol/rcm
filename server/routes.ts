@@ -469,21 +469,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // ── Super Admin user seed ─────────────────────────────────────────────
     {
       const { hashPassword } = await import("./auth");
-      const superPwd = process.env.SUPER_ADMIN_PASSWORD || 'Apps@1986N';
-      if (!process.env.SUPER_ADMIN_PASSWORD) {
-        console.warn("WARNING: SUPER_ADMIN_PASSWORD not set — using default. Set this env var in production!");
-      }
-      const hashed = await hashPassword(superPwd);
       const { rows: saCheck } = await pool.query("SELECT id FROM users WHERE email = 'abeer@tekrevol.com'");
       if (saCheck.length === 0) {
+        // First-time creation: use SUPER_ADMIN_PASSWORD env var or fallback default
+        const superPwd = process.env.SUPER_ADMIN_PASSWORD || 'Apps@1986N';
+        const hashed = await hashPassword(superPwd);
         await pool.query(
           "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, 'abeer@tekrevol.com', $1, 'super_admin', 'Abeer (Platform Admin)', NULL)",
           [hashed]
         );
         console.log("Created super_admin user: abeer@tekrevol.com");
-      } else {
+      } else if (process.env.SUPER_ADMIN_PASSWORD) {
+        // Only reset password if explicitly configured via env var — never overwrite a manually-set password
+        const hashed = await hashPassword(process.env.SUPER_ADMIN_PASSWORD);
         await pool.query("UPDATE users SET password = $1, role = 'super_admin' WHERE email = 'abeer@tekrevol.com'", [hashed]);
-        console.log("Synced super_admin password: abeer@tekrevol.com");
+        console.log("Synced super_admin password from SUPER_ADMIN_PASSWORD env var: abeer@tekrevol.com");
+      } else {
+        // User exists, no env var set — leave password untouched
+        await pool.query("UPDATE users SET role = 'super_admin' WHERE email = 'abeer@tekrevol.com'");
+        console.log("super_admin role confirmed: abeer@tekrevol.com (password unchanged)");
       }
     }
 
