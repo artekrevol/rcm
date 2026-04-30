@@ -6689,6 +6689,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // Vapi Webhook for call updates (recording, transcript, etc.)
   app.post("/api/vapi/webhook", async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const incomingSecret = req.headers['x-vapi-secret'];
       if (!process.env.VAPI_WEBHOOK_SECRET) {
         console.warn('[vapi-webhook] VAPI_WEBHOOK_SECRET not set — accepting all webhooks');
@@ -7186,6 +7187,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // Inbound SMS from Twilio — pauses active flow runs for the lead
   app.post("/api/twilio/inbound", async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const { From, Body } = req.body;
       if (!From) return res.status(200).end();
 
@@ -7531,6 +7533,7 @@ Warmly,
   // Flow Inspector — get flow runs + events for a lead
   app.get("/api/leads/:id/flow-runs", requireRole("admin", "intake"), async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const runsResult = await pool.query(
         `SELECT
            fr.id, fr.status, fr.current_step_index, fr.next_action_at,
@@ -7581,6 +7584,7 @@ Warmly,
   // POST /api/leads/:id/trigger-flow — manually enroll a lead into matching flows
   app.post("/api/leads/:id/trigger-flow", requireRole("admin", "intake"), async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const leadId = req.params.id;
       const lead = await storage.getLead(leadId);
       if (!lead) return res.status(404).json({ error: "Lead not found" });

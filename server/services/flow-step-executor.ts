@@ -173,10 +173,10 @@ export async function executeStep(
     }
 
     if (step.step_type === "sms") {
-      if (!twilioClient || !twilioMessagingServiceSid) {
+      if (!twilioClient) {
         console.warn("[flow-step-executor] Twilio not configured; skipping SMS step");
         await logFlowEvent(flowRunId, "step_skipped", {
-          reason: "Twilio not configured",
+          reason: "Twilio not configured (missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN)",
           stepId: step.id,
         });
         await advanceToNextStep(flowRunId, "failure");
@@ -436,6 +436,7 @@ export async function executeStep(
         return "00010";
       };
 
+      let vobSucceeded = false;
       try {
         const result = await checkEligibility({
           controlNumber: String(Math.floor(Math.random() * 900000000) + 100000000),
@@ -477,6 +478,7 @@ export async function executeStep(
             lead.organization_id,
           ]
         );
+        vobSucceeded = true;
       } catch (err) {
         console.error("[flow-step-executor] Stedi VOB error:", err);
         await logFlowEvent(flowRunId, "step_failed", {
@@ -486,7 +488,7 @@ export async function executeStep(
         });
       }
 
-      await advanceToNextStep(flowRunId, "success");
+      await advanceToNextStep(flowRunId, vobSucceeded ? "success" : "failure");
       return;
     }
 
@@ -527,10 +529,13 @@ export async function executeStep(
         return;
       }
 
-      const subject = "Caritas Senior Care — Healthcare Coverage Information";
+      const subject = applyTemplateVars(
+        step.subject_inline || CARITAS.emailTemplates.nurture.subject,
+        templateVars
+      );
       const body = step.template_inline
         ? applyTemplateVars(step.template_inline, templateVars)
-        : `Hi ${firstName}, thank you for your interest in Caritas Senior Care. We're here to help.`;
+        : applyTemplateVars(CARITAS.emailTemplates.nurture.body, templateVars);
 
       let emailSent = false;
       try {

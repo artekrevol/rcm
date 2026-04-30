@@ -195,7 +195,7 @@ export default function DealsPage() {
     name: "",
     phone: "",
     email: "",
-    source: "website",
+    source: "caritas_web",
     status: "new",
     state: "",
     preferredName: "",
@@ -242,7 +242,7 @@ export default function DealsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
       queryClient.invalidateQueries({ queryKey: ["/api/leads/worklist"] });
       setCreateOpen(false);
-      setNewLead({ name: "", phone: "", email: "", source: "website", status: "new", state: "", preferredName: "", serviceNeeded: "", bestTimeToCall: "", notes: "" });
+      setNewLead({ name: "", phone: "", email: "", source: "caritas_web", status: "new", state: "", preferredName: "", serviceNeeded: "", bestTimeToCall: "", notes: "" });
       toast({ title: "Lead created successfully" });
     },
     onError: () => {
