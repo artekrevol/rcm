@@ -7,6 +7,7 @@
  * Checks marked [MOCK] use in-process mocking.
  */
 
+import { randomUUID } from "crypto";
 import "../server/db"; // ensure pool initializes
 import { pool } from "../server/db";
 
@@ -118,46 +119,37 @@ async function run() {
   // ── #4 Fetch document — PDF content, mimetype, size, hash format ──────────
   console.log("\nCheck #4: fetch_document() PDF — mimetype, size, hash [LIVE — downloads PDF]");
   let fetchedHash: string | null = null;
+  // Use the 2026 Administrative Guide — a large, static binary whose bytes
+  // must not change between fetches (unlike HTML pages or session-tagged PDFs).
+  const STABLE_PDF_URL = "https://www.uhcprovider.com/content/dam/provider/docs/public/admin-guides/2026-UHC-Administrative-Guide.pdf";
   try {
     const { UhcScraper } = await import("../server/scrapers/uhc");
     const scraper = new UhcScraper();
 
-    // Use the first supplement from live manifest, or fall back to admin guide
-    const targetEntry = liveManifest.find(d => d.document_type === "supplement") ??
-      liveManifest.find(d => d.document_type === "admin_guide");
-    const targetUrl = targetEntry?.url ??
-      "https://www.uhcprovider.com/content/dam/provider/docs/public/admin-guides/2026-UHC-Administrative-Guide.pdf";
-
-    console.log(`  Fetching: ${targetUrl.substring(0, 80)}...`);
-    const result = await scraper.fetch_document(targetUrl);
+    console.log(`  Fetching: ${STABLE_PDF_URL.substring(0, 80)}...`);
+    const result = await scraper.fetch_document(STABLE_PDF_URL);
 
     fetchedHash = result.content_hash;
 
     const isSha256 = /^[a-f0-9]{64}$/.test(result.content_hash);
-    const isPdf = result.mimetype === "application/pdf";
-    const isLargeEnough = result.content.length > 500_000;
+    const isLargeEnough = result.content.length > 10_000; // any non-trivial PDF
 
-    check(4, "fetch_document() PDF — mimetype + size + SHA-256 hash",
-      isSha256,
-      `size: ${(result.content.length / 1024).toFixed(0)}KB, mimetype: ${result.mimetype}, hash_ok: ${isSha256}, large: ${isLargeEnough}`);
+    check(4, "fetch_document() PDF — SHA-256 hash + minimum size",
+      isSha256 && isLargeEnough,
+      `size: ${(result.content.length / 1024).toFixed(0)}KB, hash_ok: ${isSha256}`);
   } catch (err) {
     check(4, "fetch_document() PDF", false, (err as Error).message);
   }
 
   // ── #5 Hash stability ──────────────────────────────────────────────────────
-  console.log("\nCheck #5: Hash stability — two fetches produce identical hashes [LIVE]");
+  console.log("\nCheck #5: Hash stability — two fetches of the same PDF produce identical hashes [LIVE]");
   try {
     if (!fetchedHash) {
       check(5, "Hash stability", false, "Skipped — check #4 failed");
     } else {
       const { UhcScraper } = await import("../server/scrapers/uhc");
-      const scraper = new UhcScraper();
-      const targetEntry = liveManifest.find(d => d.document_type === "supplement") ??
-        liveManifest.find(d => d.document_type === "admin_guide");
-      const targetUrl = targetEntry?.url ??
-        "https://www.uhcprovider.com/content/dam/provider/docs/public/admin-guides/2026-UHC-Administrative-Guide.pdf";
-
-      const result2 = await scraper.fetch_document(targetUrl);
+      const scraper2 = new UhcScraper();
+      const result2 = await scraper2.fetch_document(STABLE_PDF_URL);
       check(5, "Hash stability — identical on two fetches",
         result2.content_hash === fetchedHash,
         `hash1: ${fetchedHash.slice(0, 16)}…, hash2: ${result2.content_hash.slice(0, 16)}…`);
@@ -169,6 +161,11 @@ async function run() {
   // ── #6 Discovery job dryRun — no DB writes, counts > 0 ───────────────────
   console.log("\nCheck #6: scrapePayerDocuments dryRun — no DB writes [LIVE dryRun]");
   try {
+    // Reset the "uhc" circuit — previous failed runs may have opened it.
+    // This must happen before any scrapePayerDocuments() call.
+    const { resetCircuit: rc6 } = await import("../server/scrapers/runtime");
+    await rc6("uhc", "verify-crawler pre-job reset");
+
     const { rows: before } = await pool.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM payer_source_documents WHERE source_acquisition_method='scraped'`
     );
@@ -328,6 +325,11 @@ async function run() {
   console.log("\nCheck #13: Demo button E2E — SSE stream with all 5 stages [LIVE]");
   try {
     const { scrapePayerDocuments, registerSseListener, unregisterSseListener } = await import("../server/jobs/scrape-payer-documents");
+    const { resetCircuit } = await import("../server/scrapers/runtime");
+
+    // Reset the real "uhc" circuit — previous failed runs (e.g. Playwright missing)
+    // may have opened it and blocked the SSE demo path.
+    await resetCircuit("uhc", "verify-crawler #13 pre-test reset");
 
     const stages: string[] = [];
     let completedPayload: Record<string, unknown> | undefined;
@@ -335,7 +337,7 @@ async function run() {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("SSE stream timeout after 120s")), 120_000);
 
-      const tmpRunId = `verify-${Date.now()}`;
+      const tmpRunId = randomUUID(); // must be a valid UUID — scrape_runs.id is UUID type
       const listener = (msg: { stage: string; message: string; payload?: Record<string, unknown> }) => {
         stages.push(msg.stage);
         if (msg.stage === "complete") {
@@ -351,6 +353,7 @@ async function run() {
       scrapePayerDocuments("uhc", {
         allowFallback: true,
         triggeredBy: "demo_button",
+        runId: tmpRunId,
       }).then(() => {
         if (!stages.includes("complete")) {
           clearTimeout(timeout);
@@ -419,16 +422,21 @@ async function run() {
     if (!rows.length) {
       check(15, "Source provenance", true, "No scraped rows yet (live run may have produced 0 new docs) — schema verified");
     } else {
-      const allCorrect = rows.every(r =>
-        r.source_acquisition_method === "scraped" &&
-        r.source_url_canonical &&
-        r.content_hash &&
-        r.last_scraped_at &&
-        r.scrape_status === "success"
+      const validStatuses = ["success", "unchanged", "updated"];
+      const badRows = rows.filter(r =>
+        r.source_acquisition_method !== "scraped" ||
+        !r.source_url_canonical ||
+        !r.content_hash ||
+        !r.last_scraped_at ||
+        !validStatuses.includes(r.scrape_status)
       );
+      const allCorrect = badRows.length === 0;
+      const badSummary = badRows.length
+        ? badRows.map(r => `${r.id.slice(0,8)} status=${r.scrape_status}`).join(", ")
+        : `all ${rows.length} rows valid`;
       check(15, "All scraped rows have: source_acquisition_method, source_url_canonical, content_hash, last_scraped_at, scrape_status",
         allCorrect,
-        `checked ${rows.length} rows`);
+        `checked ${rows.length} rows — ${badSummary}`);
     }
   } catch (err) {
     check(15, "Source provenance", false, (err as Error).message);

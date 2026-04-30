@@ -11908,6 +11908,7 @@ Warmly,
       // Get the actual run_id from scrape_runs (inserted by job)
       // Small delay to let the INSERT happen before returning
       await new Promise(r => setTimeout(r, 200));
+      const { pool } = await import("./db");
       const { rows } = await pool.query<{ id: string }>(
         `SELECT id FROM scrape_runs WHERE payer_code=$1 ORDER BY started_at DESC LIMIT 1`,
         [payer_code]
@@ -11922,6 +11923,7 @@ Warmly,
   // GET /api/admin/scrapers/runs/:run_id
   app.get("/api/admin/scrapers/runs/:run_id", requireSuperAdmin, async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const { rows } = await pool.query(
         `SELECT * FROM scrape_runs WHERE id=$1`,
         [req.params.run_id]
@@ -11935,51 +11937,64 @@ Warmly,
 
   // GET /api/admin/scrapers/runs/:run_id/stream — SSE progress
   app.get("/api/admin/scrapers/runs/:run_id/stream", requireSuperAdmin, async (req, res) => {
-    const { runId } = { runId: req.params.run_id };
-    const { registerSseListener, unregisterSseListener } = await import("./jobs/scrape-payer-documents");
+    try {
+      const { runId } = { runId: req.params.run_id };
+      const { registerSseListener, unregisterSseListener } = await import("./jobs/scrape-payer-documents");
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
 
-    const send = (msg: Record<string, unknown>) => {
-      res.write(`data: ${JSON.stringify(msg)}\n\n`);
-    };
+      const send = (msg: Record<string, unknown>) => {
+        try { res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch {}
+      };
 
-    const listener = (msg: { stage: string; message: string; payload?: Record<string, unknown> }) => {
-      send({ ...msg });
-      if (msg.stage === "complete" || msg.stage === "circuit_open") {
-        cleanup();
+      const listener = (msg: { stage: string; message: string; payload?: Record<string, unknown> }) => {
+        send({ ...msg });
+        if (msg.stage === "complete" || msg.stage === "circuit_open") {
+          cleanup();
+        }
+      };
+
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        unregisterSseListener(runId, listener);
+        try { res.end(); } catch {}
+      };
+
+      registerSseListener(runId, listener);
+      req.on("close", cleanup);
+
+      // Check if run is already complete — send immediate complete if so
+      try {
+        const { pool: dbPool } = await import("./db");
+        const { rows } = await dbPool.query(
+          `SELECT status, report FROM scrape_runs WHERE id=$1`,
+          [runId]
+        );
+        if (rows.length && rows[0].status !== 'running') {
+          send({
+            stage: "complete",
+            message: "Run already completed.",
+            payload: rows[0].report ?? {},
+          });
+          cleanup();
+        }
+      } catch {
+        // non-fatal: SSE listener will still receive live stages
       }
-    };
-
-    const cleanup = () => {
-      unregisterSseListener(runId, listener);
-      res.end();
-    };
-
-    registerSseListener(runId, listener);
-    req.on("close", cleanup);
-
-    // Also check if run is already complete
-    const { rows } = await pool.query(
-      `SELECT status, report FROM scrape_runs WHERE id=$1`,
-      [runId]
-    );
-    if (rows.length && rows[0].status !== 'running') {
-      send({
-        stage: "complete",
-        message: "Run already completed.",
-        payload: rows[0].report ?? {},
-      });
-      cleanup();
+    } catch (err: any) {
+      if (!res.headersSent) res.status(500).json({ error: err.message });
     }
   });
 
   // GET /api/admin/scrapers/status
   app.get("/api/admin/scrapers/status", requireSuperAdmin, async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const { rows: circuits } = await pool.query(`SELECT * FROM scraper_circuit_state`);
       const { rows: lastRuns } = await pool.query(`
         SELECT DISTINCT ON (payer_code)
@@ -12040,6 +12055,7 @@ Warmly,
   // GET /api/admin/scrapers/runs — last 20 runs across all payers
   app.get("/api/admin/scrapers/runs", requireSuperAdmin, async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const { rows } = await pool.query(`
         SELECT id, payer_code, started_at, completed_at, status, used_fallback,
                triggered_by, triggered_by_user_id,
@@ -12062,6 +12078,7 @@ Warmly,
   // GET /api/admin/scrapers/discoveries
   app.get("/api/admin/scrapers/discoveries", requireSuperAdmin, async (req, res) => {
     try {
+      const { pool } = await import("./db");
       const days = parseInt(req.query.days as string) || 30;
       const payerCode = req.query.payer_code as string | undefined;
       const docType = req.query.document_type as string | undefined;

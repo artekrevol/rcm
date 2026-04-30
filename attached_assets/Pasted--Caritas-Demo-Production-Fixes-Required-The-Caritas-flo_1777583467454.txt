@@ -1,0 +1,189 @@
+# Caritas Demo — Production Fixes Required
+
+The Caritas flow demo has three production issues identified in a QA audit. 
+Fix them in the order below. Verify each fix works before moving to the next.
+
+Production environment: claimshield.health (Railway project "RCM")
+Active failing run for reference: 
+- lead_id: bc0f0640-90aa-4cbd-928d-8e32248d0959
+- flow_run_id: e548ff29-afe6-4df0-947c-c4790835e364
+- Stuck at: current_step_order=4, current_step_type=call
+
+Do not attempt to recover the existing failing run. Mark it as failed and 
+test the fixes against a fresh lead.
+
+---
+
+## P0 #1 — Vapi outbound call payload rejected with 400
+
+### Symptom
+Production Railway logs show repeated:
+[orchestrator] Processing 1 due flow run(s)
+[flow-step-executor] Vapi call failed: {}
+  message: [ 'property server should not exist' ],
+  error: 'Bad Request',
+  statusCode: 400
+
+The Caritas flow's voice call step (step 4) calls Vapi at 
+https://api.vapi.ai/call/phone with a "server" property in the request body. 
+Vapi's current API schema does not accept "server" at the top level of the 
+call creation request. The webhook URL must be configured at the assistant 
+level in Vapi's dashboard, not in the per-call request body.
+
+### What to do
+
+1. Find the Vapi outbound call creation code. It's the fetch/axios call to 
+   POST https://api.vapi.ai/call/phone in the flow-step-executor or in a 
+   shared Vapi service file. Show me the current request body structure 
+   before making changes.
+
+2. Remove the top-level "server" property from the request body. The 
+   request body should contain:
+   - assistantId
+   - phoneNumberId  
+   - customer (with the lead's phone number)
+   - assistantOverrides (transcriber, model, voice, firstMessage if you're 
+     overriding them per call)
+   - metadata (leadId, flowRunId, lockId)
+   
+   It should NOT contain "server" at the top level.
+
+3. Confirm the Vapi assistant 71a284d9-b37b-4b12-b721-834fa84e8ad9 has 
+   the webhook URL configured in the Vapi dashboard at the assistant level 
+   pointing to https://claimshield.health/api/vapi/webhook. If it doesn't, 
+   the webhook will need to be configured in the dashboard separately — 
+   tell me if that's needed and I'll handle it.
+
+4. Test the fix:
+   - Create a new lead with source="caritas_web" via POST /api/leads
+   - Watch Railway logs for the new flow_run
+   - Confirm: orchestrator picks it up, SMS step succeeds, wait step 
+     advances, call step now returns 200 from Vapi with a call ID 
+     instead of 400
+   - Confirm the call ID is logged: 
+     "[flow-step-executor] Vapi call created: vapi_call_id=<id>"
+
+5. Mark the existing stuck flow_run e548ff29-afe6-4df0-947c-c4790835e364 
+   as status='failed' so it stops retrying. Don't delete it — just stop 
+   the retry loop.
+
+Do not move to P0 #2 until you can show me a successful Vapi call creation 
+in the logs.
+
+---
+
+## P0 #2 — Add retry cap and failure handling
+
+### Symptom
+The orchestrator currently retries failed flow steps indefinitely. Flow 
+Inspector timeline fills up with repeated step_started → 
+"Vapi call initiation failed" pairs over hours. Looks broken in a demo.
+
+### What to do
+
+1. Add bounded retry handling. The cleanest approach:
+   - Add a column attempt_count INTEGER DEFAULT 0 to flow_runs (or to 
+     flow_run_events if step-level tracking is preferred — your call based 
+     on what fits the existing schema).
+   - Add a column max_attempts INTEGER DEFAULT 3 to flow_steps so retry 
+     limits are configurable per step.
+   - Add a column failure_reason TEXT to flow_runs for capturing the 
+     final failure.
+
+2. Update the orchestrator/step executor logic:
+   - On step failure, increment attempt_count.
+   - If attempt_count < max_attempts, schedule retry with exponential 
+     backoff: attempt 1 = immediate, attempt 2 = +5 min, attempt 3 = 
+     +15 min.
+   - If attempt_count >= max_attempts, set flow_run.status = 'failed', 
+     capture failure_reason from the last error, and stop retrying.
+
+3. Update the Flow Inspector UI (the Flow tab on the deal detail page):
+   - Collapse repeated step_started/step_failed pairs for the same step 
+     into a single row showing "Step X: [type] — failed after N attempts" 
+     with the failure_reason expandable.
+   - Show a "Retry from this step" button when a flow_run is in 'failed' 
+     status. The button resets attempt_count to 0 and re-runs the step.
+
+4. Test:
+   - Temporarily break Vapi again (point the URL to api.vapi-broken.ai 
+     or similar) and create a new lead.
+   - Confirm the flow_run retries 3 times then transitions to failed.
+   - Confirm Flow Inspector shows a clean "failed after 3 attempts" row, 
+     not repeated noise.
+   - Restore the correct Vapi URL.
+   - Test the "Retry from this step" button.
+
+---
+
+## P1 — /api/calls-analytics/stats returning 500
+
+### Symptom
+GET /api/calls-analytics/stats returns HTTP 500 with body 
+{"error":"Failed to get call stats"}. Reproduces on:
+- Login / module landing page
+- /intake/dashboard
+- /intake/deals
+- /intake/lead-analytics
+
+Browser console shows red error on every page load. Bad for demo if 
+DevTools is open.
+
+### What to do
+
+1. Find the route handler for GET /api/calls-analytics/stats. Identify 
+   the actual exception being thrown by checking Railway logs or by 
+   adding error logging.
+
+2. Two-part fix:
+   a) Fix the underlying issue (likely a missing column, broken join, 
+      or null handling in the stats aggregation query).
+   b) As a safety net, wrap the handler in try/catch and return a 
+      graceful empty stats object on error:
+      {
+        totalCalls: 0,
+        completedCalls: 0,
+        failedCalls: 0,
+        avgDurationSec: 0,
+        last24h: { total: 0, completed: 0, failed: 0 }
+      }
+      with HTTP 200 instead of 500. This way even if the query breaks 
+      again later, the demo doesn't break.
+
+3. Audit which frontend pages call this endpoint. Pages that don't 
+   actually display call analytics shouldn't be calling it. Specifically 
+   check: does the login page, the deals worklist, and lead-analytics 
+   actually need call stats? If not, remove the calls. The endpoint 
+   should only be hit from pages that display call data 
+   (likely chat-analytics or a dedicated call analytics view).
+
+4. Test:
+   - curl https://www.claimshield.health/api/calls-analytics/stats
+   - Confirm 200 response with valid JSON.
+   - Open /intake/dashboard, /intake/deals, /intake/lead-analytics, 
+     and login in browser with DevTools open.
+   - Confirm zero console errors related to calls-analytics on each.
+
+---
+
+## Verification report
+
+After all three are fixed, give me a verification report:
+
+1. Vapi call test: paste the Railway log line showing successful Vapi 
+   call creation with the call ID, plus the lead ID and flow_run ID 
+   from the test.
+
+2. Retry cap test: paste the Flow Inspector screenshot or DOM showing 
+   the collapsed "failed after 3 attempts" row.
+
+3. calls-analytics test: paste the curl response showing 200, plus 
+   confirmation that the four pages (login, dashboard, deals, 
+   lead-analytics) load with zero console errors.
+
+4. Confirm the existing stuck flow_run e548ff29-afe6-4df0-947c-c4790835e364 
+   is marked as failed and no longer retrying.
+
+If anything blocks you (Vapi credentials, env var access, schema 
+migration concerns), stop and tell me before continuing rather than 
+working around it.

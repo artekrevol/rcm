@@ -1,0 +1,20 @@
+1. Run the verify script before declaring victoryThe 16-check verification hasn't run yet. Replit said "to run, takes 3-5 min." Until those 16 checks actually pass against the live environment, the build is "shipped" but not "verified." This is the C bug pattern from earlier — the resolver SQL referenced nonexistent columns, but the structural test didn't catch it because it was a behavior bug, not a structural one. Verify scripts catch behavior bugs.Tell Replit:
+Run npx tsx scripts/verify-crawler.ts against the live environment now. Paste the full output. Specifically I want to see:
+
+All 16 checks pass/fail
+The actual count of UHC supplements discovered (the number that fills the "Found N documents" message)
+The list of supplement document_names that were discovered
+The result of the Manus cleanup verification SELECT
+
+That last item — the Manus cleanup SELECT — is the one piece of T7 that has zero downside to running and surfaces any orphan rows you should know about before the meeting.2. Demo path live test, not just script testScript verification passes, that's the floor. The actual demo button — /admin/scrapers → Live Demo button → 5-stage SSE stream → rule count callout → View Results — needs to be exercised by a human. Same reason as the cascade screenshot: the script-level tests don't catch UI animation timing, copy that reads wrong, or progress messages that fire in the wrong order.
+After verify-crawler.ts passes, run the Live Demo button end-to-end in the dev environment. Capture screenshots of:
+
+Initial state (button visible, no run in progress)
+Mid-run (showing 2-3 of the 5 stages with the friendly progress messages)
+Completion state (the "N new rules ready for review" callout)
+The discovery feed showing the newly-scraped documents
+
+Same artifact treatment as cascade-demo: save the screenshots, save the route URL, save them outside Replit. The crawler is now part of the demo arc; treat it with the same paranoia.
+3. Save the cached fallback before May 12The fallback cache auto-saves on every successful manifest run. Right now, today, while UHC's site is cooperating, trigger a successful scrape. That populates the fallback cache with a real, recent UHC document set. That cached state is your insurance policy for May 12 — if UHCprovider.com is having a bad day Monday morning, the fallback runs against documents fetched today.Tell Replit:
+Trigger one full successful scrape against UHC today via the admin UI's Run button. Confirm uhc-fallback-cache.ts populated correctly. Verify the cache file (or in-process state, depending on storage) reflects today's scrape. This is the demo safety net — we want it warm before Monday, not cold.
+Once those three things are done — verify script clean, demo button screenshot proven, fallback cache primed — the crawler is genuinely done.

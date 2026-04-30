@@ -10,7 +10,7 @@ import {
 const UHC_DOMAIN = "https://www.uhcprovider.com";
 const ADMIN_GUIDES_URL = `${UHC_DOMAIN}/en/admin-guides.html`;
 const PRIOR_AUTH_URL = `${UHC_DOMAIN}/en/prior-auth-advance-notification.html`;
-const NEWS_URL = `${UHC_DOMAIN}/en/resource-library/news/news-updates.html`;
+export const NEWS_URL = `${UHC_DOMAIN}/en/resource-library/news/news-updates.html`;
 
 // ── Capitation/Delegation Supplement — the primary demo document ──────────────
 // UHC supplements for the main commercial/MA Admin Guide appear in the
@@ -122,38 +122,53 @@ export class UhcScraper implements PayerScraper {
     let content: Buffer;
     let mimetype = "application/octet-stream";
 
-    // Use Playwright to follow redirects and capture the final binary content.
-    // PDFs on UHC's CDN sometimes redirect through download handlers; Playwright
-    // resolves these transparently.
-    const response = await withBrowser(async (page) => {
-      let downloadBuffer: Buffer | null = null;
+    const looksLikePdf = url.toLowerCase().includes(".pdf");
 
-      // Intercept PDF responses to capture their binary data
-      page.on("response", async (resp) => {
-        const ct = resp.headers()["content-type"] ?? "";
-        if (ct.includes("pdf") && resp.status() === 200) {
-          try {
-            downloadBuffer = Buffer.from(await resp.body());
-            finalUrl = resp.url();
-            mimetype = "application/pdf";
-          } catch { /* body already consumed */ }
-        }
+    if (looksLikePdf) {
+      // Direct HTTPS fetch for PDF URLs — avoids Playwright download-event errors.
+      // UHC's CDN serves PDFs with standard HTTP semantics; no JS execution needed.
+      const resp = await fetch(url, {
+        headers: {
+          "User-Agent": "ClaimShieldHealth/1.0 (payer-document-crawler; contact@claimshield.ai)",
+          "Accept": "application/pdf,*/*",
+        },
+        redirect: "follow",
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching PDF: ${url}`);
+      finalUrl = resp.url;
+      const ct = resp.headers.get("content-type") ?? "";
+      if (ct.includes("pdf")) mimetype = "application/pdf";
+      const ab = await resp.arrayBuffer();
+      content = Buffer.from(ab);
+    } else {
+      // Use Playwright for HTML pages that may require JavaScript rendering.
+      const response = await withBrowser(async (page) => {
+        let downloadBuffer: Buffer | null = null;
+
+        page.on("response", async (resp) => {
+          const ct = resp.headers()["content-type"] ?? "";
+          if (ct.includes("pdf") && resp.status() === 200) {
+            try {
+              downloadBuffer = Buffer.from(await resp.body());
+              finalUrl = resp.url();
+              mimetype = "application/pdf";
+            } catch { /* body already consumed */ }
+          }
+        });
+
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+        await page.waitForTimeout(1000);
+        finalUrl = page.url();
+
+        if (downloadBuffer) return { content: downloadBuffer, finalUrl };
+
+        const html = await page.content();
+        return { content: Buffer.from(html), finalUrl };
       });
 
-      await page.goto(url, { waitUntil: "load" });
-      await page.waitForTimeout(1000);
-      finalUrl = page.url();
-
-      if (downloadBuffer) return { content: downloadBuffer, finalUrl };
-
-      // Fallback: get page content as buffer
-      const html = await page.content();
-      const ct = "text/html";
-      return { content: Buffer.from(html), finalUrl, ct };
-    });
-
-    content = response.content;
-    if (response.finalUrl) finalUrl = response.finalUrl;
+      content = response.content;
+      if (response.finalUrl) finalUrl = response.finalUrl;
+    }
 
     const content_hash = sha256(content);
 

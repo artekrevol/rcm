@@ -213,10 +213,11 @@ export default function ScrapersPage() {
     setNewRuleCount(null);
 
     try {
-      const result = await apiRequest<{ run_id: string; status: string }>(
+      const res = await apiRequest(
         "POST", "/api/admin/scrapers/run",
         { payer_code: "uhc", triggeredBy: "demo_button", allowFallback: true }
       );
+      const result = await res.json() as { run_id: string; status: string };
 
       const runId = result.run_id;
       setDemoRunId(runId);

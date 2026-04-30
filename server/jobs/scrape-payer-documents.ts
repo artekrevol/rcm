@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { pool } from "../db";
 import { ScrapeReport, DocumentManifest } from "../scrapers/types";
-import { UhcScraper } from "../scrapers/uhc";
+import { UhcScraper, NEWS_URL } from "../scrapers/uhc";
 import { checkCircuit, recordSuccess, recordError } from "../scrapers/runtime";
 import { loadManifestCache } from "../scrapers/uhc-fallback-cache";
 
@@ -13,6 +13,8 @@ export interface ScrapeOptions {
   allowFallback?: boolean;
   triggeredBy?: TriggeredBy;
   userId?: string;
+  /** Callers that pre-register an SSE listener can supply their own run_id. */
+  runId?: string;
 }
 
 // ── Registry of available scrapers ───────────────────────────────────────────
@@ -125,9 +127,10 @@ export async function scrapePayerDocuments(
     allowFallback = true,
     triggeredBy = "manual_admin",
     userId,
+    runId: callerRunId,
   } = opts;
 
-  const runId = randomUUID();
+  const runId = callerRunId ?? randomUUID();
   const started_at = new Date();
 
   const report: ScrapeReport = {
