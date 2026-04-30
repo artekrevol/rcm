@@ -58,7 +58,7 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import type { Lead, InsertLead, Call } from "@shared/schema";
 
-const leadSources = ["website", "referral", "phone", "marketing", "physician_referral", "insurance_portal"];
+const leadSources = ["website", "referral", "phone", "marketing", "physician_referral", "insurance_portal", "caritas_web"];
 
 type WorklistResponse = {
   rows: Lead[];
