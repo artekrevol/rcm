@@ -54,12 +54,19 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-import { CheckCircle, Send, Wifi, FileText, Zap, XCircle, Info, RefreshCw, CheckCheck, AlertCircle } from "lucide-react";
+import { CheckCircle, Send, Wifi, FileText, Zap, XCircle, Info, RefreshCw, CheckCheck, AlertCircle, ShieldCheck, HelpCircle, X as XIcon, ChevronDown, ChevronRight } from "lucide-react";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 const CREDENTIAL_OPTIONS = [
   "MD", "DO", "NP", "PA", "DPT", "DC", "PsyD", "LCSW", "LMFT", "PhD",
@@ -1252,6 +1259,47 @@ function PayersTab() {
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const { data: enrollments = [] } = useQuery<any[]>({
+    queryKey: ["/api/practice/payer-enrollments"],
+    queryFn: async () => {
+      const res = await fetch("/api/practice/payer-enrollments");
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const activeEnrollments = enrollments.filter((e: any) => !e.disabled_at);
+  const enrollmentMap = new Map<string, any>(
+    activeEnrollments.map((e: any) => [e.payer_id, e])
+  );
+
+  const [enrollmentPanelOpen, setEnrollmentPanelOpen] = useState(false);
+
+  const enrollMutation = useMutation({
+    mutationFn: async (payerId: string) => {
+      const res = await apiRequest("POST", "/api/practice/payer-enrollments", { payerId });
+      if (!res.ok) throw new Error("Failed to enroll");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/practice/payer-enrollments"] });
+      toast({ title: "Payer enrolled", description: "Payer-specific field activation is now active." });
+    },
+    onError: () => toast({ title: "Enrollment failed", variant: "destructive" }),
+  });
+
+  const unenrollMutation = useMutation({
+    mutationFn: async (enrollmentId: string) => {
+      const res = await apiRequest("DELETE", `/api/practice/payer-enrollments/${enrollmentId}`);
+      if (!res.ok) throw new Error("Failed to unenroll");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/practice/payer-enrollments"] });
+      toast({ title: "Payer unenrolled" });
+    },
+    onError: () => toast({ title: "Unenroll failed", variant: "destructive" }),
+  });
+
   const filteredPayers = payers.filter((p) =>
     !payerSearch ||
     p.name.toLowerCase().includes(payerSearch.toLowerCase()) ||
@@ -1297,6 +1345,20 @@ function PayersTab() {
               <TableHead>Timely Filing</TableHead>
               <TableHead>Auth Required</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="flex items-center gap-1 cursor-default select-none">
+                        Enrollment <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-60 text-xs">
+                      Enrolling a payer activates payer-specific fields on patient and claim forms. Disable to hide those fields.
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -1341,6 +1403,44 @@ function PayersTab() {
                     <Badge variant="outline" className="text-muted-foreground">Inactive</Badge>
                   )}
                 </TableCell>
+                <TableCell>
+                  {enrollmentMap.has(p.id) ? (
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50 dark:bg-green-950 dark:border-green-800 text-xs gap-1" data-testid={`badge-enrolled-${p.id}`}>
+                        <ShieldCheck className="h-3 w-3" />
+                        Enrolled
+                      </Badge>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                              onClick={() => unenrollMutation.mutate(enrollmentMap.get(p.id)!.id)}
+                              disabled={unenrollMutation.isPending}
+                              data-testid={`button-unenroll-${p.id}`}
+                            >
+                              <XIcon className="h-3 w-3" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent className="text-xs">Remove enrollment</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => enrollMutation.mutate(p.id)}
+                      disabled={enrollMutation.isPending}
+                      data-testid={`button-enroll-${p.id}`}
+                    >
+                      Enroll
+                    </Button>
+                  )}
+                </TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
                     <Button
@@ -1380,12 +1480,67 @@ function PayersTab() {
             ))}
             {filteredPayers.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No payers match your search.</TableCell>
+                <TableCell colSpan={8} className="text-center text-muted-foreground py-8">No payers match your search.</TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </div>
+
+      {/* Enrollment summary panel */}
+      <Collapsible open={enrollmentPanelOpen} onOpenChange={setEnrollmentPanelOpen}>
+        <CollapsibleTrigger asChild>
+          <button
+            className="w-full flex items-center justify-between px-4 py-3 rounded-lg border bg-muted/40 hover:bg-muted/60 text-sm transition-colors"
+            data-testid="button-enrollment-summary"
+          >
+            <span className="flex items-center gap-2 font-medium">
+              <ShieldCheck className="h-4 w-4 text-green-600" />
+              Active payer-specific fields for your practice
+              <Badge variant="secondary" className="text-xs">
+                {activeEnrollments.length} payer{activeEnrollments.length !== 1 ? "s" : ""} enrolled
+              </Badge>
+            </span>
+            {enrollmentPanelOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="border border-t-0 rounded-b-lg px-4 py-3 space-y-2">
+            {activeEnrollments.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">No payers enrolled yet. Enroll a payer above to activate payer-specific fields.</p>
+            ) : (
+              <div>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Enrolled payers may activate additional fields on patient intake and claim forms based on their billing rules.
+                  In C0, all fields are universal — payer-specific conditional fields will appear here once Prompt C activates them.
+                </p>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs">Payer</TableHead>
+                      <TableHead className="text-xs">Plan Product</TableHead>
+                      <TableHead className="text-xs">Enrolled On</TableHead>
+                      <TableHead className="text-xs">Enrolled By</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {activeEnrollments.map((e: any) => (
+                      <TableRow key={e.id} data-testid={`row-enrollment-${e.id}`}>
+                        <TableCell className="text-sm font-medium">{e.payer_name}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{e.plan_product_code ?? "All plan products"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {e.enrolled_at ? new Date(e.enrolled_at).toLocaleDateString() : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{e.enrolled_by_name ?? "—"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
 
       <Dialog open={!!editingPayer} onOpenChange={(o) => { if (!o) { setEditingPayer(null); setPayerDialogTab("settings"); setAddingReq(false); } }}>
         <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">

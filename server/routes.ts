@@ -26,6 +26,7 @@ import { advanceToNextStep } from "./services/flow-step-executor";
 import { CARITAS } from "./config/caritas-constants";
 import { releaseLock, acquireLock } from "./services/comm-locks";
 import { extractInsuranceFromTranscript } from "./services/transcript-extractor";
+import { getActivatedFieldsForContext, invalidateResolverCache } from "./services/field-resolver";
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
@@ -2010,6 +2011,55 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS needs_reverification BOOLEAN DEFAULT FALSE`);
     }
 
+    // ── Prompt C0: field_definitions reference table ────────────────────────
+    if (!(await seederLog('table', 'field_definitions'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS field_definitions (
+          code          VARCHAR PRIMARY KEY,
+          label         VARCHAR NOT NULL,
+          applies_to    VARCHAR NOT NULL CHECK (applies_to IN ('patient','claim')),
+          data_type     VARCHAR NOT NULL,
+          always_required BOOLEAN NOT NULL DEFAULT FALSE,
+          activated_by_rule_kinds JSONB NOT NULL DEFAULT '[]'::JSONB
+        )
+      `);
+    }
+    // Seed the 11 universal baseline fields (idempotent)
+    await pool.query(`
+      INSERT INTO field_definitions (code, label, applies_to, data_type, always_required, activated_by_rule_kinds) VALUES
+        ('patient_first_name',   'First Name',       'patient', 'string',  TRUE, '[]'),
+        ('patient_last_name',    'Last Name',        'patient', 'string',  TRUE, '[]'),
+        ('patient_dob',          'Date of Birth',    'patient', 'date',    TRUE, '[]'),
+        ('patient_gender',       'Gender',           'patient', 'enum',    TRUE, '[]'),
+        ('patient_address',      'Address',          'patient', 'string',  TRUE, '[]'),
+        ('patient_member_id',    'Member ID',        'patient', 'string',  TRUE, '[]'),
+        ('patient_payer_id',     'Payer',            'patient', 'uuid',    TRUE, '[]'),
+        ('claim_service_date',   'Service Date',     'claim',   'date',    TRUE, '[]'),
+        ('claim_diagnosis_code', 'Diagnosis Code',   'claim',   'string',  TRUE, '[]'),
+        ('claim_procedure_code', 'Procedure Code',   'claim',   'string',  TRUE, '[]'),
+        ('claim_units',          'Units',            'claim',   'integer', TRUE, '[]')
+      ON CONFLICT (code) DO NOTHING
+    `);
+
+    // ── Prompt C0: practice_payer_enrollments ────────────────────────────────
+    if (!(await seederLog('table', 'practice_payer_enrollments'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS practice_payer_enrollments (
+          id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id   VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          payer_id          VARCHAR NOT NULL REFERENCES payers(id) ON DELETE RESTRICT,
+          plan_product_code VARCHAR NULL,
+          enrolled_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+          enrolled_by       VARCHAR NULL REFERENCES users(id) ON DELETE SET NULL,
+          disabled_at       TIMESTAMPTZ NULL,
+          notes             TEXT NULL,
+          UNIQUE (organization_id, payer_id, plan_product_code)
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_ppe_org ON practice_payer_enrollments (organization_id) WHERE disabled_at IS NULL`);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_ppe_org_payer ON practice_payer_enrollments (organization_id, payer_id) WHERE disabled_at IS NULL`);
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -2342,6 +2392,111 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
+
+  // ── Prompt C0: Practice-Payer Enrollment API ─────────────────────────────
+
+  app.get("/api/practice/payer-enrollments", requireAuth, async (req, res) => {
+    try {
+      const orgId = (req.user as any)?.organization_id;
+      if (!orgId) return res.status(400).json({ error: "No organization context" });
+      const { rows } = await pool.query(
+        `SELECT ppe.id, ppe.payer_id, ppe.plan_product_code, ppe.enrolled_at, ppe.disabled_at,
+                ppe.notes, p.name AS payer_name, u.name AS enrolled_by_name
+           FROM practice_payer_enrollments ppe
+           JOIN payers p ON p.id = ppe.payer_id
+           LEFT JOIN users u ON u.id = ppe.enrolled_by
+          WHERE ppe.organization_id = $1
+          ORDER BY ppe.enrolled_at DESC`,
+        [orgId]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[C0] GET payer-enrollments:", err.message);
+      res.status(500).json({ error: "Failed to fetch enrollments" });
+    }
+  });
+
+  app.post("/api/practice/payer-enrollments", requireAuth, async (req, res) => {
+    try {
+      const orgId = (req.user as any)?.organization_id;
+      const userId = (req.user as any)?.id;
+      if (!orgId) return res.status(400).json({ error: "No organization context" });
+      const { payerId, planProductCode, notes } = req.body;
+      if (!payerId || typeof payerId !== "string") return res.status(400).json({ error: "payerId is required" });
+
+      // Check payer exists
+      const { rows: payerRows } = await pool.query(`SELECT id FROM payers WHERE id = $1`, [payerId]);
+      if (payerRows.length === 0) return res.status(404).json({ error: "Payer not found" });
+
+      const { rows } = await pool.query(
+        `INSERT INTO practice_payer_enrollments (organization_id, payer_id, plan_product_code, enrolled_by, notes, disabled_at)
+         VALUES ($1, $2, $3, $4, $5, NULL)
+         ON CONFLICT (organization_id, payer_id, plan_product_code) DO UPDATE
+           SET disabled_at = NULL, enrolled_at = now(), enrolled_by = $4, notes = COALESCE(EXCLUDED.notes, practice_payer_enrollments.notes)
+         RETURNING *`,
+        [orgId, payerId, planProductCode ?? null, userId, notes ?? null]
+      );
+      invalidateResolverCache(orgId);
+      res.status(201).json(rows[0]);
+    } catch (err: any) {
+      console.error("[C0] POST payer-enrollments:", err.message);
+      res.status(500).json({ error: "Failed to create enrollment" });
+    }
+  });
+
+  app.delete("/api/practice/payer-enrollments/:id", requireAuth, async (req, res) => {
+    try {
+      const orgId = (req.user as any)?.organization_id;
+      if (!orgId) return res.status(400).json({ error: "No organization context" });
+      const { rows } = await pool.query(
+        `UPDATE practice_payer_enrollments
+            SET disabled_at = now()
+          WHERE id = $1 AND organization_id = $2
+          RETURNING *`,
+        [req.params.id, orgId]
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "Enrollment not found" });
+      invalidateResolverCache(orgId);
+      res.status(204).end();
+    } catch (err: any) {
+      console.error("[C0] DELETE payer-enrollments:", err.message);
+      res.status(500).json({ error: "Failed to disable enrollment" });
+    }
+  });
+
+  app.get("/api/practice/activated-fields", requireAuth, async (req, res) => {
+    try {
+      const orgId = (req.user as any)?.organization_id;
+      if (!orgId) return res.status(400).json({ error: "No organization context" });
+      const { payerId, planProductCode, delegatedEntityId } = req.query as Record<string, string>;
+      const fields = await getActivatedFieldsForContext({
+        organizationId: orgId,
+        payerId: payerId || undefined,
+        planProductCode: planProductCode || undefined,
+        delegatedEntityId: delegatedEntityId || undefined,
+      });
+      res.json(fields);
+    } catch (err: any) {
+      console.error("[C0] GET activated-fields:", err.message);
+      res.status(500).json({ error: "Failed to resolve fields" });
+    }
+  });
+
+  app.get("/api/admin/field-definitions", requireAuth, async (req, res) => {
+    try {
+      const { rows } = await pool.query(
+        `SELECT code, label, applies_to, data_type, always_required, activated_by_rule_kinds
+           FROM field_definitions
+          ORDER BY applies_to, code`
+      );
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[C0] GET field-definitions:", err.message);
+      res.status(500).json({ error: "Failed to fetch field definitions" });
+    }
+  });
+
+  // ── End Prompt C0 ─────────────────────────────────────────────────────────
 
   app.get("/api/billing/va-locations", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
