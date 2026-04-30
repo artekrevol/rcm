@@ -1,0 +1,104 @@
+Principle 0 from the audit: complexity surfaces only when activated by what the practice actually bills. A home health agency in Texas billing only Medicare + TRICARE + TX Medicaid should never see UHC's HMO/PPO/POS/IPA fields anywhere in the UI — not in patient forms, not in the claim wizard, not in coverage dashboards.
+Prompt C0 builds the foundation that makes this conditional rendering possible: a practice-payer enrollment table and a single backend service (getActivatedFieldsForContext) that the patient form, claim wizard, and validation engine all consume. Once C0 ships, every subsequent UI component reads its required-field set from one resolver instead of hardcoding "show plan_product dropdown if payer_id == X."
+C0 is foundation only. It does NOT add plan_products, delegated_entities, or HMO referral fields — those come in Prompt C, which builds on C0's resolver. C0 just creates the activation infrastructure.
+What Prompt C0 delivers
+
+New practice_payer_enrollments table tracking which (practice, payer, plan_product) combinations a practice has activated.
+New field_definitions reference table cataloguing every patient and claim field that can be conditionally activated by payer rules.
+New backend service getActivatedFieldsForContext(practiceId, payerId, plan_product_id?, delegated_entity_id?) → field_set consumed by patient form, claim wizard, validation engine.
+Practice Settings → Payers tab gets an Enrollment column with toggles per payer.
+Acceptance test: a practice with only Medicare + TRICARE enabled returns an empty conditional-field set for any UHC, Aetna, or BCBS context — and the patient form reflects that by hiding all related fields.
+
+Build plan — 5 tasks
+T1 — Schema
+Create practice_payer_enrollments:
+id                       UUID PRIMARY KEY
+practice_id              UUID NOT NULL REFERENCES practices(id) ON DELETE CASCADE
+payer_id                 UUID NOT NULL REFERENCES payers(id) ON DELETE RESTRICT
+plan_product_code        VARCHAR NULL    (NULL = "all plan products for this payer")
+enrolled_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+enrolled_by              UUID NULL REFERENCES users(id)
+disabled_at              TIMESTAMPTZ NULL
+notes                    TEXT NULL
+UNIQUE (practice_id, payer_id, plan_product_code)
+Create field_definitions reference table seeded with these initial rows. The seeder is intentionally minimal — Prompt C will add HMO/IPA fields. C0 just establishes the catalog:
+codelabelapplies_todata_typealways_requiredpatient_first_nameFirst Namepatientstringtruepatient_last_nameLast Namepatientstringtruepatient_dobDate of Birthpatientdatetruepatient_genderGenderpatientenumtruepatient_addressAddresspatientstringtruepatient_member_idMember IDpatientstringtruepatient_payer_idPayerpatientuuidtrueclaim_service_dateService Dateclaimdatetrueclaim_diagnosis_codeDiagnosis Codeclaimstringtrueclaim_procedure_codeProcedure Codeclaimstringtrueclaim_unitsUnitsclaimintegertrue
+Note: always_required = true means the field is required regardless of payer activation. This is the universal baseline. Conditional fields (HMO referral, IPA, etc.) will be added by Prompt C with always_required = false and an activated_by_rule_kinds JSONB array indicating which rule kinds, when present in the corpus, activate this field.
+Add a column activated_by_rule_kinds JSONB NOT NULL DEFAULT '[]' to field_definitions. Empty array = field is universal (governed only by always_required). Non-empty array = field appears when the active rule corpus for this context contains rules of any of those kinds.
+T2 — Backend resolver service
+Create server/services/field-resolver.ts exporting:
+typescriptexport interface FieldResolverContext {
+  practiceId: string;
+  payerId?: string;
+  planProductCode?: string;
+  delegatedEntityId?: string;
+  serviceDate?: Date;
+}
+
+export interface ActivatedField {
+  code: string;
+  label: string;
+  applies_to: 'patient' | 'claim';
+  data_type: string;
+  required: boolean;
+  activated_by: string[];  // rule kinds that triggered this field
+  source_documents: string[];  // for traceability — which docs introduced these rules
+}
+
+export async function getActivatedFieldsForContext(
+  ctx: FieldResolverContext
+): Promise<ActivatedField[]>;
+Algorithm:
+
+Start with all field_definitions WHERE always_required = TRUE — these are universal.
+If no payerId, return only universal fields.
+Check practice_payer_enrollments for the (practiceId, payerId) pair. If not enrolled, return only universal fields. (Critical: the resolver respects enrollment, not just rule presence.)
+If enrolled and planProductCode is provided: query the active rule corpus for rules matching this (payer, plan_product) and any rules where applies_to_plan_products includes this code or ["all"].
+For each rule found, collect its rule_kind. For each field_definition where activated_by_rule_kinds contains any of those kinds, add it to the result set.
+If delegatedEntityId is provided, additionally query rules scoped to this delegate (Prompt C will populate this).
+Deduplicate by code. Return sorted by applies_to then code.
+
+Cache the resolver output per (practiceId, payerId, planProductCode) tuple with a 5-minute TTL. Invalidate the cache when practice_payer_enrollments, manual_extraction_items (review_status changes), or field_definitions rows are mutated.
+T3 — API endpoints
+Add the following routes (all requireAuth):
+
+GET /api/practice/payer-enrollments — returns all active enrollments for the current practice.
+POST /api/practice/payer-enrollments — create an enrollment. Body: { payerId, planProductCode? }. Plan product is optional in C0; if omitted, the enrollment covers all of that payer's plan products.
+DELETE /api/practice/payer-enrollments/:id — soft-delete (sets disabled_at). Existing patients with this payer are not affected; new patients can no longer be assigned this payer.
+GET /api/practice/activated-fields — query params: payerId, planProductCode?, delegatedEntityId?. Returns the resolver output. This is the endpoint the patient form and claim wizard will hit when rendering.
+GET /api/admin/field-definitions — returns all field definitions for admin/debug purposes.
+
+T4 — Frontend (Practice Settings)
+Update /practice/settings/payers:
+Each payer row in the practice's enabled-payers list now has a status: "Enrolled" (with an enrolled-on date) or "Not Enrolled" (with an Enroll button). Toggling enrollment posts to the API.
+Add an info tooltip next to each payer: "Enrolling this payer activates payer-specific fields on patient and claim forms. Disable to hide."
+Add a small panel at the bottom of the page: "Active payer-specific fields for your practice — N fields across M payers." Clicking expands to show a table of which fields are activated by which payer/rule.
+Do not yet wire this into the patient form or claim wizard — that's the smoke test in T5. Frontend wiring of the patient form to the resolver is Prompt C's job.
+T5 — Acceptance test (the proof point)
+Build an automated test (or a manual verification script) that runs:
+
+Create a test practice "Texas Home Health Co".
+Enroll only Medicare and TRICARE.
+Call GET /api/practice/activated-fields?payerId=<UHC_ID> — must return only the universal fields, no UHC-specific fields, regardless of how many UHC rules are in the corpus. Status 200, count = 11 universal fields.
+Call GET /api/practice/activated-fields?payerId=<MEDICARE_ID> — must return universal fields plus any Medicare-rule-activated fields (in C0, this should also be 11 universal fields since no rule kinds yet activate non-universal fields).
+Now enroll UHC. Re-run step 3 — count may go up if UHC has rules in the corpus that activate fields. In C0 specifically, count stays at 11 because no field_definitions yet have activated_by_rule_kinds populated. This is correct behavior — Prompt C wires up the activation arrays.
+
+Acceptance is: the resolver returns ONLY universal fields when a payer is not enrolled, regardless of corpus state. That's the principle from the audit, in code, testable.
+What Prompt C0 does NOT touch
+
+No new patient or claim fields beyond the universal baseline. Prompt C adds plan_product, delegated_entity, PCP, referral_id.
+No changes to the patient form rendering. Prompt C wires the form to the resolver.
+No changes to the claim wizard rendering. Prompt C wires the wizard to the resolver.
+No rule-engine changes — C0 doesn't touch rule evaluation. The resolver only consumes the corpus, never modifies it.
+No changes to admin payer-source-documents UI from Prompt A.
+
+Verification before greenlight
+
+Resolver respects enrollment: A non-enrolled payer always returns only universal fields, regardless of rule corpus content. Test with a practice that has Medicare enrolled and a separate practice with no enrollments at all — both should return universal-only for any non-enrolled payer.
+Cache invalidation works: Enroll a payer, query the resolver, disable the enrollment, query again. Second query must reflect the disabled state within the cache TTL boundary or via explicit invalidation.
+Universal fields are stable: Across 10 different (practice, payer, plan_product) combinations, the universal field set is always present and identical. No payer can hide a universal field.
+API smoke: All 5 new endpoints respond with correct status codes (200 / 201 / 204) and bodies.
+
+Calendar
+3 working days. T1 + T2 day 1 (schema + resolver). T3 + T4 day 2 (API + Practice Settings UI). T5 day 3 (acceptance tests + cleanup).
+Confirm the plan and the resolver algorithm. Greenlight to start.
