@@ -314,7 +314,12 @@ export async function executeStep(
           number: formatPhone(lead.phone),
           name: lead.name || "Patient",
         },
-        server: { url: vapiServerUrl },
+        server: {
+          url: vapiServerUrl,
+          ...(process.env.VAPI_WEBHOOK_SECRET
+            ? { secret: process.env.VAPI_WEBHOOK_SECRET }
+            : {}),
+        },
         metadata: {
           leadId,
           flowRunId,

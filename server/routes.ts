@@ -6510,12 +6510,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return state ? (stateTimezones[state] || "Unknown") : "Unknown";
     };
 
+    const replitDomains = process.env.REPLIT_DOMAINS;
+    const appUrl = process.env.APP_URL
+      || (replitDomains ? `https://${replitDomains.split(",")[0]}` : null)
+      || "https://www.claimshield.health";
+
     return {
       assistantId,
       phoneNumberId,
       customer: {
         number: formatToE164(lead.phone),
         name: lead.name || "Patient",
+      },
+      server: {
+        url: `${appUrl}/api/vapi/webhook`,
+        ...(process.env.VAPI_WEBHOOK_SECRET
+          ? { secret: process.env.VAPI_WEBHOOK_SECRET }
+          : {}),
       },
       metadata: {
         leadId: lead.id,
