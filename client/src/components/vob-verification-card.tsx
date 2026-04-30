@@ -72,13 +72,13 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
     queryKey: ["/api/leads", lead.id, "vob-verifications"],
   });
 
-  const { data: verifytxStatus } = useQuery<{ configured: boolean; message: string }>({
-    queryKey: ["/api/verifytx/status"],
+  const { data: stediStatus } = useQuery<{ configured: boolean; message: string }>({
+    queryKey: ["/api/stedi/status"],
   });
 
-  const { data: payers, isLoading: payersLoading, isError: payersError, error: payerSearchError } = useQuery<Payer[]>({
-    queryKey: [`/api/verifytx/payers?q=${encodeURIComponent(debouncedPayerSearch)}`],
-    enabled: verifyDialogOpen && verifytxStatus?.configured === true && shouldSearchPayers,
+  const { data: payers, isLoading: payersLoading, isError: payersError } = useQuery<Payer[]>({
+    queryKey: [`/api/stedi/payers?q=${encodeURIComponent(debouncedPayerSearch)}`],
+    enabled: verifyDialogOpen && stediStatus?.configured === true && shouldSearchPayers,
     retry: 1,
     staleTime: 30000,
   });
@@ -182,7 +182,7 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
           <CardTitle className="text-sm font-medium">Benefits Verification</CardTitle>
         </div>
         <div className="flex items-center gap-2">
-          {latestVerification?.verifytxVobId && (
+          {latestVerification?.status === "verified" && (
             <Button
               variant="ghost"
               size="icon"
@@ -204,7 +204,7 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
                 variant="outline"
                 size="sm"
                 className="gap-1 h-7"
-                disabled={!verifytxStatus?.configured}
+                disabled={!stediStatus?.configured}
                 data-testid="button-verify-insurance"
               >
                 <Shield className="h-3 w-3" />
@@ -215,7 +215,7 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
               <DialogHeader>
                 <DialogTitle>Verify Insurance Benefits</DialogTitle>
                 <DialogDescription>
-                  Search and select the insurance payer, then verify benefits with VerifyTX.
+                  Search and select the insurance payer, then verify benefits via Stedi.
                 </DialogDescription>
               </DialogHeader>
               
@@ -268,7 +268,7 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
                         <div className="p-4 text-center">
                           <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto mb-2" />
                           <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-                            VerifyTX Service Unavailable
+                            Stedi Service Unavailable
                           </p>
                           <p className="text-xs text-muted-foreground mt-1">
                             The insurance verification service is temporarily unavailable. Please try again in a few minutes.
@@ -291,9 +291,9 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
                         </div>
                       ) : (
                         <div className="p-4 text-center text-sm text-muted-foreground">
-                          {verifytxStatus?.configured 
+                          {stediStatus?.configured 
                             ? "No payers found. Try a different search term."
-                            : "VerifyTX is not configured. Add API credentials to search payers."}
+                            : "Stedi is not configured. Add STEDI_API_KEY to enable real-time verification."}
                         </div>
                       )}
                     </ScrollArea>
@@ -353,14 +353,14 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
       </CardHeader>
       
       <CardContent>
-        {!verifytxStatus?.configured && (
+        {!stediStatus?.configured && (
           <div className="mb-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
             <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
               <AlertTriangle className="h-4 w-4" />
-              <span className="text-sm font-medium">VerifyTX Not Configured</span>
+              <span className="text-sm font-medium">Stedi Not Configured</span>
             </div>
             <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
-              Add VERIFYTX_API_KEY and VERIFYTX_API_SECRET to enable real-time insurance verification.
+              Add STEDI_API_KEY to enable real-time insurance verification via Stedi.
             </p>
           </div>
         )}
@@ -465,7 +465,7 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
               </div>
             )}
 
-            {latestVerification.verifytxVobId && isVerified && (
+            {isVerified && (
               <div className="pt-2">
                 <Button
                   variant="outline"
@@ -490,7 +490,7 @@ export function VobVerificationCard({ lead, patient }: VobVerificationCardProps)
             <Shield className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
             <p className="text-sm text-muted-foreground">Not yet verified</p>
             <p className="text-xs text-muted-foreground mt-1">
-              Click "Verify" to check insurance benefits with VerifyTX
+              Click "Verify" to check insurance benefits via Stedi
             </p>
           </div>
         )}

@@ -7663,7 +7663,6 @@ Warmly,
           fr.status,
           fr.started_at,
           fr.next_action_at,
-          fr.attempt_count,
           f.name AS flow_name,
           l.name AS lead_name,
           l.phone AS lead_phone,
@@ -8720,6 +8719,46 @@ Warmly,
   });
 
   // Check VerifyTX configuration status
+  // ── Stedi intake-facing endpoints ─────────────────────────────────────────
+  app.get("/api/stedi/status", requireRole("admin", "intake"), async (_req, res) => {
+    const { isStediConfigured } = await import("./services/stedi-eligibility");
+    res.json({
+      configured: isStediConfigured(),
+      message: isStediConfigured() ? "Stedi is configured and ready" : "Stedi API key not set",
+    });
+  });
+
+  // Static payer list derived from Stedi trading-partner registry
+  const STEDI_PAYERS = [
+    { id: "SX113",  name: "Aetna" },
+    { id: "62308",  name: "Cigna" },
+    { id: "61101",  name: "Humana" },
+    { id: "00630",  name: "BCBS / BlueCross BlueShield" },
+    { id: "87726",  name: "UnitedHealthcare (UHC)" },
+    { id: "00630",  name: "Anthem" },
+    { id: "MOLIN",  name: "Molina Healthcare" },
+    { id: "00010",  name: "Medicare" },
+    { id: "77350",  name: "Medicaid" },
+    { id: "39026",  name: "Magellan Health" },
+    { id: "SX107",  name: "Centene / WellCare" },
+    { id: "95567",  name: "Optum / OptumHealth" },
+    { id: "25133",  name: "Ambetter" },
+    { id: "68069",  name: "Caresource" },
+    { id: "37602",  name: "Community Health Plan" },
+    { id: "91131",  name: "HealthFirst" },
+    { id: "77013",  name: "Tricare / Champus" },
+    { id: "31114",  name: "Oscar Health" },
+    { id: "34196",  name: "Florida Blue" },
+    { id: "91617",  name: "Kaiser Permanente" },
+  ];
+
+  app.get("/api/stedi/payers", requireRole("admin", "intake"), (req, res) => {
+    const q = ((req.query.q as string) || "").toLowerCase().trim();
+    if (q.length < 2) return res.status(400).json({ error: "Query must be at least 2 characters" });
+    const matches = STEDI_PAYERS.filter(p => p.name.toLowerCase().includes(q));
+    res.json(matches);
+  });
+
   app.get("/api/verifytx/status", requireRole("admin", "intake"), async (req, res) => {
     const { getVerifyTxClient } = await import("./verifytx");
     const client = getVerifyTxClient();
