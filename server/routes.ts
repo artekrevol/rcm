@@ -2010,6 +2010,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!(await seederLog('column', 'manual_extraction_items', 'needs_reverification'))) {
       await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS needs_reverification BOOLEAN DEFAULT FALSE`);
     }
+    if (!(await seederLog('column', 'manual_extraction_items', 'is_demo_seed'))) {
+      await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS is_demo_seed BOOLEAN NOT NULL DEFAULT FALSE`);
+      await pool.query(`UPDATE manual_extraction_items SET is_demo_seed = TRUE WHERE notes ILIKE '%[demo_seed]%'`);
+    }
 
     // ── Prompt C0: field_definitions reference table ────────────────────────
     if (!(await seederLog('table', 'field_definitions'))) {
@@ -2370,20 +2374,20 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           }
 
           if (supplementId) {
-            // Insert 3 approved demo extraction items
+            // Insert 3 approved demo extraction items (is_demo_seed=TRUE so they are excluded from live claim evaluation by default)
             await pool.query(`
               INSERT INTO manual_extraction_items
-                (source_document_id, section_type, raw_snippet, applies_to_plan_products, review_status, notes, created_at)
+                (source_document_id, section_type, raw_snippet, applies_to_plan_products, review_status, notes, is_demo_seed, created_at)
               VALUES
                 ($1, 'referrals', 'UHC HMO and MA HMO plans require a PCP referral for specialist services. Capitated medical groups are responsible for managing specialist utilization. Claims submitted without a valid PCP referral authorization number will be denied.',
                  '["commercial_hmo","ma_hmo","ma_hmo_pos"]'::jsonb, 'approved',
-                 '[demo_seed] Placeholder referral rule for activation cascade demo. Replace with real extraction when UHC supplement is manually ingested.', NOW()),
+                 '[demo_seed] Placeholder referral rule for activation cascade demo. Replace with real extraction when UHC supplement is manually ingested.', TRUE, NOW()),
                 ($1, 'referrals', 'IPA-delegated members must obtain referrals from their assigned IPA medical director. The IPA claims payer ID should be used as the billing payer for capitated encounters.',
                  '["commercial_hmo","ma_hmo"]'::jsonb, 'approved',
-                 '[demo_seed] Placeholder delegation/referral rule. Replace with real extraction.', NOW()),
+                 '[demo_seed] Placeholder delegation/referral rule. Replace with real extraction.', TRUE, NOW()),
                 ($1, 'prior_auth', 'Prior authorization is required for outpatient surgical procedures, durable medical equipment, and home health services for all MA HMO and D-SNP members. Submit via UHC electronic authorization portal.',
                  '["ma_hmo","ma_dsnp","ma_hmo_pos"]'::jsonb, 'approved',
-                 '[demo_seed] Placeholder prior auth rule for MA demo. Replace with real extraction.', NOW())
+                 '[demo_seed] Placeholder prior auth rule for MA demo. Replace with real extraction.', TRUE, NOW())
             `, [supplementId]);
             console.log('[SEEDER] UHC demo extraction items seeded (3 approved items)');
           }
@@ -2813,12 +2817,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const orgId = (req.user as any)?.organization_id;
       if (!orgId) return res.status(400).json({ error: "No organization context" });
-      const { payerId, planProductCode, delegatedEntityId } = req.query as Record<string, string>;
+      const { payerId, planProductCode, delegatedEntityId, includeDemoSeed } = req.query as Record<string, string>;
       const fields = await getActivatedFieldsForContext({
         organizationId: orgId,
         payerId: payerId || undefined,
         planProductCode: planProductCode || undefined,
         delegatedEntityId: delegatedEntityId || undefined,
+        includeDemoSeed: includeDemoSeed === "true",
       });
       res.json(fields);
     } catch (err: any) {

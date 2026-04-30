@@ -330,7 +330,11 @@ function runSanityRules(ctx: ClaimContext): RuleViolation[] {
 // Main evaluateClaim() — queries DB + runs sanity rules
 // ────────────────────────────────────────────────────────────────────────────
 
-export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]> {
+export async function evaluateClaim(
+  ctx: ClaimContext,
+  options: { includeDemoSeed?: boolean } = {}
+): Promise<RuleViolation[]> {
+  const { includeDemoSeed = false } = options;
   const violations: RuleViolation[] = [];
 
   // Sanity rules first (no DB)
@@ -340,7 +344,9 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
   try {
     // ── 1. Payer source document extraction items ──────────────────────────
     //   Join payer_source_documents → manual_extraction_items where payer_id matches
-    //   and review_status = 'approved'
+    //   and review_status = 'approved'.
+    //   Demo-seed rows (is_demo_seed=TRUE) are excluded by default; pass
+    //   includeDemoSeed=true to include them (e.g. from the /cascade-demo path).
     if (ctx.payerId) {
       const manualItems = await client.query(`
         SELECT
@@ -357,8 +363,9 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
         JOIN payer_source_documents pm ON pm.id = mei.source_document_id
         WHERE pm.payer_id = $1
           AND mei.review_status = 'approved'
+          AND ($2 OR mei.is_demo_seed = FALSE)
         ORDER BY mei.section_type, mei.created_at
-      `, [ctx.payerId]);
+      `, [ctx.payerId, includeDemoSeed]);
 
       const now = new Date();
 

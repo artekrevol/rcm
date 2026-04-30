@@ -6,6 +6,9 @@ export interface FieldResolverContext {
   planProductCode?: string;
   delegatedEntityId?: string;
   serviceDate?: Date;
+  /** When true, includes rows with is_demo_seed=TRUE in the corpus query.
+   *  Default false — production evaluations never see placeholder demo rows. */
+  includeDemoSeed?: boolean;
 }
 
 export interface ActivatedField {
@@ -32,6 +35,7 @@ function cacheKey(ctx: FieldResolverContext): string {
     ctx.payerId ?? "",
     ctx.planProductCode ?? "",
     ctx.delegatedEntityId ?? "",
+    ctx.includeDemoSeed ? "demo" : "live",
   ].join("|");
 }
 
@@ -59,7 +63,7 @@ export async function getActivatedFieldsForContext(
 }
 
 async function _resolve(ctx: FieldResolverContext): Promise<ActivatedField[]> {
-  const { organizationId, payerId, planProductCode } = ctx;
+  const { organizationId, payerId, planProductCode, includeDemoSeed = false } = ctx;
 
   // Step 1: universal fields (always_required = TRUE)
   const { rows: universalRows } = await pool.query<{
@@ -118,6 +122,9 @@ async function _resolve(ctx: FieldResolverContext): Promise<ActivatedField[]> {
   const params: (string | undefined)[] = [organizationId, payerId];
   if (planProductCode) params.push(JSON.stringify([planProductCode]));
 
+  // Inject includeDemoSeed as a SQL literal (safe — it is always a boolean from code, not user input)
+  const demoSeedFilter = includeDemoSeed ? "" : "AND mei.is_demo_seed = FALSE";
+
   const corpusQuery = `
     SELECT DISTINCT mei.section_type AS rule_kind, psd.id AS source_doc_id
       FROM manual_extraction_items mei
@@ -126,6 +133,7 @@ async function _resolve(ctx: FieldResolverContext): Promise<ActivatedField[]> {
         AND mei.review_status = 'approved'
         AND psd.organization_id = $1
         AND mei.section_type IS NOT NULL
+        ${demoSeedFilter}
         ${planFilter}
   `;
 

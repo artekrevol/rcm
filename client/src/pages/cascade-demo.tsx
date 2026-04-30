@@ -224,6 +224,9 @@ export default function CascadeDemo() {
 
         <p className="text-xs text-muted-foreground text-center">
           Demo page — no authentication required. Acceptance script <code>scripts/verify-c.ts</code> passes 31/31 checks.
+          Demo extraction items are flagged <code>is_demo_seed=TRUE</code> in <code>manual_extraction_items</code> and excluded from
+          live claim evaluation by default. Calls to <code>/api/practice/activated-fields</code> and <code>evaluateClaim()</code>
+          that need demo seed rows must pass <code>includeDemoSeed=true</code>.
         </p>
       </div>
     </div>

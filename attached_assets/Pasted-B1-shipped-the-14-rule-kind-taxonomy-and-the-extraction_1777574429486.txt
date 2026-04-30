@@ -1,0 +1,112 @@
+B1 shipped the 14-rule-kind taxonomy and the extraction prompts. A shipped the multi-document schema. C0 shipped the field resolver. C shipped plan products, delegated entities, and the patient form rewiring.
+B2 is the final piece: the rules engine actually fires claim-time evaluations against the new corpus, and the admin UI renders activation-aware tabs that reflect what's actually in each document.
+Two specific evaluation kinds activate in B2: referrals and documentation_timeframe. The other 12 kinds remain extract-and-store. They become active later as Rosemary's review queue fills with approved rules and we verify each evaluation path against real claims.
+What Prompt B2 delivers
+
+Rules engine queries approved extraction items for the claim's (payer, plan_product, delegated_entity, service_date) tuple at evaluation time.
+referrals evaluation: blocks claim submission if the patient's plan_product requires a referral and pcp_referral_number is missing.
+documentation_timeframe evaluation: warns if a claim is in pending_appeal or under_audit status and the payer's record-response window is approaching expiry (within 48 hours).
+Admin UI: review panel only renders tabs for rule kinds that have at least one extraction item for the selected source document. No more empty 14-tab strip.
+Coverage matrix on /admin/payer-manuals reorganized into 4 groups (Operational / Timeframe / Technical / Strategic) per the audit.
+End-to-end demo path verified: a UHC MA HMO patient without a referral hits the rules engine and gets a block; same patient with referral passes.
+
+Build plan — 6 tasks
+T1 — Rules engine: corpus query layer
+Update server/services/rules-engine.ts:
+The current evaluateClaim() joins payer_source_documents → manual_extraction_items filtered by review_status = 'approved'. Extend the join to include:
+
+Filter by applies_to_plan_products JSONB contains the patient's plan_product_code OR ["all"]
+Filter by service_date within effective_start / effective_end (use NULLs as open intervals)
+If the patient has a delegated_entity_id, additionally include any extraction items scoped to that delegate (when the schema supports it — for now, just include the rules where the delegate is in scope; full delegation chain resolution is a future prompt)
+
+Group results by section_type (rule_kind) so the evaluation handlers can iterate per-kind.
+T2 — Active evaluator: referrals
+Add a new evaluator function in rules-engine.ts:
+typescriptasync function evaluateReferralsRules(
+  claim: Claim,
+  patient: Patient,
+  referralRules: ExtractionItem[]
+): Promise<RuleViolation[]>
+Logic:
+
+If referralRules is empty, return empty array (no rules in corpus for this context).
+For each referral rule, parse extracted_json into the ReferralsResult shape (from B1).
+If referral_required = true for the patient's plan_product:
+
+If patient.pcp_referral_number is empty: emit a block violation with severity = 'block', rule_kind = 'referrals', liability = liability_if_missing (from rule), and source_quote from the rule.
+If patient.pcp_referral_number is present but patient.pcp_id is empty: emit a warn violation noting "Referral number recorded but no PCP on file — verify before submission."
+
+
+For exception-list cases (e.g., exceptions: ["self-referral_for_OB"]), check the claim's CPT codes against the exception conditions and skip the block if they match.
+
+Each violation carries: ruleId (the extraction item ID), sourceQuote, sourceDocumentId, reviewedBy, lastVerifiedAt. These display in the claim wizard's "View source" dialog.
+T3 — Active evaluator: documentation_timeframe
+Similar pattern for documentation_timeframe rules:
+typescriptasync function evaluateDocumentationTimeframeRules(
+  claim: Claim,
+  docTimeframeRules: ExtractionItem[]
+): Promise<RuleViolation[]>
+Logic:
+
+Only fires for claims where status IN ('pending_appeal', 'under_audit', 'records_requested').
+For each rule, calculate expiry_date = trigger_event_date + days_allowed.
+If today > expiry_date: emit block — record window has lapsed.
+If today is within 48 hours of expiry_date: emit warn with hours remaining.
+Otherwise: emit informational (visible in the claim's history, not blocking).
+
+The trigger_event_date is the date the records request was issued, the appeal was filed, or the audit was initiated. For the initial build, take this from a new records_request_date column on claims (add via migration if not present).
+T4 — Wire evaluators into the claim wizard
+The claim wizard's existing risk panel currently shows hardcoded business rules. Add a new section "Payer-specific rules" that displays violations from the new evaluators:
+
+On entering Step 3 (review), call evaluateClaim(claimId) which now includes referrals and documentation_timeframe.
+Render each violation with: severity badge (block/warn/informational), rule_kind label, message, "View source" button that opens the source quote dialog.
+If any violations are severity = block, the "Submit claim" button is disabled with a tooltip listing what needs to be resolved.
+
+Acceptance test path: a claim for a UHC MA HMO patient with pcp_referral_number = NULL should show a block violation labeled "Referral required by UnitedHealthcare for Medicare Advantage HMO plans" with the source quote from the demo-seeded UHC referrals rule.
+T5 — Admin UI activation-aware tabs
+In client/src/pages/admin/payer-manuals.tsx:
+
+The review panel tab strip currently renders 4 hardcoded section types. Replace with: query manual_extraction_items grouped by section_type for the selected source document. Render only tabs for kinds that have at least one item.
+If the document has 0 extraction items at all, show an empty state: "No rules extracted yet. Run extraction to begin."
+If a specific kind has 0 items but other kinds do, that kind's tab simply doesn't render. No empty placeholder.
+
+Reorganize the coverage matrix into 4 groups using the ui_group field from the rule_kinds table seeded in B1:
+
+Operational: timely_filing, prior_auth, modifiers_and_liability, appeals, referrals, coordination_of_benefits
+Timeframe: submission_timeframe, decision_timeframe, documentation_timeframe, notification_event, member_notice
+Technical: payer_specific_edits, edi_construction, place_of_service
+Strategic: risk_adjustment_hcc (grayed out, "Phase 3" badge)
+
+Each group renders as a collapsible section in the matrix. Default state: Operational expanded, others collapsed.
+T6 — Verification + demo path test
+Write scripts/verify-b2.ts testing:
+
+Referrals block fires: Create a UHC MA HMO patient with no referral. Create a claim. Call evaluator. Expect 1 violation with severity = 'block', rule_kind = 'referrals'.
+Referrals block clears: Same patient, set pcp_referral_number = '12345'. Re-evaluate. Expect 0 referrals violations.
+Referrals not triggered for PPO: Same payer, plan_product = commercial_ppo. Expect 0 referrals violations regardless of referral_number presence.
+Documentation timeframe warn: Create a claim with status = 'records_requested' and records_request_date = today - 12 days. With a rule of days_allowed = 14, evaluator should emit warn (within 48 hours of expiry).
+Documentation timeframe block: Same claim, records_request_date = today - 20 days. Expect block (past expiry).
+Documentation timeframe doesn't fire for active claims: Same patient, claim status = submitted. Expect 0 doc-timeframe violations.
+Admin UI tab filtering: Query test — for a source document with only timely_filing and prior_auth items, ensure only those two tabs would render.
+Effective date filtering: Insert a rule with effective_start = today + 30 days (future). Evaluator should NOT include this rule in current evaluations.
+
+Report all 8 test results in the closeout note.
+What Prompt B2 does NOT touch
+
+The other 12 rule kinds (still extract-and-store, no claim-time evaluation)
+Claim wizard refactoring beyond adding the new violations panel
+Real-time evaluation as fields are entered (still happens at Step 3 only — refactor to dynamic Step 2 evaluation is a future prompt)
+The patient form (C handled all patient form work)
+The 10 migrated modifier rules (still need_reverification — Rosemary's review session post-May 12)
+
+Verification before greenlight
+
+All 8 verify-b2.ts checks pass
+The cascade demo runs end-to-end: create a UHC MA HMO patient → create a claim → see the referral block fire → add referral number → see the block clear
+Admin UI tab filtering works: viewing a document with 4 rule kinds shows 4 tabs, viewing one with 1 shows 1 tab, viewing one with 0 shows the empty state
+The coverage matrix renders the 4 groups correctly with collapsible sections
+No console errors, no TypeScript errors
+
+Calendar
+3 working days. T1 + T2 + T3 day 1 (corpus query + evaluators). T4 + T5 day 2 (claim wizard + admin UI). T6 day 3 (verification + demo path test).
+Confirm the plan, especially the evaluator interfaces and the tab filtering algorithm. Greenlight to start.
