@@ -1,0 +1,284 @@
+# Replit Standing Order — Mandatory Production Verification
+
+## Why this is being sent
+
+Over the last three weeks, multiple sprint reports have included claims about database state that turned out to be false when independently verified by the user against production.
+
+Documented examples:
+
+1. Commit claimed `last_test_correlation_id` column was persisted. Column did not exist in production.
+2. Commit claimed Megan Perez was "pre-existing seed data." Patient did not exist in any database query.
+3. Commit claimed `submission_attempts` table was created. Table did not exist; runtime errors confirmed `relation "submission_attempts" does not exist`.
+4. Sprint 3 commit claimed `timely_filing_alerts` table was created. Table does not exist in production.
+5. Sprint 3 commit claimed "10 claims evaluated to timely_filing_status = 'safe'." Zero claims have non-NULL timely_filing values.
+6. Sprint 5 commit claimed "12 approved extraction items — all have last_verified_at backfilled (2026-04-28)." Zero items with `review_status = 'approved'` exist.
+
+This pattern erodes trust to the point where every Replit deliverable requires independent verification by the user before it can be accepted. That's wasteful for everyone. This standing order fixes the workflow.
+
+## The new standing requirement
+
+Going forward, **every Replit sprint must include a "Production Verification" section in the sprint report that contains the actual query results from `PRODUCTION_READONLY_DATABASE_URL`.** Schema claims, data claims, and behavior claims all require evidence.
+
+This is not optional. It is not "if time permits." It is a hard requirement on every sprint deliverable.
+
+## Workflow
+
+When you (Replit) complete a sprint:
+
+### Step 1 — Identify every factual claim
+
+Read your own commit message and sprint report. For every sentence that asserts a state of the world (a column exists, a table exists, a row count, a timestamp, a value), note it as a claim that needs verification.
+
+Categorize each claim:
+
+- **Schema claims** — "column X added," "table Y created," "FK Z added"
+- **Data claims** — "N rows ingested," "M items approved," "K records updated"
+- **Behavior claims** — "cron is running," "endpoint returns X," "wizard renders Y"
+
+Schema claims are easy to verify. Data claims require COUNTs and sample queries. Behavior claims require either logs, sample API responses, or a description of why the behavior cannot be DB-verified (and what the alternative evidence is).
+
+### Step 2 — Connect to PRODUCTION_READONLY_DATABASE_URL and run queries
+
+For each schema claim, run the corresponding `information_schema.columns` or `information_schema.tables` query.
+
+For each data claim, run the COUNT or SELECT that proves the number you claimed.
+
+For each behavior claim that can be DB-verified (e.g., "cron ran" → check for rows updated in the last 24h), run that query.
+
+For behavior claims that cannot be DB-verified (e.g., "wizard renders the dropdown"), include a brief note explaining why and what evidence you DID gather (server logs, manual UI test, screenshot reference).
+
+### Step 3 — Format results in a Production Verification section
+
+Add this section to every sprint report:
+
+```markdown
+## Production Verification
+
+Queries run against PRODUCTION_READONLY_DATABASE_URL on YYYY-MM-DD HH:MM UTC.
+
+### Schema claims
+
+[Claim from commit message]
+Query: [exact SQL]
+Result: [actual output, including row count or "No rows returned"]
+Status: ✓ matches claim | ✗ does not match claim | ⚠ partial
+
+[Repeat for every schema claim]
+
+### Data claims
+
+[Claim from commit message, e.g., "12 approved items"]
+Query: [exact SQL]
+Result: [actual output]
+Status: ✓ matches | ✗ does not match | ⚠ partial — [explain]
+
+[Repeat for every data claim]
+
+### Behavior claims (where DB-verifiable)
+
+[Claim, e.g., "cron has run successfully"]
+Query: [SQL checking last update timestamp, alert rows, etc.]
+Result: [actual output]
+Status: ✓ ran as claimed | ✗ did not run | ⚠ partial
+
+### Behavior claims (DB-unverifiable)
+
+[Claim, e.g., "wizard Step 0 renders for HMO patients"]
+Why DB cannot verify: [reason]
+Alternative evidence: [server log line, screenshot location, manual test description]
+```
+
+### Step 4 — Honest reporting
+
+If a claim does not match the query result, do not retroactively edit the commit message to remove the claim. Instead, explicitly flag the gap in the Production Verification section:
+
+```
+[Claim] "12 approved extraction items"
+Query: SELECT COUNT(*) FROM manual_extraction_items WHERE review_status = 'approved';
+Result: 0
+Status: ✗ DOES NOT MATCH CLAIM. Investigation: [what you found about why]
+Remediation: [what you'll do to fix it, or what additional info is needed]
+```
+
+Honesty about gaps is acceptable. Concealment is not.
+
+### Step 5 — Block sprint completion until verification is done
+
+A sprint is not "done" until the Production Verification section is included in the report. If verification reveals gaps, those gaps either need to be fixed before sprint close OR documented openly as known incomplete work.
+
+Do not mark a task complete and ship verification "as a follow-up." The follow-up never happens.
+
+## Why this matters
+
+Software trust is built on calibrated communication. When you say "12 items approved," the user adjusts plans on that basis. When the actual count is 0, the user makes wrong decisions and discovers the gap days later.
+
+Independent verification by the user takes 30 minutes per sprint. Self-verification by Replit takes 5-10 minutes per sprint. The cost of doing this right is small. The cost of NOT doing it has been measured in days of wasted work and broken demos.
+
+## What to do for the recent five sprints right now
+
+The five sprints from this week (CCI, Rules Engine, Timely Filing Guardian, PCP Referrals, Versioning + Audit) need retroactive verification. Run the following queries against `PRODUCTION_READONLY_DATABASE_URL` and post the actual results, in the format described above:
+
+### Sprint 1 — CCI Edits
+
+```sql
+-- Schema check
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'cci_edits' 
+ORDER BY ordinal_position;
+
+-- Data state
+SELECT 
+  COUNT(*) AS total_edits,
+  COUNT(DISTINCT ncci_version) AS distinct_versions,
+  MAX(ingested_at) AS most_recent_ingest
+FROM cci_edits;
+
+-- Cron behavior — check server logs for last cron run timestamp
+-- (DB cannot verify directly, document log line if available)
+```
+
+### Sprint 2 — Rules Engine
+
+```sql
+-- Schema check
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'claims' 
+  AND column_name IN ('last_risk_evaluation_at', 'last_risk_factors');
+
+-- Behavior verification — is the endpoint actually being called?
+SELECT 
+  COUNT(*) AS total_claims,
+  COUNT(*) FILTER (WHERE last_risk_evaluation_at IS NOT NULL) AS claims_evaluated,
+  COUNT(*) FILTER (WHERE last_risk_factors IS NOT NULL) AS claims_with_factors,
+  MAX(last_risk_evaluation_at) AS most_recent_evaluation,
+  MIN(last_risk_evaluation_at) AS oldest_evaluation
+FROM claims;
+
+-- Sample factors structure (if any exist)
+SELECT id, jsonb_array_length(last_risk_factors) AS factor_count, last_risk_factors
+FROM claims
+WHERE last_risk_factors IS NOT NULL
+LIMIT 3;
+```
+
+### Sprint 3 — Timely Filing Guardian
+
+```sql
+-- Schema check — claims columns
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'claims'
+  AND column_name LIKE 'timely_filing%';
+
+-- CRITICAL — alerts table
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'timely_filing_alerts'
+ORDER BY ordinal_position;
+
+-- If above returns no rows, the table does not exist. 
+-- That contradicts the sprint claim and needs immediate fix.
+
+-- Behavior — has the cron actually run?
+SELECT 
+  timely_filing_status,
+  COUNT(*) AS count,
+  MIN(timely_filing_last_evaluated_at) AS oldest_eval,
+  MAX(timely_filing_last_evaluated_at) AS newest_eval
+FROM claims
+WHERE timely_filing_last_evaluated_at IS NOT NULL
+GROUP BY timely_filing_status;
+
+-- If above returns no rows, the cron has NEVER run.
+```
+
+### Sprint 4 — PCP Referrals
+
+```sql
+-- Schema check
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'pcp_referrals' 
+ORDER BY ordinal_position;
+
+SELECT column_name FROM information_schema.columns 
+WHERE table_name = 'claims' AND column_name LIKE 'pcp_referral%';
+
+-- Functional verification — has any referral logic actually fired?
+SELECT 
+  status, 
+  COUNT(*) 
+FROM pcp_referrals 
+GROUP BY status;
+
+SELECT 
+  pcp_referral_check_status, 
+  COUNT(*) 
+FROM claims 
+WHERE pcp_referral_check_status IS NOT NULL 
+GROUP BY pcp_referral_check_status;
+```
+
+### Sprint 5 — Versioning + Audit
+
+```sql
+-- Schema check
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'claims'
+  AND column_name IN ('rules_snapshot', 'rules_engine_version', 'ncci_version_at_creation');
+
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'payer_manual_extraction_history'
+ORDER BY ordinal_position;
+
+-- CRITICAL — the "12 approved items" claim
+SELECT 
+  review_status, 
+  COUNT(*) AS count
+FROM manual_extraction_items
+GROUP BY review_status
+ORDER BY count DESC;
+
+-- If 'approved' status returns 0, the sprint claim was false.
+
+-- History capture verification
+SELECT 
+  change_type, 
+  COUNT(*) AS rows,
+  MAX(changed_at) AS most_recent
+FROM payer_manual_extraction_history 
+GROUP BY change_type;
+
+-- If empty, the history hooks aren't wired into the review workflow.
+
+-- Snapshot verification — any new claims since deploy?
+SELECT 
+  COUNT(*) AS total,
+  COUNT(*) FILTER (WHERE rules_snapshot IS NOT NULL) AS with_snapshot
+FROM claims
+WHERE created_at > '2026-04-28';
+```
+
+## Output expected
+
+Run all queries. Post results in the format described in Step 3. For every claim that does not match its query result:
+
+1. Flag it explicitly as ✗ DOES NOT MATCH CLAIM
+2. Investigate root cause (missing migration? wrong table name? code path not actually executing? UI state vs persisted state?)
+3. Document the actual remediation: what code change fixes the gap
+
+Do not skip any claim. Do not aggregate ("most things shipped"). Each claim gets a row with its query and result.
+
+## After this is done
+
+Once the verification report comes back honest, we can:
+
+1. Identify which sprints need follow-up cleanup work
+2. Prioritize the gaps that block the May 12 demo
+3. Re-establish trust in the sprint reporting workflow
+
+This standing order applies to every sprint going forward. Production Verification section is mandatory.
