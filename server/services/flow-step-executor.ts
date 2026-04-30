@@ -211,12 +211,20 @@ export async function executeStep(
         ? applyTemplateVars(step.template_inline, templateVars)
         : "Hi, this is Caritas Senior Care following up on your inquiry.";
 
+      let smsSent = false;
       try {
-        await twilioClient.messages.create({
+        const msgParams: Record<string, string> = {
           body,
-          messagingServiceSid: twilioMessagingServiceSid,
           to: formatPhone(lead.phone),
-        });
+        };
+        if (twilioMessagingServiceSid) {
+          msgParams.messagingServiceSid = twilioMessagingServiceSid;
+        } else if (process.env.TWILIO_PHONE_NUMBER) {
+          msgParams.from = process.env.TWILIO_PHONE_NUMBER;
+        }
+
+        await twilioClient!.messages.create(msgParams as any);
+        smsSent = true;
 
         await pool.query(
           `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
@@ -228,12 +236,18 @@ export async function executeStep(
           message: `SMS sent: ${body.slice(0, 60)}`,
           stepId: step.id,
         });
+      } catch (smsErr: any) {
+        console.error("[flow-step-executor] Twilio SMS error:", smsErr?.message || smsErr);
+        await logFlowEvent(flowRunId, "step_failed", {
+          reason: `Twilio error: ${smsErr?.message || String(smsErr)}`,
+          stepId: step.id,
+        });
       } finally {
         await releaseLock(lockId);
         lockId = null;
       }
 
-      await advanceToNextStep(flowRunId, "success");
+      await advanceToNextStep(flowRunId, smsSent ? "success" : "failure");
       return;
     }
 
@@ -520,13 +534,15 @@ export async function executeStep(
         ? applyTemplateVars(step.template_inline, templateVars)
         : `Hi ${firstName}, thank you for your interest in Caritas Senior Care. We're here to help.`;
 
+      let emailSent = false;
       try {
-        await emailTransporter.sendMail({
+        await emailTransporter!.sendMail({
           from: gmailUser,
           to: lead.email,
           subject,
           text: body,
         });
+        emailSent = true;
 
         await logFlowEvent(flowRunId, "step_completed", {
           message: `Email sent to ${lead.email}`,
@@ -538,12 +554,18 @@ export async function executeStep(
            VALUES ($1, 'email_sent', $2, NOW(), $3)`,
           [leadId, `[Flow] Email sent: ${subject}`, lead.organization_id]
         );
+      } catch (emailErr: any) {
+        console.error("[flow-step-executor] Gmail error:", emailErr?.message || emailErr);
+        await logFlowEvent(flowRunId, "step_failed", {
+          reason: `Gmail error: ${emailErr?.message || String(emailErr)}`,
+          stepId: step.id,
+        });
       } finally {
         await releaseLock(lockId);
         lockId = null;
       }
 
-      await advanceToNextStep(flowRunId, "success");
+      await advanceToNextStep(flowRunId, emailSent ? "success" : "failure");
       return;
     }
 
