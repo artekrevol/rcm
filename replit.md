@@ -38,6 +38,17 @@ The platform uses an enterprise SaaS design aesthetic with shadcn/ui and Tailwin
 - **Demo Seed Convention**: Any `manual_extraction_items` row created for demo/placeholder purposes must set `is_demo_seed = TRUE`. This column (`BOOLEAN NOT NULL DEFAULT FALSE`) was added to `manual_extraction_items` after the Prompt C seeder. The rules engine corpus query (`evaluateClaim()` in `server/services/rules-engine.ts`) and the field-resolver corpus query (`getActivatedFieldsForContext()` in `server/services/field-resolver.ts`) both filter `WHERE is_demo_seed = FALSE` by default. To include demo rows (e.g. for the `/cascade-demo` verification path or B2 end-to-end tests), pass `includeDemoSeed: true` to `evaluateClaim(ctx, { includeDemoSeed: true })` or `getActivatedFieldsForContext({ ..., includeDemoSeed: true })`. The `/api/practice/activated-fields` endpoint also accepts `?includeDemoSeed=true`. All future seed paths that insert placeholder extraction items must set `is_demo_seed = TRUE` in the INSERT.
 - **Prompt C — Plan Products + Delegated Entities + Conditional Form Activation**: Builds on C0 to drive per-payer conditional field rendering for patients. Six new/extended tables: `plan_products` (16 active product types e.g. `commercial_hmo`, `ma_hmo`), `payer_supported_plan_products` (566 payer→product links), `delegated_entities` (IPA/delegated management entities), `payer_delegated_entities` (payer→IPA links, UNIQUE NULLS NOT DISTINCT). Four conditional `field_definitions` rows added: `patient_plan_product`, `patient_pcp_id`, `patient_pcp_referral_id`, `patient_delegated_entity_id`. Resolver enhanced with chained-disclosure pattern: when payer has corpus rules but no `planProductCode` provided, returns universals + `patient_plan_product` only; once plan selected, full conditional set activates. Corpus query fixed to join on `mei.section_type` (not deprecated `rule_kind_id`). Three new API routes: `GET /api/billing/payers/:id/plan-products`, `GET /api/billing/payers/:id/delegated-entities`, `GET /api/billing/plan-products`. Patients table extended with `plan_product_code`, `delegated_entity_id`, `pcp_id`, `pcp_referral_number`. Patient create/edit form (`patient-create.tsx`) rewritten with FadeField animation and resolver-driven conditional fields. UHC demo seed: demo org enrolled with UHC Commercial + MA, 3 approved extraction items (referrals×2, prior_auth×1). Acceptance script `scripts/verify-c.ts` passes 31/31 checks.
 
+## Source Document Architecture
+
+All payer source documents track acquisition provenance via `source_acquisition_method` (column on `payer_source_documents`, `VARCHAR NOT NULL DEFAULT 'manual_upload'`). Values:
+- `manual_upload` — uploaded directly by admin or practice staff through the admin UI
+- `scraped` — fetched by a per-payer scraper adapter (future scraper kit, planned post-May 12)
+- `bulletin_triggered` — fetched in response to a payer bulletin/news-feed event
+- `manus_agent` — extracted via Manus third-party agent (current interim path; to be deprecated per payer as scrapers come online)
+- `cms_structured` — sourced from CMS structured data feeds (e.g. NPI registry, NCCI edits)
+
+When manually uploading Manus-extracted documents, set `source_acquisition_method = 'manus_agent'` in the admin upload flow or directly via the `PATCH /api/admin/payer-manuals/:id` endpoint. All existing rows default to `manual_upload`.
+
 ## External Dependencies
 
 ### Database

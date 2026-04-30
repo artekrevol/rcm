@@ -1,0 +1,174 @@
+Before writing the prompt, two checks worth doing in your head — these affect what you send.
+Check 1: Is this prompt the right next move?
+
+The honest answer is not yet, but the spec work is. Here's why and what you should send instead.
+
+The crawler kit is a 3-week build. Even if Replit hits his usual pace, you're looking at roughly May 5 → May 26 for full delivery, assuming B2 wraps May 4-5 and the crawler starts immediately after. That window collides with two more important things:
+
+    May 12 Rosemary meeting — preparation, dress rehearsal, and the meeting itself need engineering availability for last-minute fixes. Don't schedule a 3-week marathon that overlaps.
+    Chajinel pilot launch prep — once the advisor agreement is signed, the pilot becomes real work. Real claims, real data, real bug reports. That eats engineering bandwidth in unpredictable ways.
+
+So the right play is: send the spec to Replit now as a roadmap document, not as a build prompt. Get him to validate the architecture, identify gotchas you haven't thought of, and produce a sequenced 3-week build plan. Then schedule the actual build for after May 12, ideally starting May 14-15. That gives you the demo, the meeting, the advisor signing, and a 1-2 day breather before engineering starts again.
+Check 2: What specifically goes in Replit's hands vs. yours?
+
+Three things need to happen in parallel during the build window, and only one is engineering:
+
+    Engineering (Replit): Scraper interface, Playwright setup, per-payer adapters
+    Domain knowledge (you + Rosemary): Per-payer document inventories — which URLs, which login walls, which document types matter for each payer. Replit can't generate this; he'd guess wrong on edge cases.
+    Operational (you): Manus engagement to bridge the gap during the build. While the scraper kit is being built, Manus keeps running for documents you need now. The handoff is gradual, not switched-over.
+
+The prompt below addresses all three.
+What to send Replit
+
+This is two messages, sent in sequence. Send the first now (post-B2), get his architecture review back (1-2 days), then send the second when you're ready to greenlight the build (post-May 12).
+Message 1 — Architecture review request (send now or post-B2)
+
+    Crawler Kit — Architecture Review Request (Not a Build Prompt)
+    Context
+
+    We've discussed payer manual ingestion as a competitive moat. Currently, the only paths into the corpus are (a) manual admin upload of PDFs and (b) Manus agent extraction (third-party SaaS). Long-term, we need ClaimShield to own this end-to-end with proprietary scrapers per payer, refreshing nightly, decommissioning Manus dependency.
+
+    This is not a build greenlight yet. The build itself is post-May 12 work, ideally starting around May 14-15 once the Rosemary meeting and Chajinel advisor sign-off are done. What I need from you now is an architecture review — validate the approach below, identify gotchas, and produce a sequenced 3-week build plan I can greenlight after the meeting.
+    Strategic frame
+
+    ClaimShield's value proposition to investors and partners hinges on "the only billing platform with an automatic payer rules ingestion engine." This phrase only holds if the ingestion is actually automatic — manual upload doesn't sell it. The scraper kit is the operational backbone that makes the moat real.
+
+    Specifically: every 90 days, the corpus drifts. Payers publish monthly bulletins, monthly medical policy updates, quarterly reimbursement policy updates, monthly prior auth list revisions. Without automated refresh, the corpus is stale by an average of 30-45 days within any 90-day window. With automated refresh, we can claim "Our corpus is fresher than any competitor's by an average of 23 days" — a defensible, measurable number that no other billing platform can claim.
+    Proposed architecture
+    Per-payer adapter pattern
+
+    Not a generic crawler. One TypeScript file per payer in server/scrapers/, each implementing a common interface:
+    typescript
+
+    interface PayerScraper {
+      payer_code: string;
+      payer_name: string;
+      
+      // Returns the manifest of all documents available for this payer
+      list_documents(opts?: { since?: Date }): Promise<DocumentManifest[]>;
+      
+      // Fetches a specific document by URL
+      fetch_document(url: string): Promise<FetchResult>;
+      
+      // Optional: per-payer bulletin/news feed adapter
+      list_bulletins(opts?: { since?: Date }): Promise<BulletinManifest[]>;
+    }
+
+    interface DocumentManifest {
+      url: string;
+      document_type: 'admin_guide' | 'supplement' | 'pa_list' | 'reimbursement_policy' | 'medical_policy' | 'bulletin';
+      document_name: string;
+      last_modified?: Date;
+      content_hash?: string;
+      discovered_at: Date;
+      parent_document_url?: string;  // for supplements
+    }
+
+    interface FetchResult {
+      content: Buffer;
+      mimetype: string;
+      final_url: string;  // after redirects
+      fetched_at: Date;
+    }
+
+    Each adapter encodes the quirks of that payer's portal: URL patterns, HTML structure, login requirements, JavaScript rendering. They share nothing except the interface.
+    Playwright, not basic fetch()
+
+    Provider portals are hostile to basic HTTP clients. UHC has bot detection, JavaScript-rendered nav, session tokens. Aetna has authentication walls on most reimbursement policies. Cigna similar. Playwright handles all of this — at the cost of being slower and more expensive than raw HTTP. The tradeoff is necessary.
+    Respectful crawling
+
+        Rate limit: 1 request per 3-5 seconds per payer, configurable per adapter
+        Honor robots.txt
+        Identify User-Agent honestly: "ClaimShieldHealth/1.0 (compliance-research; contact@claimshield.health)"
+        Exponential backoff on 429 / 503
+        Circuit breaker: if a payer returns >5 consecutive errors, pause that payer's scraping for 24 hours and alert admin
+
+    Storage and provenance
+
+    Add columns to payer_source_documents:
+
+        source_acquisition_method: enum of manual_upload, scraped, bulletin_triggered, manus_agent, cms_structured
+        source_url_canonical: the URL the scraper fetched from
+        content_hash: SHA-256 of the raw fetched bytes, used for change detection
+        last_scraped_at: timestamp
+        scrape_status: success, unchanged, error, auth_required, rate_limited
+
+    Scheduled refresh
+
+    Cron jobs (one per payer, staggered to avoid simultaneous load on any single payer's infrastructure):
+
+        Nightly: list_documents() for the payer, diff against current payer_source_documents rows.
+        For new documents: queue for ingestion via existing extraction pipeline.
+        For changed documents (different content_hash): fetch, queue for re-extraction, flag existing extraction items as needs_reverification = TRUE.
+        For unchanged: update last_scraped_at only.
+        For errors: log, alert admin if persistent.
+
+    Bulletin watchers
+
+    Separate, simpler path. Most payers publish bulletins via RSS, Atom, or a structured "What's New" page. Per-payer bulletin adapter is dramatically simpler than full document scraping. Build these first — they generate the trigger signals that drive smart refresh of everything else.
+    Manual upload remains first-class
+
+    Some documents won't be scrapeable: login-walled portals requiring practice credentials, regional plan documents, contract-specific fee schedules. The admin UI already supports manual upload. Keep that path, tag with source_acquisition_method = 'manual_upload', and let practices upload anything the scrapers can't reach.
+    Manus migration path
+
+    Documents currently in the corpus that came from Manus agents get tagged source_acquisition_method = 'manus_agent'. As scrapers come online for each payer, we re-fetch via the scraper, compare hashes, and update provenance to scraped. Once a payer's scraper has successfully refreshed all its documents at least twice, mark the Manus dependency for that payer as deprecated. Goal: zero Manus dependency by end of Q3.
+    Per-payer scope (for the 3-week build)
+
+    Order matters. Start with hardest, finish with easiest:
+
+    Week 1: UHC adapter. Most complex (484-page admin guide, 11+ supplements, separately-maintained PA list, hundreds of reimbursement policies, thousands of medical policies, monthly bulletins). If the pattern works for UHC, it works for everyone.
+
+    Week 2: Aetna + Cigna adapters. Different login behaviors. Aetna especially has authentication walls that will test the credential-handling layer.
+
+    Week 3: BCBS + Humana adapters + bulletin watchers across all five + scheduled refresh job. BCBS is structurally interesting because it's a federation — 36 independent BCBS plans with different portals. The adapter has to handle this as either one parent BCBS class with regional sub-adapters, or 36 separate adapters with shared utility functions. Pick a pattern and document it.
+    What I need from you in this review
+
+        Validate the per-payer adapter pattern. Is the interface right? Anything I'm missing in DocumentManifest or FetchResult?
+        Playwright vs alternatives. Have you used Playwright in production for scraping at this scale? Any concerns about cost, reliability, or detection? Alternatives worth considering (Puppeteer, Selenium, headless Chrome with stealth plugins)?
+        Login/credential handling. Some payer portals require provider credentials to access reimbursement policies. The practice has those credentials. How do we let practices supply credentials securely (encrypted at rest, never logged) and have the adapter use them per-fetch? Sketch the flow.
+        Rate limiting architecture. With 5+ payers refreshing nightly, the rate-limit windows can stack up. Should this be in-process (per Node instance) or external (Redis-backed)? Replit's deployment context matters here.
+        Failure mode handling. If UHC blocks our IP, what happens to the corpus? What's the fallback? How does the admin get alerted? Ideally there's a graceful degradation path that doesn't break ClaimShield for customers.
+        Build sequence. I proposed Week 1 UHC, Week 2 Aetna+Cigna, Week 3 BCBS+Humana+bulletins+cron. Push back if you'd sequence differently. UHC first is intentional — if the pattern fails on UHC, we want to know in week 1, not week 3.
+        Schema additions to payer_source_documents. I listed 5 new columns. Anything else needed for full provenance? effective_start and effective_end already exist from Prompt A.
+        Per-payer document inventory. This is the part I can't generate alone. For each of UHC/Aetna/Cigna/BCBS/Humana, I need to provide you with the list of URLs and document types that matter. I'll work that up with Rosemary post-May 12. Confirm that's the right division of labor — you build the adapter framework, I supply the per-payer inventory.
+
+    What I'm NOT asking for
+
+        Code, yet. This is a planning review.
+        A start date. Build kicks off post-May 12 (~May 14-15).
+        Any change to the May 12 demo path. Cascade demo and B2 are sealed.
+
+    Reply with the architecture review. I'll send the actual build prompt as Message 2 once we're past the Rosemary meeting and the Chajinel advisor signing.
+
+Message 2 — The actual build prompt (send post-May 12)
+
+I'd write this after you get Replit's architecture review back. His response will inevitably surface 2-3 things you and I haven't thought about — auth flow specifics, rate-limit architecture choices, his Playwright experience or lack thereof. Those answers reshape the build prompt in ways I can't predict accurately right now.
+
+So instead of giving you a build prompt that'll need 30% rewrite after the architecture review, here's what to do:
+
+Step 1. Send Message 1 above this week (after B2 ships, before May 12). Replit gets 5-7 days to think it through while you focus on demo prep.
+
+Step 2. Read his review. He'll catch things — every prior prompt round, he's caught 1-3 implementation issues per review. Same will happen here.
+
+Step 3. May 12 happens. You demo, sign Rosemary, agree on Chajinel pilot timeline.
+
+Step 4. May 13-14, write Message 2 (the actual build prompt) incorporating his feedback. Send it. Build runs May 14 → June 3 ish.
+
+This is the same pattern that worked for B1, A, C0, C, B2 — plan review first, build second, with the review surfacing issues that would otherwise become rework. Don't skip it just because you have a prompt template ready.
+One small change to send Replit before all of this
+
+Independently of the crawler work, there's a 5-minute change worth slotting into B2 closeout or right after:
+
+    Quick add — source provenance column
+
+    When you have a free 5 minutes, add this column to payer_source_documents:
+    sql
+
+    ALTER TABLE payer_source_documents 
+    ADD COLUMN IF NOT EXISTS source_acquisition_method VARCHAR NOT NULL DEFAULT 'manual_upload';
+
+    This is groundwork for the future scraper kit. For now every existing row defaults to manual_upload. When we manually upload Manus-extracted documents, we'll set this to manus_agent going forward. Down the road, scraped documents get scraped. No other code changes needed yet.
+
+    Add as part of replit.md "Source Document Architecture" section: "All source documents track acquisition provenance via source_acquisition_method. Values: manual_upload, scraped, bulletin_triggered, manus_agent, cms_structured."
+
+Send that with B2 closeout. Costs nothing now, gives you the data you'll need later to answer "how is our corpus refreshed."

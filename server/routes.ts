@@ -2409,6 +2409,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS pcp_referral_number TEXT NULL`);
     }
 
+    // ── Source document provenance (groundwork for scraper kit) ──────────────
+    // Tracks how each source document entered the corpus.
+    // Values: manual_upload | scraped | bulletin_triggered | manus_agent | cms_structured
+    // Defaults to manual_upload — every existing row is already correctly labelled.
+    if (!(await seederLog('column', 'payer_source_documents', 'source_acquisition_method'))) {
+      await pool.query(`ALTER TABLE payer_source_documents ADD COLUMN IF NOT EXISTS source_acquisition_method VARCHAR NOT NULL DEFAULT 'manual_upload'`);
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
