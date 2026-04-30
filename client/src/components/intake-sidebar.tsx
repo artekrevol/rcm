@@ -7,6 +7,7 @@ import {
   LogOut,
   ShieldCheck,
   ArrowLeft,
+  Workflow,
 } from "lucide-react";
 import {
   Sidebar,
@@ -27,6 +28,7 @@ const intakeNavItems = [
   { title: "Dashboard", url: "/intake/dashboard", icon: LayoutDashboard },
   { title: "Chat Analytics", url: "/intake/lead-analytics", icon: MessageCircle },
   { title: "Lead Worklist", url: "/intake/deals", icon: Users },
+  { title: "Flows", url: "/intake/flows", icon: Workflow },
   { title: "Scheduling", url: "/intake/scheduling", icon: CalendarDays },
 ];
 

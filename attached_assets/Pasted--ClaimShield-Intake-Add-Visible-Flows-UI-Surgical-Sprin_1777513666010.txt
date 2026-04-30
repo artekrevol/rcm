@@ -1,0 +1,688 @@
+# ClaimShield Intake — Add Visible Flows UI
+## Surgical Sprint: Pre-Demo Visibility Fix (2-3 hours)
+
+---
+
+## CRITICAL: Read before touching anything
+
+The flow engine backend is built and working. The Flow Inspector tab on the deal detail page works. **The gap is that there is no top-level UI to see flows.** 
+
+Victor and Leo (the prospects we're demoing to tomorrow) are not going to drill into a single lead to find the engine. They need to see the dynamic workflow structure on a top-level page in the sidebar.
+
+This sprint is PURELY ADDITIVE. Do NOT:
+- Rebuild any existing page
+- Modify the dashboard, deals, lead worklist, scheduling, or chat analytics pages
+- Change the existing Flow Inspector component on the deal detail page (keep it as-is)
+- Touch any backend code, services, or routes for the flow engine itself
+- Modify the database schema
+
+What you ARE doing: adding ONE new sidebar item, ONE new top-level page, and TWO new lightweight read-only API endpoints to power that page.
+
+---
+
+## Item 1 — Add Flows API endpoints (read-only)
+
+Add to `server/routes.ts` (or wherever the flow-related routes already live):
+
+```typescript
+// GET /api/flows — list all flows with step counts and active run counts
+app.get('/api/flows', requireAuth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        f.id,
+        f.name,
+        f.description,
+        f.trigger_event,
+        f.trigger_conditions,
+        f.is_active,
+        f.created_at,
+        (SELECT COUNT(*) FROM flow_steps WHERE flow_id = f.id)::int AS step_count,
+        (SELECT COUNT(*) FROM flow_runs WHERE flow_id = f.id AND status = 'running')::int AS active_run_count,
+        (SELECT COUNT(*) FROM flow_runs WHERE flow_id = f.id AND status = 'completed')::int AS completed_run_count
+      FROM flows f
+      ORDER BY f.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('[GET /api/flows] error:', err);
+    res.status(500).json({ error: 'Failed to load flows' });
+  }
+});
+
+// GET /api/flows/:id — full flow detail with steps in order
+app.get('/api/flows/:id', requireAuth, async (req, res) => {
+  try {
+    const flow = await db.query(`SELECT * FROM flows WHERE id = $1`, [req.params.id]);
+    if (!flow.rows[0]) return res.status(404).json({ error: 'Flow not found' });
+
+    const steps = await db.query(
+      `SELECT * FROM flow_steps WHERE flow_id = $1 ORDER BY step_order ASC`,
+      [req.params.id]
+    );
+
+    const recentRuns = await db.query(`
+      SELECT 
+        fr.id,
+        fr.lead_id,
+        fr.status,
+        fr.started_at,
+        fr.next_action_at,
+        fr.completed_at,
+        l.name AS lead_name,
+        l.phone AS lead_phone,
+        fs.step_order AS current_step_order,
+        fs.step_type AS current_step_type
+      FROM flow_runs fr
+      LEFT JOIN leads l ON l.id = fr.lead_id
+      LEFT JOIN flow_steps fs ON fs.id = fr.current_step_id
+      WHERE fr.flow_id = $1
+      ORDER BY fr.started_at DESC
+      LIMIT 25
+    `, [req.params.id]);
+
+    res.json({
+      flow: flow.rows[0],
+      steps: steps.rows,
+      recent_runs: recentRuns.rows,
+    });
+  } catch (err) {
+    console.error('[GET /api/flows/:id] error:', err);
+    res.status(500).json({ error: 'Failed to load flow detail' });
+  }
+});
+
+// GET /api/flow-runs/active — all currently running flow_runs across all flows
+app.get('/api/flow-runs/active', requireAuth, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT 
+        fr.id,
+        fr.flow_id,
+        fr.lead_id,
+        fr.status,
+        fr.started_at,
+        fr.next_action_at,
+        fr.attempt_count,
+        f.name AS flow_name,
+        l.name AS lead_name,
+        l.phone AS lead_phone,
+        l.insurance_carrier,
+        l.vob_score,
+        fs.step_order AS current_step_order,
+        fs.step_type AS current_step_type,
+        fs.channel AS current_step_channel,
+        (SELECT COUNT(*) FROM flow_steps WHERE flow_id = fr.flow_id)::int AS total_steps
+      FROM flow_runs fr
+      LEFT JOIN flows f ON f.id = fr.flow_id
+      LEFT JOIN leads l ON l.id = fr.lead_id
+      LEFT JOIN flow_steps fs ON fs.id = fr.current_step_id
+      WHERE fr.status = 'running'
+      ORDER BY fr.next_action_at ASC
+      LIMIT 100
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('[GET /api/flow-runs/active] error:', err);
+    res.status(500).json({ error: 'Failed to load active runs' });
+  }
+});
+```
+
+After adding, verify each endpoint returns 200 with valid JSON via curl or browser. Report results.
+
+---
+
+## Item 2 — Add "Flows" to the sidebar
+
+Find the sidebar component that renders the INTAKE section (likely in `client/src/components/sidebar.tsx` or similar — the file that has the existing "Dashboard", "Chat Analytics", "Lead Worklist", "Scheduling" items).
+
+Add ONE new item between "Lead Worklist" and "Scheduling":
+
+```tsx
+{
+  label: 'Flows',
+  path: '/intake/flows',
+  icon: <Workflow className="h-4 w-4" />, // from lucide-react
+}
+```
+
+Use the existing pattern — match how the other items are added. If they're hardcoded in JSX rather than mapped from an array, just add the equivalent JSX. Do NOT restructure the sidebar.
+
+---
+
+## Item 3 — Create the Flows list page
+
+Create `client/src/pages/intake/flows.tsx`:
+
+```tsx
+import { useQuery } from '@tanstack/react-query';
+import { Link, useLocation } from 'wouter';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Workflow, Play, CheckCircle2, Clock, Phone, MessageSquare, Mail, Activity, GitBranch, Pause } from 'lucide-react';
+
+const STEP_TYPE_ICONS: Record<string, any> = {
+  call: Phone,
+  sms: MessageSquare,
+  email: Mail,
+  wait: Clock,
+  vob_check: Activity,
+  branch: GitBranch,
+  human_task: Pause,
+};
+
+const STEP_TYPE_COLORS: Record<string, string> = {
+  call: 'bg-blue-50 text-blue-700 border-blue-200',
+  sms: 'bg-green-50 text-green-700 border-green-200',
+  email: 'bg-purple-50 text-purple-700 border-purple-200',
+  wait: 'bg-gray-50 text-gray-600 border-gray-200',
+  vob_check: 'bg-amber-50 text-amber-700 border-amber-200',
+  branch: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  human_task: 'bg-rose-50 text-rose-700 border-rose-200',
+};
+
+export default function FlowsPage() {
+  const [, setLocation] = useLocation();
+  
+  const { data: flows, isLoading } = useQuery({
+    queryKey: ['flows'],
+    queryFn: () => fetch('/api/flows').then(r => r.json()),
+  });
+
+  const { data: activeRuns } = useQuery({
+    queryKey: ['flow-runs-active'],
+    queryFn: () => fetch('/api/flow-runs/active').then(r => r.json()),
+    refetchInterval: 5000, // poll every 5s for live demo
+  });
+
+  return (
+    <div className="p-8 max-w-7xl mx-auto">
+      <div className="flex items-start justify-between mb-2">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Flows</h1>
+          <p className="text-muted-foreground mt-1">
+            Configurable intake sequences. Each flow defines how leads move through 
+            calls, SMS, email, and verification automatically.
+          </p>
+        </div>
+      </div>
+
+      {/* Top metric strip */}
+      <div className="grid grid-cols-3 gap-4 mt-6 mb-8">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-2xl font-semibold">{flows?.filter((f: any) => f.is_active).length || 0}</div>
+            <div className="text-sm text-muted-foreground mt-1">Active flows</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-2xl font-semibold">{activeRuns?.length || 0}</div>
+            <div className="text-sm text-muted-foreground mt-1">Leads currently in a flow</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-2xl font-semibold">
+              {flows?.reduce((sum: number, f: any) => sum + (f.completed_run_count || 0), 0) || 0}
+            </div>
+            <div className="text-sm text-muted-foreground mt-1">Completed runs (all time)</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Flows list */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <Workflow className="h-5 w-5" />
+          Configured Flows
+        </h2>
+
+        {isLoading && <div className="text-muted-foreground">Loading flows...</div>}
+        
+        {!isLoading && (!flows || flows.length === 0) && (
+          <Card>
+            <CardContent className="pt-6 text-center text-muted-foreground">
+              No flows configured yet.
+            </CardContent>
+          </Card>
+        )}
+
+        {flows?.map((flow: any) => (
+          <Card 
+            key={flow.id} 
+            className="cursor-pointer hover:border-blue-400 transition-colors"
+            onClick={() => setLocation(`/intake/flows/${flow.id}`)}
+          >
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    {flow.name}
+                    {flow.is_active && <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Active</Badge>}
+                    {!flow.is_active && <Badge variant="secondary">Paused</Badge>}
+                  </CardTitle>
+                  {flow.description && (
+                    <p className="text-sm text-muted-foreground mt-1">{flow.description}</p>
+                  )}
+                </div>
+                <Button variant="outline" size="sm">View Flow →</Button>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="flex flex-wrap gap-4 text-sm">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground">Trigger:</span>
+                  <Badge variant="outline" className="font-mono text-xs">{flow.trigger_event}</Badge>
+                  {flow.trigger_conditions && Object.keys(flow.trigger_conditions).length > 0 && (
+                    <span className="text-xs text-muted-foreground">
+                      where {Object.entries(flow.trigger_conditions).map(([k, v]) => `${k}=${v}`).join(', ')}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Workflow className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span>{flow.step_count} steps</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Play className="h-3.5 w-3.5 text-blue-600" />
+                  <span>{flow.active_run_count} active</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+                  <span>{flow.completed_run_count} completed</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Active runs section */}
+      {activeRuns && activeRuns.length > 0 && (
+        <div className="mt-10">
+          <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
+            <Activity className="h-5 w-5" />
+            Live Activity
+            <Badge variant="outline" className="text-xs ml-2">refreshes every 5s</Badge>
+          </h2>
+          <Card>
+            <CardContent className="p-0">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/30">
+                  <tr className="text-left">
+                    <th className="p-3 font-medium">Lead</th>
+                    <th className="p-3 font-medium">Flow</th>
+                    <th className="p-3 font-medium">Current Step</th>
+                    <th className="p-3 font-medium">Progress</th>
+                    <th className="p-3 font-medium">Next Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeRuns.map((run: any) => {
+                    const Icon = STEP_TYPE_ICONS[run.current_step_type] || Activity;
+                    const colorClass = STEP_TYPE_COLORS[run.current_step_type] || 'bg-gray-50';
+                    const nextActionDate = run.next_action_at ? new Date(run.next_action_at) : null;
+                    const inFuture = nextActionDate && nextActionDate > new Date();
+                    return (
+                      <tr 
+                        key={run.id} 
+                        className="border-b hover:bg-muted/20 cursor-pointer"
+                        onClick={() => setLocation(`/intake/deals/${run.lead_id}`)}
+                      >
+                        <td className="p-3">
+                          <div className="font-medium">{run.lead_name || `Lead #${run.lead_id}`}</div>
+                          <div className="text-xs text-muted-foreground">{run.lead_phone}</div>
+                        </td>
+                        <td className="p-3">
+                          <span className="text-xs">{run.flow_name}</span>
+                        </td>
+                        <td className="p-3">
+                          <Badge variant="outline" className={`${colorClass} font-normal`}>
+                            <Icon className="h-3 w-3 mr-1" />
+                            Step {run.current_step_order}: {run.current_step_type}
+                          </Badge>
+                        </td>
+                        <td className="p-3">
+                          <div className="text-xs">
+                            {run.current_step_order} / {run.total_steps}
+                          </div>
+                          <div className="w-24 h-1.5 bg-gray-100 rounded-full mt-1">
+                            <div 
+                              className="h-full bg-blue-500 rounded-full" 
+                              style={{ width: `${(run.current_step_order / run.total_steps) * 100}%` }}
+                            />
+                          </div>
+                        </td>
+                        <td className="p-3 text-xs text-muted-foreground">
+                          {nextActionDate && (
+                            inFuture 
+                              ? `in ${formatDistance(nextActionDate)}`
+                              : 'firing now'
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatDistance(date: Date): string {
+  const ms = date.getTime() - Date.now();
+  const min = Math.round(ms / 60000);
+  if (min < 1) return '<1 min';
+  if (min < 60) return `${min} min`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h`;
+  return `${Math.round(hr / 24)}d`;
+}
+```
+
+---
+
+## Item 4 — Create the Flow Detail page (the visual sequence)
+
+Create `client/src/pages/intake/flow-detail.tsx`:
+
+```tsx
+import { useQuery } from '@tanstack/react-query';
+import { useRoute, useLocation, Link } from 'wouter';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { ArrowLeft, Phone, MessageSquare, Mail, Clock, Activity, GitBranch, Pause, ArrowDown, CheckCircle2, Play } from 'lucide-react';
+
+const STEP_TYPE_LABELS: Record<string, string> = {
+  call: 'AI Voice Call',
+  sms: 'SMS Message',
+  email: 'Email',
+  wait: 'Wait',
+  vob_check: 'Insurance Verification (Stedi)',
+  branch: 'Conditional Branch',
+  human_task: 'Human Review',
+};
+
+const STEP_TYPE_ICONS: Record<string, any> = {
+  call: Phone,
+  sms: MessageSquare,
+  email: Mail,
+  wait: Clock,
+  vob_check: Activity,
+  branch: GitBranch,
+  human_task: Pause,
+};
+
+const STEP_TYPE_COLORS: Record<string, string> = {
+  call: 'bg-blue-50 text-blue-700 border-blue-200',
+  sms: 'bg-green-50 text-green-700 border-green-200',
+  email: 'bg-purple-50 text-purple-700 border-purple-200',
+  wait: 'bg-gray-50 text-gray-600 border-gray-200',
+  vob_check: 'bg-amber-50 text-amber-700 border-amber-200',
+  branch: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  human_task: 'bg-rose-50 text-rose-700 border-rose-200',
+};
+
+function formatDelay(min: number): string {
+  if (!min || min === 0) return 'immediate';
+  if (min < 60) return `wait ${min} min`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `wait ${hr}h`;
+  return `wait ${Math.round(hr / 24)}d`;
+}
+
+export default function FlowDetailPage() {
+  const [, params] = useRoute<{ id: string }>('/intake/flows/:id');
+  const [, setLocation] = useLocation();
+  
+  const { data, isLoading } = useQuery({
+    queryKey: ['flow', params?.id],
+    queryFn: () => fetch(`/api/flows/${params?.id}`).then(r => r.json()),
+    enabled: !!params?.id,
+    refetchInterval: 5000,
+  });
+
+  if (isLoading) return <div className="p-8">Loading flow...</div>;
+  if (!data?.flow) return <div className="p-8">Flow not found</div>;
+
+  const { flow, steps, recent_runs } = data;
+
+  return (
+    <div className="p-8 max-w-5xl mx-auto">
+      <Button variant="ghost" size="sm" onClick={() => setLocation('/intake/flows')} className="mb-4">
+        <ArrowLeft className="h-4 w-4 mr-1" />
+        Back to Flows
+      </Button>
+
+      <div className="flex items-start justify-between mb-2">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">{flow.name}</h1>
+          {flow.description && (
+            <p className="text-muted-foreground mt-1">{flow.description}</p>
+          )}
+        </div>
+        <div className="flex gap-2">
+          {flow.is_active ? (
+            <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Active</Badge>
+          ) : (
+            <Badge variant="secondary">Paused</Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Trigger card */}
+      <Card className="mt-6 border-dashed">
+        <CardContent className="pt-6">
+          <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Trigger</div>
+          <div className="font-medium">
+            When <code className="bg-muted px-1.5 py-0.5 rounded text-sm">{flow.trigger_event}</code>
+            {flow.trigger_conditions && Object.keys(flow.trigger_conditions).length > 0 && (
+              <span className="text-muted-foreground">
+                {' '}where{' '}
+                {Object.entries(flow.trigger_conditions).map(([k, v]: any, i, arr) => (
+                  <span key={k}>
+                    <code className="bg-muted px-1.5 py-0.5 rounded text-sm">{k} = "{v}"</code>
+                    {i < arr.length - 1 && ' AND '}
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* The visual sequence */}
+      <div className="mt-8">
+        <h2 className="text-lg font-semibold mb-4">Sequence ({steps.length} steps)</h2>
+        <div className="relative">
+          {steps.map((step: any, idx: number) => {
+            const Icon = STEP_TYPE_ICONS[step.step_type] || Activity;
+            const colorClass = STEP_TYPE_COLORS[step.step_type] || 'bg-gray-50';
+            const isLast = idx === steps.length - 1;
+            return (
+              <div key={step.id}>
+                <Card className={`${colorClass} border`}>
+                  <CardContent className="py-4">
+                    <div className="flex items-start gap-4">
+                      <div className="flex flex-col items-center">
+                        <div className="w-8 h-8 rounded-full bg-white border-2 border-current flex items-center justify-center font-semibold text-sm">
+                          {step.step_order}
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Icon className="h-4 w-4" />
+                          <div className="font-semibold">{STEP_TYPE_LABELS[step.step_type] || step.step_type}</div>
+                          {step.channel && (
+                            <Badge variant="outline" className="text-xs font-mono">via {step.channel}</Badge>
+                          )}
+                          <Badge variant="outline" className="text-xs ml-auto">
+                            <Clock className="h-3 w-3 mr-1" />
+                            {formatDelay(step.delay_minutes || 0)}
+                          </Badge>
+                        </div>
+                        {step.template_inline && (
+                          <div className="text-sm mt-2 italic opacity-80 bg-white/50 p-2 rounded border">
+                            "{step.template_inline}"
+                          </div>
+                        )}
+                        {step.success_condition && (
+                          <div className="text-xs mt-2 font-mono opacity-70">
+                            Branch: if {step.success_condition.field} {step.success_condition.op} {step.success_condition.value}
+                          </div>
+                        )}
+                        {step.max_attempts > 1 && (
+                          <div className="text-xs mt-1 opacity-70">
+                            Retry up to {step.max_attempts} times, {step.retry_delay_minutes} min apart
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                {!isLast && (
+                  <div className="flex justify-center py-1">
+                    <ArrowDown className="h-5 w-5 text-muted-foreground" />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Recent runs */}
+      {recent_runs && recent_runs.length > 0 && (
+        <div className="mt-10">
+          <h2 className="text-lg font-semibold mb-4">Recent Runs</h2>
+          <Card>
+            <CardContent className="p-0">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/30">
+                  <tr className="text-left">
+                    <th className="p-3 font-medium">Lead</th>
+                    <th className="p-3 font-medium">Status</th>
+                    <th className="p-3 font-medium">Current Step</th>
+                    <th className="p-3 font-medium">Started</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recent_runs.map((run: any) => (
+                    <tr 
+                      key={run.id} 
+                      className="border-b hover:bg-muted/20 cursor-pointer"
+                      onClick={() => setLocation(`/intake/deals/${run.lead_id}`)}
+                    >
+                      <td className="p-3">
+                        <div className="font-medium">{run.lead_name || `Lead #${run.lead_id}`}</div>
+                        <div className="text-xs text-muted-foreground">{run.lead_phone}</div>
+                      </td>
+                      <td className="p-3">
+                        {run.status === 'running' && (
+                          <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">
+                            <Play className="h-3 w-3 mr-1" />
+                            Running
+                          </Badge>
+                        )}
+                        {run.status === 'completed' && (
+                          <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                            Completed
+                          </Badge>
+                        )}
+                        {run.status === 'failed' && <Badge variant="destructive">Failed</Badge>}
+                        {run.status === 'paused' && <Badge variant="secondary">Paused</Badge>}
+                      </td>
+                      <td className="p-3 text-xs">
+                        Step {run.current_step_order || '—'} ({run.current_step_type || 'n/a'})
+                      </td>
+                      <td className="p-3 text-xs text-muted-foreground">
+                        {new Date(run.started_at).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+---
+
+## Item 5 — Wire the routes
+
+In the main router (likely `client/src/App.tsx` where the existing `/intake/dashboard`, `/intake/deals`, etc. routes are defined), add the two new routes alongside the existing intake routes:
+
+```tsx
+import FlowsPage from './pages/intake/flows';
+import FlowDetailPage from './pages/intake/flow-detail';
+
+// ... in the Switch / Route block, add:
+<Route path="/intake/flows" component={FlowsPage} />
+<Route path="/intake/flows/:id" component={FlowDetailPage} />
+```
+
+Match the exact pattern of how other routes in the file are declared. Don't change anything else.
+
+---
+
+## Verification checklist
+
+After all 5 items, verify:
+
+1. Server restarts cleanly with no TypeScript errors
+2. `curl http://localhost:5000/api/flows -H "Cookie: <session>"` returns an array containing the Caritas flow
+3. `curl http://localhost:5000/api/flows/<caritas_flow_id>` returns flow + 8 steps + recent_runs
+4. `curl http://localhost:5000/api/flow-runs/active` returns array (may be empty)
+5. Open the app in browser. Sidebar shows "Flows" between "Lead Worklist" and "Scheduling"
+6. Click "Flows". The page loads showing the Caritas flow card with "8 steps" and trigger info
+7. Click the Caritas flow card. The detail page opens showing all 8 steps in sequence with icons, delays, and template text
+8. Each step shows correct color coding (call=blue, sms=green, email=purple, wait=gray, vob_check=amber)
+9. Step text/template_inline content is visible inline (the welcome SMS text, the call goal, etc.)
+10. If any flow_runs exist, the "Live Activity" table on the Flows index page shows them
+11. Refresh polling works — Live Activity table updates every 5 seconds without page refresh
+
+If 1-11 all pass, the demo-ready Flows UI is complete.
+
+---
+
+## What this gives Abeer for the demo
+
+When Victor and Leo say "show us the dynamic intake structure":
+1. Click "Flows" in the sidebar
+2. Click the Caritas flow card
+3. The 8-step visual sequence appears — every step labeled, every delay shown, every template visible
+4. Switch tabs to show "Live Activity" — leads currently moving through the steps in real time
+
+That's the demo. Don't add anything else. Don't try to build an editor. Don't try to add multiple flows. The single visible Caritas flow with its 8 steps is the entire pitch.
+
+---
+
+## What NOT to do this sprint
+
+- Do NOT build a flow editor (drag-and-drop, step adding, etc.) — read-only is the demo
+- Do NOT add a "create flow" button (mention it as "next iteration" if asked)
+- Do NOT modify the deal detail page or its existing Flow Inspector tab
+- Do NOT change the sidebar's other items
+- Do NOT touch any flow engine backend code (orchestrator, executor, services)
+- Do NOT change the database schema
+- Do NOT seed additional flows — the Caritas one is the only one needed for tomorrow
+
+---
+
+## Reporting back
+
+After each item, confirm what was built (file paths) and what verification step passed. If any TypeScript errors occur, paste them and STOP — do not proceed to the next item. Work items 1 through 5 in order.

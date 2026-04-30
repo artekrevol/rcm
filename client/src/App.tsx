@@ -19,6 +19,8 @@ import DataToolsPage from "@/pages/admin/data-tools";
 import ClinicHome from "@/pages/billing/clinic-home";
 
 import IntakeDashboard from "@/pages/intake/dashboard";
+import FlowsPage from "@/pages/intake/flows";
+import FlowDetailPage from "@/pages/intake/flow-detail";
 import DashboardPage from "@/pages/dashboard";
 import DealsPage from "@/pages/deals";
 import DealDetailPage from "@/pages/deal-detail";
@@ -79,6 +81,16 @@ function Router() {
       <Route path="/intake/lead-analytics">
         <AuthGuard allowedRoles={["admin", "intake"]}>
           <IntakeLayout><LeadAnalyticsPage /></IntakeLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/intake/flows/:id">
+        <AuthGuard allowedRoles={["admin", "intake"]}>
+          <IntakeLayout><FlowDetailPage /></IntakeLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/intake/flows">
+        <AuthGuard allowedRoles={["admin", "intake"]}>
+          <IntakeLayout><FlowsPage /></IntakeLayout>
         </AuthGuard>
       </Route>
       <Route path="/intake/scheduling">

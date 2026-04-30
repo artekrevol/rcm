@@ -7570,6 +7570,109 @@ Warmly,
     }
   });
 
+  // GET /api/flows — list all flows with step counts and active/completed run counts
+  app.get("/api/flows", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT
+          f.id,
+          f.name,
+          f.description,
+          f.trigger_event,
+          f.trigger_conditions,
+          f.is_active,
+          f.created_at,
+          (SELECT COUNT(*) FROM flow_steps WHERE flow_id = f.id)::int AS step_count,
+          (SELECT COUNT(*) FROM flow_runs WHERE flow_id = f.id AND status = 'running')::int AS active_run_count,
+          (SELECT COUNT(*) FROM flow_runs WHERE flow_id = f.id AND status = 'completed')::int AS completed_run_count
+        FROM flows f
+        ORDER BY f.created_at DESC
+      `);
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[GET /api/flows] error:", err);
+      res.status(500).json({ error: "Failed to load flows" });
+    }
+  });
+
+  // GET /api/flows/:id — full flow detail with steps and recent runs
+  app.get("/api/flows/:id", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const flow = await pool.query(`SELECT * FROM flows WHERE id = $1`, [req.params.id]);
+      if (!flow.rows[0]) return res.status(404).json({ error: "Flow not found" });
+
+      const steps = await pool.query(
+        `SELECT * FROM flow_steps WHERE flow_id = $1 ORDER BY step_order ASC`,
+        [req.params.id]
+      );
+
+      const recentRuns = await pool.query(`
+        SELECT
+          fr.id,
+          fr.lead_id,
+          fr.status,
+          fr.started_at,
+          fr.next_action_at,
+          fr.completed_at,
+          l.name AS lead_name,
+          l.phone AS lead_phone,
+          fs.step_order AS current_step_order,
+          fs.step_type AS current_step_type
+        FROM flow_runs fr
+        LEFT JOIN leads l ON l.id = fr.lead_id
+        LEFT JOIN flow_steps fs ON fs.id = fr.current_step_id
+        WHERE fr.flow_id = $1
+        ORDER BY fr.started_at DESC
+        LIMIT 25
+      `, [req.params.id]);
+
+      res.json({
+        flow: flow.rows[0],
+        steps: steps.rows,
+        recent_runs: recentRuns.rows,
+      });
+    } catch (err) {
+      console.error("[GET /api/flows/:id] error:", err);
+      res.status(500).json({ error: "Failed to load flow detail" });
+    }
+  });
+
+  // GET /api/flow-runs/active — all currently running flow_runs across all flows
+  app.get("/api/flow-runs/active", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT
+          fr.id,
+          fr.flow_id,
+          fr.lead_id,
+          fr.status,
+          fr.started_at,
+          fr.next_action_at,
+          fr.attempt_count,
+          f.name AS flow_name,
+          l.name AS lead_name,
+          l.phone AS lead_phone,
+          l.insurance_carrier,
+          l.vob_score,
+          fs.step_order AS current_step_order,
+          fs.step_type AS current_step_type,
+          fs.channel AS current_step_channel,
+          (SELECT COUNT(*) FROM flow_steps WHERE flow_id = fr.flow_id)::int AS total_steps
+        FROM flow_runs fr
+        LEFT JOIN flows f ON f.id = fr.flow_id
+        LEFT JOIN leads l ON l.id = fr.lead_id
+        LEFT JOIN flow_steps fs ON fs.id = fr.current_step_id
+        WHERE fr.status = 'running'
+        ORDER BY fr.next_action_at ASC
+        LIMIT 100
+      `);
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[GET /api/flow-runs/active] error:", err);
+      res.status(500).json({ error: "Failed to load active runs" });
+    }
+  });
+
   // Get email configuration status
   app.get("/api/email/status", requireRole("admin", "intake"), async (req, res) => {
     res.json({
