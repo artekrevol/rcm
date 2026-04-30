@@ -3,6 +3,8 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth, ensureSessionTable } from "./auth";
+import { startOrchestrator } from "./jobs/flow-orchestrator";
+import { seedCaritasFlow } from "./seeds/caritas-flow";
 
 const app = express();
 const httpServer = createServer(app);
@@ -104,6 +106,11 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      // Start flow orchestrator and seed demo data after server is up
+      seedCaritasFlow().catch((err) =>
+        console.error("[startup] seedCaritasFlow error:", err)
+      );
+      startOrchestrator();
     },
   );
 })();

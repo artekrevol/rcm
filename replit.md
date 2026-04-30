@@ -34,6 +34,7 @@ The platform adopts an enterprise SaaS design aesthetic with shadcn/ui and Tailw
 - **Plan Product Dimension**: `plan_product` column (HMO/PPO/POS/EPO/Indemnity/unknown/NULL) on both `patients` and `claims` tables. Captured inline in the claim wizard Step 1 (patient selection card) with an HMO-referral info banner. Displayed and editable on the patient detail page Insurance card. Snapshotted from patient record into claim at draft creation. `applies_to_plan_products` JSONB column on `manual_extraction_items` lets admins scope rules to specific plan products via multi-select. Backfill tool at `/admin/data-tools` for bulk-setting existing patient records.
 - **CMS-1500 PDF Generation**: Enhanced to include new claim fields.
 - **Test Claim Mode**: Provides end-to-end EDI validation via Stedi's production API with a test indicator, preventing phantom claims from reaching real payers.
+- **Intake Flow Engine**: A 12-item flow orchestration layer on top of the intake module. Includes 5 new DB tables (`flows`, `flow_steps`, `flow_runs`, `flow_run_events`, `comm_locks`), a 30-second polling orchestrator, a Caritas Senior Care 8-step demo flow (wait → SMS → wait → call → VOB → call → SMS → email), concurrency locking via advisory locks, Vapi webhook integration for call-end advancement, inbound SMS endpoint, and a Flow Inspector UI tab on the lead detail page.
 
 ## External Dependencies
 

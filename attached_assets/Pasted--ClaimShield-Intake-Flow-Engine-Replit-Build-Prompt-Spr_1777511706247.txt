@@ -1,0 +1,1056 @@
+# ClaimShield Intake Flow Engine — Replit Build Prompt
+## Sprint: Pre-Caritas Demo (24-hour scope)
+
+---
+
+## CRITICAL: Read before touching anything
+
+This sprint adds an orchestration layer to the existing intake module. **Do not rebuild any of the existing intake code.** Specifically:
+
+- Do NOT touch the `leads`, `calls`, `appointments`, `chat_sessions`, `chat_messages`, `chat_analytics`, `vob_verifications`, `email_templates`, `nurture_sequences` tables — they continue to work as-is
+- Do NOT rebuild the deal detail page, the worklist, the chat widget, the call modal, or the VOB card UI
+- Do NOT remove the manual Call/SMS/Email buttons on deal detail — they stay, but they now also acquire a comm lock
+- Do NOT remove the Vapi integration — keep it working as the current voice provider, just tune it (see Item 7 below)
+- Do NOT remove VerifyTX code from billing — only swap the intake-side VOB endpoint to use Stedi
+
+What you ARE doing:
+1. Adding a flow definition + flow runtime + comm lock layer on top of existing channels
+2. Swapping intake-side VOB from VerifyTX to Stedi (reusing the billing-side `stedi-eligibility.ts` service)
+3. Tuning the Vapi assistant config to fix latency
+4. Seeding ONE flow ("Caritas Senior Care — Standard Intake") to demonstrate the engine
+5. Adding a Flow Inspector view to the existing deal detail page
+
+If at any point this prompt asks you to do something that would break a working feature, STOP and ask for confirmation.
+
+---
+
+## Item 1 — Database schema additions
+
+Add these tables. Use `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS` so the migration is safe to run on the existing DB.
+
+```sql
+-- Flow definitions (the configurable sequence)
+CREATE TABLE IF NOT EXISTS flows (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  trigger_event TEXT NOT NULL,        -- 'lead_created' | 'status_changed' | 'manual' | 'scheduled'
+  trigger_conditions JSONB DEFAULT '{}',
+  is_active BOOLEAN DEFAULT true,
+  organization_id UUID,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_flows_trigger_active ON flows(trigger_event, is_active);
+
+-- Steps within a flow (ordered)
+CREATE TABLE IF NOT EXISTS flow_steps (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  flow_id UUID NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+  step_order INT NOT NULL,
+  step_type TEXT NOT NULL,            -- 'call' | 'sms' | 'email' | 'wait' | 'branch' | 'vob_check' | 'human_task' | 'webhook'
+  channel TEXT,                       -- 'vapi' | 'retell' | 'twilio' | 'gmail' | 'system' | NULL
+  template_id UUID,                   -- references email_templates or sms_templates or call_scripts
+  template_inline TEXT,               -- inline body if no template_id (for quick demos)
+  delay_minutes INT DEFAULT 0,
+  max_attempts INT DEFAULT 1,
+  retry_delay_minutes INT DEFAULT 60,
+  success_condition JSONB,            -- e.g. {"field": "vob_score", "op": ">=", "value": 80}
+  on_success_step_id UUID,            -- self-FK to flow_steps
+  on_failure_step_id UUID,
+  on_response_step_id UUID,           -- if lead replies on any channel
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_flow_steps_flow_order ON flow_steps(flow_id, step_order);
+
+-- Each lead's progress through a flow
+CREATE TABLE IF NOT EXISTS flow_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  flow_id UUID NOT NULL REFERENCES flows(id),
+  lead_id INT NOT NULL,               -- match the existing leads.id type
+  current_step_id UUID REFERENCES flow_steps(id),
+  status TEXT NOT NULL DEFAULT 'running',  -- 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  next_action_at TIMESTAMPTZ DEFAULT NOW(),
+  attempt_count INT DEFAULT 0,
+  context JSONB DEFAULT '{}',         -- accumulated data (extracted insurance, etc.)
+  completed_at TIMESTAMPTZ,
+  failed_reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_flow_runs_status_action ON flow_runs(status, next_action_at) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS idx_flow_runs_lead ON flow_runs(lead_id);
+
+-- Audit trail of every step execution
+CREATE TABLE IF NOT EXISTS flow_run_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  flow_run_id UUID NOT NULL REFERENCES flow_runs(id) ON DELETE CASCADE,
+  step_id UUID REFERENCES flow_steps(id),
+  event_type TEXT NOT NULL,           -- 'step_started' | 'step_completed' | 'step_failed' | 'response_received' | 'lock_acquired' | 'lock_released'
+  channel TEXT,
+  payload JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_flow_run_events_run ON flow_run_events(flow_run_id, created_at);
+
+-- The cross-channel lock (prevents double engagement)
+CREATE TABLE IF NOT EXISTS comm_locks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_id INT NOT NULL,
+  acquired_by_type TEXT NOT NULL,     -- 'flow_run' | 'manual_user' | 'inbound_response'
+  acquired_by_id TEXT NOT NULL,       -- flow_run_id, user_id, or event_id as string
+  channel TEXT NOT NULL,              -- 'call' | 'sms' | 'email' | 'any'
+  reason TEXT,
+  acquired_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  released_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_comm_locks_active ON comm_locks(lead_id, released_at, expires_at) WHERE released_at IS NULL;
+```
+
+After the migration, verify with `\dt` that all 5 tables exist. Report the result.
+
+---
+
+## Item 2 — The orchestrator (server-side cron)
+
+Create `server/jobs/flow-orchestrator.ts`. This is the heart of the engine. It runs every 60 seconds via `setInterval` (same pattern as the Stedi 277/835 polling — Railway runs the server continuously, no separate cron service needed).
+
+```typescript
+// server/jobs/flow-orchestrator.ts
+import { db } from '../db';
+import { acquireLock, releaseLock, hasActiveLock } from '../services/comm-locks';
+import { executeStep } from '../services/flow-step-executor';
+import { logFlowEvent } from '../services/flow-events';
+
+const TICK_INTERVAL_MS = 60_000;
+let isRunning = false;
+
+export function startFlowOrchestrator() {
+  console.log('[flow-orchestrator] starting, tick interval =', TICK_INTERVAL_MS, 'ms');
+  setInterval(tick, TICK_INTERVAL_MS);
+  // also tick once at startup
+  tick();
+}
+
+async function tick() {
+  if (isRunning) {
+    console.log('[flow-orchestrator] previous tick still running, skipping');
+    return;
+  }
+  isRunning = true;
+  try {
+    const dueRuns = await db.query(`
+      SELECT fr.*, fs.id as step_id, fs.step_type, fs.channel, fs.max_attempts, fs.retry_delay_minutes
+      FROM flow_runs fr
+      LEFT JOIN flow_steps fs ON fs.id = fr.current_step_id
+      WHERE fr.status = 'running'
+        AND fr.next_action_at <= NOW()
+      ORDER BY fr.next_action_at ASC
+      LIMIT 50
+    `);
+
+    for (const run of dueRuns.rows) {
+      // Check for active lock — skip and reschedule if locked
+      const locked = await hasActiveLock(run.lead_id);
+      if (locked) {
+        await db.query(
+          `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '15 minutes' WHERE id = $1`,
+          [run.id]
+        );
+        await logFlowEvent(run.id, run.step_id, 'step_skipped_locked', {});
+        continue;
+      }
+
+      try {
+        await executeStep(run);
+      } catch (err) {
+        console.error('[flow-orchestrator] step execution failed:', err);
+        await logFlowEvent(run.id, run.step_id, 'step_failed', { error: String(err) });
+        // Mark run as failed (don't retry forever)
+        await db.query(
+          `UPDATE flow_runs SET status = 'failed', failed_reason = $2 WHERE id = $1`,
+          [run.id, String(err).slice(0, 500)]
+        );
+      }
+    }
+  } finally {
+    isRunning = false;
+  }
+}
+```
+
+Wire it into `server/index.ts` AFTER the express app starts:
+```typescript
+import { startFlowOrchestrator } from './jobs/flow-orchestrator';
+// ... after app.listen()
+startFlowOrchestrator();
+```
+
+---
+
+## Item 3 — Comm lock service
+
+Create `server/services/comm-locks.ts`:
+
+```typescript
+import { db } from '../db';
+
+export async function hasActiveLock(leadId: number, channel?: string): Promise<boolean> {
+  const result = await db.query(
+    `SELECT id FROM comm_locks 
+     WHERE lead_id = $1 
+       AND released_at IS NULL 
+       AND expires_at > NOW()
+       AND ($2::text IS NULL OR channel = $2 OR channel = 'any')
+     LIMIT 1`,
+    [leadId, channel || null]
+  );
+  return result.rows.length > 0;
+}
+
+export async function acquireLock(opts: {
+  leadId: number;
+  acquiredByType: 'flow_run' | 'manual_user' | 'inbound_response';
+  acquiredById: string;
+  channel: 'call' | 'sms' | 'email' | 'any';
+  reason: string;
+  durationMinutes: number;
+}): Promise<string | null> {
+  // Double-check no conflicting lock exists
+  const conflict = await hasActiveLock(opts.leadId, opts.channel);
+  if (conflict) return null;
+
+  const result = await db.query(
+    `INSERT INTO comm_locks (lead_id, acquired_by_type, acquired_by_id, channel, reason, expires_at)
+     VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' minutes')::interval)
+     RETURNING id`,
+    [opts.leadId, opts.acquiredByType, opts.acquiredById, opts.channel, opts.reason, opts.durationMinutes]
+  );
+  return result.rows[0].id;
+}
+
+export async function releaseLock(lockId: string): Promise<void> {
+  await db.query(
+    `UPDATE comm_locks SET released_at = NOW() WHERE id = $1 AND released_at IS NULL`,
+    [lockId]
+  );
+}
+
+export async function releaseAllLocksForLead(leadId: number): Promise<void> {
+  await db.query(
+    `UPDATE comm_locks SET released_at = NOW() WHERE lead_id = $1 AND released_at IS NULL`,
+    [leadId]
+  );
+}
+
+// Default lock durations by channel
+export const LOCK_DURATION_MINUTES: Record<string, number> = {
+  call: 30,    // 30 min covers a long call + transcript processing
+  sms: 5,      // 5 min covers Twilio delivery + immediate read
+  email: 5,    // 5 min covers SMTP send
+  any: 240,    // 4 hours — used when human needs to handle a response
+};
+```
+
+---
+
+## Item 4 — Step executor with channel dispatchers
+
+Create `server/services/flow-step-executor.ts`. This is the dispatcher that maps `step_type` to the actual channel handler:
+
+```typescript
+import { db } from '../db';
+import { acquireLock, releaseLock, LOCK_DURATION_MINUTES } from './comm-locks';
+import { logFlowEvent } from './flow-events';
+import { runStediEligibility } from './stedi-eligibility';  // reuse from billing
+import { initiateVapiCall } from './vapi-client';            // existing
+import { sendTwilioSms } from './twilio-client';             // existing
+import { sendGmailEmail } from './gmail-client';             // existing
+
+export async function executeStep(run: any): Promise<void> {
+  const { id: runId, lead_id: leadId, step_id: stepId, step_type, channel } = run;
+  
+  await logFlowEvent(runId, stepId, 'step_started', { stepType: step_type });
+
+  switch (step_type) {
+    case 'wait':
+      await advanceToNextStep(runId, 'success');
+      break;
+
+    case 'call':
+      await handleCallStep(run);
+      break;
+
+    case 'sms':
+      await handleSmsStep(run);
+      break;
+
+    case 'email':
+      await handleEmailStep(run);
+      break;
+
+    case 'vob_check':
+      await handleVobStep(run);
+      break;
+
+    case 'branch':
+      await handleBranchStep(run);
+      break;
+
+    case 'human_task':
+      // Pause the flow and notify
+      await db.query(
+        `UPDATE flow_runs SET status = 'paused', updated_at = NOW() WHERE id = $1`,
+        [runId]
+      );
+      await logFlowEvent(runId, stepId, 'human_task_created', {});
+      // TODO: push notification to assigned coordinator
+      break;
+
+    default:
+      throw new Error(`Unknown step type: ${step_type}`);
+  }
+}
+
+async function handleCallStep(run: any) {
+  const lockId = await acquireLock({
+    leadId: run.lead_id,
+    acquiredByType: 'flow_run',
+    acquiredById: run.id,
+    channel: 'any',  // calls block ALL other channels
+    reason: `flow step ${run.step_id} — outbound call`,
+    durationMinutes: LOCK_DURATION_MINUTES.call,
+  });
+
+  if (!lockId) {
+    // Reschedule
+    await db.query(
+      `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '15 minutes' WHERE id = $1`,
+      [run.id]
+    );
+    return;
+  }
+
+  try {
+    const lead = await db.query(`SELECT * FROM leads WHERE id = $1`, [run.lead_id]);
+    if (!lead.rows[0]) throw new Error('Lead not found');
+
+    // Get the script from template_inline or template_id
+    const step = await db.query(`SELECT * FROM flow_steps WHERE id = $1`, [run.step_id]);
+    const script = step.rows[0].template_inline || 'You are a Caritas Senior Care intake coordinator. Confirm the caller wants senior care services, capture insurance carrier, member ID, date of birth, and care urgency. Be warm and concise.';
+
+    const callResult = await initiateVapiCall({
+      leadId: run.lead_id,
+      phone: lead.rows[0].phone,
+      script,
+      flowRunId: run.id,
+      lockId,
+    });
+
+    // Vapi webhook will release the lock and advance the step when call ends
+    await logFlowEvent(run.id, run.step_id, 'call_initiated', { vapiCallId: callResult.vapiCallId, lockId });
+    
+    // Don't advance step here — webhook will do it when call completes
+    await db.query(
+      `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '30 minutes', updated_at = NOW() WHERE id = $1`,
+      [run.id]
+    );
+  } catch (err) {
+    await releaseLock(lockId);
+    throw err;
+  }
+}
+
+async function handleSmsStep(run: any) {
+  const lockId = await acquireLock({
+    leadId: run.lead_id,
+    acquiredByType: 'flow_run',
+    acquiredById: run.id,
+    channel: 'sms',
+    reason: `flow step ${run.step_id} — outbound SMS`,
+    durationMinutes: LOCK_DURATION_MINUTES.sms,
+  });
+
+  if (!lockId) {
+    await db.query(
+      `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '15 minutes' WHERE id = $1`,
+      [run.id]
+    );
+    return;
+  }
+
+  try {
+    const lead = await db.query(`SELECT * FROM leads WHERE id = $1`, [run.lead_id]);
+    const step = await db.query(`SELECT * FROM flow_steps WHERE id = $1`, [run.step_id]);
+    const body = renderTemplate(step.rows[0].template_inline || '', lead.rows[0]);
+
+    await sendTwilioSms({ to: lead.rows[0].phone, body });
+    await logFlowEvent(run.id, run.step_id, 'sms_sent', { body });
+
+    await advanceToNextStep(run.id, 'success');
+  } finally {
+    await releaseLock(lockId);
+  }
+}
+
+async function handleEmailStep(run: any) {
+  const lockId = await acquireLock({
+    leadId: run.lead_id,
+    acquiredByType: 'flow_run',
+    acquiredById: run.id,
+    channel: 'email',
+    reason: `flow step ${run.step_id} — outbound email`,
+    durationMinutes: LOCK_DURATION_MINUTES.email,
+  });
+
+  if (!lockId) {
+    await db.query(
+      `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '15 minutes' WHERE id = $1`,
+      [run.id]
+    );
+    return;
+  }
+
+  try {
+    const lead = await db.query(`SELECT * FROM leads WHERE id = $1`, [run.lead_id]);
+    const step = await db.query(`SELECT * FROM flow_steps WHERE id = $1`, [run.step_id]);
+    const subject = renderTemplate(step.rows[0].metadata?.subject || 'Following up', lead.rows[0]);
+    const body = renderTemplate(step.rows[0].template_inline || '', lead.rows[0]);
+
+    await sendGmailEmail({ to: lead.rows[0].email, subject, body });
+    await logFlowEvent(run.id, run.step_id, 'email_sent', { subject });
+
+    await advanceToNextStep(run.id, 'success');
+  } finally {
+    await releaseLock(lockId);
+  }
+}
+
+async function handleVobStep(run: any) {
+  // No comm lock needed — this is a system call to Stedi
+  const lead = await db.query(`SELECT * FROM leads WHERE id = $1`, [run.lead_id]);
+  const l = lead.rows[0];
+
+  if (!l.insurance_carrier || !l.insurance_member_id || !l.date_of_birth) {
+    await logFlowEvent(run.id, run.step_id, 'vob_skipped_missing_data', {});
+    await advanceToNextStep(run.id, 'failure');
+    return;
+  }
+
+  try {
+    const result = await runStediEligibility({
+      payerId: mapCarrierToStediPayerId(l.insurance_carrier),
+      memberId: l.insurance_member_id,
+      dateOfBirth: l.date_of_birth,
+      firstName: l.name?.split(' ')[0],
+      lastName: l.name?.split(' ').slice(1).join(' '),
+    });
+
+    // Write to vob_verifications, update lead.vob_score
+    await db.query(
+      `INSERT INTO vob_verifications (lead_id, status, payer_name, copay, deductible, oop_max, network_status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+      [run.lead_id, 'verified', result.payerName, result.copay, result.deductible, result.oopMax, result.networkStatus]
+    );
+
+    await db.query(
+      `UPDATE leads SET vob_score = 100, updated_at = NOW() WHERE id = $1`,
+      [run.lead_id]
+    );
+
+    await logFlowEvent(run.id, run.step_id, 'vob_completed', result);
+    await advanceToNextStep(run.id, 'success');
+  } catch (err) {
+    await logFlowEvent(run.id, run.step_id, 'vob_failed', { error: String(err) });
+    await advanceToNextStep(run.id, 'failure');
+  }
+}
+
+async function handleBranchStep(run: any) {
+  // Evaluate success_condition against the run's context + lead state
+  const step = await db.query(`SELECT * FROM flow_steps WHERE id = $1`, [run.step_id]);
+  const lead = await db.query(`SELECT * FROM leads WHERE id = $1`, [run.lead_id]);
+  const condition = step.rows[0].success_condition;
+
+  const passed = evaluateCondition(condition, { ...lead.rows[0], ...run.context });
+  await advanceToNextStep(run.id, passed ? 'success' : 'failure');
+}
+
+async function advanceToNextStep(runId: string, outcome: 'success' | 'failure' | 'response') {
+  const run = await db.query(`SELECT * FROM flow_runs WHERE id = $1`, [runId]);
+  const currentStep = await db.query(`SELECT * FROM flow_steps WHERE id = $1`, [run.rows[0].current_step_id]);
+  const cs = currentStep.rows[0];
+
+  let nextStepId: string | null = null;
+  if (outcome === 'success') nextStepId = cs.on_success_step_id;
+  else if (outcome === 'failure') nextStepId = cs.on_failure_step_id;
+  else if (outcome === 'response') nextStepId = cs.on_response_step_id;
+
+  // Default: next step in step_order
+  if (!nextStepId) {
+    const next = await db.query(
+      `SELECT id FROM flow_steps WHERE flow_id = $1 AND step_order > $2 ORDER BY step_order ASC LIMIT 1`,
+      [cs.flow_id, cs.step_order]
+    );
+    nextStepId = next.rows[0]?.id || null;
+  }
+
+  if (!nextStepId) {
+    // Flow complete
+    await db.query(
+      `UPDATE flow_runs SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1`,
+      [runId]
+    );
+    await logFlowEvent(runId, cs.id, 'flow_completed', {});
+    return;
+  }
+
+  const nextStep = await db.query(`SELECT * FROM flow_steps WHERE id = $1`, [nextStepId]);
+  const delayMin = nextStep.rows[0].delay_minutes || 0;
+
+  await db.query(
+    `UPDATE flow_runs 
+     SET current_step_id = $1, 
+         next_action_at = NOW() + ($2 || ' minutes')::interval,
+         attempt_count = 0,
+         updated_at = NOW()
+     WHERE id = $3`,
+    [nextStepId, delayMin, runId]
+  );
+
+  await logFlowEvent(runId, nextStepId, 'step_scheduled', { delayMinutes: delayMin });
+}
+
+function renderTemplate(tmpl: string, lead: any): string {
+  return tmpl
+    .replace(/\{name\}/g, lead.name || '')
+    .replace(/\{first_name\}/g, (lead.name || '').split(' ')[0])
+    .replace(/\{phone\}/g, lead.phone || '')
+    .replace(/\{state\}/g, lead.state || '');
+}
+
+function evaluateCondition(cond: any, data: any): boolean {
+  if (!cond) return true;
+  const { field, op, value } = cond;
+  const actual = data[field];
+  switch (op) {
+    case '>=': return Number(actual) >= Number(value);
+    case '<=': return Number(actual) <= Number(value);
+    case '==': return actual == value;
+    case '!=': return actual != value;
+    case 'truthy': return !!actual;
+    default: return false;
+  }
+}
+
+function mapCarrierToStediPayerId(carrier: string): string {
+  // Reuse the mapping from billing-side. Add new ones as needed.
+  const map: Record<string, string> = {
+    'BCBS': 'BCBSTX',
+    'UHC': '87726',
+    'Aetna': '60054',
+    'Cigna': '62308',
+    'Humana': '61101',
+    'Medicare': '00973',
+    'Medicare Advantage': '00973',
+    'Medicaid': 'MCDTX',
+  };
+  return map[carrier] || carrier;
+}
+```
+
+---
+
+## Item 5 — Wire flow trigger into existing lead creation
+
+In the existing `POST /api/leads` route (or wherever leads are created — both manually and from the chat widget), add this AFTER the lead is inserted:
+
+```typescript
+import { triggerMatchingFlows } from './services/flow-trigger';
+
+// ... after existing lead creation logic
+await triggerMatchingFlows({
+  event: 'lead_created',
+  leadId: newLead.id,
+  context: { source: newLead.source, state: newLead.state, service: newLead.service_needed },
+});
+```
+
+Create `server/services/flow-trigger.ts`:
+
+```typescript
+import { db } from '../db';
+
+export async function triggerMatchingFlows(opts: {
+  event: string;
+  leadId: number;
+  context: Record<string, any>;
+}) {
+  // Find active flows whose trigger matches
+  const flows = await db.query(
+    `SELECT * FROM flows WHERE trigger_event = $1 AND is_active = true`,
+    [opts.event]
+  );
+
+  for (const flow of flows.rows) {
+    const conditions = flow.trigger_conditions || {};
+    const matches = Object.entries(conditions).every(
+      ([key, val]) => opts.context[key] === val
+    );
+    if (!matches) continue;
+
+    // Find first step
+    const firstStep = await db.query(
+      `SELECT * FROM flow_steps WHERE flow_id = $1 ORDER BY step_order ASC LIMIT 1`,
+      [flow.id]
+    );
+    if (!firstStep.rows[0]) continue;
+
+    // Create flow_run
+    const delayMin = firstStep.rows[0].delay_minutes || 0;
+    await db.query(
+      `INSERT INTO flow_runs (flow_id, lead_id, current_step_id, status, next_action_at, context)
+       VALUES ($1, $2, $3, 'running', NOW() + ($4 || ' minutes')::interval, $5)`,
+      [flow.id, opts.leadId, firstStep.rows[0].id, delayMin, JSON.stringify(opts.context)]
+    );
+  }
+}
+```
+
+---
+
+## Item 6 — Stedi VOB swap on intake side
+
+Replace the body of `POST /api/leads/:id/verify-insurance` (currently calls VerifyTX). Use the existing `server/services/stedi-eligibility.ts` from the billing module.
+
+```typescript
+// server/routes/leads.ts (or wherever the existing route lives)
+import { runStediEligibility } from '../services/stedi-eligibility';
+
+app.post('/api/leads/:id/verify-insurance', requireAuth, async (req, res) => {
+  const leadId = parseInt(req.params.id);
+  const lead = await db.query(`SELECT * FROM leads WHERE id = $1`, [leadId]);
+  if (!lead.rows[0]) return res.status(404).json({ error: 'Lead not found' });
+  const l = lead.rows[0];
+
+  if (!l.insurance_carrier || !l.insurance_member_id || !l.date_of_birth) {
+    return res.status(400).json({ 
+      error: 'Missing insurance data', 
+      required: ['insurance_carrier', 'insurance_member_id', 'date_of_birth'] 
+    });
+  }
+
+  try {
+    const result = await runStediEligibility({
+      payerId: mapCarrierToStediPayerId(l.insurance_carrier),
+      memberId: l.insurance_member_id,
+      dateOfBirth: l.date_of_birth,
+      firstName: l.name?.split(' ')[0],
+      lastName: l.name?.split(' ').slice(1).join(' '),
+    });
+
+    const inserted = await db.query(
+      `INSERT INTO vob_verifications 
+        (lead_id, status, payer_name, copay, deductible, oop_max, network_status, raw_response, created_at)
+       VALUES ($1, 'verified', $2, $3, $4, $5, $6, $7, NOW())
+       RETURNING *`,
+      [leadId, result.payerName, result.copay, result.deductible, result.oopMax, result.networkStatus, JSON.stringify(result)]
+    );
+
+    await db.query(
+      `UPDATE leads SET vob_score = 100, updated_at = NOW() WHERE id = $1`,
+      [leadId]
+    );
+
+    res.json({ verification: inserted.rows[0] });
+  } catch (err) {
+    console.error('[verify-insurance] Stedi error:', err);
+    res.status(500).json({ error: 'Eligibility check failed', details: String(err) });
+  }
+});
+```
+
+Keep the existing VerifyTX-based code commented out or in a feature-flagged fallback. Don't delete it.
+
+---
+
+## Item 7 — Vapi tuning (latency fix)
+
+In wherever the Vapi assistant is configured (likely `server/services/vapi-client.ts` or a Vapi dashboard config that's referenced by ID), apply these settings. If the config is in code, update it. If it's in the Vapi dashboard, update via API call once OR document for Abeer to update manually.
+
+```typescript
+const vapiAssistantConfig = {
+  model: {
+    provider: 'openai',
+    model: 'gpt-4o-mini',           // was likely gpt-4 — this alone cuts 400-600ms
+    temperature: 0.3,
+    maxTokens: 250,                 // tight budget keeps responses snappy
+    systemPrompt: `You are a Caritas Senior Care intake coordinator.
+Your job is to:
+1. Greet warmly, confirm you're speaking with the right person
+2. Identify who needs care (caller or relative)
+3. Capture: insurance carrier, member ID, date of birth, urgency, state of residence
+4. Confirm the best callback time
+5. Thank them and end the call
+
+Be concise. One question at a time. If they ask questions, answer briefly and steer back.`,
+  },
+  voice: {
+    provider: '11labs',
+    voiceId: 'flq6f7yk4E4fJM5XTYuZ', // ElevenLabs Turbo v2.5 voice — 2x faster than default
+    model: 'eleven_turbo_v2_5',
+    stability: 0.5,
+    similarityBoost: 0.75,
+  },
+  transcriber: {
+    provider: 'deepgram',
+    model: 'nova-2',                 // fastest Deepgram model
+    language: 'en-US',
+  },
+  startSpeakingPlan: {
+    waitSeconds: 0.4,                // small humanizing delay
+    smartEndpointingEnabled: true,
+  },
+  stopSpeakingPlan: {
+    numWords: 2,                     // can be interrupted after 2 words
+    voiceSeconds: 0.1,
+    backoffSeconds: 1.0,
+  },
+  endpointing: 200,                  // ms — was likely 500+ — aggressive endpointing feels human
+  responseDelaySeconds: 0.4,
+  llmRequestDelaySeconds: 0.1,
+  silenceTimeoutSeconds: 30,
+  maxDurationSeconds: 600,
+};
+```
+
+If `model` was `gpt-4` and `endpointing` was 500+, those two changes alone fix 70% of the lag.
+
+---
+
+## Item 8 — Vapi webhook updates to release locks and advance flow runs
+
+The existing `POST /api/vapi/webhook` handles call events. Add lock release + flow advancement:
+
+```typescript
+app.post('/api/vapi/webhook', async (req, res) => {
+  const { type, call } = req.body;
+  
+  // ... existing webhook handling ...
+
+  if (type === 'end-of-call-report' || type === 'call-end') {
+    const flowRunId = call.metadata?.flowRunId;
+    const lockId = call.metadata?.lockId;
+
+    if (lockId) {
+      await releaseLock(lockId);
+    }
+
+    if (flowRunId) {
+      // Determine outcome from call data
+      const transcript = call.transcript || '';
+      const insuranceCaptured = extractInsuranceFromTranscript(transcript); // existing helper, but moved server-side
+      
+      const outcome = insuranceCaptured.carrier && insuranceCaptured.memberId 
+        ? 'success' 
+        : 'failure';
+      
+      // Update lead with extracted data
+      if (insuranceCaptured.carrier) {
+        await db.query(
+          `UPDATE leads SET 
+            insurance_carrier = COALESCE($1, insurance_carrier),
+            insurance_member_id = COALESCE($2, insurance_member_id),
+            date_of_birth = COALESCE($3, date_of_birth),
+            updated_at = NOW()
+           WHERE id = $4`,
+          [insuranceCaptured.carrier, insuranceCaptured.memberId, insuranceCaptured.dob, call.metadata?.leadId]
+        );
+      }
+
+      await advanceToNextStep(flowRunId, outcome);
+    }
+  }
+
+  res.json({ ok: true });
+});
+```
+
+**IMPORTANT — move regex extraction server-side.** The current frontend regex extraction in `call-modal.tsx` is one of the documented gaps. Move `extractDataFromTranscript()` to `server/services/transcript-extractor.ts` and add 15+ carriers (BCBS variants, Anthem, Kaiser, Molina, Centene, WellCare, MoneyCare, etc.) and all 50 US state abbreviations. Better yet, use Claude Haiku to extract structured data:
+
+```typescript
+export async function extractInsuranceFromTranscript(transcript: string) {
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 500,
+    messages: [{
+      role: 'user',
+      content: `Extract structured data from this intake call transcript. Return ONLY a JSON object with these keys: carrier (string), memberId (string), dob (YYYY-MM-DD), state (2-letter), urgency (immediate|within_week|within_month|exploring), serviceType (string), consent (boolean). If a field is unknown, use null. Do not include markdown or explanation, only JSON.
+
+Transcript:
+${transcript}`
+    }]
+  });
+  
+  const text = response.content.find(b => b.type === 'text')?.text || '{}';
+  return JSON.parse(text.replace(/```json|```/g, '').trim());
+}
+```
+
+This replaces fragile regex with reliable LLM extraction. Cost: ~$0.001 per call.
+
+---
+
+## Item 9 — Inbound response detection (the "they replied, pause flow" piece)
+
+For Twilio inbound SMS:
+```typescript
+// Webhook configured in Twilio dashboard to point at /api/twilio/inbound
+app.post('/api/twilio/inbound', async (req, res) => {
+  const { From, Body } = req.body;
+  const lead = await db.query(`SELECT * FROM leads WHERE phone = $1 LIMIT 1`, [From]);
+  if (!lead.rows[0]) return res.status(200).end();
+
+  const leadId = lead.rows[0].id;
+
+  // Acquire a long lock to pause all flows
+  await acquireLock({
+    leadId,
+    acquiredByType: 'inbound_response',
+    acquiredById: `sms_${Date.now()}`,
+    channel: 'any',
+    reason: `Inbound SMS: ${Body.slice(0, 80)}`,
+    durationMinutes: 240, // 4 hours
+  });
+
+  // Find any running flow_runs for this lead and pause them
+  await db.query(
+    `UPDATE flow_runs SET status = 'paused', updated_at = NOW() WHERE lead_id = $1 AND status = 'running'`,
+    [leadId]
+  );
+
+  // Log activity (existing activity_logs table)
+  await db.query(
+    `INSERT INTO activity_logs (lead_id, type, description, created_at) 
+     VALUES ($1, 'sms_inbound', $2, NOW())`,
+    [leadId, `Inbound: ${Body}`]
+  );
+
+  // TODO: notify assigned coordinator (push, email, or Slack — your call)
+  res.status(200).end();
+});
+```
+
+For inbound email replies — Gmail API has a watch endpoint. Skip this for tomorrow, it's a 4-hour task and not central to demo.
+
+---
+
+## Item 10 — Manual button lock acquisition
+
+In the existing manual Call/SMS/Email handlers (deal detail page), wrap them with lock acquisition so they coordinate with the orchestrator:
+
+```typescript
+// e.g. POST /api/leads/:id/sms (existing route)
+app.post('/api/leads/:id/sms', requireAuth, async (req, res) => {
+  const leadId = parseInt(req.params.id);
+  const userId = req.user.id;
+
+  const lockId = await acquireLock({
+    leadId,
+    acquiredByType: 'manual_user',
+    acquiredById: String(userId),
+    channel: 'sms',
+    reason: 'Manual SMS from deal detail',
+    durationMinutes: 5,
+  });
+
+  if (!lockId) {
+    return res.status(409).json({ 
+      error: 'Lead is currently engaged on another channel. Try again in a few minutes.' 
+    });
+  }
+
+  try {
+    await sendTwilioSms({ to: req.body.phone, body: req.body.message });
+    res.json({ ok: true });
+  } finally {
+    await releaseLock(lockId);
+  }
+});
+```
+
+Same pattern for the manual call and email buttons. This is the "no double engagement" guarantee — even if a coordinator tries to manually call while a flow run is mid-call, the lock blocks it with a clean error.
+
+---
+
+## Item 11 — Seed the Caritas demo flow
+
+Create `server/seeds/caritas-flow.ts` and call it once on startup if no flows exist (or via a manual trigger endpoint):
+
+```typescript
+import { db } from '../db';
+
+export async function seedCaritasFlow() {
+  // Check if it already exists
+  const existing = await db.query(`SELECT id FROM flows WHERE name = 'Caritas Senior Care — Standard Intake'`);
+  if (existing.rows[0]) {
+    console.log('[seed] Caritas flow already exists');
+    return;
+  }
+
+  const flow = await db.query(
+    `INSERT INTO flows (name, description, trigger_event, trigger_conditions, is_active)
+     VALUES ($1, $2, $3, $4, true)
+     RETURNING id`,
+    [
+      'Caritas Senior Care — Standard Intake',
+      'Standard 8-step intake sequence for caritasseniorcare.life inquiries',
+      'lead_created',
+      JSON.stringify({ source: 'caritas_web' }),
+    ]
+  );
+  const flowId = flow.rows[0].id;
+
+  // Insert steps in reverse order so we can wire up FK references
+  // Or just insert with NULL FKs first, then UPDATE to wire them
+  
+  const steps = [
+    { order: 1, type: 'wait', delay: 2, body: null },
+    { order: 2, type: 'sms', delay: 0, channel: 'twilio',
+      body: 'Hi {first_name}, this is Caritas Senior Care. We received your inquiry. A care coordinator will call you in the next 5 minutes.' },
+    { order: 3, type: 'wait', delay: 3, body: null },
+    { order: 4, type: 'call', delay: 0, channel: 'vapi',
+      body: 'Caritas intake call — capture insurance carrier, member ID, DOB, urgency, state.' },
+    { order: 5, type: 'vob_check', delay: 0, channel: 'system', body: null },
+    { order: 6, type: 'call', delay: 15, channel: 'vapi',
+      body: 'Callback to share verified plan details and offer to schedule a consult.' },
+    { order: 7, type: 'sms', delay: 1440, channel: 'twilio', // 24h
+      body: 'Hi {first_name}, did you have a chance to think it over? Reply YES to book a consult.' },
+    { order: 8, type: 'email', delay: 4320, channel: 'gmail', // 72h
+      body: 'Sending more info on Caritas Senior Care plans available in {state}.' },
+  ];
+
+  const stepIds: string[] = [];
+  for (const s of steps) {
+    const r = await db.query(
+      `INSERT INTO flow_steps (flow_id, step_order, step_type, channel, delay_minutes, template_inline)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [flowId, s.order, s.type, s.channel, s.delay, s.body]
+    );
+    stepIds.push(r.rows[0].id);
+  }
+
+  console.log('[seed] Seeded Caritas flow with', stepIds.length, 'steps');
+}
+```
+
+Call this from `server/index.ts` after DB is connected.
+
+---
+
+## Item 12 — Flow Inspector UI on the deal detail page
+
+Add a new tab "Flow" to the existing deal detail tabs (Overview, Calls, Insurance, Appointments, Activity, **Flow**). Read-only is fine for tomorrow.
+
+Create `client/src/components/flow-inspector.tsx`:
+
+```typescript
+export function FlowInspector({ leadId }: { leadId: number }) {
+  const { data: runs } = useQuery({
+    queryKey: ['flow-runs', leadId],
+    queryFn: () => fetch(`/api/leads/${leadId}/flow-runs`).then(r => r.json()),
+  });
+
+  if (!runs?.length) return <div className="p-4 text-muted">No active flows for this lead.</div>;
+
+  return (
+    <div className="space-y-4">
+      {runs.map(run => (
+        <Card key={run.id}>
+          <CardHeader>
+            <CardTitle>{run.flow_name}</CardTitle>
+            <Badge>{run.status}</Badge>
+          </CardHeader>
+          <CardContent>
+            <div className="text-sm">
+              <strong>Current step:</strong> {run.current_step_label}
+            </div>
+            <div className="text-sm">
+              <strong>Next action:</strong> {formatDistanceToNow(run.next_action_at)}
+            </div>
+            
+            <Separator className="my-3" />
+            <div className="text-xs font-semibold mb-2">Step Timeline</div>
+            <ol className="space-y-2">
+              {run.events.map(ev => (
+                <li key={ev.id} className="flex items-start gap-2 text-xs">
+                  <span className="text-muted">{format(ev.created_at, 'HH:mm')}</span>
+                  <Badge variant="outline">{ev.event_type}</Badge>
+                  <span>{ev.payload?.message || ''}</span>
+                </li>
+              ))}
+            </ol>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+```
+
+Add route: `GET /api/leads/:id/flow-runs` returns runs joined with events and step labels.
+
+This is the UI you point at during demo. "Watch — this lead came in 8 minutes ago, the welcome SMS fired, then the call fired and captured insurance, then VOB ran via Stedi, and now it's waiting 13 more minutes before the callback step."
+
+---
+
+## Verification checklist before demo
+
+Run through these at least 2 hours before the demo:
+
+1. Migrate the new tables. Confirm with `\dt` in psql.
+2. Restart server. Confirm orchestrator log line appears.
+3. Run seed for Caritas flow. Confirm flow has 8 steps.
+4. Manually create a test lead with `source: 'caritas_web'` via UI or API. Confirm a `flow_runs` row appears.
+5. Wait 2 minutes. Confirm welcome SMS fires (check Twilio logs + activity log).
+6. Wait 3 more minutes. Confirm Vapi call initiates.
+7. Pick up the call, give insurance info. Confirm transcript is captured, lead's insurance fields update, VOB step fires Stedi, lead's vob_score becomes 100.
+8. Confirm callback fires within 15 min.
+9. Open the Flow Inspector tab on that lead. Confirm full timeline shows.
+10. Try to manually click the "Call" button on deal detail while a flow call is active. Confirm you get the lock error.
+
+If 1-10 all work, you're ready to demo.
+
+---
+
+## What NOT to do this sprint (defer to next iteration)
+
+- Drag-and-drop flow builder UI (data model is ready, UI is 3-4 days of work)
+- Email/SMS template management page (use template_inline for now)
+- Scheduling page (still a stub — defer)
+- Retell migration (mention in slides only)
+- handoff_status, referral_partner_name UI
+- attempting_contact action button
+- Inbound phone number routing
+- Multi-organization isolation (the schema has organization_id but enforcement is later)
+- Per-pod analytics dashboards
+
+---
+
+## Reporting back
+
+After each item, confirm:
+- What was built (file paths + line counts)
+- What was tested (which verification step passed)
+- What needs Abeer's input before proceeding (e.g. Stedi payer ID for a specific carrier)
+
+Work items 1 through 12 in order. Do not skip ahead. If item 4 fails, do not proceed to item 5.

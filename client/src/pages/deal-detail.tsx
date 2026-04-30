@@ -13,6 +13,7 @@ import { CallModal } from "@/components/call-modal";
 import { LeadFormDialog } from "@/components/lead-form-dialog";
 import { ScheduleAppointmentDialog } from "@/components/schedule-appointment-dialog";
 import { VobVerificationCard } from "@/components/vob-verification-card";
+import { FlowInspector } from "@/components/flow-inspector";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
@@ -686,6 +687,7 @@ export default function DealDetailPage() {
           <TabsTrigger value="activity" data-testid="tab-activity">
             Activity {activityLogs && activityLogs.length > 0 && <Badge variant="secondary" className="ml-1 h-5 px-1.5">{activityLogs.length}</Badge>}
           </TabsTrigger>
+          <TabsTrigger value="flow" data-testid="tab-flow">Flow</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
@@ -1106,6 +1108,10 @@ export default function DealDetailPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="flow">
+          <FlowInspector leadId={lead.id} />
         </TabsContent>
       </Tabs>
 

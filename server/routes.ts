@@ -21,6 +21,10 @@ import {
 import { allPayers } from "./payers";
 import twilio from "twilio";
 import nodemailer from "nodemailer";
+import { triggerMatchingFlows } from "./services/flow-trigger";
+import { advanceToNextStep } from "./services/flow-step-executor";
+import { releaseLock, acquireLock } from "./services/comm-locks";
+import { extractInsuranceFromTranscript } from "./services/transcript-extractor";
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
@@ -1559,6 +1563,81 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS plan_product TEXT CHECK (plan_product IN ('HMO','PPO','POS','EPO','Indemnity','unknown') OR plan_product IS NULL)`);
     await seederLog('column', 'manual_extraction_items', 'applies_to_plan_products');
     await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS applies_to_plan_products JSONB DEFAULT '["all"]'::jsonb`);
+
+    // ── Flow Engine Tables ─────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flows (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        name VARCHAR NOT NULL,
+        description TEXT,
+        trigger_event VARCHAR NOT NULL,
+        trigger_conditions JSONB DEFAULT '{}',
+        is_active BOOLEAN DEFAULT true,
+        organization_id VARCHAR,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flow_steps (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        flow_id VARCHAR NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
+        step_order INTEGER NOT NULL,
+        step_type VARCHAR NOT NULL,
+        channel VARCHAR,
+        delay_minutes INTEGER DEFAULT 0,
+        template_inline TEXT,
+        config JSONB DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_steps_flow_id ON flow_steps(flow_id, step_order)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flow_runs (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        flow_id VARCHAR NOT NULL REFERENCES flows(id),
+        lead_id TEXT NOT NULL REFERENCES leads(id),
+        status VARCHAR NOT NULL DEFAULT 'running',
+        current_step_index INTEGER DEFAULT 0,
+        next_action_at TIMESTAMP,
+        started_at TIMESTAMP DEFAULT NOW(),
+        completed_at TIMESTAMP,
+        organization_id VARCHAR,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_runs_due ON flow_runs(status, next_action_at)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_runs_lead ON flow_runs(lead_id)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS flow_run_events (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        flow_run_id VARCHAR NOT NULL REFERENCES flow_runs(id) ON DELETE CASCADE,
+        event_type VARCHAR NOT NULL,
+        step_id VARCHAR,
+        payload JSONB DEFAULT '{}',
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_run_events_run ON flow_run_events(flow_run_id)`);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS comm_locks (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        lead_id TEXT NOT NULL,
+        acquired_by_type VARCHAR NOT NULL,
+        acquired_by_id VARCHAR NOT NULL,
+        channel VARCHAR NOT NULL,
+        reason TEXT,
+        expires_at TIMESTAMP NOT NULL,
+        released_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_comm_locks_lead ON comm_locks(lead_id, released_at, expires_at)`);
 
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
@@ -5586,6 +5665,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     
     const lead = await storage.createLead(leadData as any);
     res.status(201).json(lead);
+
+    // Trigger any matching automation flows (fire-and-forget)
+    triggerMatchingFlows(lead as any).catch((err) =>
+      console.error("[routes] triggerMatchingFlows error:", err)
+    );
   });
 
   // PATCH endpoint for quick actions and lead updates
@@ -6452,6 +6536,27 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           clinic_name: "Kemah Palms Recovery",
           clinic_callback_number: "(866) 488-8684",
         },
+        // Vapi quality tuning (Item 7)
+        transcriber: {
+          provider: "deepgram",
+          model: "nova-2",
+          language: "en",
+          endpointing: 300,
+        },
+        model: {
+          provider: "openai",
+          model: "gpt-4o-mini",
+          temperature: 0.2,
+        },
+        voice: {
+          provider: "11labs",
+          voiceId: "21m00Tcm4TlvDq8ikWAM",
+          stability: 0.5,
+          similarityBoost: 0.75,
+        },
+        silenceTimeoutSeconds: 30,
+        maxDurationSeconds: 900,
+        backgroundDenoisingEnabled: true,
       },
     };
   };
@@ -6482,6 +6587,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!lead.phone) {
       return res.status(400).json({ error: "Lead has no phone number" });
     }
+
+    // Acquire comm lock — block if lead is engaged by an active flow
+    const callUserId = (req.user as any)?.id || "unknown";
+    const callLockId = await acquireLock({
+      leadId: String(leadId),
+      acquiredByType: "manual_user",
+      acquiredById: String(callUserId),
+      channel: "call",
+      reason: "Manual outbound call from deal detail",
+      durationMinutes: 30,
+    });
+    if (!callLockId) {
+      return res.status(409).json({
+        error: "Lead is currently engaged on another channel. Try again in a few minutes.",
+      });
+    }
     
     try {
       // Build personalized call payload with lead context
@@ -6499,6 +6620,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!response.ok) {
         const errorData = await response.json();
         console.error("Vapi API error:", errorData);
+        await releaseLock(callLockId).catch(() => {});
         return res.status(response.status).json({ 
           error: errorData.message || "Failed to initiate call" 
         });
@@ -6516,14 +6638,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         organizationId: getOrgId(req),
       });
       
+      // Lock will be released when call ends (via Vapi webhook end-of-call-report)
       res.status(201).json({ 
         success: true, 
         callId: call.id,
         vapiCallId: callData.id,
         status: callData.status,
+        lockId: callLockId,
       });
     } catch (error) {
       console.error("Error initiating Vapi call:", error);
+      await releaseLock(callLockId).catch(() => {});
       res.status(500).json({ error: "Failed to initiate outbound call" });
     }
   });
@@ -6607,6 +6732,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           || "";
         
         console.log("Processing call end:", { vapiCallId, hasRecording: !!recordingUrl, hasTranscript: !!transcript, hasSummary: !!summary });
+
+        // Extract flow metadata embedded when the call was initiated
+        const flowRunId = callData.metadata?.flowRunId || null;
+        const lockId = callData.metadata?.lockId || null;
+        const flowLeadId = callData.metadata?.leadId || null;
+
+        // Release comm lock if one was held for this call
+        if (lockId) {
+          await releaseLock(lockId).catch((e: unknown) =>
+            console.error("releaseLock error:", e)
+          );
+        }
         
         if (vapiCallId) {
           // Find and update the call by vapiCallId
@@ -6634,6 +6771,41 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           }
         } else {
           console.warn("Webhook event missing vapiCallId");
+        }
+
+        // Server-side transcript extraction + flow advancement
+        if (flowRunId && flowLeadId && transcript) {
+          try {
+            const extracted = await extractInsuranceFromTranscript(transcript);
+            console.log("[vapi-webhook] Extracted from transcript:", extracted);
+
+            // Update lead with extracted insurance data
+            if (extracted.carrier || extracted.memberId || extracted.dob) {
+              await pool.query(
+                `UPDATE leads SET
+                   insurance_carrier = COALESCE($1, insurance_carrier),
+                   insurance_member_id = COALESCE($2, insurance_member_id),
+                   date_of_birth = COALESCE($3, date_of_birth),
+                   updated_at = NOW()
+                 WHERE id = $4`,
+                [extracted.carrier, extracted.memberId, extracted.dob, flowLeadId]
+              );
+            }
+
+            const outcome = extracted.carrier && extracted.memberId
+              ? "success"
+              : "failure";
+
+            await advanceToNextStep(flowRunId, outcome);
+          } catch (e) {
+            console.error("[vapi-webhook] post-call flow processing error:", e);
+            await advanceToNextStep(flowRunId, "failure").catch(() => {});
+          }
+        } else if (flowRunId) {
+          // No transcript or lead — still advance the flow
+          await advanceToNextStep(flowRunId, "failure").catch((e: unknown) =>
+            console.error("[vapi-webhook] advanceToNextStep error:", e)
+          );
         }
       }
       
@@ -6825,6 +6997,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       return res.status(400).json({ error: "Lead has no phone number" });
     }
 
+    // Acquire comm lock — block if lead is engaged by an active flow
+    const userId = (req.user as any)?.id || "unknown";
+    const smsLockId = await acquireLock({
+      leadId: req.params.id,
+      acquiredByType: "manual_user",
+      acquiredById: String(userId),
+      channel: "sms",
+      reason: "Manual SMS from deal detail",
+      durationMinutes: 5,
+    });
+    if (!smsLockId) {
+      return res.status(409).json({
+        error: "Lead is currently engaged on another channel. Try again in a few minutes.",
+      });
+    }
+
     const { message, template } = req.body;
     
     // Template-based messages
@@ -6888,6 +7076,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         performedBy: "user",
       });
 
+      await releaseLock(smsLockId).catch(() => {});
       res.json({
         success: true,
         messageSid: twilioMessage.sid,
@@ -6896,6 +7085,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       });
     } catch (error: any) {
       console.error("Twilio SMS error:", error);
+      await releaseLock(smsLockId).catch(() => {});
       res.status(500).json({ error: error.message || "Failed to send SMS" });
     }
   });
@@ -6983,6 +7173,54 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       configured: !!twilioClient,
       phoneNumber: twilioPhoneNumber ? twilioPhoneNumber.replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") : null,
     });
+  });
+
+  // Inbound SMS from Twilio — pauses active flow runs for the lead
+  app.post("/api/twilio/inbound", async (req, res) => {
+    try {
+      const { From, Body } = req.body;
+      if (!From) return res.status(200).end();
+
+      // Find lead by phone
+      const normalizedFrom = From.replace(/\D/g, "").slice(-10);
+      const leadResult = await pool.query(
+        `SELECT id, organization_id FROM leads WHERE REGEXP_REPLACE(phone, '[^0-9]', '', 'g') LIKE $1 LIMIT 1`,
+        [`%${normalizedFrom}`]
+      );
+      if (!leadResult.rows.length) return res.status(200).end();
+
+      const leadRow = leadResult.rows[0];
+
+      // Acquire a long-duration lock to pause all flows for this lead
+      await acquireLock({
+        leadId: leadRow.id,
+        acquiredByType: "inbound_response",
+        acquiredById: `sms_${Date.now()}`,
+        channel: "any",
+        reason: `Inbound SMS: ${(Body || "").slice(0, 80)}`,
+        durationMinutes: 240,
+      });
+
+      // Pause all running flow_runs for this lead
+      await pool.query(
+        `UPDATE flow_runs SET status = 'paused', updated_at = NOW()
+         WHERE lead_id = $1 AND status = 'running'`,
+        [leadRow.id]
+      );
+
+      // Log the inbound SMS
+      await pool.query(
+        `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+         VALUES ($1, 'sms_inbound', $2, NOW(), $3)`,
+        [leadRow.id, `Inbound SMS: ${(Body || "").slice(0, 200)}`, leadRow.organization_id]
+      );
+
+      console.log(`[twilio/inbound] Paused flows for lead ${leadRow.id} due to inbound SMS from ${From}`);
+      res.status(200).end();
+    } catch (err) {
+      console.error("[twilio/inbound] error:", err);
+      res.status(200).end();
+    }
   });
 
   // ==================== EMAIL AUTOMATION ====================
@@ -7148,6 +7386,22 @@ Warmly,
       return res.status(400).json({ error: "Lead has no email address" });
     }
 
+    // Acquire comm lock — block if lead is engaged by an active flow
+    const emailUserId = (req.user as any)?.id || "unknown";
+    const emailLockId = await acquireLock({
+      leadId: req.params.id,
+      acquiredByType: "manual_user",
+      acquiredById: String(emailUserId),
+      channel: "email",
+      reason: "Manual email from deal detail",
+      durationMinutes: 5,
+    });
+    if (!emailLockId) {
+      return res.status(409).json({
+        error: "Lead is currently engaged on another channel. Try again in a few minutes.",
+      });
+    }
+
     const { template, templateId, subject, body } = req.body;
     let emailSubject: string;
     let emailBody: string;
@@ -7250,6 +7504,7 @@ Warmly,
       performedBy: "user",
     });
 
+    await releaseLock(emailLockId).catch(() => {});
     res.json({ success: true, emailLogId: emailLog.id });
   });
 
@@ -7263,6 +7518,56 @@ Warmly,
   app.get("/api/leads/:id/activity", requireRole("admin", "intake"), async (req, res) => {
     const activities = await storage.getActivityLogsByLeadId(req.params.id);
     res.json(activities);
+  });
+
+  // Flow Inspector — get flow runs + events for a lead
+  app.get("/api/leads/:id/flow-runs", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const runsResult = await pool.query(
+        `SELECT
+           fr.id, fr.status, fr.current_step_index, fr.next_action_at,
+           fr.started_at, fr.completed_at, fr.created_at,
+           f.name AS flow_name,
+           fs.step_type AS current_step_label
+         FROM flow_runs fr
+         JOIN flows f ON f.id = fr.flow_id
+         LEFT JOIN LATERAL (
+           SELECT step_type FROM flow_steps
+           WHERE flow_id = fr.flow_id
+           ORDER BY step_order ASC
+           LIMIT 1 OFFSET fr.current_step_index
+         ) fs ON true
+         WHERE fr.lead_id = $1
+         ORDER BY fr.created_at DESC`,
+        [req.params.id]
+      );
+
+      const runIds = runsResult.rows.map((r: any) => r.id);
+
+      let eventsMap: Record<string, any[]> = {};
+      if (runIds.length > 0) {
+        const eventsResult = await pool.query(
+          `SELECT * FROM flow_run_events
+           WHERE flow_run_id = ANY($1::text[])
+           ORDER BY created_at ASC`,
+          [runIds]
+        );
+        for (const ev of eventsResult.rows) {
+          if (!eventsMap[ev.flow_run_id]) eventsMap[ev.flow_run_id] = [];
+          eventsMap[ev.flow_run_id].push(ev);
+        }
+      }
+
+      const result = runsResult.rows.map((run: any) => ({
+        ...run,
+        events: eventsMap[run.id] || [],
+      }));
+
+      res.json(result);
+    } catch (err) {
+      console.error("[flow-runs] error:", err);
+      res.status(500).json({ error: "Failed to fetch flow runs" });
+    }
   });
 
   // Get email configuration status
@@ -8029,16 +8334,6 @@ Warmly,
 
   // Verify insurance benefits for a lead
   app.post("/api/leads/:id/verify-insurance", requireRole("admin", "intake"), async (req, res) => {
-    const { getVerifyTxClient, mapVerifyTxResponse } = await import("./verifytx");
-    const client = getVerifyTxClient();
-    
-    if (!client) {
-      return res.status(503).json({ 
-        error: "VerifyTX not configured", 
-        message: "VerifyTX API credentials are not set up. Please configure VERIFYTX_API_KEY and VERIFYTX_API_SECRET." 
-      });
-    }
-
     const leadId = req.params.id;
     const lead = await storage.getLead(leadId);
     
@@ -8055,7 +8350,6 @@ Warmly,
     // Get patient data for verification
     const patient = await storage.getPatientByLeadId(leadId);
     
-    // Use patient data if available, otherwise fall back to lead data
     const firstName = lead.firstName || lead.name?.split(" ")[0] || "";
     const lastName = lead.lastName || lead.name?.split(" ").slice(1).join(" ") || "";
     const dateOfBirth = patient?.dob || req.body.dateOfBirth;
@@ -8085,10 +8379,7 @@ Warmly,
         organizationId: getOrgId(req),
       });
 
-      // Update lead VOB status
       await storage.updateLead(leadId, { vobStatus: "in_progress" });
-
-      // Log activity
       await storage.createActivityLog({
         leadId,
         activityType: "vob_started",
@@ -8098,7 +8389,81 @@ Warmly,
         metadata: { payerId, payerName, memberId },
       });
 
-      // Call VerifyTX API
+      // ── Try Stedi as primary VOB engine ─────────────────────────────────────
+      const { checkEligibility: stediCheck, isStediConfigured: stediOk } = await import("./services/stedi-eligibility");
+      
+      if (stediOk() && memberId && dateOfBirth) {
+        try {
+          const settingsResult = await pool.query(`SELECT primary_npi, practice_name FROM practice_settings LIMIT 1`);
+          const providerNpi = settingsResult.rows[0]?.primary_npi || "1234567890";
+          const providerName = settingsResult.rows[0]?.practice_name || "ClaimShield Practice";
+
+          const stediResult = await stediCheck({
+            controlNumber: String(Math.floor(Math.random() * 900000000) + 100000000),
+            tradingPartnerServiceId: payerId,
+            providerNpi,
+            providerName,
+            subscriberFirstName: firstName,
+            subscriberLastName: lastName,
+            subscriberDob: dateOfBirth,
+            subscriberMemberId: memberId,
+            serviceTypeCodes: ["MH", "30"],
+          });
+
+          const isActive = stediResult.status === "active";
+          const stediMapped: any = {
+            status: isActive ? "verified" : "incomplete",
+            policyStatus: stediResult.policyStatus,
+            planName: stediResult.planName,
+            effectiveDate: stediResult.effectiveDate ? new Date(stediResult.effectiveDate) : null,
+            termDate: stediResult.termDate ? new Date(stediResult.termDate) : null,
+            copay: stediResult.copay,
+            deductible: stediResult.deductible,
+            deductibleMet: stediResult.deductibleMet,
+            coinsurance: stediResult.coinsurance,
+            outOfPocketMax: stediResult.outOfPocketMax,
+            networkStatus: stediResult.networkStatus,
+            rawResponse: stediResult.rawResponse,
+            verifiedAt: new Date(),
+            source: "stedi",
+          };
+
+          const updatedVerification = await storage.updateVobVerification(pendingVerification.id, stediMapped);
+
+          await storage.updateLead(leadId, {
+            vobStatus: isActive ? "verified" : "incomplete",
+            vobScore: isActive ? 100 : 25,
+            insuranceCarrier: payerName,
+          });
+
+          await storage.createActivityLog({
+            leadId,
+            activityType: "vob_completed",
+            description: `VOB via Stedi: ${stediResult.status} — ${stediResult.planName || payerName}`,
+            performedBy: "system",
+            organizationId: getOrgId(req),
+            metadata: { source: "stedi", status: stediResult.status, planName: stediResult.planName },
+          });
+
+          return res.json(updatedVerification);
+        } catch (stediErr: any) {
+          console.warn(`[verify-insurance] Stedi check failed (${stediErr.message}), falling back to VerifyTX`);
+        }
+      }
+
+      // ── Fall back to VerifyTX ────────────────────────────────────────────────
+      const { getVerifyTxClient, mapVerifyTxResponse } = await import("./verifytx");
+      const client = getVerifyTxClient();
+
+      if (!client) {
+        await storage.updateVobVerification(pendingVerification.id, { status: "incomplete" });
+        await storage.updateLead(leadId, { vobStatus: "incomplete" });
+        return res.status(503).json({
+          error: "No VOB engine configured",
+          message: "Neither Stedi nor VerifyTX is configured. Please set STEDI_API_KEY or VerifyTX credentials.",
+        });
+      }
+
       const response = await client.createVob({
         firstName,
         lastName,
@@ -8110,49 +8475,34 @@ Warmly,
         email: lead.email || undefined,
       });
 
-      // Map response to our schema
       const mappedData = mapVerifyTxResponse(response, { payerId, payerName, memberId });
-
-      // Update verification record with results
       const updatedVerification = await storage.updateVobVerification(pendingVerification.id, {
         ...mappedData,
         verifiedAt: new Date(),
       });
 
-      // Update lead VOB status based on result
-      const vobStatus = mappedData.status === "verified" ? "verified" : 
+      const vobStatus = mappedData.status === "verified" ? "verified" :
                         mappedData.status === "error" ? "incomplete" : "in_progress";
-      
-      await storage.updateLead(leadId, { 
+
+      await storage.updateLead(leadId, {
         vobStatus,
         vobScore: mappedData.status === "verified" ? 100 : 0,
         insuranceCarrier: payerName,
       });
 
-      // Log completion
       await storage.createActivityLog({
         leadId,
         activityType: "vob_completed",
-        description: `VOB verification ${mappedData.status === "verified" ? "completed successfully" : "failed"}`,
+        description: `VOB via VerifyTX: ${mappedData.status === "verified" ? "completed" : "failed"}`,
         performedBy: "system",
         organizationId: getOrgId(req),
-        metadata: { 
-          payerId, 
-          payerName, 
-          status: mappedData.status,
-          copay: mappedData.copay,
-          deductible: mappedData.deductible,
-        },
+        metadata: { source: "verifytx", payerId, payerName, status: mappedData.status },
       });
 
       res.json(updatedVerification);
     } catch (error: any) {
-      console.error("VerifyTX verification error:", error);
-      
-      // Update lead status to reflect failure
-      await storage.updateLead(leadId, { vobStatus: "incomplete" });
-      
-      // Log error
+      console.error("verify-insurance error:", error);
+      await storage.updateLead(leadId, { vobStatus: "incomplete" }).catch(() => {});
       await storage.createActivityLog({
         leadId,
         activityType: "vob_failed",
@@ -8161,7 +8511,6 @@ Warmly,
         organizationId: getOrgId(req),
         metadata: { error: error.message },
       });
-      
       res.status(500).json({ error: "Verification failed", message: error.message });
     }
   });
