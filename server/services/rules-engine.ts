@@ -455,8 +455,8 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
           }
         }
 
-        // ── Modifier requirements ──────────────────────────────────────────
-        if (section === "modifiers") {
+        // ── Modifier requirements (Prompt B1: renamed from modifiers → modifiers_and_liability) ──
+        if (section === "modifiers_and_liability") {
           const requiredModifier: string = (ej.modifier_code || "").toUpperCase();
           if (!requiredModifier) continue;
 

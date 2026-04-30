@@ -1346,6 +1346,67 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       )
     `);
 
+    // ── Prompt B1: rule_kinds reference table ─────────────────────────────────
+    await seederLog('table', 'rule_kinds');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS rule_kinds (
+        code VARCHAR PRIMARY KEY,
+        label VARCHAR NOT NULL,
+        description TEXT,
+        ui_group VARCHAR NOT NULL DEFAULT 'Operational',
+        active_in_extraction BOOLEAN NOT NULL DEFAULT TRUE,
+        active_in_rules_engine BOOLEAN NOT NULL DEFAULT FALSE,
+        sort_order INT NOT NULL DEFAULT 99,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    // Idempotent upsert of all 15 rule kinds (INSERT … ON CONFLICT DO UPDATE)
+    await pool.query(`
+      INSERT INTO rule_kinds (code, label, description, ui_group, active_in_extraction, active_in_rules_engine, sort_order) VALUES
+        ('timely_filing',          'Timely Filing',               'Days from service date to submit a clean claim.',                                                                               'Operational', TRUE,  TRUE,  1),
+        ('prior_auth',             'Prior Authorization',          'CPT/HCPCS codes and service categories requiring pre-approval before rendering.',                                              'Operational', TRUE,  TRUE,  2),
+        ('modifiers_and_liability','Modifiers & Liability',        'Billing modifier requirements with conditional liability assignment (GA/GZ/GY, Mod 25/59/26/TC and more).',                   'Operational', TRUE,  TRUE,  3),
+        ('appeals',                'Appeals & Reconsideration',    'Appeal deadlines, submission methods, required documents, and escalation levels.',                                            'Operational', TRUE,  TRUE,  4),
+        ('referrals',              'Referral Requirements',        'Plan-product-specific PCP and specialist referral rules, exceptions, and liability when missing.',                            'Operational', TRUE,  FALSE, 5),
+        ('coordination_of_benefits','Coordination of Benefits',   'Medicare Secondary Payer, Medicare crossover, dual-coverage billing order, and required EOB documentation.',                  'Operational', TRUE,  FALSE, 6),
+        ('payer_specific_edits',   'Payer-Specific Edits',        'Clearinghouse-level Smart Edits, response windows, Return-and-Documentation vs Rejection edit categories.',                  'Technical',   TRUE,  FALSE, 7),
+        ('edi_construction',       'EDI Construction',            'Field-level 837 format requirements: NDC formatting, segment/loop specs, qualifier codes, taxonomy requirements.',            'Technical',   TRUE,  FALSE, 8),
+        ('place_of_service',       'Place of Service',            'POS code restrictions, facility vs non-facility distinctions, telehealth originating/distant site rules.',                   'Technical',   TRUE,  FALSE, 9),
+        ('submission_timeframe',   'Submission Timeframes',        'How far in advance a request must be submitted before service (PA advance notice, home health prior notice, DME prior notice).','Timeframe', TRUE,  FALSE, 10),
+        ('decision_timeframe',     'Decision Timeframes',          'How quickly the payer must respond to authorization requests (standard, expedited, urgent turnaround windows).',             'Timeframe',   TRUE,  FALSE, 11),
+        ('documentation_timeframe','Documentation Timeframes',     'Deadlines for submitting medical records, discharge summaries, lab results, and audit documentation.',                       'Timeframe',   TRUE,  FALSE, 12),
+        ('notification_event',     'Notification Events',          'Provider-to-payer notifications required at specific clinical events (inpatient admission, discharge, demographic change).', 'Timeframe',   TRUE,  FALSE, 13),
+        ('member_notice',          'Member Notices',               'Required provider-to-member notices: ABN, NOMNC, IDN, advance written consent, termination of service notices.',            'Timeframe',   TRUE,  FALSE, 14),
+        ('risk_adjustment_hcc',    'HCC / Risk Adjustment',        'HCC coding guidance, RAF score documentation, Medicare Advantage risk adjustment requirements.',                             'Strategic',   FALSE, FALSE, 15)
+      ON CONFLICT (code) DO UPDATE SET
+        label = EXCLUDED.label,
+        description = EXCLUDED.description,
+        ui_group = EXCLUDED.ui_group,
+        active_in_extraction = EXCLUDED.active_in_extraction,
+        active_in_rules_engine = EXCLUDED.active_in_rules_engine,
+        sort_order = EXCLUDED.sort_order
+    `);
+
+    // ── Prompt B1: modifier migration — flag for manual remap ─────────────────
+    // Rename 'modifiers' → 'modifiers_and_liability' and flag all rows for re-review
+    // because the schema changed from flat text to conditional liability structure.
+    {
+      const { rowCount } = await pool.query(`
+        UPDATE manual_extraction_items
+        SET
+          section_type       = 'modifiers_and_liability',
+          needs_reverification = TRUE,
+          notes = COALESCE(notes || E'\n', '') ||
+                  '[needs_manual_remap] Schema changed from flat-text to conditional liability structure (GA/GZ/GY). ' ||
+                  'Re-review required: add conditions_required, conditions_excluded, liability_assignment before approving.'
+        WHERE section_type = 'modifiers'
+      `);
+      if ((rowCount ?? 0) > 0) {
+        console.log(`[SEEDER] Prompt B1: migrated ${rowCount} modifier rows → modifiers_and_liability (flagged needs_manual_remap)`);
+      }
+    }
+
     // Seed 3 initial payer manuals (TriWest, Medicare, Aetna) for Phase 2 end-state
     const { rows: manualCount } = await pool.query("SELECT COUNT(*)::int as cnt FROM payer_manuals");
     if (manualCount[0]?.cnt === 0) {
@@ -9703,7 +9764,14 @@ Warmly,
             ? { buffer: Buffer.from(manual.file_content), fileName: manual.file_name || "upload.pdf" }
             : { url: manual.source_url };
           const { sections } = await extractManualSections(extractInput);
-          const sectionTypes = ["timely_filing", "prior_auth", "modifiers", "appeals"] as const;
+          // Prompt B1: all 14 active extraction kinds (risk_adjustment_hcc excluded — seeded only)
+          const sectionTypes = [
+            "timely_filing", "prior_auth", "modifiers_and_liability", "appeals",
+            "referrals", "coordination_of_benefits",
+            "payer_specific_edits", "edi_construction", "place_of_service",
+            "submission_timeframe", "decision_timeframe", "documentation_timeframe",
+            "notification_event", "member_notice",
+          ] as const;
 
           for (const section of sections) {
             if (section.chunks.length === 0) {
@@ -9816,13 +9884,18 @@ Warmly,
               .catch((e: any) => sideEffectErrors.push(`payer_auth code ${code}: ${e.message}`));
           }
         }
-        if (item.section_type === "modifiers" || item.section_type === "appeals") {
-          const ruleName = item.section_type === "modifiers"
-            ? `${manual?.payer_name || 'Payer'}: Modifier ${data.modifier_code || ''} Rule`
+        if (item.section_type === "modifiers_and_liability" || item.section_type === "appeals") {
+          const isModifier = item.section_type === "modifiers_and_liability";
+          const ruleName = isModifier
+            ? `${manual?.payer_name || 'Payer'}: Modifier ${data.modifier_code || ''} — ${data.liability_assignment || 'unknown'} liability`
             : `${manual?.payer_name || 'Payer'}: ${data.level || 'Appeals'} Process`;
-          const description = item.section_type === "modifiers" ? data.payer_rule : `Deadline: ${data.deadline_days} days. Method: ${data.submission_method}`;
-          const trigger = item.section_type === "modifiers" ? `modifier,${data.modifier_code || ''}`.toLowerCase() : "appeal,dispute";
-          const prevention = item.section_type === "modifiers" ? `Apply modifier ${data.modifier_code} per payer policy` : `File appeal within ${data.deadline_days} days via ${data.submission_method}`;
+          const description = isModifier
+            ? `${data.payer_rule || ''} Liability: ${data.liability_assignment || 'unknown'}. Conditions required: ${(data.conditions_required || []).join(', ') || 'none specified'}.`
+            : `Deadline: ${data.deadline_days} days. Method: ${data.submission_method}`;
+          const trigger = isModifier ? `modifier,${data.modifier_code || ''}`.toLowerCase() : "appeal,dispute";
+          const prevention = isModifier
+            ? `Apply modifier ${data.modifier_code} per payer policy. ${data.appeal_path_if_denied || ''}`.trim()
+            : `File appeal within ${data.deadline_days} days via ${data.submission_method}`;
 
           // Derive contextual specialty tags from payer name
           const payerName = (manual?.payer_name || '').toLowerCase();
@@ -10026,11 +10099,25 @@ Warmly,
         };
       }
 
-      const sectionTypes = ["timely_filing", "prior_auth", "modifiers", "appeals"];
+      // Prompt B1: all 14 active section kinds in coverage matrix
+      const sectionTypes = [
+        "timely_filing", "prior_auth", "modifiers_and_liability", "appeals",
+        "referrals", "coordination_of_benefits",
+        "payer_specific_edits", "edi_construction", "place_of_service",
+        "submission_timeframe", "decision_timeframe", "documentation_timeframe",
+        "notification_event", "member_notice",
+      ];
       const payerData = sources.map((src: any) => {
         const manualId = src.linked_manual_id;
         const cov = manualId ? (coverageByManual[manualId] || {}) : {};
         const secCov = (type: string) => cov[type] || { approved: 0, reviewed: 0 };
+
+        const coverage: Record<string, boolean> = {};
+        for (const st of sectionTypes) {
+          coverage[st] = secCov(st).approved > 0;
+          coverage[`${st}_reviewed`] = secCov(st).reviewed > 0;
+        }
+
         return {
           source_id: src.id,
           payer_name: src.payer_name,
@@ -10042,15 +10129,7 @@ Warmly,
           manual_status: src.manual_status || null,
           manual_ingested_at: src.manual_ingested_at || null,
           manual_payer_id: src.manual_payer_id || null,
-          // "approved" = extracted and confirmed; "reviewed" = approved OR explicitly not_found
-          timely_filing: secCov("timely_filing").approved > 0,
-          timely_filing_reviewed: secCov("timely_filing").reviewed > 0,
-          prior_auth: secCov("prior_auth").approved > 0,
-          prior_auth_reviewed: secCov("prior_auth").reviewed > 0,
-          modifiers: secCov("modifiers").approved > 0,
-          modifiers_reviewed: secCov("modifiers").reviewed > 0,
-          appeals: secCov("appeals").approved > 0,
-          appeals_reviewed: secCov("appeals").reviewed > 0,
+          ...coverage,
         };
       });
 
@@ -10067,14 +10146,35 @@ Warmly,
         summary: {
           total_sources: total,
           ingested_count: ingested,
+          // Prompt B1: all 14 active section kind percentages
           timely_filing_pct: pctApproved("timely_filing"),
           timely_filing_reviewed_pct: pctReviewed("timely_filing"),
           prior_auth_pct: pctApproved("prior_auth"),
           prior_auth_reviewed_pct: pctReviewed("prior_auth"),
-          modifiers_pct: pctApproved("modifiers"),
-          modifiers_reviewed_pct: pctReviewed("modifiers"),
+          modifiers_and_liability_pct: pctApproved("modifiers_and_liability"),
+          modifiers_and_liability_reviewed_pct: pctReviewed("modifiers_and_liability"),
           appeals_pct: pctApproved("appeals"),
           appeals_reviewed_pct: pctReviewed("appeals"),
+          referrals_pct: pctApproved("referrals"),
+          referrals_reviewed_pct: pctReviewed("referrals"),
+          coordination_of_benefits_pct: pctApproved("coordination_of_benefits"),
+          coordination_of_benefits_reviewed_pct: pctReviewed("coordination_of_benefits"),
+          payer_specific_edits_pct: pctApproved("payer_specific_edits"),
+          payer_specific_edits_reviewed_pct: pctReviewed("payer_specific_edits"),
+          edi_construction_pct: pctApproved("edi_construction"),
+          edi_construction_reviewed_pct: pctReviewed("edi_construction"),
+          place_of_service_pct: pctApproved("place_of_service"),
+          place_of_service_reviewed_pct: pctReviewed("place_of_service"),
+          submission_timeframe_pct: pctApproved("submission_timeframe"),
+          submission_timeframe_reviewed_pct: pctReviewed("submission_timeframe"),
+          decision_timeframe_pct: pctApproved("decision_timeframe"),
+          decision_timeframe_reviewed_pct: pctReviewed("decision_timeframe"),
+          documentation_timeframe_pct: pctApproved("documentation_timeframe"),
+          documentation_timeframe_reviewed_pct: pctReviewed("documentation_timeframe"),
+          notification_event_pct: pctApproved("notification_event"),
+          notification_event_reviewed_pct: pctReviewed("notification_event"),
+          member_notice_pct: pctApproved("member_notice"),
+          member_notice_reviewed_pct: pctReviewed("member_notice"),
         },
         payers: payerData,
       });

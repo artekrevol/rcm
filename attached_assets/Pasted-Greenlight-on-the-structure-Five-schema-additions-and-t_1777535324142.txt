@@ -1,0 +1,21 @@
+Greenlight on the structure. Five schema additions and three keyword fixes before B1 starts. No further plan revision needed after this round.
+T2 schema additions (one field each):
+
+notification_event: add failure_consequence: "provider_liability" | "denial" | "warning_only" | "informational"
+referrals: add liability_if_missing: "provider" | "member" | "payer"
+submission_timeframe: split applies_to into two fields — applies_to_service_type: string and applies_to_cpts: string[]
+payer_specific_edits: add auto_remediation_available: boolean
+coordination_of_benefits: add requires_primary_eob_attached: boolean
+
+Keyword overlap fixes:
+
+submission_timeframe vs notification_event: Remove all "X notification" phrases from submission_timeframe. Replace with submission-only language: "submit prior to service," "prior authorization deadline," "claim submission deadline," "retroactive authorization," "post-service review," "at least 5 business days before," "at least 15 calendar days before," "request prior to service," "submit before service date," "home health prior notice," "DME prior notice," "at least 2 business days after."
+Generic time durations across 3 kinds: Replace standalone time unigrams ("72 hours," "5 calendar days," etc.) with directional bigrams. decision_timeframe gets "decision within / respond within / determination within / review within / completed within / we will decide within." documentation_timeframe gets "submit within / supply within / provide within / records within / delivered within / produce within." submission_timeframe gets "submit at least / request at least / notify at least / before service date / in advance of."
+member_notice scope cleanup: Remove "QMB," "dual eligible," "balance billing notice," "cannot bill member." Move them to coordination_of_benefits. member_notice keeps NOMNC, ABN, IDN, written consent, termination notice language only.
+
+Two minor adds:
+
+referrals: add "specialty care," "must select a PCP," "referral guide." Remove "gatekeeper."
+place_of_service: add "POS-22," "POS-23," "outpatient hospital," "ambulatory surgery center."
+
+Apply these and ship B1. No further revision round.
