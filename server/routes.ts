@@ -1388,6 +1388,27 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         sort_order = EXCLUDED.sort_order
     `);
 
+    // ── Prompt B1: FK from manual_extraction_items.section_type → rule_kinds.code ──
+    // ON UPDATE CASCADE: if a rule_kind code is renamed, existing rows follow.
+    // ON DELETE RESTRICT: cannot delete a rule_kind while extraction items reference it.
+    // Idempotent: ADD CONSTRAINT IF NOT EXISTS prevents duplicate-constraint errors.
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_name = 'manual_extraction_items'
+            AND constraint_name = 'fk_mei_section_type_rule_kinds'
+        ) THEN
+          ALTER TABLE manual_extraction_items
+          ADD CONSTRAINT fk_mei_section_type_rule_kinds
+          FOREIGN KEY (section_type) REFERENCES rule_kinds(code)
+          ON UPDATE CASCADE
+          ON DELETE RESTRICT;
+        END IF;
+      END $$
+    `);
+
     // ── Prompt B1: modifier migration — flag for manual remap ─────────────────
     // Rename 'modifiers' → 'modifiers_and_liability' and flag all rows for re-review
     // because the schema changed from flat text to conditional liability structure.

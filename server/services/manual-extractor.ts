@@ -356,8 +356,13 @@ Return the extracted text in plain text format with section headings preserved. 
   clearTimeout(visionTimeout);
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Claude PDF vision API error ${res.status}: ${err.slice(0, 300)}`);
+    const errBody = await res.text();
+    if (errBody.includes("maximum of 100 PDF pages")) {
+      throw new Error(
+        "PDF exceeds 100-page Claude limit. Upload a shorter document or split into chapter-level files before ingesting."
+      );
+    }
+    throw new Error(`Claude PDF vision API error ${res.status}: ${errBody.slice(0, 300)}`);
   }
 
   const data = (await res.json()) as any;
