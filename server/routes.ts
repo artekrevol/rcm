@@ -6688,6 +6688,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // Vapi Webhook for call updates (recording, transcript, etc.)
   app.post("/api/vapi/webhook", async (req, res) => {
     try {
+      const incomingSecret = req.headers['x-vapi-secret'];
+      if (!process.env.VAPI_WEBHOOK_SECRET) {
+        console.warn('[vapi-webhook] VAPI_WEBHOOK_SECRET not set — accepting all webhooks');
+      } else if (incomingSecret !== process.env.VAPI_WEBHOOK_SECRET) {
+        return res.status(401).json({ error: 'Invalid webhook secret' });
+      }
+
       const event = req.body;
       const eventType = event.message?.type || event.type;
       console.log("Vapi webhook received:", eventType, JSON.stringify(event).slice(0, 1000));
