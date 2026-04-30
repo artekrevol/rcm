@@ -284,7 +284,7 @@ export async function executeStep(
         acquiredById: flowRunId,
         channel: "call",
         reason: `Flow Vapi call step ${step.step_order}`,
-        durationMinutes: 30,
+        durationMinutes: 120,
       });
 
       if (!lockId) {
@@ -387,6 +387,16 @@ export async function executeStep(
         vapiCallId: callData.id,
         stepId: step.id,
       });
+
+      // Push next_action_at far out so the orchestrator does not re-fire
+      // this step while we wait for the Vapi end-of-call-report webhook.
+      // The webhook will call advanceToNextStep() when the call ends.
+      // If the webhook never arrives within 4 hours the orchestrator will
+      // treat this as a timeout and retry (or an operator can manually advance).
+      await pool.query(
+        `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '4 hours', updated_at = NOW() WHERE id = $1`,
+        [flowRunId]
+      );
 
       // NOTE: lock is intentionally NOT released here — it will be released
       // in the Vapi webhook end-of-call-report handler (server/routes.ts),
