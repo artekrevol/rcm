@@ -1,0 +1,11 @@
+1. Visual screenshot of the cascade. Replit's summary says he couldn't take a logged-in screenshot, but the cascade is the demo. The script-level test passed 31/31, but a human needs to see the form expand from Medicare → UHC HMO → Medi-Cal IPA before May 12. Ask him to log in via the dev environment and capture three screenshots:
+
+"Log into the dev environment as a test user. Open patient creation form. Capture: (a) form with payer = Medicare selected — should show universal fields only; (b) form with payer = UHC + plan_product = commercial_hmo — should show PCP and referral fields appearing with the FadeField animation; (c) form with payer = UHC + plan_product = ma_hmo + state = CA — should show the IPA dropdown populated and the routing preview panel showing the delegated entity. Paste all three."
+This isn't a re-test — it's a sanity check that what the script verified actually looks right to a human eye. The fade animation, the routing preview pane, the dropdown population — all those are user-facing details that pass the script test trivially but can still look broken in the actual UI.2. The 10 modifier rules in the new UI. T7 was supposed to verify those render correctly with the new conditional-liability schema fields. The summary doesn't mention this check explicitly. Ask:
+
+"In verify-c.ts, did the 10 migrated modifier rows render check pass? If yes, paste the test result line. If no, run the check now and report."
+3. The UHC demo seed actually wrote rules. The summary mentions the bug fix and the resolver test, but doesn't explicitly confirm the seeder created the UHC placeholder document with approved referrals rules:
+
+"Run this query and paste output: SELECT psd.document_name, mei.section_type, mei.review_status, mei.applies_to_plan_products, mei.notes FROM payer_source_documents psd JOIN manual_extraction_items mei ON mei.source_document_id = psd.id WHERE psd.payer_id IN (SELECT id FROM payers WHERE name ILIKE '%united%') AND mei.review_status = 'approved';"
+Should return 2-3 rows with [demo_seed] in notes, section_type values including referrals, and applies_to_plan_products containing ma_hmo or commercial_hmo.
+These are 10 minutes of Replit time, and they close the loop on what was script-tested vs. visually-verified vs. data-confirmed.

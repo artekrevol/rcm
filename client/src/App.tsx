@@ -47,6 +47,7 @@ import ClaimTrackerPage from "@/pages/billing/claim-tracker";
 import ERAPage from "@/pages/billing/era";
 import FollowUpPage from "@/pages/billing/follow-up";
 import FilingAlertsPage from "@/pages/billing/filing-alerts";
+import CascadeDemo from "@/pages/cascade-demo";
 
 function Router() {
   return (
@@ -58,6 +59,9 @@ function Router() {
       </Route>
 
       <Route path="/auth/login" component={LoginPage} />
+
+      {/* Public visual demo — no auth required */}
+      <Route path="/cascade-demo" component={CascadeDemo} />
 
       {/* Legacy redirect */}
       <Route path="/login">
