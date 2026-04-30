@@ -22,7 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Lead, InsertLead } from "@shared/schema";
 
-const leadSources = ["website", "phone", "referral", "marketing", "social_media", "other"];
+const leadSources = ["website", "phone", "referral", "marketing", "social_media", "caritas_web", "other"];
 const priorities = ["P0", "P1", "P2"];
 
 interface LeadFormDialogProps {
