@@ -1846,6 +1846,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_run_events_run ON flow_run_events(flow_run_id)`);
 
+    // Retry cap columns
+    await pool.query(`ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS attempt_count INTEGER DEFAULT 0`);
+    await pool.query(`ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
+    await pool.query(`ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS max_attempts INTEGER DEFAULT 3`);
+
     // One-time: mark stuck flow run as failed so the orchestrator stops retrying it
     await pool.query(`
       UPDATE flow_runs SET status = 'failed', updated_at = NOW()
@@ -8937,6 +8942,7 @@ Warmly,
         `SELECT
            fr.id, fr.status, fr.current_step_index, fr.next_action_at,
            fr.started_at, fr.completed_at, fr.created_at,
+           fr.attempt_count, fr.failure_reason,
            f.name AS flow_name,
            fs.step_type AS current_step_label
          FROM flow_runs fr
@@ -8977,6 +8983,43 @@ Warmly,
     } catch (err) {
       console.error("[flow-runs] error:", err);
       res.status(500).json({ error: "Failed to fetch flow runs" });
+    }
+  });
+
+  // POST /api/flow-runs/:id/retry — reset a failed flow run so it picks up again
+  app.post("/api/flow-runs/:id/retry", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const { pool } = await import("./db");
+      const { id } = req.params;
+
+      const existing = await pool.query(
+        `SELECT id, status FROM flow_runs WHERE id = $1`,
+        [id]
+      );
+      if (!existing.rows.length) {
+        return res.status(404).json({ error: "Flow run not found" });
+      }
+      if (existing.rows[0].status !== "failed") {
+        return res.status(409).json({ error: "Flow run is not in failed state" });
+      }
+
+      await pool.query(
+        `UPDATE flow_runs
+         SET status = 'running', attempt_count = 0, failure_reason = NULL,
+             next_action_at = NOW(), updated_at = NOW()
+         WHERE id = $1`,
+        [id]
+      );
+
+      const { logFlowEvent } = await import("./services/flow-events");
+      await logFlowEvent(id, "flow_retried", {
+        message: "Flow run retried manually — attempt_count reset",
+      });
+
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[flow-runs/retry] error:", err);
+      res.status(500).json({ error: "Failed to retry flow run" });
     }
   });
 

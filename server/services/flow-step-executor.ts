@@ -41,6 +41,75 @@ function formatPhone(phone: string): string {
   return `+1${digits}`;
 }
 
+// ── Retry / failure helper ────────────────────────────────────────────────────
+/**
+ * Called whenever a retryable step failure occurs (e.g. Vapi call rejected).
+ * Increments attempt_count; if still under the step's max_attempts cap, reschedules
+ * with exponential backoff. At cap, marks the flow run as permanently failed.
+ * Returns true if the run was permanently failed, false if rescheduled.
+ */
+export async function handleStepFailure(
+  flowRunId: string,
+  stepId: string,
+  failureReason: string
+): Promise<boolean> {
+  try {
+    // Fetch current attempt_count and the step's max_attempts
+    const runRes = await pool.query(
+      `SELECT attempt_count FROM flow_runs WHERE id = $1`,
+      [flowRunId]
+    );
+    const stepRes = await pool.query(
+      `SELECT max_attempts FROM flow_steps WHERE id = $1`,
+      [stepId]
+    );
+
+    const currentAttempts: number = runRes.rows[0]?.attempt_count ?? 0;
+    const maxAttempts: number = stepRes.rows[0]?.max_attempts ?? 3;
+    const newAttemptCount = currentAttempts + 1;
+
+    if (newAttemptCount >= maxAttempts) {
+      // At cap — permanently fail the run
+      await pool.query(
+        `UPDATE flow_runs
+         SET status = 'failed', attempt_count = $1, failure_reason = $2, updated_at = NOW()
+         WHERE id = $3`,
+        [newAttemptCount, failureReason, flowRunId]
+      );
+      await logFlowEvent(flowRunId, "flow_failed", {
+        message: `Failed permanently after ${newAttemptCount} attempt(s)`,
+        failureReason,
+        stepId,
+      });
+      console.log(
+        `[flow-step-executor] Flow run ${flowRunId} failed after ${newAttemptCount} attempt(s): ${failureReason}`
+      );
+      return true;
+    }
+
+    // Under cap — reschedule with backoff
+    // attempt_count=1 → immediate, 2 → +5 min, 3+ → +15 min
+    let delayMinutes = 0;
+    if (newAttemptCount === 2) delayMinutes = 5;
+    else if (newAttemptCount >= 3) delayMinutes = 15;
+
+    await pool.query(
+      `UPDATE flow_runs
+       SET attempt_count = $1, next_action_at = NOW() + ($2 || ' minutes')::INTERVAL, updated_at = NOW()
+       WHERE id = $3`,
+      [newAttemptCount, String(delayMinutes), flowRunId]
+    );
+    console.log(
+      `[flow-step-executor] Flow run ${flowRunId} step failed (attempt ${newAttemptCount}/${maxAttempts}), ` +
+      `retrying in ${delayMinutes} min`
+    );
+    return false;
+  } catch (err) {
+    console.error("[flow-step-executor] handleStepFailure error:", err);
+    return false;
+  }
+}
+
 // ── Advance to next step ───────────────────────────────────────────────────────
 export async function advanceToNextStep(
   flowRunId: string,
@@ -89,9 +158,11 @@ export async function advanceToNextStep(
     const delayMs = (step.delay_minutes ?? 0) * 60 * 1000;
     const nextActionAt = new Date(Date.now() + delayMs);
 
+    // Reset per-step retry state when moving to a new step
     await pool.query(
       `UPDATE flow_runs
-       SET current_step_index = $1, next_action_at = $2, updated_at = NOW()
+       SET current_step_index = $1, next_action_at = $2,
+           attempt_count = 0, failure_reason = NULL, updated_at = NOW()
        WHERE id = $3`,
       [nextIndex, nextActionAt, flowRunId]
     );
@@ -112,6 +183,7 @@ export async function executeStep(
   leadId: string
 ): Promise<void> {
   let lockId: string | null = null;
+  let currentStepId: string | null = null;
 
   try {
     // Load flow run + current step
@@ -137,6 +209,7 @@ export async function executeStep(
       return;
     }
     const step = stepResult.rows[0];
+    currentStepId = step.id;
 
     // Load lead
     const leadResult = await pool.query(
@@ -357,19 +430,17 @@ export async function executeStep(
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
+        const errMsg = JSON.stringify(err);
         console.error("[flow-step-executor] Vapi call failed:", err);
         await releaseLock(lockId);
         lockId = null;
         await logFlowEvent(flowRunId, "step_failed", {
           reason: "Vapi call initiation failed",
           stepId: step.id,
-          error: JSON.stringify(err),
+          error: errMsg,
         });
-        // Don't advance — let orchestrator retry after a delay
-        await pool.query(
-          `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '5 minutes', updated_at = NOW() WHERE id = $1`,
-          [flowRunId]
-        );
+        // Increment attempt_count; reschedule with backoff or fail permanently
+        await handleStepFailure(flowRunId, step.id, `Vapi call initiation failed: ${errMsg}`);
         return;
       }
 
@@ -597,6 +668,10 @@ export async function executeStep(
     }
     await logFlowEvent(flowRunId, "step_failed", {
       error: String(err),
+      stepId: currentStepId ?? undefined,
     });
+    if (currentStepId) {
+      await handleStepFailure(flowRunId, currentStepId, String(err)).catch(() => {});
+    }
   }
 }
