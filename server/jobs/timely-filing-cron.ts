@@ -1,17 +1,42 @@
 /**
- * Timely Filing Guardian — Daily Cron
- * Fires evaluateAllActiveClaims() once per day at 6:00 AM UTC.
- * Double-fire guard: records last run date in memory — safe across redeploys
- * since the job only does upserts/idempotent writes.
+ * Daily Cron — Timely Filing Guardian + PCP Referral Maintenance
+ * Fires at 6:00 AM UTC:
+ *   1. evaluateAllActiveClaims() — timely filing status
+ *   2. maintainReferralStatuses() — expire/use-up stale referrals
+ * Double-fire guard: records last run date in memory.
  */
 
 import { evaluateAllActiveClaims, sendEmailDigests } from "../services/timely-filing-guardian";
+import { pool } from "../db";
 
 let lastRunDate = "";
 let running = false;
 
 const TARGET_HOUR_UTC = 6; // 6 AM UTC
 const CHECK_INTERVAL_MS = 60 * 1000; // check every minute
+
+/** Update pcp_referrals: mark expired or used-up records */
+async function maintainReferralStatuses(): Promise<{ expired: number; usedUp: number }> {
+  const today = new Date().toISOString().split("T")[0];
+  const expiredRes = await pool.query(
+    `UPDATE pcp_referrals
+     SET status = 'expired'
+     WHERE status = 'active'
+       AND expiration_date IS NOT NULL
+       AND expiration_date < $1
+     RETURNING id`,
+    [today]
+  );
+  const usedUpRes = await pool.query(
+    `UPDATE pcp_referrals
+     SET status = 'used_up'
+     WHERE status = 'active'
+       AND visits_authorized IS NOT NULL
+       AND visits_used >= visits_authorized
+     RETURNING id`
+  );
+  return { expired: expiredRes.rowCount ?? 0, usedUp: usedUpRes.rowCount ?? 0 };
+}
 
 async function maybeRun() {
   if (running) return; // already running
@@ -33,6 +58,10 @@ async function maybeRun() {
       console.warn(`[TF-Guardian] Payers with no rule: ${stats.payersWithNoRule.join(", ")}`);
     }
     await sendEmailDigests(stats);
+
+    // ── Referral status maintenance ─────────────────────────────────────────
+    const refStats = await maintainReferralStatuses();
+    console.log(`[PCP-Referrals] Status maintenance: expired=${refStats.expired}, used_up=${refStats.usedUp}`);
   } catch (err: any) {
     console.error("[TF-Guardian] Evaluation failed:", err.message || err);
   } finally {

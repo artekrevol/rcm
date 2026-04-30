@@ -1716,6 +1716,46 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       `).catch(() => {});
     }
 
+    // ── PCP Referral Capture (Prompt 05 T1) ─────────────────────────────────
+    if (!(await seederLog('table', 'pcp_referrals'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS pcp_referrals (
+          id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+          organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          patient_id VARCHAR NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+          pcp_name TEXT NOT NULL,
+          pcp_npi TEXT,
+          pcp_phone TEXT,
+          pcp_practice_name TEXT,
+          referral_number TEXT,
+          issue_date DATE NOT NULL,
+          expiration_date DATE,
+          visits_authorized INTEGER,
+          visits_used INTEGER DEFAULT 0,
+          specialty_authorized TEXT,
+          diagnosis_authorized TEXT,
+          captured_via TEXT NOT NULL DEFAULT 'manual_entry',
+          captured_by TEXT NOT NULL,
+          captured_at TIMESTAMP DEFAULT NOW(),
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active','expired','used_up','revoked','pending_verification'))
+        )
+      `);
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pcp_ref_patient ON pcp_referrals (patient_id)`).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pcp_ref_org_active ON pcp_referrals (organization_id, status) WHERE status = 'active'`).catch(() => {});
+    }
+
+    // New columns on claims for PCP referral tracking
+    if (!(await seederLog('column', 'claims', 'pcp_referral_id'))) {
+      await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS pcp_referral_id VARCHAR REFERENCES pcp_referrals(id) ON DELETE SET NULL`).catch((e: any) => console.error('[SEEDER] pcp_referral_id:', e.message));
+    }
+    if (!(await seederLog('column', 'claims', 'pcp_referral_required'))) {
+      await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS pcp_referral_required BOOLEAN DEFAULT NULL`).catch(() => {});
+    }
+    if (!(await seederLog('column', 'claims', 'pcp_referral_check_status'))) {
+      await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS pcp_referral_check_status TEXT CHECK (pcp_referral_check_status IN ('not_required','present_valid','present_expired','present_used_up','missing','unknown') OR pcp_referral_check_status IS NULL)`).catch(() => {});
+    }
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -2313,6 +2353,136 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       res.json({ ok: true, claim: updated.rows[0], stats });
     } catch (err: any) {
       console.error("[Filing Evaluate] Error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── PCP Referrals (Prompt 05) ──────────────────────────────────────────────
+
+  // List referrals for a patient
+  app.get("/api/billing/patients/:id/referrals", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { rows } = await db.query(
+        `SELECT r.*, u.name AS captured_by_name
+         FROM pcp_referrals r
+         LEFT JOIN users u ON u.id = r.captured_by
+         WHERE r.patient_id = $1 AND r.organization_id = $2
+         ORDER BY r.captured_at DESC`,
+        [req.params.id, orgId]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Create a new referral
+  app.post("/api/billing/patients/:id/referrals", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const userId = (req as any).user?.id || "unknown";
+      const {
+        pcp_name, pcp_npi, pcp_phone, pcp_practice_name, referral_number,
+        issue_date, expiration_date, visits_authorized, specialty_authorized,
+        diagnosis_authorized, captured_via, status,
+      } = req.body;
+
+      if (!pcp_name || !issue_date) {
+        return res.status(400).json({ error: "pcp_name and issue_date are required" });
+      }
+
+      const { rows } = await db.query(
+        `INSERT INTO pcp_referrals
+           (organization_id, patient_id, pcp_name, pcp_npi, pcp_phone, pcp_practice_name,
+            referral_number, issue_date, expiration_date, visits_authorized, visits_used,
+            specialty_authorized, diagnosis_authorized, captured_via, captured_by, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$11,$12,$13,$14,$15)
+         RETURNING *`,
+        [
+          orgId, req.params.id, pcp_name, pcp_npi || null, pcp_phone || null, pcp_practice_name || null,
+          referral_number || null, issue_date, expiration_date || null, visits_authorized || null,
+          specialty_authorized || null, diagnosis_authorized || null,
+          captured_via || "manual_entry", userId, status || "active",
+        ]
+      );
+      res.status(201).json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update a referral
+  app.patch("/api/billing/referrals/:id", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const allowed = ["pcp_name","pcp_npi","pcp_phone","pcp_practice_name","referral_number",
+        "issue_date","expiration_date","visits_authorized","visits_used",
+        "specialty_authorized","diagnosis_authorized","captured_via","status"];
+      const sets: string[] = [];
+      const vals: any[] = [];
+      for (const key of allowed) {
+        if (req.body[key] !== undefined) { sets.push(`${key} = $${vals.length + 1}`); vals.push(req.body[key]); }
+      }
+      if (sets.length === 0) return res.status(400).json({ error: "No valid fields" });
+      vals.push(req.params.id, orgId);
+      const { rows } = await db.query(
+        `UPDATE pcp_referrals SET ${sets.join(", ")} WHERE id = $${vals.length - 1} AND organization_id = $${vals.length} RETURNING *`,
+        vals
+      );
+      if (rows.length === 0) return res.status(404).json({ error: "Referral not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Link a referral to a claim
+  app.post("/api/billing/claims/:id/link-referral", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { referral_id } = req.body;
+
+      // Verify claim belongs to org
+      const claimRes = await db.query(
+        `SELECT id FROM claims WHERE id = $1 AND organization_id = $2`, [req.params.id, orgId]
+      );
+      if (claimRes.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
+
+      if (referral_id) {
+        // Verify referral belongs to org
+        const refRes = await db.query(
+          `SELECT id, status, visits_authorized, visits_used FROM pcp_referrals WHERE id = $1 AND organization_id = $2`,
+          [referral_id, orgId]
+        );
+        if (refRes.rows.length === 0) return res.status(404).json({ error: "Referral not found" });
+        const ref = refRes.rows[0];
+        const checkStatus = ref.status === "active"
+          ? (ref.visits_authorized != null && ref.visits_used >= ref.visits_authorized ? "present_used_up" : "present_valid")
+          : ref.status === "expired" ? "present_expired" : "present_used_up";
+
+        await db.query(
+          `UPDATE claims SET pcp_referral_id = $1, pcp_referral_required = true, pcp_referral_check_status = $2 WHERE id = $3`,
+          [referral_id, checkStatus, req.params.id]
+        );
+        // Increment visits_used on the referral
+        if (ref.status === "active") {
+          await db.query(`UPDATE pcp_referrals SET visits_used = visits_used + 1 WHERE id = $1`, [referral_id]);
+        }
+        res.json({ ok: true, pcp_referral_check_status: checkStatus });
+      } else {
+        // User is proceeding without a referral (HMO/POS plan, no referral chosen)
+        await db.query(
+          `UPDATE claims SET pcp_referral_required = true, pcp_referral_check_status = 'missing' WHERE id = $1`,
+          [req.params.id]
+        );
+        res.json({ ok: true, pcp_referral_check_status: "missing" });
+      }
+    } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
@@ -3317,6 +3487,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         patientFirstName: b.patientFirstName || null,
         patientLastName: b.patientLastName || null,
         testMode: b.testMode === true,
+        pcpReferralCheckStatus: b.pcpReferralCheckStatus || null,
       };
 
       const factors = await evaluateClaim(ctx);
@@ -3485,6 +3656,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         patientFirstName: patient?.first_name || null,
         patientLastName: patient?.last_name || null,
         testMode: false,
+        pcpReferralCheckStatus: (claim.pcp_referral_check_status || null) as any,
       };
 
       const violations = await evaluateClaim(ctx);

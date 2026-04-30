@@ -1,0 +1,228 @@
+# Replit Prompt 05 — PCP Referral Capture
+
+## Context
+
+In the April 28 call, Rosemary identified PCP referrals as a major denial source the system doesn't currently catch. Her exact scenario: an HMO patient walks in, the front desk doesn't notice the PCP name on the insurance card, the visit happens, the claim gets denied because no referral was on file. The clinic loses the visit revenue.
+
+This prompt adds PCP referral tracking to the wizard and rules engine. It only fires for HMO and POS plans (relies on Prompt 1's plan_product field).
+
+## Standing constraints
+
+- No live Stedi submissions during verification
+- Commit messages must include verification queries WITH their actual results
+- All schema migrations must be idempotent
+
+## Tasks
+
+### Task 1 — Schema for referrals
+
+Create a new table to store referrals separately from patient/insurance records (since referrals expire and a patient may have multiple over time):
+
+```sql
+CREATE TABLE IF NOT EXISTS pcp_referrals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  patient_id UUID NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  
+  -- The PCP who issued the referral
+  pcp_name TEXT NOT NULL,
+  pcp_npi TEXT,                         -- nullable; sometimes not on the card
+  pcp_phone TEXT,
+  pcp_practice_name TEXT,
+  
+  -- The referral itself
+  referral_number TEXT,                 -- payer-issued identifier (sometimes blank for verbal)
+  issue_date DATE NOT NULL,
+  expiration_date DATE,                 -- nullable; some referrals are open-ended
+  visits_authorized INTEGER,            -- nullable; sometimes capped, sometimes unlimited
+  visits_used INTEGER DEFAULT 0,
+  
+  -- Scope
+  specialty_authorized TEXT,            -- e.g., "Cardiology", "Orthopedics" 
+  diagnosis_authorized TEXT,            -- nullable; sometimes restricted to specific dx
+  
+  -- Source
+  captured_via TEXT NOT NULL,           -- 'card_scan' | 'manual_entry' | 'fax' | 'phone_verification'
+  captured_by TEXT NOT NULL,            -- user_id
+  captured_at TIMESTAMP DEFAULT NOW(),
+  
+  -- Status
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'expired', 'used_up', 'revoked', 'pending_verification'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_pcp_ref_patient ON pcp_referrals (patient_id);
+CREATE INDEX IF NOT EXISTS idx_pcp_ref_org_active ON pcp_referrals (organization_id, status) 
+  WHERE status = 'active';
+```
+
+Add a foreign key on claims to track which referral was used:
+
+```sql
+ALTER TABLE claims 
+ADD COLUMN IF NOT EXISTS pcp_referral_id UUID REFERENCES pcp_referrals(id) ON DELETE SET NULL,
+ADD COLUMN IF NOT EXISTS pcp_referral_required BOOLEAN DEFAULT NULL,
+ADD COLUMN IF NOT EXISTS pcp_referral_check_status TEXT
+  CHECK (pcp_referral_check_status IN ('not_required', 'present_valid', 'present_expired', 'present_used_up', 'missing', 'unknown') OR pcp_referral_check_status IS NULL);
+```
+
+### Task 2 — Patient detail page section
+
+On the patient detail page, add a "Referrals" section showing:
+
+- Active referrals: list with PCP name, expiration date, visits remaining, specialty authorized
+- Expired referrals (collapsed by default): historical record
+- "Add Referral" button → opens entry form
+
+The entry form captures all fields from the schema. If the patient's plan_product is HMO or POS, this section is highlighted. If not, it's still available but not prominent.
+
+### Task 3 — Wizard integration
+
+In the claim wizard, after the patient/insurance step (Step 1), add a referral check:
+
+**If plan_product is HMO or POS AND no active referral exists:**
+- Show a banner before allowing Step 2 to proceed:
+  > "⚠️ This patient has an HMO/POS plan that typically requires a PCP referral. No active referral is on file. [Add referral now] [Continue without referral — risk of denial]"
+- If user clicks "Continue without referral", record the decision and proceed but flag it on the risk panel later
+
+**If plan_product is HMO or POS AND there's an active referral:**
+- Show a confirmation in the wizard:
+  > "Referral on file: Dr. {pcp_name} for {specialty_authorized}, valid through {expiration_date}, {visits_remaining} visits remaining. [Use this referral]"
+- Auto-link the referral to the claim when user clicks "Use this referral"
+
+**If plan_product is PPO, EPO, Indemnity, or unknown:**
+- Skip the referral check entirely
+
+When linking a referral to a claim:
+- Set `claims.pcp_referral_id`
+- Set `claims.pcp_referral_required = true`
+- Set `claims.pcp_referral_check_status = 'present_valid'`
+- Increment `pcp_referrals.visits_used`
+
+If user proceeds without a referral on an HMO/POS:
+- Set `claims.pcp_referral_required = true`
+- Set `claims.pcp_referral_check_status = 'missing'`
+
+### Task 4 — Rules engine integration
+
+Extend the rules engine (from Prompt 3) to factor PCP referral status into violations:
+
+```typescript
+// In rules-engine.ts, add evaluator:
+function evaluatePCPReferral(claim: ClaimContext): RuleViolation | null {
+  if (claim.planProduct !== 'HMO' && claim.planProduct !== 'POS') {
+    return null;  // not required for this plan product
+  }
+  
+  if (claim.pcpReferralCheckStatus === 'present_valid') {
+    return null;  // satisfied
+  }
+  
+  if (claim.pcpReferralCheckStatus === 'missing') {
+    return {
+      ruleType: 'plan_product_mismatch',
+      severity: 'block',
+      message: `${claim.planProduct} plan requires PCP referral. No referral on file.`,
+      fixSuggestion: 'Obtain referral from patient\'s PCP before submitting claim.',
+      ruleId: null,
+      sourcePage: null,
+      sourceQuote: null,
+      payerSpecific: false
+    };
+  }
+  
+  if (claim.pcpReferralCheckStatus === 'present_expired') {
+    return {
+      ruleType: 'plan_product_mismatch',
+      severity: 'block',
+      message: 'Referral on file has expired.',
+      fixSuggestion: 'Obtain renewed referral or use a different active referral.',
+      ...
+    };
+  }
+  
+  if (claim.pcpReferralCheckStatus === 'present_used_up') {
+    return {
+      ruleType: 'plan_product_mismatch',
+      severity: 'block', 
+      message: 'Referral has no remaining authorized visits.',
+      fixSuggestion: 'Obtain renewal or new referral with visit allocation.',
+      ...
+    };
+  }
+  
+  return null;
+}
+```
+
+Wire this into the main `evaluateClaim()` function so PCP referral violations show up in the risk panel.
+
+### Task 5 — Daily referral status maintenance
+
+Add a daily cron (run with the timely filing job at 6 AM UTC):
+
+For each `pcp_referrals` row where `status = 'active'`:
+- If `expiration_date < today` → update status to 'expired'
+- If `visits_used >= visits_authorized` → update status to 'used_up'
+
+Log the count of status changes.
+
+This keeps the referral data fresh so the wizard's check is always accurate.
+
+### Task 6 — Verification queries
+
+After deploy, run against `PRODUCTION_READONLY_DATABASE_URL`:
+
+```sql
+-- Schema check
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'pcp_referrals'
+ORDER BY ordinal_position;
+
+-- New columns on claims
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'claims' 
+  AND column_name IN ('pcp_referral_id', 'pcp_referral_required', 'pcp_referral_check_status');
+
+-- Count of HMO/POS patients without active referrals
+SELECT 
+  pi.plan_product,
+  COUNT(DISTINCT p.id) AS patients,
+  COUNT(DISTINCT pr.id) FILTER (WHERE pr.status = 'active') AS active_referrals
+FROM patients p
+LEFT JOIN patient_insurance pi ON pi.patient_id = p.id
+LEFT JOIN pcp_referrals pr ON pr.patient_id = p.id
+WHERE pi.plan_product IN ('HMO', 'POS')
+GROUP BY pi.plan_product;
+```
+
+## Acceptance
+
+- `pcp_referrals` table exists with correct schema
+- New columns on `claims` exist
+- Patient detail page has Referrals section with add/edit functionality
+- Wizard prompts for referral on HMO/POS plans
+- Wizard skips referral check on PPO/EPO/Indemnity/unknown plans
+- Rules engine surfaces missing/expired/used-up referrals as BLOCK violations
+- Daily cron updates status on expired/used-up referrals
+- All verification queries return expected schema/data
+
+## What NOT to do in this prompt
+
+- Do not auto-fetch referrals from external systems (Availity, payer portals). Manual entry only for now. Auto-fetch is a separate later prompt.
+- Do not enforce referral specialty matching against the rendering provider's specialty. That's a Phase 3 sophistication after the basic feature works.
+- Do not block claim creation if the referral fields are unknown — block at submission only. Drafts can exist without referrals.
+
+## Output expected from Replit
+
+1. List of files modified
+2. SQL migration with rollback
+3. Verification query results
+4. Screenshots:
+   - Patient detail page with Referrals section (one active, one expired)
+   - Wizard Step 1 with HMO patient triggering the referral banner
+   - Wizard Step 1 with PPO patient (no referral prompt)
+   - Risk panel with PCP referral missing violation
+   - Add Referral form

@@ -29,6 +29,8 @@ export interface ClaimContext {
   patientFirstName: string | null;
   patientLastName: string | null;
   testMode?: boolean;
+  // PCP Referral (Prompt 05)
+  pcpReferralCheckStatus?: "not_required" | "present_valid" | "present_expired" | "present_used_up" | "missing" | "unknown" | null;
 }
 
 export type RuleType =
@@ -525,7 +527,77 @@ export async function evaluateClaim(ctx: ClaimContext): Promise<RuleViolation[]>
     client.release();
   }
 
+  // ── PCP Referral check ──────────────────────────────────────────────────
+  const pcpViolation = evaluatePCPReferral(ctx);
+  if (pcpViolation) violations.push(pcpViolation);
+
   return violations;
+}
+
+// ── PCP Referral evaluator (Prompt 05 T4) ────────────────────────────────
+function evaluatePCPReferral(ctx: ClaimContext): RuleViolation | null {
+  // Only applies to HMO and POS plans
+  if (ctx.planProduct !== "HMO" && ctx.planProduct !== "POS") return null;
+
+  const status = ctx.pcpReferralCheckStatus;
+
+  // Explicitly satisfied
+  if (status === "present_valid" || status === "not_required") return null;
+
+  // Unknown / not yet evaluated — don't block at draft stage, just warn
+  if (!status || status === "unknown") {
+    return {
+      ruleType: "plan_product_mismatch",
+      severity: "warn",
+      message: `${ctx.planProduct} plan — referral status not confirmed. Verify PCP referral before submitting.`,
+      fixSuggestion: "Open the patient's Referrals tab and attach an active referral, or confirm via phone.",
+      ruleId: null,
+      sourcePage: null,
+      sourceQuote: null,
+      payerSpecific: false,
+    };
+  }
+
+  if (status === "missing") {
+    return {
+      ruleType: "plan_product_mismatch",
+      severity: "block",
+      message: `${ctx.planProduct} plan requires a PCP referral. No referral is on file.`,
+      fixSuggestion: "Obtain a referral from the patient's PCP before submitting this claim.",
+      ruleId: null,
+      sourcePage: null,
+      sourceQuote: null,
+      payerSpecific: false,
+    };
+  }
+
+  if (status === "present_expired") {
+    return {
+      ruleType: "plan_product_mismatch",
+      severity: "block",
+      message: "PCP referral on file has expired. Claim will likely be denied without a valid referral.",
+      fixSuggestion: "Obtain a renewed referral from the patient's PCP or attach a still-valid one.",
+      ruleId: null,
+      sourcePage: null,
+      sourceQuote: null,
+      payerSpecific: false,
+    };
+  }
+
+  if (status === "present_used_up") {
+    return {
+      ruleType: "plan_product_mismatch",
+      severity: "block",
+      message: "PCP referral has no remaining authorized visits.",
+      fixSuggestion: "Obtain a renewed referral with additional visit authorization before submitting.",
+      ruleId: null,
+      sourcePage: null,
+      sourceQuote: null,
+      payerSpecific: false,
+    };
+  }
+
+  return null;
 }
 
 // ── Score helpers ────────────────────────────────────────────────────────────

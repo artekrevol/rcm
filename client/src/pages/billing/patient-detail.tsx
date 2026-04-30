@@ -55,7 +55,13 @@ import {
   PenLine,
   Info,
   XCircle,
+  AlarmClock,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Stethoscope,
 } from "lucide-react";
+import { format } from "date-fns";
 
 const REFERRAL_SOURCES = [
   "VA Community Care", "Physician office", "Hospital discharge planner",
@@ -915,6 +921,287 @@ function EligibilityTab({ patientId, patient }: { patientId: string; patient: an
   );
 }
 
+// ── PCP Referrals Tab (Prompt 05) ──────────────────────────────────────────
+
+const CAPTURED_VIA_OPTIONS = [
+  { value: "manual_entry", label: "Manual Entry" },
+  { value: "card_scan", label: "Card Scan" },
+  { value: "fax", label: "Fax" },
+  { value: "phone_verification", label: "Phone Verification" },
+];
+
+const REFERRAL_STATUS_CONFIG: Record<string, { label: string; badgeClass: string }> = {
+  active: { label: "Active", badgeClass: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" },
+  expired: { label: "Expired", badgeClass: "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400" },
+  used_up: { label: "Used Up", badgeClass: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300" },
+  revoked: { label: "Revoked", badgeClass: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" },
+  pending_verification: { label: "Pending Verification", badgeClass: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400" },
+};
+
+function ReferralsTab({ patientId, patient }: { patientId: string; patient: any }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [showExpired, setShowExpired] = useState(false);
+  const [form, setForm] = useState({
+    pcp_name: "", pcp_npi: "", pcp_phone: "", pcp_practice_name: "",
+    referral_number: "", issue_date: "", expiration_date: "",
+    visits_authorized: "", specialty_authorized: "", diagnosis_authorized: "",
+    captured_via: "manual_entry", status: "active",
+  });
+
+  const planProduct = patient?.plan_product || "";
+  const isHmoOrPos = planProduct === "HMO" || planProduct === "POS";
+
+  const { data: referrals = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/billing/patients", patientId, "referrals"],
+    queryFn: async () => {
+      const res = await fetch(`/api/billing/patients/${patientId}/referrals`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load referrals");
+      return res.json();
+    },
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: typeof form) =>
+      apiRequest("POST", `/api/billing/patients/${patientId}/referrals`, {
+        ...data,
+        visits_authorized: data.visits_authorized ? parseInt(data.visits_authorized) : null,
+        expiration_date: data.expiration_date || null,
+        pcp_npi: data.pcp_npi || null,
+        pcp_phone: data.pcp_phone || null,
+        pcp_practice_name: data.pcp_practice_name || null,
+        referral_number: data.referral_number || null,
+        diagnosis_authorized: data.diagnosis_authorized || null,
+      }),
+    onSuccess: () => {
+      toast({ title: "Referral added" });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patientId, "referrals"] });
+      setShowAddForm(false);
+      setForm({
+        pcp_name: "", pcp_npi: "", pcp_phone: "", pcp_practice_name: "",
+        referral_number: "", issue_date: "", expiration_date: "",
+        visits_authorized: "", specialty_authorized: "", diagnosis_authorized: "",
+        captured_via: "manual_entry", status: "active",
+      });
+    },
+    onError: (e: any) => toast({ title: "Failed to add referral", description: e.message, variant: "destructive" }),
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("PATCH", `/api/billing/referrals/${id}`, { status: "revoked" }),
+    onSuccess: () => {
+      toast({ title: "Referral revoked" });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patientId, "referrals"] });
+    },
+  });
+
+  const activeReferrals = referrals.filter((r) => r.status === "active" || r.status === "pending_verification");
+  const inactiveReferrals = referrals.filter((r) => r.status !== "active" && r.status !== "pending_verification");
+
+  return (
+    <div className="space-y-4">
+      {/* HMO/POS highlight banner */}
+      {isHmoOrPos && (
+        <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-700 rounded-lg" data-testid="banner-referral-required">
+          <AlarmClock className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">{planProduct} plan — PCP referral required</p>
+            <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+              This patient is on an {planProduct} plan which typically requires a valid PCP referral before specialist visits. Keep referrals current to avoid denials.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Active Referrals */}
+      <Card data-testid="card-active-referrals">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base font-medium flex items-center gap-2">
+              <Stethoscope className="h-4 w-4" />
+              Active Referrals
+              {activeReferrals.length > 0 && (
+                <Badge className="bg-green-600 text-white text-[10px] ml-1">{activeReferrals.length}</Badge>
+              )}
+            </CardTitle>
+            <Button size="sm" onClick={() => setShowAddForm((v) => !v)} data-testid="button-add-referral">
+              <Plus className="h-4 w-4 mr-1" />
+              Add Referral
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+          ) : activeReferrals.length === 0 && !showAddForm ? (
+            <div className="py-8 text-center text-muted-foreground" data-testid="empty-active-referrals">
+              <Stethoscope className="h-8 w-8 mx-auto mb-2 opacity-30" />
+              <p className="text-sm">No active referrals on file.</p>
+              {isHmoOrPos && (
+                <p className="text-xs mt-1 text-amber-600">An active referral is required for {planProduct} plan submission.</p>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {activeReferrals.map((ref) => (
+                <ReferralCard key={ref.id} referral={ref} onRevoke={() => revokeMutation.mutate(ref.id)} />
+              ))}
+            </div>
+          )}
+
+          {/* Add Referral Form */}
+          {showAddForm && (
+            <div className="mt-4 pt-4 border-t space-y-4" data-testid="form-add-referral">
+              <p className="text-sm font-medium">New Referral</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">PCP Name <span className="text-red-500">*</span></Label>
+                  <Input value={form.pcp_name} onChange={(e) => setForm({ ...form, pcp_name: e.target.value })} placeholder="Dr. Jane Smith" data-testid="input-pcp-name" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">PCP Practice Name</Label>
+                  <Input value={form.pcp_practice_name} onChange={(e) => setForm({ ...form, pcp_practice_name: e.target.value })} placeholder="Smith Family Medicine" data-testid="input-pcp-practice" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">PCP NPI</Label>
+                  <Input value={form.pcp_npi} onChange={(e) => setForm({ ...form, pcp_npi: e.target.value })} placeholder="1234567890" data-testid="input-pcp-npi" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">PCP Phone</Label>
+                  <Input value={form.pcp_phone} onChange={(e) => setForm({ ...form, pcp_phone: e.target.value })} placeholder="(512) 555-0100" data-testid="input-pcp-phone" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Referral Number</Label>
+                  <Input value={form.referral_number} onChange={(e) => setForm({ ...form, referral_number: e.target.value })} placeholder="Optional payer-issued number" data-testid="input-referral-number" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Issue Date <span className="text-red-500">*</span></Label>
+                  <Input type="date" value={form.issue_date} onChange={(e) => setForm({ ...form, issue_date: e.target.value })} data-testid="input-issue-date" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Expiration Date</Label>
+                  <Input type="date" value={form.expiration_date} onChange={(e) => setForm({ ...form, expiration_date: e.target.value })} data-testid="input-expiration-date" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Visits Authorized</Label>
+                  <Input type="number" min="1" value={form.visits_authorized} onChange={(e) => setForm({ ...form, visits_authorized: e.target.value })} placeholder="Leave blank if unlimited" data-testid="input-visits-authorized" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Specialty Authorized</Label>
+                  <Input value={form.specialty_authorized} onChange={(e) => setForm({ ...form, specialty_authorized: e.target.value })} placeholder="e.g. Cardiology, Physical Therapy" data-testid="input-specialty" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Diagnosis Authorized</Label>
+                  <Input value={form.diagnosis_authorized} onChange={(e) => setForm({ ...form, diagnosis_authorized: e.target.value })} placeholder="Optional ICD-10 or description" data-testid="input-diagnosis-authorized" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Captured Via</Label>
+                  <Select value={form.captured_via} onValueChange={(v) => setForm({ ...form, captured_via: v })}>
+                    <SelectTrigger data-testid="select-captured-via"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {CAPTURED_VIA_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Status</Label>
+                  <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+                    <SelectTrigger data-testid="select-status"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="pending_verification">Pending Verification</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <Button variant="outline" onClick={() => setShowAddForm(false)} data-testid="button-cancel-referral">Cancel</Button>
+                <Button
+                  onClick={() => createMutation.mutate(form)}
+                  disabled={createMutation.isPending || !form.pcp_name || !form.issue_date}
+                  data-testid="button-save-referral"
+                >
+                  {createMutation.isPending && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
+                  Save Referral
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Historical referrals (collapsed) */}
+      {inactiveReferrals.length > 0 && (
+        <Card data-testid="card-historical-referrals">
+          <CardHeader className="pb-2 cursor-pointer" onClick={() => setShowExpired((v) => !v)}>
+            <CardTitle className="text-sm font-medium flex items-center gap-2 text-muted-foreground">
+              {showExpired ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              Historical Referrals ({inactiveReferrals.length})
+            </CardTitle>
+          </CardHeader>
+          {showExpired && (
+            <CardContent>
+              <div className="space-y-3">
+                {inactiveReferrals.map((ref) => (
+                  <ReferralCard key={ref.id} referral={ref} />
+                ))}
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function ReferralCard({ referral: r, onRevoke }: { referral: any; onRevoke?: () => void }) {
+  const cfg = REFERRAL_STATUS_CONFIG[r.status] || REFERRAL_STATUS_CONFIG.active;
+  const isActive = r.status === "active";
+  const visitsRemaining = r.visits_authorized != null
+    ? Math.max(0, r.visits_authorized - (r.visits_used || 0))
+    : null;
+
+  return (
+    <div className={`rounded-lg border p-3 space-y-2 ${isActive ? "border-green-200 dark:border-green-800 bg-green-50/20 dark:bg-green-950/10" : "border-border bg-muted/30"}`} data-testid={`referral-card-${r.id}`}>
+      <div className="flex items-start justify-between gap-2 flex-wrap">
+        <div>
+          <p className="font-medium text-sm" data-testid={`text-pcp-name-${r.id}`}>{r.pcp_name}</p>
+          {r.pcp_practice_name && <p className="text-xs text-muted-foreground">{r.pcp_practice_name}</p>}
+          {r.pcp_npi && <p className="text-xs text-muted-foreground">NPI: {r.pcp_npi}</p>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${cfg.badgeClass}`}>{cfg.label}</span>
+          {isActive && onRevoke && (
+            <Button size="sm" variant="ghost" className="h-6 text-xs text-muted-foreground" onClick={onRevoke} data-testid={`button-revoke-${r.id}`}>
+              <XCircle className="h-3 w-3 mr-1" />Revoke
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {r.specialty_authorized && (
+          <span className="flex items-center gap-1"><Stethoscope className="h-3 w-3" />{r.specialty_authorized}</span>
+        )}
+        {r.referral_number && <span>Ref #: {r.referral_number}</span>}
+        <span className="flex items-center gap-1"><Calendar className="h-3 w-3" />Issued: {r.issue_date ? format(new Date(r.issue_date), "MMM d, yyyy") : "—"}</span>
+        {r.expiration_date && (
+          <span className={`flex items-center gap-1 ${isActive && new Date(r.expiration_date) < new Date(Date.now() + 30 * 86400000) ? "text-amber-600 font-medium" : ""}`}>
+            <Clock className="h-3 w-3" />Expires: {format(new Date(r.expiration_date), "MMM d, yyyy")}
+          </span>
+        )}
+        {visitsRemaining !== null && (
+          <span className={visitsRemaining <= 2 ? "text-orange-600 font-medium" : ""}>
+            {visitsRemaining} / {r.visits_authorized} visits remaining
+          </span>
+        )}
+        {r.captured_by_name && <span>Captured by: {r.captured_by_name}</span>}
+      </div>
+    </div>
+  );
+}
+
 function NotesTab({ patient }: { patient: any }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -1109,6 +1396,10 @@ export default function PatientDetail() {
             <Shield className="h-4 w-4 mr-2" />
             Eligibility
           </TabsTrigger>
+          <TabsTrigger value="referrals" data-testid="tab-referrals" className={patient?.plan_product === "HMO" || patient?.plan_product === "POS" ? "text-amber-600 dark:text-amber-400 font-medium" : ""}>
+            <Stethoscope className="h-4 w-4 mr-2" />
+            Referrals
+          </TabsTrigger>
           <TabsTrigger value="notes" data-testid="tab-notes">
             <MessageSquare className="h-4 w-4 mr-2" />
             Notes
@@ -1123,6 +1414,9 @@ export default function PatientDetail() {
         </TabsContent>
         <TabsContent value="eligibility">
           <EligibilityTab patientId={patientId} patient={patient} />
+        </TabsContent>
+        <TabsContent value="referrals">
+          <ReferralsTab patientId={patientId} patient={patient} />
         </TabsContent>
         <TabsContent value="notes">
           <NotesTab patient={patient} />

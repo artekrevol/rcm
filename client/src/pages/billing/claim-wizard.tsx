@@ -51,7 +51,10 @@ import {
   DollarSign,
   Info,
   FlaskConical,
+  Stethoscope,
+  AlarmClock,
 } from "lucide-react";
+import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { validateNPI } from "@shared/npi-validation";
 import { generateAndDownloadClaimPdf } from "@/lib/generate-claim-pdf";
@@ -1004,6 +1007,10 @@ export default function ClaimWizard() {
   const [externalOrderingNpi, setExternalOrderingNpi] = useState("");
   const [delayReasonCode, setDelayReasonCode] = useState("none");
 
+  // PCP Referral check (Prompt 05) — for HMO/POS plans
+  const [wizardReferralId, setWizardReferralId] = useState<string | null>(null);
+  const [wizardReferralAcknowledgedMissing, setWizardReferralAcknowledgedMissing] = useState(false);
+
   const [riskResult, setRiskResult] = useState<{
     riskScore: number;
     readinessStatus: string;
@@ -1058,6 +1065,19 @@ export default function ClaimWizard() {
     },
     enabled: !!matchedPayer?.id && activeCodes.length > 0,
   });
+
+  // Referral query for HMO/POS plan patients (Prompt 05)
+  const isHmoOrPosPlan = patient?.plan_product === "HMO" || patient?.plan_product === "POS";
+  const { data: patientReferrals = [] } = useQuery<any[]>({
+    queryKey: ["/api/billing/patients", patient?.id, "referrals"],
+    queryFn: async () => {
+      const res = await fetch(`/api/billing/patients/${patient.id}/referrals`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!patient?.id && isHmoOrPosPlan,
+  });
+  const activePatientReferrals = patientReferrals.filter((r: any) => r.status === "active");
 
   const { data: stediStatus } = useQuery<{ configured: boolean; ediMode?: "P" | "T"; stediEnv?: string }>({
     queryKey: ["/api/billing/stedi/status"],
@@ -1240,9 +1260,23 @@ export default function ClaimWizard() {
       const res = await apiRequest("POST", "/api/billing/claims/draft", { patientId });
       return res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setClaimId(data.claimId);
       setEncounterId(data.encounterId);
+      // PCP Referral wiring (Prompt 05)
+      if (wizardReferralId) {
+        try {
+          await apiRequest("POST", `/api/billing/claims/${data.claimId}/link-referral`, { referralId: wizardReferralId });
+        } catch {
+          // non-blocking — rules engine will catch missing referral
+        }
+      } else if (wizardReferralAcknowledgedMissing && isHmoOrPosPlan) {
+        try {
+          await apiRequest("PATCH", `/api/billing/claims/${data.claimId}`, { pcp_referral_check_status: "missing" });
+        } catch {
+          // non-blocking
+        }
+      }
       setStep(1);
     },
     onError: (err: any) => {
@@ -1271,6 +1305,9 @@ export default function ClaimWizard() {
     if (!p) { setPatient(null); return; }
     setPatient(p);
     if (p.authorization_number) setAuthNumber(p.authorization_number);
+    // Reset referral selections when patient changes
+    setWizardReferralId(null);
+    setWizardReferralAcknowledgedMissing(false);
     if (preselectedPatientId) {
       draftMutation.mutate(p.id);
     }
@@ -1560,8 +1597,114 @@ export default function ClaimWizard() {
               <PatientSearch onSelect={handlePatientSelect} selectedPatient={patient} />
             </CardContent>
           </Card>
+
+          {/* PCP Referral Check — HMO/POS plans (Prompt 05) */}
+          {patient && isHmoOrPosPlan && (
+            <Card data-testid="card-wizard-referral-check" className="border-amber-200 dark:border-amber-700">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                  <AlarmClock className="h-4 w-4" />
+                  PCP Referral Required — {patient.plan_product} Plan
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {activePatientReferrals.length === 0 ? (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-950/30 rounded-lg border border-amber-200 dark:border-amber-700" data-testid="banner-no-active-referrals">
+                      <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                      <p className="text-sm text-amber-800 dark:text-amber-300">
+                        No active PCP referrals found for this patient. {patient.plan_product} plans typically require a referral for specialist visits.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={`text-xs border-amber-300 ${wizardReferralAcknowledgedMissing ? "bg-amber-100 dark:bg-amber-900/30 border-amber-500" : ""}`}
+                        onClick={() => setWizardReferralAcknowledgedMissing((v) => !v)}
+                        data-testid="button-acknowledge-missing-referral"
+                      >
+                        {wizardReferralAcknowledgedMissing
+                          ? <><CheckCircle2 className="h-3 w-3 mr-1 text-amber-600" />Acknowledged — proceeding without referral</>
+                          : "Acknowledge — no referral on file, proceed anyway"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2" data-testid="list-referral-options">
+                    <p className="text-xs text-muted-foreground mb-2">Select the authorizing referral for this claim:</p>
+                    {activePatientReferrals.map((ref: any) => {
+                      const isSelected = wizardReferralId === ref.id;
+                      const visitsRemaining = ref.visits_authorized != null
+                        ? Math.max(0, ref.visits_authorized - (ref.visits_used || 0))
+                        : null;
+                      return (
+                        <button
+                          key={ref.id}
+                          type="button"
+                          onClick={() => {
+                            setWizardReferralId(isSelected ? null : ref.id);
+                            setWizardReferralAcknowledgedMissing(false);
+                          }}
+                          data-testid={`referral-option-${ref.id}`}
+                          className={`w-full text-left rounded-lg border p-3 transition-colors ${isSelected
+                            ? "border-primary bg-primary/5 dark:bg-primary/10"
+                            : "border-border hover:border-muted-foreground/40 hover:bg-muted/30"}`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              {isSelected
+                                ? <CheckCircle2 className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                                : <Stethoscope className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />}
+                              <div>
+                                <p className="text-sm font-medium">{ref.pcp_name}</p>
+                                {ref.specialty_authorized && <p className="text-xs text-muted-foreground">{ref.specialty_authorized}</p>}
+                              </div>
+                            </div>
+                            <div className="text-right text-xs text-muted-foreground space-y-0.5">
+                              {ref.expiration_date && (
+                                <p className={new Date(ref.expiration_date) < new Date(Date.now() + 30 * 86400000) ? "text-amber-600 font-medium" : ""}>
+                                  Expires {format(new Date(ref.expiration_date), "MMM d, yyyy")}
+                                </p>
+                              )}
+                              {visitsRemaining !== null && (
+                                <p className={visitsRemaining <= 2 ? "text-orange-600 font-medium" : ""}>
+                                  {visitsRemaining}/{ref.visits_authorized} visits left
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={`text-xs mt-1 text-muted-foreground ${wizardReferralAcknowledgedMissing ? "bg-amber-100 dark:bg-amber-900/30" : ""}`}
+                      onClick={() => {
+                        setWizardReferralAcknowledgedMissing((v) => !v);
+                        setWizardReferralId(null);
+                      }}
+                      data-testid="button-proceed-without-referral"
+                    >
+                      {wizardReferralAcknowledgedMissing ? <CheckCircle2 className="h-3 w-3 mr-1 text-amber-600" /> : null}
+                      Proceed without referral
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <div className="flex justify-end">
-            <Button onClick={handleStep1Next} disabled={!patient || draftMutation.isPending} data-testid="button-step1-next">
+            <Button
+              onClick={handleStep1Next}
+              disabled={
+                !patient || draftMutation.isPending ||
+                (isHmoOrPosPlan && !wizardReferralId && !wizardReferralAcknowledgedMissing)
+              }
+              data-testid="button-step1-next"
+            >
               {draftMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Next: Service Details
               <ChevronRight className="h-4 w-4 ml-1" />
