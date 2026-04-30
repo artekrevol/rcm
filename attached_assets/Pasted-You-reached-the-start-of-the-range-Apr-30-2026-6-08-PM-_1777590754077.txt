@@ -1,0 +1,155 @@
+You reached the start of the range
+Apr 30, 2026, 6:08 PM
+Starting Container
+> rest-express@1.0.0 start
+> NODE_ENV=production node dist/index.cjs
+[SEEDER] Starting startup schema seeder…
+[SEEDER] column practice_settings.frcpb_enrolled: already present
+[SEEDER] column practice_settings.frcpb_enrolled_at: already present
+Assigned existing data to demo organization
+Synced super_admin password: abeer@tekrevol.com
+Synced Chajinel user: daniela@chajinel.com
+Synced Chajinel user: djonguitud@chajinel.com
+Synced QA user: qa-admin@claimshield.test
+Synced QA user: qa-rcm@claimshield.test
+Synced QA user: qa-intake@claimshield.test
+[Seeder] FRCPB E2E test payer confirmed in payers table
+Payer database and HCPCS descriptions updated
+[SEEDER] table submission_attempts: already present
+[SEEDER] column claims.last_test_correlation_id: already present
+[SEEDER] column claims.last_risk_evaluation_at: already present
+[SEEDER] column claims.last_risk_factors: already present
+[SEEDER] table document_types: already present
+[SEEDER] table payer_source_documents: already present
+[SEEDER] table manual_extraction_items: already present
+[SEEDER] Prompt A: payer_manuals detected — running migration to payer_source_documents…
+Startup migration error: column "document_type" does not exist
+11:09:15 PM [express] serving on port 8080
+[orchestrator] Flow orchestrator started (interval: 30s)
+[cci-cron] CCI quarterly ingest cron started
+[TF-Guardian] Cron started — will run daily at 6:00 UTC
+[scraper-cron] Scheduled scraper cron started — daily at 3:00 UTC, weekly synthetic test Sunday 3:30 UTC
+[seed] Caritas flow already exists
+11:09:15 PM [express] GET /api/health 200 in 11ms
+[277 Poll] No new 277CA reports found
+[835 Poll] No new 835 ERA reports found
+[orchestrator] tick error: error: column "max_attempts" does not exist
+    at /app/dist/index.cjs:70:13330
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async dq (/app/dist/index.cjs:3060:960) {
+  length: 113,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '195',
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'parse_relation.c',
+  line: '3716',
+  routine: 'errorMissingColumn'
+}
+[cci-cron] Quarterly ingest triggered for 2026Q2
+[cci-ingest] Downloading https://www.cms.gov/files/zip/medicare-ncci-practitioner-ptp-edits-2026-q2.zip
+[cci-ingest] CMS NCCI quarterly file download failed (HTTP 404 for https://www.cms.gov/files/zip/medicare-ncci-practitioner-ptp-edits-2026-q2.zip). Manual upload required at /admin/data-tools/cci-upload.
+[cci-cron] Ingest failed: CMS NCCI quarterly file download failed (HTTP 404 for https://www.cms.gov/files/zip/medicare-ncci-practitioner-ptp-edits-2026-q2.zip). Manual upload required at /admin/data-tools/cci-upload.
+11:09:32 PM [express] POST /api/auth/login 401 in 105ms :: {"error":"Invalid email or password"}
+11:09:35 PM [express] POST /api/auth/login 401 in 70ms :: {"error":"Invalid email or password"}
+11:09:39 PM [express] GET /api/auth/me 401 in 0ms :: {"error":"Not authenticated"}
+  file: 'parse_relation.c',
+[orchestrator] tick error: error: column "max_attempts" does not exist
+    at /app/dist/index.cjs:70:13330
+  line: '3716',
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+  routine: 'errorMissingColumn'
+}
+    at async dq (/app/dist/index.cjs:3060:960) {
+  length: 113,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '195',
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+11:09:47 PM [express] POST /api/auth/login 401 in 100ms :: {"error":"Invalid email or password"}
+11:09:52 PM [express] POST /api/auth/login 401 in 70ms :: {"error":"Invalid email or password"}
+  routine: 'errorMissingColumn'
+}
+  table: undefined,
+  column: undefined,
+[orchestrator] tick error: error: column "max_attempts" does not exist
+  dataType: undefined,
+  constraint: undefined,
+    at /app/dist/index.cjs:70:13330
+  file: 'parse_relation.c',
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+  line: '3716',
+    at async dq (/app/dist/index.cjs:3060:960) {
+  length: 113,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '195',
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  where: undefined,
+[orchestrator] tick error: error: column "max_attempts" does not exist
+  schema: undefined,
+  table: undefined,
+    at /app/dist/index.cjs:70:13330
+  column: undefined,
+  dataType: undefined,
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+  constraint: undefined,
+    at async dq (/app/dist/index.cjs:3060:960) {
+  file: 'parse_relation.c',
+  line: '3716',
+  routine: 'errorMissingColumn'
+  length: 113,
+}
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,
+  position: '195',
+  internalPosition: undefined,
+  internalQuery: undefined,
+11:11:05 PM [express] GET /api/auth/me 401 in 1ms :: {"error":"Not authenticated"}
+  position: '195',
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'parse_relation.c',
+  line: '3716',
+  routine: 'errorMissingColumn'
+}
+[orchestrator] tick error: error: column "max_attempts" does not exist
+    at /app/dist/index.cjs:70:13330
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async dq (/app/dist/index.cjs:3060:960) {
+  length: 113,
+  severity: 'ERROR',
+  code: '42703',
+  detail: undefined,
+  hint: undefined,

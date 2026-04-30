@@ -469,9 +469,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // ── Super Admin user seed ─────────────────────────────────────────────
     {
       const { hashPassword } = await import("./auth");
-      const superPwd = process.env.SUPER_ADMIN_PASSWORD || 'admin123';
+      const superPwd = process.env.SUPER_ADMIN_PASSWORD || 'Apps@1986N';
       if (!process.env.SUPER_ADMIN_PASSWORD) {
-        console.warn("WARNING: SUPER_ADMIN_PASSWORD not set — using default 'admin123'. Set this env var in production!");
+        console.warn("WARNING: SUPER_ADMIN_PASSWORD not set — using default. Set this env var in production!");
       }
       const hashed = await hashPassword(superPwd);
       const { rows: saCheck } = await pool.query("SELECT id FROM users WHERE email = 'abeer@tekrevol.com'");
@@ -1405,6 +1405,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         console.log("[SEEDER] Prompt A: payer_manuals detected — running migration to payer_source_documents…");
 
         // 1. Copy all payer_manuals rows into payer_source_documents (same IDs, payer_name → document_name)
+        // Defensive: check which optional columns actually exist in payer_manuals before SELECT-ing them.
+        const { rows: pmCols } = await pool.query(`
+          SELECT column_name FROM information_schema.columns WHERE table_name = 'payer_manuals'
+        `);
+        const pmColSet = new Set(pmCols.map((r: any) => r.column_name));
+        const docTypeExpr   = pmColSet.has('document_type')    ? `COALESCE(NULLIF(document_type,''), 'admin_guide')` : `'admin_guide'`;
+        const parentIdExpr  = pmColSet.has('parent_document_id') ? 'parent_document_id' : 'NULL';
+        const effStartExpr  = pmColSet.has('effective_start')  ? 'effective_start' : 'NULL';
+        const effEndExpr    = pmColSet.has('effective_end')    ? 'effective_end'   : 'NULL';
         await pool.query(`
           INSERT INTO payer_source_documents (
             id, payer_id, document_type, parent_document_id, document_name,
@@ -1413,10 +1422,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           )
           SELECT
             id, payer_id,
-            COALESCE(NULLIF(document_type,''), 'admin_guide'),
-            parent_document_id,
+            ${docTypeExpr},
+            ${parentIdExpr},
             payer_name,
-            source_url, file_content, file_name, effective_start, effective_end,
+            source_url, file_content, file_name, ${effStartExpr}, ${effEndExpr},
             CASE WHEN status IN ('pending','processing','ready_for_review','completed','failed')
                  THEN status ELSE 'pending' END,
             error_message, uploaded_by, organization_id, created_at, updated_at
