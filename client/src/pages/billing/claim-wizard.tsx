@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, type ComponentType } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -54,6 +55,33 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { validateNPI } from "@shared/npi-validation";
 import { generateAndDownloadClaimPdf } from "@/lib/generate-claim-pdf";
+
+// ── Rules Engine types (mirrored from server/services/rules-engine.ts) ──────
+type RuleType =
+  | "timely_filing" | "prior_auth" | "modifier" | "appeals"
+  | "cci_edit" | "plan_product_mismatch" | "date_sanity" | "data_quality";
+type Severity = "block" | "warn" | "info";
+interface RuleViolation {
+  ruleType: RuleType;
+  severity: Severity;
+  message: string;
+  fixSuggestion: string;
+  ruleId: string | null;
+  sourcePage: number | null;
+  sourceQuote: string | null;
+  payerSpecific: boolean;
+}
+
+const RULE_TYPE_LABELS: Record<RuleType, string> = {
+  timely_filing: "Timely Filing",
+  prior_auth: "Prior Auth",
+  modifier: "Modifier",
+  appeals: "Appeals",
+  cci_edit: "CCI Edit",
+  plan_product_mismatch: "Plan Product",
+  date_sanity: "Date",
+  data_quality: "Data Quality",
+};
 
 const ICD10_COMMON = [
   { code: "Z51.11", desc: "Encounter for antineoplastic chemotherapy" },
@@ -979,7 +1007,7 @@ export default function ClaimWizard() {
   const [riskResult, setRiskResult] = useState<{
     riskScore: number;
     readinessStatus: string;
-    factors: string[];
+    factors: RuleViolation[];
     cciFactors?: Array<{
       type: string;
       severity: "high" | "medium";
@@ -990,6 +1018,9 @@ export default function ClaimWizard() {
       fix_suggestion: string;
     }>;
   } | null>(null);
+  const [preflightFactors, setPreflightFactors] = useState<RuleViolation[]>([]);
+  const [sourceViewViolation, setSourceViewViolation] = useState<RuleViolation | null>(null);
+  const preflightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
@@ -1164,6 +1195,45 @@ export default function ClaimWizard() {
       } catch {}
     }
   }, [step]);
+
+  // ── T5: Debounced real-time preflight ──────────────────────────────────────
+  useEffect(() => {
+    if (step !== 1) { setPreflightFactors([]); return; }
+    if (preflightTimerRef.current) clearTimeout(preflightTimerRef.current);
+    preflightTimerRef.current = setTimeout(async () => {
+      try {
+        const matchedPayerLocal = payers.find((p: any) => p.id === patient?.payer_id || p.name === patient?.insurance_carrier) || null;
+        const body = {
+          claimId: claimId || undefined,
+          patientId: patient?.id || "",
+          payerId: matchedPayerLocal?.id || null,
+          payerName: patient?.insurance_carrier || "",
+          planProduct: patient?.plan_product || null,
+          serviceDate: serviceDate || null,
+          serviceLines: serviceLines.map((sl) => ({
+            code: sl.code,
+            modifier: sl.modifier || "",
+            units: parseFloat(sl.units) || 0,
+            totalCharge: parseFloat(sl.totalCharge) || 0,
+          })),
+          icd10Primary: icd10Primary.code || "",
+          icd10Secondary: icd10Secondary.filter((d) => d.code).map((d) => d.code),
+          authorizationNumber: null,
+          placeOfService: placeOfService,
+          memberId: patient?.member_id || null,
+          patientDob: patient?.dob || null,
+          patientFirstName: patient?.first_name || null,
+          patientLastName: patient?.last_name || null,
+        };
+        const res = await apiRequest("POST", "/api/billing/claims/preflight", body);
+        const data = await res.json();
+        if (Array.isArray(data.factors)) setPreflightFactors(data.factors);
+      } catch {
+        // silent — preflight is advisory
+      }
+    }, 500);
+    return () => { if (preflightTimerRef.current) clearTimeout(preflightTimerRef.current); };
+  }, [step, serviceDate, icd10Primary, icd10Secondary, serviceLines, patient, claimId, placeOfService, payers]);
 
   const draftMutation = useMutation({
     mutationFn: async (patientId: string) => {
@@ -1420,6 +1490,38 @@ export default function ClaimWizard() {
   const totalAmount = serviceLines.reduce((sum, l) => sum + (parseFloat(l.totalCharge) || 0), 0);
   const selectedProvider = providers.find((p: any) => p.id === providerId);
 
+  // ── T5 helpers: inline field violation markers ────────────────────────────
+  const preflightViolationsFor = useCallback((types: RuleType[]) =>
+    preflightFactors.filter((v) => types.includes(v.ruleType)),
+  [preflightFactors]);
+
+  function FieldViolationHint({ types }: { types: RuleType[] }) {
+    const violations = preflightViolationsFor(types);
+    if (violations.length === 0) return null;
+    const topSeverity = violations.some(v => v.severity === "block") ? "block"
+      : violations.some(v => v.severity === "warn") ? "warn" : "info";
+    const colorClass = topSeverity === "block" ? "text-destructive" : topSeverity === "warn" ? "text-yellow-600 dark:text-yellow-400" : "text-blue-500";
+    const Icon = topSeverity === "block" ? XCircle : topSeverity === "warn" ? AlertTriangle : Info;
+    return (
+      <TooltipProvider>
+        {violations.map((v, i) => (
+          <Tooltip key={i}>
+            <TooltipTrigger asChild>
+              <span className={`inline-flex items-center gap-1 text-xs ${colorClass} cursor-help`}>
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                {v.message}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-xs">
+              <p className="font-medium">{v.message}</p>
+              <p className="text-muted-foreground text-xs mt-1">{v.fixSuggestion}</p>
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </TooltipProvider>
+    );
+  }
+
   return (
     <div className="p-6 max-w-4xl space-y-6">
       <div>
@@ -1482,6 +1584,36 @@ export default function ClaimWizard() {
               )}
             </div>
           )}
+
+          {/* T5: Real-time preflight violations summary */}
+          {preflightFactors.length > 0 && (
+            <div className={`rounded-lg border px-4 py-3 space-y-1.5 text-sm ${
+              preflightFactors.some(v => v.severity === "block")
+                ? "bg-red-50 dark:bg-red-950/20 border-red-300 dark:border-red-800"
+                : preflightFactors.some(v => v.severity === "warn")
+                ? "bg-yellow-50 dark:bg-yellow-950/20 border-yellow-300 dark:border-yellow-800"
+                : "bg-blue-50 dark:bg-blue-950/20 border-blue-300 dark:border-blue-800"
+            }`} data-testid="banner-preflight-violations">
+              <div className="font-medium flex items-center gap-1.5">
+                {preflightFactors.some(v => v.severity === "block")
+                  ? <XCircle className="h-4 w-4 text-destructive shrink-0" />
+                  : <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 shrink-0" />}
+                Preflight Issues ({preflightFactors.length})
+              </div>
+              {preflightFactors.slice(0, 4).map((v, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+                  <Badge variant="outline" className="text-[10px] h-4 shrink-0 mt-px">
+                    {RULE_TYPE_LABELS[v.ruleType] || v.ruleType}
+                  </Badge>
+                  {v.message}
+                </div>
+              ))}
+              {preflightFactors.length > 4 && (
+                <p className="text-xs text-muted-foreground">+{preflightFactors.length - 4} more (see Risk Review tab)</p>
+              )}
+            </div>
+          )}
+
           <Card>
             <CardHeader><CardTitle>Rendering Provider</CardTitle></CardHeader>
             <CardContent>
@@ -1520,6 +1652,7 @@ export default function ClaimWizard() {
                       <AlertCircle className="h-3 w-3" /> {serviceDateError}
                     </p>
                   )}
+                  <FieldViolationHint types={["date_sanity", "timely_filing"]} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Place of Service</Label>
@@ -1572,6 +1705,7 @@ export default function ClaimWizard() {
             <CardContent className="space-y-3">
               {step2Errors.icd10 && <p className="text-sm text-red-500" data-testid="error-icd10">{step2Errors.icd10}</p>}
               <ICD10Search label="Primary Diagnosis (required)" value={icd10Primary} onChange={(val) => { setIcd10Primary(val); setStep2Errors(prev => { const n = {...prev}; delete n.icd10; return n; }); }} testId="icd10-primary" />
+              <FieldViolationHint types={["data_quality"]} />
               {icd10Secondary.map((d, i) => (
                 <ICD10Search
                   key={i}
@@ -1847,62 +1981,95 @@ export default function ClaimWizard() {
                     {riskResult.readinessStatus}
                   </Badge>
                 </div>
-                {riskResult.factors.length > 0 && (
-                  <ul className="text-sm space-y-1 mt-2" data-testid="list-risk-factors">
-                    {riskResult.factors.map((f, i) => (
-                      <li key={i} className="flex items-center gap-2">
-                        <AlertTriangle className="h-3 w-3 text-amber-500 shrink-0" />
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {/* T6: grouped violations by severity */}
+                {riskResult.factors.length > 0 && (() => {
+                  const blocks = riskResult.factors.filter(f => f.severity === "block");
+                  const warns  = riskResult.factors.filter(f => f.severity === "warn");
+                  const infos  = riskResult.factors.filter(f => f.severity === "info");
+                  const Section = ({ items, icon: Icon, colorClass, label }: {
+                    items: RuleViolation[];
+                    icon: ComponentType<{ className?: string }>;
+                    colorClass: string;
+                    label: string;
+                  }) => items.length === 0 ? null : (
+                    <div className="mt-3" data-testid={`section-risk-${label.toLowerCase()}`}>
+                      <p className={`text-xs font-semibold uppercase tracking-wider mb-1.5 ${colorClass}`}>{label} ({items.length})</p>
+                      <div className="space-y-2">
+                        {items.map((v, i) => (
+                          <div key={i} className="rounded-md border p-2.5 text-sm space-y-1" data-testid={`risk-violation-${i}`}>
+                            <div className="flex items-start gap-2">
+                              <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${colorClass}`} />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-medium">{v.message}</span>
+                                  <Badge variant="outline" className="text-[10px] h-4 shrink-0">
+                                    {RULE_TYPE_LABELS[v.ruleType] || v.ruleType}
+                                  </Badge>
+                                  {v.payerSpecific && (
+                                    <Badge variant="outline" className="text-[10px] h-4 shrink-0 border-blue-400 text-blue-600">
+                                      Payer
+                                    </Badge>
+                                  )}
+                                </div>
+                                {v.fixSuggestion && (
+                                  <p className="text-xs text-muted-foreground italic mt-0.5">{v.fixSuggestion}</p>
+                                )}
+                              </div>
+                              {v.sourceQuote && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-2 text-[10px] shrink-0"
+                                  onClick={() => setSourceViewViolation(v)}
+                                  data-testid={`button-view-source-${i}`}
+                                >
+                                  View source
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                  return (
+                    <div data-testid="list-risk-factors">
+                      <Section items={blocks} icon={XCircle} colorClass="text-destructive" label="Blockers" />
+                      <Section items={warns}  icon={AlertTriangle} colorClass="text-yellow-600 dark:text-yellow-400" label="Warnings" />
+                      <Section items={infos}  icon={Info} colorClass="text-blue-500" label="Info" />
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           )}
 
-          {/* CCI Edit Conflicts Panel */}
+          {/* CCI Edit Conflicts Panel (backward-compat) */}
           {riskResult?.cciFactors && riskResult.cciFactors.length > 0 && (
             <Card className="border-2 border-orange-400 bg-orange-50/50 dark:bg-orange-950/20" data-testid="card-cci-panel">
               <CardContent className="pt-4">
                 <div className="flex items-center gap-2 mb-3">
                   <AlertTriangle className="h-5 w-5 text-orange-500 shrink-0" />
                   <div>
-                    <h3 className="font-semibold text-orange-700 dark:text-orange-400">
-                      CCI Edit Conflicts Detected
-                    </h3>
+                    <h3 className="font-semibold text-orange-700 dark:text-orange-400">CCI Edit Conflicts Detected</h3>
                     <p className="text-xs text-muted-foreground">
-                      CMS NCCI (National Correct Coding Initiative) flagged {riskResult.cciFactors.length} conflict{riskResult.cciFactors.length > 1 ? "s" : ""} on this claim.
+                      CMS NCCI flagged {riskResult.cciFactors.length} conflict{riskResult.cciFactors.length > 1 ? "s" : ""} on this claim.
                     </p>
                   </div>
                 </div>
                 <div className="space-y-2" data-testid="list-cci-conflicts">
                   {riskResult.cciFactors.map((cf, i) => (
-                    <div
-                      key={i}
-                      className={`rounded-md p-3 text-sm border ${
-                        cf.modifier_indicator === "0"
-                          ? "bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-700"
-                          : "bg-yellow-50 dark:bg-yellow-950/30 border-yellow-300 dark:border-yellow-700"
-                      }`}
-                      data-testid={`cci-conflict-${i}`}
-                    >
+                    <div key={i} className={`rounded-md p-3 text-sm border ${cf.modifier_indicator === "0" ? "bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-700" : "bg-yellow-50 dark:bg-yellow-950/30 border-yellow-300 dark:border-yellow-700"}`} data-testid={`cci-conflict-${i}`}>
                       <div className="flex items-center gap-2 mb-1">
-                        <Badge variant="outline" className={`text-xs font-mono ${cf.modifier_indicator === "0" ? "border-red-500 text-red-600" : "border-yellow-500 text-yellow-700"}`}>
-                          {cf.primary_code}
-                        </Badge>
+                        <Badge variant="outline" className={`text-xs font-mono ${cf.modifier_indicator === "0" ? "border-red-500 text-red-600" : "border-yellow-500 text-yellow-700"}`}>{cf.primary_code}</Badge>
                         <span className="text-muted-foreground">+</span>
-                        <Badge variant="outline" className={`text-xs font-mono ${cf.modifier_indicator === "0" ? "border-red-500 text-red-600" : "border-yellow-500 text-yellow-700"}`}>
-                          {cf.secondary_code}
-                        </Badge>
+                        <Badge variant="outline" className={`text-xs font-mono ${cf.modifier_indicator === "0" ? "border-red-500 text-red-600" : "border-yellow-500 text-yellow-700"}`}>{cf.secondary_code}</Badge>
                         <Badge className={`ml-auto text-xs ${cf.modifier_indicator === "0" ? "bg-red-600" : "bg-yellow-500"}`}>
                           {cf.modifier_indicator === "0" ? "Hard Block" : "Modifier Required"}
                         </Badge>
                       </div>
                       <p className="text-muted-foreground">{cf.message}</p>
-                      <p className="text-xs mt-1 font-medium">
-                        Fix: {cf.fix_suggestion}
-                      </p>
+                      <p className="text-xs mt-1 font-medium">Fix: {cf.fix_suggestion}</p>
                     </div>
                   ))}
                 </div>
@@ -1914,6 +2081,44 @@ export default function ClaimWizard() {
                 )}
               </CardContent>
             </Card>
+          )}
+
+          {/* T6: "View source" side panel for payer-specific violations */}
+          {sourceViewViolation && (
+            <Dialog open={!!sourceViewViolation} onOpenChange={() => setSourceViewViolation(null)}>
+              <DialogContent className="max-w-lg" data-testid="dialog-source-view">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    Payer Manual Reference
+                  </DialogTitle>
+                  <DialogDescription>
+                    Source quote from the payer's provider manual that triggered this rule.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="outline">{RULE_TYPE_LABELS[sourceViewViolation.ruleType] || sourceViewViolation.ruleType}</Badge>
+                    {sourceViewViolation.sourcePage && (
+                      <span className="text-xs text-muted-foreground">Page {sourceViewViolation.sourcePage}</span>
+                    )}
+                  </div>
+                  <p className="text-sm font-medium">{sourceViewViolation.message}</p>
+                  <blockquote className="border-l-4 border-primary pl-3 py-2 bg-muted/50 rounded text-sm text-muted-foreground italic leading-relaxed">
+                    {sourceViewViolation.sourceQuote}
+                  </blockquote>
+                  {sourceViewViolation.fixSuggestion && (
+                    <p className="text-sm text-muted-foreground">
+                      <span className="font-medium text-foreground">Fix: </span>
+                      {sourceViewViolation.fixSuggestion}
+                    </p>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setSourceViewViolation(null)} data-testid="button-close-source-view">Close</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           )}
 
           <Card>

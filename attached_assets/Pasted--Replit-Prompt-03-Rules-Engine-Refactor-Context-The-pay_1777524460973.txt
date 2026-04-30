@@ -1,0 +1,246 @@
+# Replit Prompt 03 — Rules Engine Refactor
+
+## Context
+
+The payer manual ingestion pipeline now produces structured rules data in `payer_manual_extractions` (timely filing, prior auth, modifiers, appeals) plus the new `cci_edits` table from Prompt 2.
+
+But the existing wizard and risk engine still hardcode payer logic. The risk engine returns 0/100 GREEN on claims that have real problems (we caught this multiple times this week — future-dated services, duplicate diagnoses, etc.). The wizard validates fields-present but not payer-specific requirements.
+
+This prompt refactors the existing risk engine and wizard validation to query the rules tables instead of hardcoded logic. After this lands, every existing feature gets sharper because the rules database powers it.
+
+This is the most architecturally significant prompt in the sequence. It's also the one with the most risk of breaking existing functionality. Take it carefully.
+
+## Standing constraints
+
+- No live Stedi submissions during verification
+- Commit messages must include verification queries WITH their actual results  
+- All schema migrations must be idempotent
+- Breaking changes to existing endpoints require explicit approval before shipping
+
+## Tasks
+
+### Task 1 — Rules query service
+
+Create `server/services/rules-engine.ts` that exposes a clean interface for querying rules:
+
+```typescript
+interface ClaimContext {
+  claimId: string;
+  organizationId: string;
+  patientId: string;
+  payerId: string;
+  payerName: string;
+  planProduct: 'HMO' | 'PPO' | 'POS' | 'EPO' | 'Indemnity' | 'unknown' | null;
+  serviceDate: Date;
+  cptCodes: string[];
+  hcpcsCodes: string[];
+  icd10Primary: string;
+  icd10Secondary: string[];
+  modifiers: string[][];  // per service line
+  totalAmount: number;
+  authorizationNumber: string | null;
+  placeOfService: string;
+}
+
+interface RuleViolation {
+  ruleType: 'timely_filing' | 'prior_auth' | 'modifier' | 'appeals' | 'cci_edit' | 'plan_product_mismatch' | 'date_sanity' | 'data_quality';
+  severity: 'block' | 'warn' | 'info';
+  message: string;
+  fixSuggestion: string;
+  ruleId: string | null;  // payer_manual_extractions.id or cci_edits.id
+  sourcePage: number | null;
+  sourceQuote: string | null;
+  payerSpecific: boolean;
+}
+
+export async function evaluateClaim(claim: ClaimContext): Promise<RuleViolation[]>
+```
+
+The service queries:
+- `payer_manual_extractions` filtered by `payer_id`, `status='approved'`, optionally by `applies_to_plan_products` containing the claim's plan_product
+- `cci_edits` filtered by the claim's CPT/HCPCS codes
+- A new internal "sanity rules" set for date logic, duplicate diagnoses, etc. (see Task 3)
+
+Returns the full list of violations. No grouping, no scoring — just the raw violation set. The risk engine's job (Task 2) is to score them.
+
+### Task 2 — Risk engine refactor
+
+The existing risk engine (currently returning 0/100 GREEN on bad claims) needs to be replaced with one that:
+
+1. Calls `evaluateClaim()` from the rules engine
+2. Aggregates violations into a score:
+   - Each `block` severity violation: +40 risk points
+   - Each `warn` severity violation: +15 risk points
+   - Each `info` severity violation: +5 risk points
+3. Maps the total to a status:
+   - 0-30: GREEN
+   - 31-70: YELLOW
+   - 71+: RED
+4. Returns the violations array as `factors` so the UI can display them
+
+Keep the existing endpoint contract:
+
+```
+POST /api/billing/claims/:claimId/risk
+Response: {
+  riskScore: number,
+  readinessStatus: 'GREEN' | 'YELLOW' | 'RED',
+  factors: RuleViolation[]
+}
+```
+
+This means existing UI consumers don't have to change immediately. New UI work in Task 5 takes advantage of the richer factor data.
+
+### Task 3 — Sanity rules
+
+Add internal rules that don't come from payer manuals — basic data quality checks that should always fire. Implement these as code (not DB rows):
+
+**Date sanity:**
+- Service date in the future → BLOCK
+- Service date more than 365 days in past → WARN
+- DOB after service date → BLOCK
+- Service date older than payer's timely filing days → BLOCK (this one queries the rules table for the value)
+- Service date within 30 days of timely filing deadline → WARN
+
+**Diagnosis sanity:**
+- Duplicate diagnosis codes (same code as primary AND secondary) → BLOCK
+- Empty diagnosis → BLOCK
+- Diagnosis code format invalid (not matching ICD-10 pattern) → BLOCK
+
+**Service line sanity:**
+- Empty service lines → BLOCK
+- Charge of $0 → WARN (might be legitimate but unusual)
+- Units > 999 → WARN (data entry error suspected)
+- HCPCS/CPT code format invalid → BLOCK
+
+**Patient/insurance sanity:**
+- No member ID → BLOCK
+- Member ID has obvious test patterns (TEST, ZZZ, all zeros) → BLOCK in production, allowed in test mode
+- Patient address state-zip mismatch → WARN
+- Plan product = 'unknown' or NULL on HMO-suspect payer (Aetna, Kaiser, Molina, etc.) → WARN with prompt to specify
+
+These should run on every risk evaluation, regardless of which payer.
+
+### Task 4 — Wizard real-time validation
+
+Currently the wizard runs validation on step transitions (Step 2 → Step 3). Add real-time validation as the user types/changes fields, but throttled (debounce 500ms after last change).
+
+When the user enters a CPT code, the wizard:
+1. Calls a lightweight pre-flight rules check: `POST /api/billing/claims/preflight` with the partial claim data
+2. Receives any violations triggered so far
+3. Surfaces violations inline next to the relevant field
+
+Visual treatment:
+- Red border + icon for BLOCK-level violations
+- Amber border + icon for WARN-level
+- Blue info icon for INFO-level
+- Tooltip on the icon shows the violation message + fix suggestion
+
+This is what Rosemary will recognize as "the system caught it before submission" — the moment that distinguishes ClaimShield from anything CollaborateMD does.
+
+Field-level violations to surface inline:
+- Service date: future/past warnings, timely filing
+- Diagnosis codes: duplicates, format
+- CPT codes: CCI conflicts as you add additional service lines
+- Member ID: test patterns
+- Plan product dropdown: HMO-suspect payer warning
+
+### Task 5 — Risk panel UI
+
+The Risk Readiness panel on Step 3 currently shows score and status. Expand it to:
+
+- Show the score and status badge as before
+- Below the badge, list each violation with:
+  - Severity icon (red/amber/blue)
+  - Rule type badge ("Timely Filing" / "Prior Auth" / "CCI Edit" / etc.)
+  - Message
+  - Fix suggestion in italics
+  - "View source" link if `ruleId` is non-null — opens a side panel showing the raw quote from the manual and source page reference
+  - "Payer-specific" badge if `payerSpecific = true`
+
+Group violations by severity: Blockers first, warnings second, info last.
+
+If status is GREEN with zero factors, show a confident message:
+> "Claim looks clean. All payer rules satisfied. Ready to submit."
+
+If status is GREEN with info-only factors:
+> "Claim looks clean. Some informational notes — review before submitting."
+
+This panel becomes the centerpiece of the May 12 demo. It's where the rules engine becomes visible to the user.
+
+### Task 6 — API endpoint for preflight
+
+```
+POST /api/billing/claims/preflight
+Body: ClaimContext (partial — fields may be missing as user types)
+Response: { factors: RuleViolation[] }
+```
+
+This is called by the wizard for real-time validation. It should be fast (< 200ms) — the rules engine queries should be optimized with proper indexes.
+
+If a claim ID is in the body, persist the violations to the claim record so they can be inspected later (helpful for debugging "why did this claim show YELLOW yesterday but GREEN today?"). Use a new column:
+
+```sql
+ALTER TABLE claims 
+ADD COLUMN IF NOT EXISTS last_risk_evaluation_at TIMESTAMP,
+ADD COLUMN IF NOT EXISTS last_risk_factors JSONB;
+```
+
+### Task 7 — Verification queries
+
+After deploy, run against `PRODUCTION_READONLY_DATABASE_URL` and include results:
+
+```sql
+-- New columns exist
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'claims' 
+  AND column_name IN ('last_risk_evaluation_at', 'last_risk_factors');
+
+-- How many approved rules are queryable
+SELECT 
+  section_type, 
+  COUNT(*) AS approved_rules 
+FROM payer_manual_extractions 
+WHERE review_status = 'approved' 
+GROUP BY section_type;
+
+-- Test the rules engine logic by querying for a known scenario
+-- (Pick a Chajinel claim and confirm the rules engine returns expected violations)
+```
+
+Then run a manual test: 
+1. Build a claim with service date = today + 1 day → confirm BLOCK
+2. Build a claim with duplicate primary/secondary diagnosis → confirm BLOCK
+3. Build a claim that's 100 days old, payer with 90-day timely filing → confirm BLOCK with specific timely filing message including source page
+4. Build a clean claim → confirm GREEN with zero factors
+
+Include the output of each test in the commit message.
+
+## Acceptance
+
+- `rules-engine.ts` service exists with the documented interface
+- Risk engine refactored to use rules engine; existing endpoint contract preserved
+- Sanity rules from Task 3 all fire correctly (verified with manual test scenarios)
+- Real-time wizard validation surfaces violations inline as user types
+- Risk panel shows grouped violations with source attribution
+- `last_risk_evaluation_at` and `last_risk_factors` columns added
+- All four manual test scenarios in Task 7 produce expected results
+
+## What NOT to do in this prompt
+
+- Do not yet wire any agent (Timely Filing Guardian, Prior Auth Agent, etc.) to the rules engine. That's Prompt 4.
+- Do not change the EDI generation logic. The rules engine is for pre-submission validation, not envelope construction.
+- Do not auto-fix violations. The system surfaces; the human decides.
+- Do not delete the old hardcoded validation logic until you've confirmed the new rules engine catches everything the old logic caught. Keep both running for one deploy cycle as a safety net, then remove the old logic in a follow-up.
+
+## Output expected from Replit
+
+1. List of files modified
+2. SQL migration with rollback
+3. Verification query results from Task 7
+4. Screenshots:
+   - Risk panel with multiple violations grouped by severity
+   - Wizard with inline real-time validation visible (red border on a field)
+   - "View source" panel showing raw quote from a payer manual
+5. Manual test results from Task 7 (all 4 scenarios with actual rules engine output)

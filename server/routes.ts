@@ -1141,6 +1141,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await seederLog('column', 'claims', 'last_test_correlation_id');
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_correlation_id VARCHAR`).catch(() => {});
 
+    // Rules engine evaluation audit columns (Task 6 from Prompt 03)
+    await seederLog('column', 'claims', 'last_risk_evaluation_at');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_risk_evaluation_at TIMESTAMP`).catch(() => {});
+    await seederLog('column', 'claims', 'last_risk_factors');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_risk_factors JSONB`).catch(() => {});
+
     // ── Section 1: payer enrollment status columns ────────────────────────────
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_status_835 VARCHAR DEFAULT 'not_enrolled'`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_status_837 VARCHAR DEFAULT 'not_enrolled'`);
@@ -3105,6 +3111,56 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // ── Preflight rules check (real-time wizard validation) ─────────────────────
+  // MUST be registered before /:id routes to avoid route collision
+  app.post("/api/billing/claims/preflight", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const { evaluateClaim } = await import("./services/rules-engine");
+      const b = req.body || {};
+
+      const ctx = {
+        claimId: b.claimId || undefined,
+        organizationId: (req.user as any)?.organization_id || b.organizationId || "",
+        patientId: b.patientId || "",
+        payerId: b.payerId || null,
+        payerName: b.payerName || "",
+        planProduct: b.planProduct || null,
+        serviceDate: b.serviceDate ? new Date(b.serviceDate) : null,
+        serviceLines: (b.serviceLines || []).map((sl: any) => ({
+          code: (sl.hcpcs_code || sl.code || "").trim(),
+          modifier: sl.modifier || "",
+          units: parseFloat(sl.units) || 0,
+          totalCharge: parseFloat(sl.totalCharge || sl.total_charge) || 0,
+        })),
+        icd10Primary: b.icd10Primary || "",
+        icd10Secondary: Array.isArray(b.icd10Secondary) ? b.icd10Secondary : [],
+        authorizationNumber: b.authorizationNumber || null,
+        placeOfService: b.placeOfService || "11",
+        memberId: b.memberId || null,
+        patientDob: b.patientDob ? new Date(b.patientDob) : null,
+        patientFirstName: b.patientFirstName || null,
+        patientLastName: b.patientLastName || null,
+        testMode: b.testMode === true,
+      };
+
+      const factors = await evaluateClaim(ctx);
+
+      // Persist if claimId is provided
+      if (b.claimId) {
+        const db = await import("./db").then(m => m.pool);
+        await db.query(
+          `UPDATE claims SET last_risk_evaluation_at = NOW(), last_risk_factors = $1 WHERE id = $2`,
+          [JSON.stringify(factors), b.claimId]
+        ).catch(() => {});
+      }
+
+      res.json({ factors });
+    } catch (err: any) {
+      console.error('[API] Preflight error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.patch("/api/billing/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
@@ -3214,6 +3270,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/billing/claims/:id/risk", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
+      const { evaluateClaim, scoreViolations } = await import("./services/rules-engine");
+
       const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
       if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
       const claim = claimResult.rows[0];
@@ -3225,142 +3283,89 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       const patient = patientResult.rows[0];
 
-      let score = 0;
-      const factors: string[] = [];
+      const rawServiceLines: any[] = claim.service_lines || [];
+      const serviceLines = rawServiceLines.map((sl: any) => ({
+        code: (sl.hcpcs_code || sl.code || "").trim(),
+        modifier: sl.modifier || "",
+        units: parseFloat(sl.units) || 0,
+        totalCharge: parseFloat(sl.totalCharge || sl.total_charge) || 0,
+      }));
 
-      if (!patient?.first_name || !patient?.last_name) { score += 15; factors.push("Patient name incomplete"); }
-      if (!patient?.dob) { score += 10; factors.push("Patient DOB missing"); }
-      if (!patient?.insurance_carrier) { score += 20; factors.push("No insurance carrier"); }
-      if (!patient?.member_id) { score += 15; factors.push("No member ID"); }
-      if (!patient?.vob_verified) { score += 10; factors.push("VOB not verified"); }
-      if (!claim.authorization_number) {
-        const payer = await db.query("SELECT auth_required FROM payers WHERE name = $1 OR id = $2", [claim.payer, claim.payer_id]);
-        if (payer.rows[0]?.auth_required) { score += 15; factors.push("Authorization required but missing"); }
+      const ctx = {
+        claimId: claim.id,
+        organizationId: claim.organization_id,
+        patientId: claim.patient_id,
+        payerId: claim.payer_id || null,
+        payerName: claim.payer || "",
+        planProduct: (claim.plan_product || patient?.plan_product || null) as any,
+        serviceDate: claim.service_date ? new Date(claim.service_date) : null,
+        serviceLines,
+        icd10Primary: claim.icd10_primary || "",
+        icd10Secondary: Array.isArray(claim.icd10_secondary) ? claim.icd10_secondary : [],
+        authorizationNumber: claim.authorization_number || null,
+        placeOfService: claim.place_of_service || "11",
+        memberId: patient?.member_id || null,
+        patientDob: patient?.dob ? new Date(patient.dob) : null,
+        patientFirstName: patient?.first_name || null,
+        patientLastName: patient?.last_name || null,
+        testMode: false,
+      };
+
+      const violations = await evaluateClaim(ctx);
+      const { riskScore, readinessStatus } = scoreViolations(violations);
+
+      // Legacy compat: also add VOB + charge_overridden as info factors
+      const legacyFactors: any[] = [];
+      if (!patient?.vob_verified) {
+        legacyFactors.push({
+          ruleType: "data_quality", severity: "info",
+          message: "Benefits (VOB) not yet verified for this patient.",
+          fixSuggestion: "Run insurance verification before submitting.",
+          ruleId: null, sourcePage: null, sourceQuote: null, payerSpecific: false,
+        });
       }
-      if (!claim.icd10_primary) { score += 20; factors.push("Primary diagnosis missing"); }
-      const serviceLines = claim.service_lines || [];
-      if (serviceLines.length === 0) { score += 20; factors.push("No service lines"); }
-      if (claim.charge_overridden) { score += 5; factors.push("Charge manually overridden"); }
-
-      // ── Duplicate diagnosis code check ───────────────────────────────────────
-      const allDx: string[] = [];
-      if (claim.icd10_primary) allDx.push(claim.icd10_primary.trim().toUpperCase());
-      if (Array.isArray(claim.icd10_secondary)) {
-        for (const code of claim.icd10_secondary) {
-          if (code) allDx.push(code.trim().toUpperCase());
-        }
-      }
-      if (allDx.length > new Set(allDx).size) {
-        const dupes = allDx.filter((c, i) => allDx.indexOf(c) !== i);
-        score += 40;
-        factors.push(`Duplicate diagnosis code(s): ${[...new Set(dupes)].join(", ")} — payers reject claims with repeated diagnosis codes`);
-      }
-
-      // ── Service date checks ──────────────────────────────────────────────────
-      const serviceDate = claim.service_date;
-      if (serviceDate) {
-        const svcTime = new Date(serviceDate).getTime();
-        const now = Date.now();
-        const daysSince = Math.floor((now - svcTime) / 86400000);
-
-        if (daysSince < 0) {
-          // Future-dated — payers always reject
-          score += 60;
-          factors.push(`Service date is ${Math.abs(daysSince)} day(s) in the future — payers reject future-dated claims`);
-        } else {
-          const payerResult = await db.query("SELECT timely_filing_days FROM payers WHERE name = $1 OR id = $2", [claim.payer, claim.payer_id]);
-          const filingLimit = payerResult.rows[0]?.timely_filing_days || 365;
-          const daysRemaining = filingLimit - daysSince;
-          if (daysRemaining < 0) {
-            score += 40;
-            factors.push(`Service date is ${daysSince} days ago — past the ${filingLimit}-day timely filing limit`);
-          } else if (daysRemaining <= 30) {
-            score += 20;
-            factors.push(`Filing deadline in ${daysRemaining} day(s) — submit immediately (${filingLimit}-day limit)`);
-          } else if (daysSince > filingLimit * 0.8) {
-            score += 10;
-            factors.push(`Service date ${daysSince} days ago — approaching ${filingLimit}-day filing limit`);
-          }
-        }
-
-        // DOB sanity: patient should have been born before the service date
-        if (patient?.dob) {
-          const dobTime = new Date(patient.dob).getTime();
-          if (dobTime > svcTime) {
-            score += 20;
-            factors.push("Patient date of birth is after the service date — possible data entry error");
-          }
-        }
+      if (claim.charge_overridden) {
+        legacyFactors.push({
+          ruleType: "data_quality", severity: "info",
+          message: "Charge amount was manually overridden — ensure it matches your fee schedule.",
+          fixSuggestion: "Confirm the charge is correct before submitting.",
+          ruleId: null, sourcePage: null, sourceQuote: null, payerSpecific: false,
+        });
       }
 
-      // ── CCI Edit conflict check ──────────────────────────────────────────────
-      const cciFactors: any[] = [];
-      if (serviceLines.length >= 2) {
-        const codes = serviceLines
-          .map((sl: any) => (sl.hcpcs_code || sl.code || "").trim().toUpperCase())
-          .filter(Boolean);
-        if (codes.length >= 2) {
-          const cciResult = await db.query(`
-            SELECT column_1_code, column_2_code, modifier_indicator, ptp_edit_rationale
-            FROM cci_edits
-            WHERE deletion_date IS NULL
-              AND ncci_version = (SELECT MAX(ncci_version) FROM cci_edits WHERE TRUE)
-              AND column_1_code = ANY($1)
-              AND column_2_code = ANY($1)
-              AND modifier_indicator != '9'
-          `, [codes]);
+      const allFactors = [...violations, ...legacyFactors];
+      const finalScore = Math.min(riskScore + legacyFactors.length * 5, 100);
+      const finalStatus: "GREEN" | "YELLOW" | "RED" =
+        finalScore >= 71 ? "RED" : finalScore >= 31 ? "YELLOW" : "GREEN";
 
-          for (const conflict of cciResult.rows) {
-            const { column_1_code, column_2_code, modifier_indicator, ptp_edit_rationale } = conflict;
-            // Check whether the component code already has an unbundling modifier
-            const compLine = serviceLines.find(
-              (sl: any) => (sl.hcpcs_code || sl.code || "").toUpperCase() === column_2_code
-            );
-            const hasUnbundlingModifier = compLine?.modifier &&
-              ["59", "XE", "XS", "XP", "XU"].some((m) =>
-                compLine.modifier.toUpperCase().split(/[\s,]+/).includes(m)
-              );
-
-            if (modifier_indicator === "0") {
-              score += 100;
-              factors.push(`CCI hard block: ${column_1_code} and ${column_2_code} cannot be billed together — CMS bundles ${column_2_code} into ${column_1_code}. Remove one before submitting.`);
-              cciFactors.push({
-                type: "cci_edit",
-                severity: "high",
-                primary_code: column_1_code,
-                secondary_code: column_2_code,
-                modifier_indicator: "0",
-                message: `${column_1_code} and ${column_2_code} are an incompatible pair (hard block). ${ptp_edit_rationale || ""}`,
-                fix_suggestion: `Remove ${column_2_code} from the claim`,
-              });
-            } else if (modifier_indicator === "1" && !hasUnbundlingModifier) {
-              score += 30;
-              factors.push(`CCI soft warning: ${column_1_code} and ${column_2_code} are normally bundled. Add an unbundling modifier (59, XE, XS, XP, or XU) to ${column_2_code} to bill separately.`);
-              cciFactors.push({
-                type: "cci_edit",
-                severity: "medium",
-                primary_code: column_1_code,
-                secondary_code: column_2_code,
-                modifier_indicator: "1",
-                message: `${column_1_code} and ${column_2_code} are typically bundled. ${ptp_edit_rationale || ""}`,
-                fix_suggestion: `Add modifier 59 (or XE/XS/XP/XU) to ${column_2_code}`,
-              });
-            }
-          }
-        }
-      }
-
-      const riskScore = Math.min(score, 100);
-      const readinessStatus = riskScore >= 60 ? "RED" : riskScore >= 30 ? "YELLOW" : "GREEN";
+      // Derive backward-compat cciFactors for existing wizard UI
+      const cciFactors = allFactors
+        .filter((v) => v.ruleType === "cci_edit")
+        .map((v) => ({
+          type: "cci_edit",
+          severity: v.severity === "block" ? "high" : "medium",
+          message: v.message,
+          fix_suggestion: v.fixSuggestion,
+          modifier_indicator: v.message.includes("hard block") ? "0" : "1",
+          primary_code: v.message.match(/([A-Z0-9]{4,7}) and/i)?.[1] || "",
+          secondary_code: v.message.match(/and ([A-Z0-9]{4,7})/i)?.[1] || "",
+        }));
 
       await db.query(
-        "UPDATE claims SET risk_score = $1, readiness_status = $2, updated_at = NOW() WHERE id = $3",
-        [riskScore, readinessStatus, req.params.id]
+        `UPDATE claims SET
+           risk_score = $1,
+           readiness_status = $2,
+           last_risk_evaluation_at = NOW(),
+           last_risk_factors = $3,
+           updated_at = NOW()
+         WHERE id = $4`,
+        [finalScore, finalStatus, JSON.stringify(allFactors), req.params.id]
       );
 
-      res.json({ riskScore, readinessStatus, factors, cciFactors });
+      res.json({ riskScore: finalScore, readinessStatus: finalStatus, factors: allFactors, cciFactors });
     } catch (err: any) {
-      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+      console.error('[API] Risk engine error:', err);
+      res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
