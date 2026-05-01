@@ -2973,6 +2973,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_icd10_codes_description ON icd10_codes USING gin(to_tsvector('english', description))`).catch(() => {});
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_nurture_sequences_org  ON nurture_sequences(organization_id)`).catch(() => {});
 
+    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS engagement_halted BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+    await pool.query(`ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS halted_at TIMESTAMPTZ`).catch(() => {});
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -8029,6 +8031,71 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
     
     res.json(updatedPatient);
+  });
+
+  // ── Halt all engagement for a lead ────────────────────────────────────────
+  app.post("/api/leads/:id/halt-engagement", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const orgId = getOrgId(req);
+      const leadCheck = await pool.query(
+        `SELECT id FROM leads WHERE id = $1 AND organization_id = $2`,
+        [id, orgId]
+      );
+      if (!leadCheck.rows.length) return res.status(404).json({ error: "Lead not found" });
+
+      await pool.query(
+        `UPDATE leads SET engagement_halted = true, consent_to_call = false WHERE id = $1`,
+        [id]
+      );
+      const haltedCount = await pool.query(
+        `UPDATE flow_runs SET status = 'halted', halted_at = NOW(), updated_at = NOW()
+         WHERE lead_id = $1 AND status IN ('running', 'paused')
+         RETURNING id`,
+        [id]
+      );
+      await pool.query(
+        `UPDATE comm_locks SET released_at = NOW()
+         WHERE lead_id = $1 AND released_at IS NULL`,
+        [id]
+      );
+      await pool.query(
+        `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+         VALUES ($1, 'engagement_halted', $2, NOW(), $3)`,
+        [id, `All engagement halted by staff. ${haltedCount.rowCount} active flow run(s) stopped.`, orgId]
+      );
+      res.json({ success: true, flowRunsHalted: haltedCount.rowCount });
+    } catch (err: any) {
+      console.error("[API] halt-engagement error:", err);
+      res.status(500).json({ error: "Failed to halt engagement" });
+    }
+  });
+
+  // ── Resume engagement for a lead ───────────────────────────────────────────
+  app.post("/api/leads/:id/resume-engagement", requireRole("admin", "intake"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const orgId = getOrgId(req);
+      const leadCheck = await pool.query(
+        `SELECT id FROM leads WHERE id = $1 AND organization_id = $2`,
+        [id, orgId]
+      );
+      if (!leadCheck.rows.length) return res.status(404).json({ error: "Lead not found" });
+
+      await pool.query(
+        `UPDATE leads SET engagement_halted = false, consent_to_call = true WHERE id = $1`,
+        [id]
+      );
+      await pool.query(
+        `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+         VALUES ($1, 'engagement_resumed', 'Engagement resumed by staff — lead can be re-enrolled in flows', NOW(), $2)`,
+        [id, orgId]
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[API] resume-engagement error:", err);
+      res.status(500).json({ error: "Failed to resume engagement" });
+    }
   });
 
   app.post("/api/leads/:id/convert-to-patient", requireRole("admin", "intake"), async (req, res) => {

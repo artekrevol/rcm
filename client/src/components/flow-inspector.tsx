@@ -24,6 +24,8 @@ import {
   AlertTriangle,
   ChevronDown,
   RotateCcw,
+  OctagonX,
+  ShieldCheck,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -39,7 +41,7 @@ interface FlowRunEvent {
 
 interface FlowRun {
   id: string;
-  status: "running" | "paused" | "completed" | "failed";
+  status: "running" | "paused" | "completed" | "failed" | "halted";
   current_step_index: number;
   next_action_at: string | null;
   started_at: string;
@@ -156,6 +158,7 @@ const STATUS_ICON: Record<string, React.ReactNode> = {
   paused: <PauseCircle className="h-4 w-4 text-amber-500" />,
   completed: <CheckCircle2 className="h-4 w-4 text-emerald-500" />,
   failed: <XCircle className="h-4 w-4 text-red-500" />,
+  halted: <OctagonX className="h-4 w-4 text-rose-600" />,
 };
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
@@ -163,6 +166,7 @@ const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "dest
   paused: "secondary",
   completed: "outline",
   failed: "destructive",
+  halted: "destructive",
 };
 
 const EVENT_ICON: Record<string, React.ReactNode> = {
@@ -224,9 +228,18 @@ function FailureGroupRow({ group }: { group: FailureGroup }) {
   );
 }
 
-export function FlowInspector({ leadId }: { leadId: string }) {
+export function FlowInspector({
+  leadId,
+  engagementHalted = false,
+  onHaltChange,
+}: {
+  leadId: string;
+  engagementHalted?: boolean;
+  onHaltChange?: () => void;
+}) {
   const { toast } = useToast();
   const [selectedFlowId, setSelectedFlowId] = useState<string>("");
+  const [haltConfirmOpen, setHaltConfirmOpen] = useState(false);
 
   const { data: runs, isLoading: runsLoading } = useQuery<FlowRun[]>({
     queryKey: ["/api/leads", leadId, "flow-runs"],
@@ -279,6 +292,40 @@ export function FlowInspector({ leadId }: { leadId: string }) {
     },
   });
 
+  const haltMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/leads/${leadId}/halt-engagement`, {}),
+    onSuccess: () => {
+      toast({
+        title: "Engagement halted",
+        description: "All active flows stopped. No calls, SMS, or emails will be sent to this lead.",
+        variant: "destructive",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", leadId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", leadId, "flow-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", leadId, "activity"] });
+      onHaltChange?.();
+      setHaltConfirmOpen(false);
+    },
+    onError: () => {
+      toast({ title: "Failed to halt engagement", variant: "destructive" });
+      setHaltConfirmOpen(false);
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: () => apiRequest("POST", `/api/leads/${leadId}/resume-engagement`, {}),
+    onSuccess: () => {
+      toast({ title: "Engagement resumed", description: "This lead can now be re-enrolled in flows." });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", leadId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", leadId, "flow-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/leads", leadId, "activity"] });
+      onHaltChange?.();
+    },
+    onError: () => {
+      toast({ title: "Failed to resume engagement", variant: "destructive" });
+    },
+  });
+
   if (runsLoading) {
     return (
       <div className="p-6 space-y-3">
@@ -293,19 +340,50 @@ export function FlowInspector({ leadId }: { leadId: string }) {
 
   return (
     <div className="space-y-4 p-1">
+      {/* Engagement halted banner */}
+      {engagementHalted && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 px-4 py-3">
+          <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400">
+            <OctagonX className="h-4 w-4 shrink-0" />
+            <span className="text-sm font-semibold">All engagement halted</span>
+            <span className="text-xs font-normal">— no calls, SMS, or emails will be sent</span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1.5 text-xs border-rose-300 dark:border-rose-700 text-rose-700 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/30 shrink-0"
+            onClick={() => resumeMutation.mutate()}
+            disabled={resumeMutation.isPending}
+            data-testid="button-resume-engagement"
+          >
+            {resumeMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ShieldCheck className="h-3 w-3" />
+            )}
+            Resume Engagement
+          </Button>
+        </div>
+      )}
+
       {/* Manual trigger panel */}
       <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
         <div className="flex items-center gap-2">
           <Zap className="h-4 w-4 text-primary" />
           <span className="text-sm font-semibold">Enroll in Flow</span>
-          {hasActiveRun && (
+          {hasActiveRun && !engagementHalted && (
             <Badge variant="secondary" className="ml-auto text-xs flex items-center gap-1">
               <Activity className="h-3 w-3" /> Flow running
             </Badge>
           )}
         </div>
 
-        {hasActiveRun ? (
+        {engagementHalted ? (
+          <div className="flex items-start gap-2 text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 rounded-md p-3">
+            <OctagonX className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>Engagement is halted for this lead. Resume engagement above before enrolling in a new flow.</span>
+          </div>
+        ) : hasActiveRun ? (
           <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md p-3">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             <span>This lead is already enrolled in an active flow. It cannot be re-enrolled until the current run completes.</span>
@@ -330,7 +408,7 @@ export function FlowInspector({ leadId }: { leadId: string }) {
               size="sm"
               className="h-8 gap-1.5 text-xs"
               onClick={() => triggerMutation.mutate()}
-              disabled={triggerMutation.isPending}
+              disabled={triggerMutation.isPending || engagementHalted}
               data-testid="button-start-flow"
             >
               {triggerMutation.isPending ? (
@@ -344,7 +422,62 @@ export function FlowInspector({ leadId }: { leadId: string }) {
             </Button>
           </div>
         )}
+
+        {/* Halt engagement button — always shown when not halted */}
+        {!engagementHalted && (
+          <div className="pt-1 border-t border-border/50">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1.5 text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 hover:text-rose-700 w-full justify-start"
+              onClick={() => setHaltConfirmOpen(true)}
+              data-testid="button-halt-engagement"
+            >
+              <OctagonX className="h-3 w-3" />
+              Halt All Engagement
+            </Button>
+          </div>
+        )}
       </div>
+
+      {/* Halt confirmation dialog */}
+      {haltConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-background border rounded-xl shadow-xl p-6 max-w-sm w-full mx-4 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center shrink-0">
+                <OctagonX className="h-5 w-5 text-rose-600 dark:text-rose-400" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">Halt All Engagement?</p>
+                <p className="text-xs text-muted-foreground mt-0.5">This will immediately stop all active flows and block future calls, SMS, and emails for this lead.</p>
+              </div>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setHaltConfirmOpen(false)}
+                disabled={haltMutation.isPending}
+                data-testid="button-halt-cancel"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                className="bg-rose-600 hover:bg-rose-700 text-white gap-1.5"
+                onClick={() => haltMutation.mutate()}
+                disabled={haltMutation.isPending}
+                data-testid="button-halt-confirm"
+              >
+                {haltMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <OctagonX className="h-3 w-3" />}
+                Yes, Halt Engagement
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
 
       {/* Flow run history */}
       {(!runs || runs.length === 0) ? (

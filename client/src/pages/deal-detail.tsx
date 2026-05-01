@@ -60,6 +60,7 @@ import {
   RefreshCw,
   Send,
   UserPlus,
+  OctagonX,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -401,6 +402,16 @@ export default function DealDetailPage() {
                 <h1 className="text-xl font-semibold">{lead.name}</h1>
                 <LeadStatusBadge status={lead.status} />
                 <PriorityBadge priority={lead.priority || "P2"} />
+                {lead.engagementHalted && (
+                  <Badge
+                    variant="outline"
+                    className="bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 border-rose-300 dark:border-rose-700 flex items-center gap-1"
+                    data-testid="badge-engagement-halted"
+                  >
+                    <OctagonX className="h-3 w-3" />
+                    Do Not Contact
+                  </Badge>
+                )}
                 {/* Claim Risk Preview Badge */}
                 <Badge 
                   variant="outline" 
@@ -1111,7 +1122,14 @@ export default function DealDetailPage() {
         </TabsContent>
 
         <TabsContent value="flow">
-          <FlowInspector leadId={lead.id} />
+          <FlowInspector
+            leadId={lead.id}
+            engagementHalted={lead.engagementHalted ?? false}
+            onHaltChange={() => {
+              queryClient.invalidateQueries({ queryKey: ["/api/leads", id] });
+              queryClient.invalidateQueries({ queryKey: ["/api/leads", id, "activity"] });
+            }}
+          />
         </TabsContent>
       </Tabs>
 

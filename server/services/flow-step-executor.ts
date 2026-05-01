@@ -222,6 +222,22 @@ export async function executeStep(
     }
     const lead = leadResult.rows[0];
 
+    // ── Engagement halt guard ─────────────────────────────────────────────────
+    // Staff can manually halt all future engagement for a lead. This check runs
+    // before EVERY step type so no channel (call/SMS/email) can slip through.
+    if (lead.engagement_halted === true) {
+      await pool.query(
+        `UPDATE flow_runs SET status = 'halted', halted_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND status = 'running'`,
+        [flowRunId]
+      );
+      await logFlowEvent(flowRunId, "flow_halted", {
+        reason: "Lead engagement_halted flag is set — all steps blocked",
+      });
+      console.warn(`[flow-step-executor] Flow run ${flowRunId} halted — lead ${leadId} has engagement_halted=true`);
+      return;
+    }
+
     const firstName = lead.first_name || lead.name?.split(" ")[0] || "";
     const state = lead.state || "";
     const templateVars = {

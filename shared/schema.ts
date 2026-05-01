@@ -49,6 +49,7 @@ export const leads = pgTable("leads", {
   bestTimeToCall: text("best_time_to_call"),
   notes: text("notes"),
   consentToCall: boolean("consent_to_call").notNull().default(true),
+  engagementHalted: boolean("engagement_halted").notNull().default(false),
   ownerUserId: varchar("owner_user_id"),
   organizationId: varchar("organization_id"),
   handoffStatus: text("handoff_status").notNull().default("not_sent"),
