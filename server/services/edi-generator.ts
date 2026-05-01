@@ -244,7 +244,11 @@ export function generate837P(input: EDI837PInput): string {
       ? line.modifier.split(",").map(m => m.trim()).filter(m => m.length === 2)
       : [];
     const composite = ["HC", line.hcpcs_code, ...modifiers].join(":");
-    const ptrMap: Record<string, string> = { 'A': '1', 'B': '2', 'C': '3', 'D': '4' };
+    // A–L = 1–12; also accepts already-numeric strings passed from diagPointerToNumeric
+    const ptrMap: Record<string, string> = {
+      A: '1', B: '2',  C: '3',  D: '4',  E: '5',  F: '6',
+      G: '7', H: '8',  I: '9',  J: '10', K: '11', L: '12',
+    };
     const rawPtr = line.diagnosis_pointer || 'A';
     const diagPtr = ptrMap[rawPtr?.toUpperCase()] || rawPtr || '1';
     segments.push(

@@ -62,7 +62,8 @@ export interface RuleViolation {
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
-const ICD10_PATTERN = /^[A-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/i;
+// Accepts codes with or without the decimal separator (both F03.90 and F0390 are valid)
+const ICD10_PATTERN = /^[A-Z][0-9][0-9A-Z]([0-9A-Z]{1,4}|\.[0-9A-Z]{1,4})?$/i;
 const CPT_HCPCS_PATTERN = /^[A-Z0-9]{4,7}$/i;
 const UNBUNDLING_MODIFIERS = ["59", "XE", "XS", "XP", "XU"];
 

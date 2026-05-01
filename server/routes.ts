@@ -160,7 +160,11 @@ function getOrgId(req: any): string | null {
 }
 
 function diagPointerToNumeric(ptr: string): string {
-  const map: Record<string, string> = { A: "1", B: "2", C: "3", D: "4" };
+  // A–L map to 1–12 per 837P SV1 element (up to 12 ICD-10 pointers allowed)
+  const map: Record<string, string> = {
+    A: "1", B: "2",  C: "3",  D: "4",  E: "5",  F: "6",
+    G: "7", H: "8",  I: "9",  J: "10", K: "11", L: "12",
+  };
   const s = String(ptr || "A");
   // Handle colon-separated format "A:B" → "1:2"
   if (s.includes(":")) {

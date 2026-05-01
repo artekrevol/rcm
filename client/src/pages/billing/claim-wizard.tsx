@@ -764,12 +764,12 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
           />
         </div>
         <div className="space-y-1.5">
-          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd, D=3rd">DX Pointers <span className="text-xs text-muted-foreground">(A/AB/ABCD)</span></Label>
+          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd… L=11th secondary">DX Pointers <span className="text-xs text-muted-foreground">(A–L)</span></Label>
           <Input
             value={line.diagnosisPointers}
-            onChange={(e) => onChange(index, { diagnosisPointers: e.target.value.toUpperCase().replace(/[^ABCD]/g, "") })}
+            onChange={(e) => onChange(index, { diagnosisPointers: e.target.value.toUpperCase().replace(/[^A-L]/g, "") })}
             placeholder="A"
-            maxLength={4}
+            maxLength={12}
             className="font-mono w-24"
             data-testid={`input-line-dx-pointers-${index}`}
           />
@@ -992,7 +992,7 @@ export default function ClaimWizard() {
   const [serviceLines, setServiceLines] = useState<ServiceLine[]>([emptyLine()]);
   const [icd10Primary, setIcd10Primary] = useState<{ code: string; desc: string }>({ code: "", desc: "" });
   const [icd10Secondary, setIcd10Secondary] = useState<{ code: string; desc: string }[]>([
-    { code: "", desc: "" }, { code: "", desc: "" }, { code: "", desc: "" },
+    { code: "", desc: "" },
   ]);
   const [authNumber, setAuthNumber] = useState("");
   const [saveAuthToPatient, setSaveAuthToPatient] = useState(false);
@@ -1144,8 +1144,8 @@ export default function ClaimWizard() {
     if (claim.icd10Primary) setIcd10Primary({ code: claim.icd10Primary, desc: "" });
     if (claim.icd10Secondary && Array.isArray(claim.icd10Secondary)) {
       const sec = claim.icd10Secondary.map((c: string) => ({ code: c, desc: "" }));
-      while (sec.length < 3) sec.push({ code: "", desc: "" });
-      setIcd10Secondary(sec.slice(0, 3));
+      if (sec.length === 0) sec.push({ code: "", desc: "" });
+      setIcd10Secondary(sec);
     }
     if (claim.serviceLines && Array.isArray(claim.serviceLines) && claim.serviceLines.length > 0) {
       setServiceLines(claim.serviceLines.map((sl: any) => ({
@@ -1873,16 +1873,40 @@ export default function ClaimWizard() {
               <ICD10Search label="Primary Diagnosis (required)" value={icd10Primary} onChange={(val) => { setIcd10Primary(val); setStep2Errors(prev => { const n = {...prev}; delete n.icd10; return n; }); }} testId="icd10-primary" />
               <FieldViolationHint types={["data_quality"]} />
               {icd10Secondary.map((d, i) => (
-                <ICD10Search
-                  key={i}
-                  label={`Secondary ${i + 1}`}
-                  value={d}
-                  onChange={(val) => {
-                    setIcd10Secondary((prev) => prev.map((s, j) => j === i ? val : s));
-                  }}
-                  testId={`icd10-secondary-${i}`}
-                />
+                <div key={i} className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <ICD10Search
+                      label={`Secondary ${i + 1}`}
+                      value={d}
+                      onChange={(val) => {
+                        setIcd10Secondary((prev) => prev.map((s, j) => j === i ? val : s));
+                      }}
+                      testId={`icd10-secondary-${i}`}
+                    />
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-muted-foreground hover:text-destructive shrink-0 mb-0.5"
+                    onClick={() => setIcd10Secondary((prev) => prev.length === 1 ? [{ code: "", desc: "" }] : prev.filter((_, j) => j !== i))}
+                    data-testid={`button-remove-secondary-${i}`}
+                    title="Remove this diagnosis"
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </Button>
+                </div>
               ))}
+              {icd10Secondary.length < 11 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => setIcd10Secondary((prev) => [...prev, { code: "", desc: "" }])}
+                  data-testid="button-add-secondary-dx"
+                >
+                  + Add Secondary Diagnosis
+                </Button>
+              )}
             </CardContent>
           </Card>
 
