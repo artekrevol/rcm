@@ -2800,7 +2800,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
                  'completed',
                  NOW(),
                  (SELECT id FROM organizations LIMIT 1),
-                 'ea017017-c295-4d81-be0b-8892a9c147fc')
+                 NULL)
               RETURNING id
             `);
             supplementId = newDoc?.id || null;
