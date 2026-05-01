@@ -3868,7 +3868,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
       if (!verifyOrg(claimResult.rows[0], req)) return res.status(404).json({ error: "Claim not found" });
 
+      const allowedResubmitStatuses = ['denied', 'error', 'appeal_needed', 'review_needed'];
       if (resubmit) {
+        if (!allowedResubmitStatuses.includes(claimResult.rows[0].status)) {
+          return res.status(400).json({ error: `Cannot resubmit a claim in '${claimResult.rows[0].status}' status. Only denied or error claims may be resubmitted.` });
+        }
         await db.query(`UPDATE claims SET status = 'submitted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
         await db.query(
           `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1, $2, 'Resubmitted', 'Claim resubmitted after error was fixed', $3)`,
@@ -3890,13 +3894,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/eras", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const orgId = getOrgId(req);
-      const params: any[] = [];
-      let query = `SELECT eb.*, COUNT(el.id) as line_count FROM era_batches eb LEFT JOIN era_lines el ON el.era_id = eb.id WHERE 1=1`;
-      let idx = 1;
-      if (orgId) { query += ` AND eb.org_id = $${idx}`; params.push(orgId); idx++; }
-      query += ` GROUP BY eb.id ORDER BY eb.created_at DESC`;
-      const { rows } = await db.query(query, params);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
+      const { rows } = await db.query(
+        `SELECT eb.*, COUNT(el.id) as line_count FROM era_batches eb LEFT JOIN era_lines el ON el.era_id = eb.id WHERE eb.org_id = $1 GROUP BY eb.id ORDER BY eb.created_at DESC`,
+        [orgId]
+      );
       res.json(rows);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
@@ -3960,6 +3963,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         for (const line of lines) {
           if (!line.claim_id) {
             await db.query(`UPDATE era_lines SET status = 'posted' WHERE id = $1`, [line.id]);
+            continue;
+          }
+
+          // Verify the linked claim belongs to the same org as this ERA batch
+          const { rows: [claimOrgRow] } = await db.query(
+            `SELECT organization_id FROM claims WHERE id = $1 LIMIT 1`,
+            [line.claim_id]
+          );
+          if (!claimOrgRow || claimOrgRow.organization_id !== era.org_id) {
+            console.warn(`[ERA Post] Skipping line ${line.id}: claim ${line.claim_id} does not belong to ERA org ${era.org_id}`);
             continue;
           }
 
@@ -4579,6 +4592,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/prior-auths", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { rows } = await db.query(`
         SELECT pa.*,
           COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name,
@@ -4587,8 +4602,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         FROM prior_authorizations pa
         LEFT JOIN patients p ON pa.patient_id = p.id
         LEFT JOIN claims c ON c.encounter_id = pa.encounter_id
+        WHERE pa.organization_id = $1
         ORDER BY pa.requested_date DESC
-      `);
+      `, [orgId]);
       res.json(rows);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
@@ -4599,14 +4615,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const db = await import("./db").then(m => m.pool);
       const { startDate, endDate, activityType, performedBy } = req.query;
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       let query = `
         SELECT al.*, u.email as user_email
         FROM activity_logs al
         LEFT JOIN users u ON al.performed_by::text = u.id::text
         WHERE (al.claim_id IS NOT NULL OR al.patient_id IS NOT NULL)
+        AND al.organization_id = $1
       `;
-      const params: any[] = [];
-      let idx = 1;
+      const params: any[] = [orgId];
+      let idx = 2;
       if (startDate) { query += ` AND al.created_at >= $${idx++}`; params.push(startDate); }
       if (endDate) { query += ` AND al.created_at <= $${idx++}`; params.push(endDate); }
       if (activityType && activityType !== "all") { query += ` AND al.activity_type = $${idx++}`; params.push(activityType); }
@@ -4627,20 +4646,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const end = endDate || new Date().toISOString();
       const type = req.params.type;
       let query = "";
-      const params = [start, end];
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
+      const params = [start, end, orgId];
 
       switch (type) {
         case "access":
-          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.activity_type IN ('view_patient','view_claim','exported','export_pdf') AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC LIMIT 500`;
+          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.activity_type IN ('view_patient','view_claim','exported','export_pdf') AND al.created_at BETWEEN $1 AND $2 AND al.organization_id = $3 ORDER BY al.created_at DESC LIMIT 500`;
           break;
         case "edit-history":
-          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.field IS NOT NULL AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC LIMIT 500`;
+          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.field IS NOT NULL AND al.created_at BETWEEN $1 AND $2 AND al.organization_id = $3 ORDER BY al.created_at DESC LIMIT 500`;
           break;
         case "export":
-          query = `SELECT al.*, u.email as user_email, c.amount, c.status as claim_status FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text LEFT JOIN claims c ON al.claim_id::text = c.id::text WHERE al.activity_type = 'export_pdf' AND al.created_at BETWEEN $1 AND $2 ORDER BY al.created_at DESC LIMIT 500`;
+          query = `SELECT al.*, u.email as user_email, c.amount, c.status as claim_status FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text LEFT JOIN claims c ON al.claim_id::text = c.id::text WHERE al.activity_type = 'export_pdf' AND al.created_at BETWEEN $1 AND $2 AND al.organization_id = $3 ORDER BY al.created_at DESC LIMIT 500`;
           break;
         case "claims-integrity":
-          query = `SELECT c.id, c.status, c.amount, c.created_at, c.updated_at, c.service_date, c.readiness_status, c.submission_method, COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name FROM claims c LEFT JOIN patients p ON c.patient_id = p.id WHERE c.created_at BETWEEN $1 AND $2 ORDER BY c.created_at DESC LIMIT 500`;
+          query = `SELECT c.id, c.status, c.amount, c.created_at, c.updated_at, c.service_date, c.readiness_status, c.submission_method, COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name FROM claims c LEFT JOIN patients p ON c.patient_id = p.id WHERE c.created_at BETWEEN $1 AND $2 AND c.organization_id = $3 ORDER BY c.created_at DESC LIMIT 500`;
           break;
         default:
           return res.status(400).json({ error: "Invalid report type" });
@@ -4721,12 +4742,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/claims/wizard-data", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const [providers, payers, settings] = await Promise.all([
-        db.query("SELECT id, first_name, last_name, credentials, npi, is_default FROM providers WHERE is_active = true ORDER BY last_name"),
-        db.query("SELECT id, name, payer_id, timely_filing_days, auth_required, is_active FROM payers ORDER BY name"),
-        getOrgId(req) 
-          ? db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [getOrgId(req)])
-          : db.query("SELECT * FROM practice_settings LIMIT 1"),
+        db.query("SELECT id, first_name, last_name, credentials, npi, is_default FROM providers WHERE is_active = true AND organization_id = $1 ORDER BY last_name", [orgId]),
+        db.query("SELECT id, name, payer_id, timely_filing_days, auth_required, is_active FROM payers WHERE organization_id = $1 ORDER BY name", [orgId]),
+        db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]),
       ]);
       res.json({
         providers: providers.rows,
@@ -4742,8 +4763,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const { patientId } = req.body;
       if (!patientId) return res.status(400).json({ error: "Patient ID is required" });
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const db = await import("./db").then(m => m.pool);
-      const patient = await db.query("SELECT * FROM patients WHERE id = $1", [patientId]);
+      const patient = await db.query("SELECT * FROM patients WHERE id = $1 AND organization_id = $2", [patientId, orgId]);
       if (patient.rows.length === 0) return res.status(404).json({ error: "Patient not found" });
       const p = patient.rows[0];
 
@@ -4752,26 +4775,26 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const now = new Date();
 
       await db.query(
-        `INSERT INTO encounters (id, patient_id, service_type, facility_type, admission_type, expected_start_date, created_by, created_at)
-         VALUES ($1, $2, 'Home Health', 'Home', 'Elective', $3, $4, $5)`,
-        [encounterId, patientId, now.toISOString().split("T")[0], (req.user as any)?.email || null, now]
+        `INSERT INTO encounters (id, patient_id, service_type, facility_type, admission_type, expected_start_date, created_by, created_at, organization_id)
+         VALUES ($1, $2, 'Home Health', 'Home', 'Elective', $3, $4, $5, $6)`,
+        [encounterId, patientId, now.toISOString().split("T")[0], (req.user as any)?.email || null, now, orgId]
       );
 
       await db.query(
         `INSERT INTO claims (id, organization_id, patient_id, encounter_id, payer, cpt_codes, amount, status, risk_score, readiness_status, created_at, payer_id, authorization_number, created_by, plan_product)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, 0, 'draft', 0, 'GREEN', $7, $8, $9, $10, $11)`,
-        [claimId, getOrgId(req), patientId, encounterId, p.insurance_carrier || 'Unknown', '[]', now, p.payer_id || null, p.authorization_number || null, (req.user as any)?.email || null, p.plan_product || null]
+        [claimId, orgId, patientId, encounterId, p.insurance_carrier || 'Unknown', '[]', now, p.payer_id || null, p.authorization_number || null, (req.user as any)?.email || null, p.plan_product || null]
       );
 
       await db.query(
-        `INSERT INTO claim_events (id, claim_id, type, timestamp, notes)
-         VALUES ($1, $2, 'Created', $3, 'Claim created via wizard')`,
-        [crypto.randomUUID(), claimId, now]
+        `INSERT INTO claim_events (id, claim_id, type, timestamp, notes, organization_id)
+         VALUES ($1, $2, 'Created', $3, 'Claim created via wizard', $4)`,
+        [crypto.randomUUID(), claimId, now, orgId]
       );
 
       await db.query(
-        `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [crypto.randomUUID(), claimId, patientId, 'created', 'Claim draft created via wizard', (req.user as any)?.id || null]
+        `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by, organization_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [crypto.randomUUID(), claimId, patientId, 'created', 'Claim draft created via wizard', (req.user as any)?.id || null, orgId]
       );
 
       // ── Snapshot + risk evaluation at claim creation ─────────────────────────
@@ -7569,6 +7592,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await db.query("UPDATE patients SET vob_verified = true WHERE id = $1", [patientId]);
 
       const { rows } = await db.query("SELECT * FROM vob_verifications WHERE id = $1", [vobId]);
+      if (!rows[0]) return res.status(500).json({ error: "VOB saved but could not be retrieved" });
       res.json(rows[0]);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
@@ -7585,42 +7609,58 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/dashboard/alerts", requireRole("admin", "rcm_manager", "intake"), async (req, res) => {
     const orgId = requireOrgCtx(req, res);
     if (!orgId) return;
-    const claims = await storage.getClaims(orgId);
-    const alerts = [];
-    
-    for (const claim of claims.filter(c => c.readinessStatus === "RED").slice(0, 3)) {
-      alerts.push({
-        id: claim.id,
-        type: "risk",
-        title: "High-Risk Claim Blocked",
-        description: `Claim ${claim.id.slice(0, 8)} for ${claim.payer} requires prior authorization`,
-        claimId: claim.id,
-        severity: "high",
-        timestamp: claim.createdAt,
-      });
-    }
-    
-    const events = [];
-    for (const claim of claims.slice(0, 5)) {
-      const claimEvents = await storage.getClaimEvents(claim.id);
-      const pendingEvent = claimEvents.find(e => e.type === "Pending");
-      if (pendingEvent) {
-        const daysPending = Math.floor((Date.now() - new Date(pendingEvent.timestamp).getTime()) / (1000 * 60 * 60 * 24));
-        if (daysPending > 7) {
-          alerts.push({
-            id: `stuck-${claim.id}`,
-            type: "stuck",
-            title: "Claim Stuck in Pending",
-            description: `Claim ${claim.id.slice(0, 8)} has been pending for ${daysPending} days`,
-            claimId: claim.id,
-            severity: "medium",
-            timestamp: pendingEvent.timestamp,
-          });
-        }
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { rows: redClaims } = await db.query(
+        `SELECT c.id, c.payer, c.created_at, c.last_test_errors
+         FROM claims c
+         WHERE c.organization_id = $1 AND c.readiness_status = 'RED' AND c.archived_at IS NULL
+         ORDER BY c.created_at DESC LIMIT 3`,
+        [orgId]
+      );
+      const { rows: stuckClaims } = await db.query(
+        `SELECT DISTINCT ON (c.id) c.id, c.payer, ce.timestamp as pending_since
+         FROM claims c
+         JOIN claim_events ce ON ce.claim_id = c.id AND ce.type = 'Pending'
+         WHERE c.organization_id = $1 AND c.archived_at IS NULL
+           AND ce.timestamp < NOW() - INTERVAL '7 days'
+         ORDER BY c.id, ce.timestamp ASC LIMIT 5`,
+        [orgId]
+      );
+      const alerts: any[] = [];
+      for (const claim of redClaims) {
+        let reason = "Claim blocked — review required";
+        try {
+          const errs = Array.isArray(claim.last_test_errors) ? claim.last_test_errors : JSON.parse(claim.last_test_errors || "[]");
+          if (errs[0]) reason = errs[0];
+        } catch { /* use default */ }
+        alerts.push({
+          id: claim.id,
+          type: "risk",
+          title: "High-Risk Claim Blocked",
+          description: `Claim ${claim.id.slice(0, 8)} for ${claim.payer}: ${reason}`,
+          claimId: claim.id,
+          severity: "high",
+          timestamp: claim.created_at,
+        });
       }
+      for (const claim of stuckClaims) {
+        const daysPending = Math.floor((Date.now() - new Date(claim.pending_since).getTime()) / (1000 * 60 * 60 * 24));
+        alerts.push({
+          id: `stuck-${claim.id}`,
+          type: "stuck",
+          title: "Claim Stuck in Pending",
+          description: `Claim ${claim.id.slice(0, 8)} has been pending for ${daysPending} days`,
+          claimId: claim.id,
+          severity: "medium",
+          timestamp: claim.pending_since,
+        });
+      }
+      res.json(alerts.slice(0, 5));
+    } catch (err: any) {
+      console.error('[API] dashboard alerts error:', err);
+      res.status(500).json({ error: 'An unexpected error occurred.' });
     }
-    
-    res.json(alerts.slice(0, 5));
   });
 
   app.get("/api/leads", requireRole("admin", "intake"), async (req, res) => {
@@ -7989,17 +8029,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   app.get("/api/leads/:id/calls", requireRole("admin", "intake"), async (req, res) => {
+    const lead = await storage.getLead(req.params.id);
+    if (!lead || !verifyOrg(lead, req)) return res.status(404).json({ error: "Lead not found" });
     const calls = await storage.getCallsByLeadId(req.params.id);
     res.json(calls);
   });
 
   app.get("/api/leads/:id/patient", requireRole("admin", "intake"), async (req, res) => {
+    const lead = await storage.getLead(req.params.id);
+    if (!lead || !verifyOrg(lead, req)) return res.status(404).json({ error: "Lead not found" });
     const patient = await storage.getPatientByLeadId(req.params.id);
     res.json(patient || null);
   });
 
   // Update patient and sync to lead
   app.patch("/api/leads/:id/patient", requireRole("admin", "intake"), async (req, res) => {
+    const leadForPatient = await storage.getLead(req.params.id);
+    if (!leadForPatient || !verifyOrg(leadForPatient, req)) return res.status(404).json({ error: "Lead not found" });
     const patient = await storage.getPatientByLeadId(req.params.id);
     if (!patient) {
       return res.status(404).json({ error: "Patient not found for this lead" });
@@ -8130,7 +8176,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/leads/:id/convert-to-patient", requireRole("admin", "intake"), async (req, res) => {
     try {
       const lead = await storage.getLead(req.params.id);
-      if (!lead) {
+      if (!lead || !verifyOrg(lead, req)) {
         return res.status(404).json({ error: "Lead not found" });
       }
 
@@ -8145,13 +8191,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const db = await import("./db").then(m => m.pool);
       const { rows } = await db.query(
-        `INSERT INTO patients (id, lead_id, first_name, last_name, dob, email, phone, insurance_carrier, member_id, plan_type, state, service_needed, referral_source, intake_completed)
-         SELECT gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true
+        `INSERT INTO patients (id, lead_id, first_name, last_name, dob, email, phone, insurance_carrier, member_id, plan_type, state, service_needed, referral_source, intake_completed, organization_id)
+         SELECT gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true, $13
          WHERE NOT EXISTS (SELECT 1 FROM patients WHERE lead_id = $1)
          RETURNING *`,
-        [lead.id, firstName, lastName, "", lead.email || null, lead.phone || null,
+        [lead.id, firstName, lastName, (lead as any).dob || null, lead.email || null, lead.phone || null,
          lead.insuranceCarrier || null, lead.memberId || null, lead.planType || null,
-         lead.state || null, lead.serviceNeeded || null, lead.source || "From Intake"]
+         lead.state || null, lead.serviceNeeded || null, lead.source || "From Intake", getOrgId(req)]
       );
 
       if (rows.length === 0) {
@@ -8218,7 +8264,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // Get lead context for call prep preview
   app.get("/api/leads/:id/call-context", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
-    if (!lead) {
+    if (!lead || !verifyOrg(lead, req)) {
       return res.status(404).json({ error: "Lead not found" });
     }
     
@@ -8309,7 +8355,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.post("/api/leads/:id/call", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
-    if (!lead) {
+    if (!lead || !verifyOrg(lead, req)) {
       return res.status(404).json({ error: "Lead not found" });
     }
 
@@ -8324,6 +8370,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       notes: req.body.notes || null,
       vobData: req.body.vobData || null,
       organizationId: getOrgId(req),
+      channel: "vapi",
     };
 
     const call = await storage.createCall(callData);
@@ -8395,7 +8442,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.post("/api/leads/:id/claim-packet", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
-    if (!lead) {
+    if (!lead || !verifyOrg(lead, req)) {
       return res.status(404).json({ error: "Lead not found" });
     }
 
@@ -8793,6 +8840,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         disposition: "in_progress",
         extractedData: {},
         organizationId: getOrgId(req),
+        channel: "vapi",
       });
       
       // Lock will be released when call ends (via Vapi webhook end-of-call-report)
@@ -9106,12 +9154,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   // Prior Authorization routes
   app.get("/api/prior-auth/encounter/:encounterId", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const auths = await storage.getPriorAuthsByEncounterId(req.params.encounterId);
+    const orgId = requireOrgCtx(req, res);
+    if (!orgId) return;
+    const auths = await storage.getPriorAuthsByEncounterId(req.params.encounterId, orgId);
     res.json(auths);
   });
 
   app.get("/api/prior-auth/patient/:patientId", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const auths = await storage.getPriorAuthsByPatientId(req.params.patientId);
+    const orgId = requireOrgCtx(req, res);
+    if (!orgId) return;
+    const auths = await storage.getPriorAuthsByPatientId(req.params.patientId, orgId);
     res.json(auths);
   });
 
@@ -9172,7 +9224,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
 
     const lead = await storage.getLead(req.params.id);
-    if (!lead) {
+    if (!lead || !verifyOrg(lead, req)) {
       return res.status(404).json({ error: "Lead not found" });
     }
 
@@ -9243,6 +9295,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         organizationId: getOrgId(req),
         vobData: null,
         notes: null,
+        channel: "sms",
       });
 
       // Log SMS sent activity
@@ -9313,6 +9366,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         vobData: null,
         notes: null,
         organizationId: matchingLead.organizationId || undefined,
+        channel: "sms",
       });
 
       // Check for keywords and auto-respond
@@ -9562,7 +9616,7 @@ Warmly,
   // Send email to lead
   app.post("/api/leads/:id/email", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
-    if (!lead) {
+    if (!lead || !verifyOrg(lead, req)) {
       return res.status(404).json({ error: "Lead not found" });
     }
 
@@ -9613,14 +9667,29 @@ Warmly,
       return res.status(400).json({ error: "Template, templateId, or subject/body required" });
     }
 
+    // Fetch org practice name for template substitution
+    const emailOrgId = getOrgId(req);
+    let facilityName = "Claim Shield Health";
+    if (emailOrgId) {
+      try {
+        const { pool: emailPool } = await import("./db");
+        const { rows: psRows } = await emailPool.query(
+          "SELECT practice_name FROM practice_settings WHERE organization_id = $1 LIMIT 1",
+          [emailOrgId]
+        );
+        if (psRows[0]?.practice_name) facilityName = psRows[0].practice_name;
+      } catch { /* use default */ }
+    }
     // Replace template variables
     const variables: Record<string, string> = {
       first_name: lead.firstName || lead.name.split(" ")[0] || "there",
       last_name: lead.lastName || lead.name.split(" ").slice(1).join(" ") || "",
       full_name: lead.name,
       service_needed: lead.serviceNeeded || "your care",
-      facility_name: "Claim Shield Health",
+      facility_name: facilityName,
       insurance_carrier: lead.insuranceCarrier || "your insurance",
+      appointment_date: "",
+      appointment_time: "",
     };
 
     for (const [key, value] of Object.entries(variables)) {
@@ -10185,7 +10254,7 @@ Warmly,
   // Create appointment for a lead
   app.post("/api/leads/:id/appointments", requireRole("admin", "intake"), async (req, res) => {
     const lead = await storage.getLead(req.params.id);
-    if (!lead) {
+    if (!lead || !verifyOrg(lead, req)) {
       return res.status(404).json({ error: "Lead not found" });
     }
 
@@ -10261,7 +10330,7 @@ Warmly,
   });
 
   // Get available time slots for a specific date
-  app.get("/api/availability/slots", async (req, res) => {
+  app.get("/api/availability/slots", requireRole("admin", "intake"), async (req, res) => {
     const { date } = req.query;
     if (!date) {
       return res.status(400).json({ error: "Date required" });
@@ -10482,7 +10551,7 @@ Warmly,
                       </div>
                     </div>
                     
-                    <a href="${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000'}/leads/${lead.id}" class="btn">View Conversation</a>
+                    <a href="${process.env.PUBLIC_URL || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000')}/leads/${lead.id}" class="btn">View Conversation</a>
                   </div>
                   <div class="footer">
                     <span class="footer-brand">Claim Shield Health</span><br>

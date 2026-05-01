@@ -148,6 +148,7 @@ async function seed() {
   for (const t of orgScopedTables) {
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
   }
+  await pool.query(`ALTER TABLE calls ADD COLUMN IF NOT EXISTS channel VARCHAR DEFAULT 'vapi'`).catch(() => {});
 
   // Check if data already exists
   const existingUsers = await db.select().from(users).limit(1);

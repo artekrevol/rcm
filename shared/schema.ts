@@ -247,6 +247,7 @@ export const calls = pgTable("calls", {
     networkStatus?: "in_network" | "out_of_network" | "unknown";
   }>(),
   organizationId: varchar("organization_id"),
+  channel: varchar("channel").default("vapi"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -518,6 +519,7 @@ export const organizations = pgTable("organizations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
 });
 
 export type Organization = typeof organizations.$inferSelect;

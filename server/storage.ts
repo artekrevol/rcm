@@ -39,7 +39,7 @@ export interface IStorage {
   createLead(lead: InsertLead): Promise<Lead>;
   updateLead(id: string, updates: Partial<Lead>): Promise<Lead | undefined>;
   
-  getPatientByLeadId(leadId: string): Promise<Patient | undefined>;
+  getPatientByLeadId(leadId: string, orgId?: string | null): Promise<Patient | undefined>;
   getPatient(id: string): Promise<Patient | undefined>;
   createPatient(patient: InsertPatient): Promise<Patient>;
   updatePatient(id: string, updates: Partial<Patient>): Promise<Patient | undefined>;
@@ -72,8 +72,8 @@ export interface IStorage {
   createCall(call: InsertCall): Promise<Call>;
   updateCall(id: string, updates: Partial<Call>): Promise<Call | undefined>;
   
-  getPriorAuthsByEncounterId(encounterId: string): Promise<PriorAuth[]>;
-  getPriorAuthsByPatientId(patientId: string): Promise<PriorAuth[]>;
+  getPriorAuthsByEncounterId(encounterId: string, orgId?: string | null): Promise<PriorAuth[]>;
+  getPriorAuthsByPatientId(patientId: string, orgId?: string | null): Promise<PriorAuth[]>;
   getPriorAuth(id: string): Promise<PriorAuth | undefined>;
   createPriorAuth(auth: InsertPriorAuth): Promise<PriorAuth>;
   updatePriorAuth(id: string, updates: Partial<PriorAuth>): Promise<PriorAuth | undefined>;
@@ -182,8 +182,10 @@ export class DatabaseStorage implements IStorage {
     return updated || undefined;
   }
 
-  async getPatientByLeadId(leadId: string): Promise<Patient | undefined> {
-    const [patient] = await db.select().from(patients).where(eq(patients.leadId, leadId));
+  async getPatientByLeadId(leadId: string, orgId?: string | null): Promise<Patient | undefined> {
+    const conds: any[] = [eq(patients.leadId, leadId)];
+    if (orgId) conds.push(eq(patients.organizationId, orgId));
+    const [patient] = await db.select().from(patients).where(conds.length === 1 ? conds[0] : and(...conds));
     return patient || undefined;
   }
 
@@ -308,12 +310,16 @@ export class DatabaseStorage implements IStorage {
     return updated || undefined;
   }
 
-  async getPriorAuthsByEncounterId(encounterId: string): Promise<PriorAuth[]> {
-    return db.select().from(priorAuthorizations).where(eq(priorAuthorizations.encounterId, encounterId)).orderBy(desc(priorAuthorizations.requestedDate));
+  async getPriorAuthsByEncounterId(encounterId: string, orgId?: string | null): Promise<PriorAuth[]> {
+    const conds: any[] = [eq(priorAuthorizations.encounterId, encounterId)];
+    if (orgId) conds.push(eq(priorAuthorizations.organizationId, orgId));
+    return db.select().from(priorAuthorizations).where(conds.length === 1 ? conds[0] : and(...conds)).orderBy(desc(priorAuthorizations.requestedDate));
   }
 
-  async getPriorAuthsByPatientId(patientId: string): Promise<PriorAuth[]> {
-    return db.select().from(priorAuthorizations).where(eq(priorAuthorizations.patientId, patientId)).orderBy(desc(priorAuthorizations.requestedDate));
+  async getPriorAuthsByPatientId(patientId: string, orgId?: string | null): Promise<PriorAuth[]> {
+    const conds: any[] = [eq(priorAuthorizations.patientId, patientId)];
+    if (orgId) conds.push(eq(priorAuthorizations.organizationId, orgId));
+    return db.select().from(priorAuthorizations).where(conds.length === 1 ? conds[0] : and(...conds)).orderBy(desc(priorAuthorizations.requestedDate));
   }
 
   async getPriorAuth(id: string): Promise<PriorAuth | undefined> {
@@ -348,10 +354,18 @@ export class DatabaseStorage implements IStorage {
     
     const revenueProtected = denialsPrevented * 2500;
     
+    const now = Date.now();
+    const openClaims = allClaims.filter(c => c.status !== 'paid' && c.status !== 'draft' && c.status !== 'archived');
+    const avgArDays = openClaims.length > 0
+      ? Math.round(openClaims.reduce((sum, c) => {
+          const start = c.serviceDate ? new Date(c.serviceDate).getTime() : new Date(c.createdAt).getTime();
+          return sum + (now - start) / (1000 * 60 * 60 * 24);
+        }, 0) / openClaims.length)
+      : 0;
     return {
       denialsPrevented,
       claimsAtRisk,
-      avgArDays: 34,
+      avgArDays,
       topPayerRisk,
       revenueProtected,
       totalClaims: allClaims.length,
@@ -389,17 +403,25 @@ export class DatabaseStorage implements IStorage {
   async getTopPatterns(orgId?: string): Promise<Array<{ rootCause: string; count: number; change: number }>> {
     const allDenials = await this.getDenials(orgId);
     
-    const patterns: Record<string, number> = {};
+    const now = Date.now();
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
+    const currentPeriod: Record<string, number> = {};
+    const priorPeriod: Record<string, number> = {};
     allDenials.forEach(d => {
-      patterns[d.rootCauseTag] = (patterns[d.rootCauseTag] || 0) + 1;
+      const age = now - new Date(d.createdAt).getTime();
+      if (age <= thirtyDaysMs) {
+        currentPeriod[d.rootCauseTag] = (currentPeriod[d.rootCauseTag] || 0) + 1;
+      } else if (age <= sixtyDaysMs) {
+        priorPeriod[d.rootCauseTag] = (priorPeriod[d.rootCauseTag] || 0) + 1;
+      }
     });
-    
-    return Object.entries(patterns)
-      .map(([rootCause, count]) => ({
-        rootCause,
-        count,
-        change: Math.floor(Math.random() * 40) - 10,
-      }))
+    return Object.entries(currentPeriod)
+      .map(([rootCause, count]) => {
+        const prior = priorPeriod[rootCause] || 0;
+        const change = prior > 0 ? Math.round(((count - prior) / prior) * 100) : 0;
+        return { rootCause, count, change };
+      })
       .sort((a, b) => b.count - a.count);
   }
 
