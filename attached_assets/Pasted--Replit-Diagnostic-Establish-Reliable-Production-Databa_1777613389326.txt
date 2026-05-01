@@ -1,0 +1,348 @@
+# Replit Diagnostic — Establish Reliable Production Database Access
+
+## Stop everything else until this is resolved
+
+This is not a feature, fix, or audit task. This is a diagnostic to figure out why your QA audit on May 1 fell back to dev when April 30's verifications successfully hit production. Until we resolve this, every "production verification" report is suspect, every "fix shipped" is unverifiable, and we can't trust the system state.
+
+No code changes. No fixes. No new features. Just confirm production access works reliably, and establish a check that prevents this confusion from happening again.
+
+## What I already verified directly
+
+I queried production via Railway's console at the time of writing this prompt. Production state right now:
+
+- Claims table: 85 rows
+- All 85 have `last_risk_factors` populated
+- All 85 have `last_risk_evaluation_at` populated
+- `cci_edits`: 1,821,352 in 2026Q1 + 2,581,309 in 2026Q2 = 4,402,661 total
+
+Your audit reported 147 claims, all with NULL risk factors, and an empty `cci_edits` table. That is not production state. You were against dev.
+
+Earlier this week (April 30), your verification reports for the rules engine fix and the snapshot fix DID hit production correctly — they showed 81 claims with factors, the 12 approved items in payer_manual_extraction_history, etc. So production access HAS worked through Replit at least once. Something has broken between then and now.
+
+## Task 1: Inventory what secrets and connection methods you currently have
+
+Run these and paste the output:
+
+```bash
+# 1. List all environment secrets in Replit (names only, not values)
+# Use whatever Replit secret-listing mechanism exists
+echo "Secrets configured:"
+env | grep -E '^(DATABASE|PRODUCTION|RAILWAY|POSTGRES)' | sed 's/=.*/=<REDACTED>/'
+
+# 2. Check what DATABASE_URL points to
+node -e "
+const url = process.env.DATABASE_URL || 'NOT_SET';
+const u = new URL(url);
+console.log('DATABASE_URL host:', u.hostname);
+console.log('DATABASE_URL port:', u.port);
+console.log('DATABASE_URL database:', u.pathname);
+console.log('DATABASE_URL user:', u.username);
+"
+
+# 3. Check what PRODUCTION_DATABASE_URL points to
+node -e "
+const url = process.env.PRODUCTION_DATABASE_URL || 'NOT_SET';
+if (url === 'NOT_SET') { console.log('PRODUCTION_DATABASE_URL is NOT SET'); process.exit(0); }
+const u = new URL(url);
+console.log('PRODUCTION_DATABASE_URL host:', u.hostname);
+console.log('PRODUCTION_DATABASE_URL port:', u.port);
+console.log('PRODUCTION_DATABASE_URL database:', u.pathname);
+console.log('PRODUCTION_DATABASE_URL user:', u.username);
+"
+
+# 4. Any other database-related env vars?
+env | grep -iE '(neon|supabase|railway)' | sed 's/=.*/=<REDACTED>/'
+```
+
+Report:
+- Which secrets exist, by name
+- Each connection string's host (Railway uses *.railway.internal or *.railway.app or *.proxy.rlwy.net; Neon uses *.neon.tech)
+- Whether the secret values look correct or stale
+
+## Task 2: Test each connection independently
+
+For each database connection string available, run this exact diagnostic query:
+
+```javascript
+// File: /tmp/db-identity-check.js
+const { Client } = require('pg');
+
+async function checkDatabase(name, connectionString) {
+  if (!connectionString) {
+    console.log(`\n=== ${name} ===\nNOT SET\n`);
+    return;
+  }
+  
+  const client = new Client({ 
+    connectionString,
+    ssl: { rejectUnauthorized: false }
+  });
+  
+  try {
+    const start = Date.now();
+    await client.connect();
+    const connectMs = Date.now() - start;
+    
+    const result = await client.query(`
+      SELECT 
+        current_database() AS db_name,
+        inet_server_addr()::text AS server_ip,
+        current_setting('server_version') AS pg_version,
+        (SELECT COUNT(*) FROM claims) AS claim_count,
+        (SELECT COUNT(*) FROM cci_edits) AS cci_edit_count,
+        (SELECT MAX(created_at) FROM claims) AS most_recent_claim,
+        (SELECT COUNT(*) FROM organizations) AS org_count
+    `);
+    
+    console.log(`\n=== ${name} ===`);
+    console.log(`Connection time: ${connectMs}ms`);
+    console.log(`Connection string host: ${new URL(connectionString).hostname}`);
+    console.log(`current_database(): ${result.rows[0].db_name}`);
+    console.log(`server_ip: ${result.rows[0].server_ip}`);
+    console.log(`pg_version: ${result.rows[0].pg_version}`);
+    console.log(`claim_count: ${result.rows[0].claim_count}`);
+    console.log(`cci_edit_count: ${result.rows[0].cci_edit_count}`);
+    console.log(`org_count: ${result.rows[0].org_count}`);
+    console.log(`most_recent_claim: ${result.rows[0].most_recent_claim}`);
+    
+    await client.end();
+  } catch (err) {
+    console.log(`\n=== ${name} ===`);
+    console.log(`ERROR: ${err.message}`);
+    console.log(`Code: ${err.code}`);
+  }
+}
+
+(async () => {
+  await checkDatabase('DATABASE_URL', process.env.DATABASE_URL);
+  await checkDatabase('PRODUCTION_DATABASE_URL', process.env.PRODUCTION_DATABASE_URL);
+})();
+```
+
+Run it: `cd /home/runner/<project> && node /tmp/db-identity-check.js`
+
+Paste the FULL output verbatim. I want to see what each connection actually points to.
+
+Expected results:
+- One of these should show `claim_count: 85` and `cci_edit_count: 4402661` (or close) — that's production
+- The other should show `claim_count: 147` (or whatever dev has) and `cci_edit_count: 0` — that's dev
+
+If neither hits production state, your secrets are either wrong, stale, or missing. We need to fix that before anything else.
+
+## Task 3: If PRODUCTION_DATABASE_URL is broken, re-establish it
+
+If Task 2 shows `PRODUCTION_DATABASE_URL` is missing or hits the wrong database, here's how to fix it:
+
+### Step A — Get the correct connection string from Railway
+
+The user (Abeer) will need to:
+1. Log into Railway at https://railway.app
+2. Open the ClaimShield project
+3. Click on the Postgres service
+4. Click on the "Variables" or "Connect" tab  
+5. Find `DATABASE_PUBLIC_URL` — this is the externally-accessible production connection string. It will look like:
+   `postgresql://postgres:PASSWORD@junction.proxy.rlwy.net:PORT/railway`
+6. Copy that value
+
+### Step B — Add it to Replit secrets
+
+In Replit:
+1. Click the lock/key icon (Secrets tab)
+2. Find `PRODUCTION_DATABASE_URL` if it exists, click edit
+3. If it doesn't exist, click Add Secret with key `PRODUCTION_DATABASE_URL`
+4. Paste the value from Step A
+5. Save
+
+### Step C — Test immediately
+
+Re-run the Task 2 diagnostic. Confirm `PRODUCTION_DATABASE_URL` now shows production state (85 claims, 4.4M CCI edits).
+
+## Task 4: Build a permanent identity check
+
+Once production access is restored, create this utility that EVERY future verification report must use:
+
+```javascript
+// File: server/utils/verify-db-identity.ts (or .js — match the project's setup)
+
+import { Client } from 'pg';
+
+export interface DatabaseIdentity {
+  connection_target: 'production' | 'dev' | 'unknown';
+  host: string;
+  database_name: string;
+  claim_count: number;
+  cci_edit_count: number;
+  org_count: number;
+  most_recent_claim: string | null;
+  warnings: string[];
+}
+
+export async function verifyDatabaseIdentity(
+  connectionString: string
+): Promise<DatabaseIdentity> {
+  const client = new Client({ 
+    connectionString, 
+    ssl: { rejectUnauthorized: false } 
+  });
+  
+  await client.connect();
+  
+  const result = await client.query(`
+    SELECT 
+      current_database() AS db_name,
+      inet_server_addr()::text AS server_ip,
+      (SELECT COUNT(*)::int FROM claims) AS claim_count,
+      (SELECT COUNT(*)::int FROM cci_edits) AS cci_edit_count,
+      (SELECT COUNT(*)::int FROM organizations) AS org_count,
+      (SELECT MAX(created_at)::text FROM claims) AS most_recent_claim
+  `);
+  
+  await client.end();
+  
+  const row = result.rows[0];
+  const host = new URL(connectionString).hostname;
+  
+  // Determine connection target heuristically
+  // Production has ~85+ claims and 4M+ CCI edits; dev has neither
+  let target: 'production' | 'dev' | 'unknown' = 'unknown';
+  const warnings: string[] = [];
+  
+  if (row.claim_count >= 80 && row.cci_edit_count >= 1000000) {
+    target = 'production';
+  } else if (row.claim_count < 80 || row.cci_edit_count < 1000000) {
+    target = 'dev';
+    warnings.push(`This connection has ${row.claim_count} claims and ${row.cci_edit_count} CCI edits — looks like dev, not production`);
+  }
+  
+  // Sanity warnings
+  if (row.org_count === 0) {
+    warnings.push('Zero organizations — database likely not seeded');
+  }
+  
+  if (host.includes('neon.tech')) {
+    warnings.push('Connection is to Neon — likely Replit dev DB, not Railway production');
+  } else if (host.includes('railway')) {
+    // expected for production
+  } else {
+    warnings.push(`Unknown host: ${host} — verify this is the intended target`);
+  }
+  
+  return {
+    connection_target: target,
+    host,
+    database_name: row.db_name,
+    claim_count: row.claim_count,
+    cci_edit_count: row.cci_edit_count,
+    org_count: row.org_count,
+    most_recent_claim: row.most_recent_claim,
+    warnings,
+  };
+}
+
+// CLI usage: node verify-db-identity.js
+if (require.main === module) {
+  (async () => {
+    const target = process.argv[2] || 'PRODUCTION_DATABASE_URL';
+    const url = process.env[target];
+    
+    if (!url) {
+      console.error(`ERROR: ${target} is not set`);
+      process.exit(1);
+    }
+    
+    const identity = await verifyDatabaseIdentity(url);
+    console.log('\n=== DATABASE IDENTITY ===');
+    console.log(JSON.stringify(identity, null, 2));
+    console.log('\nTarget: ' + identity.connection_target.toUpperCase());
+    
+    if (identity.warnings.length > 0) {
+      console.log('\nWARNINGS:');
+      identity.warnings.forEach(w => console.log('  - ' + w));
+    }
+    
+    if (identity.connection_target !== 'production') {
+      console.error('\nNOT POINTING AT PRODUCTION — verification cannot proceed');
+      process.exit(2);
+    }
+  })();
+}
+```
+
+## Task 5: Update the verification protocol
+
+Going forward, every Production Verification report must start with:
+
+```
+=== DATABASE IDENTITY CHECK ===
+Connection target: production
+Host: junction.proxy.rlwy.net (or whatever Railway resolves to)
+Database: railway
+Claim count at start: 85
+CCI edit count: 4402661
+Most recent claim: 2026-04-30 22:14:33
+
+✓ Confirmed against production
+```
+
+If the identity check fails or shows dev, the verification report STOPS THERE. Do not continue. Do not "verify against dev as a substitute." Flag the access issue, surface the error to me, and wait for instructions.
+
+This is non-negotiable. The standing order from this point forward:
+
+1. Every verification begins with `node verify-db-identity.js PRODUCTION_DATABASE_URL`
+2. If output shows `Target: PRODUCTION`, proceed
+3. If anything else, stop and escalate
+4. Paste the identity check output verbatim at the top of every verification report
+
+## Task 6: Diagnose why production access broke between April 30 and May 1
+
+Once production access is restored, please investigate:
+
+1. Check Replit's secret history if available — was `PRODUCTION_DATABASE_URL` modified?
+2. Check Railway's logs — did the production DB credentials rotate?
+3. Check git history for any code changes that touched database connection logic
+4. Was there a Replit workspace reset or environment refresh?
+
+Document what you find. Even if the cause isn't recoverable, knowing what happened helps prevent recurrence.
+
+## Required deliverable format
+
+Submit a single report with these sections:
+
+### Section 1: Current connection state
+
+Output of Task 1 (secrets inventory) and Task 2 (identity check on each connection).
+
+### Section 2: Production access status
+
+One of:
+- "✓ PRODUCTION_DATABASE_URL works correctly. Identity check confirms production state (85 claims, 4.4M CCI edits)."
+- "✗ PRODUCTION_DATABASE_URL is broken. Diagnosis: [reason]. Re-established by [steps taken]. Confirmed working with identity check output: [paste]."
+- "✗ PRODUCTION_DATABASE_URL is broken. Could not re-establish because [reason]. Need user help with [specific ask]."
+
+### Section 3: Identity check utility shipped
+
+- Path to the utility file
+- Test run output showing it correctly identifies production
+- Test run output showing it correctly identifies dev (if dev is accessible)
+- Confirmation that the protocol going forward is: every verification starts with this check
+
+### Section 4: Root cause analysis
+
+What broke between April 30 and May 1? Even partial findings are useful.
+
+### Section 5: Open questions
+
+Anything you couldn't determine, anything that needs my input, anything that requires Railway-side action only the user can do.
+
+## What this prompt does NOT include
+
+- No fixes for the EDI Loop 2310B bug (separate prompt)
+- No fixes for the payer tenant filter (separate prompt)  
+- No re-running of the QA audit (will happen after this lands)
+- No new features or sprint work
+
+The single deliverable here is: reliable, verifiable production database access with a check that prevents future drift. Until this is solid, nothing else can be trusted.
+
+## Time scope
+
+This should be 1-2 hours of work. If it's taking longer, something more fundamental is broken and needs my attention. Stop and tell me.
