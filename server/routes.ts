@@ -5075,7 +5075,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.patch("/api/admin/users/:id", requireRole("admin"), async (req, res) => {
     try {
-      const targetUser = await storage.getUserById(req.params.id);
+      const targetUser = await storage.getUser(req.params.id);
       if (!targetUser || !verifyOrg(targetUser, req)) return res.status(404).json({ error: "User not found" });
       const { updateUser } = await import("./services/user-service");
       const { name, role } = req.body;
@@ -5090,7 +5090,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.patch("/api/admin/users/:id/password", requireRole("admin"), async (req, res) => {
     try {
-      const targetUser = await storage.getUserById(req.params.id);
+      const targetUser = await storage.getUser(req.params.id);
       if (!targetUser || !verifyOrg(targetUser, req)) return res.status(404).json({ error: "User not found" });
       const { updatePassword } = await import("./services/user-service");
       await updatePassword(req.params.id, req.body.password);
@@ -5103,7 +5103,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.delete("/api/admin/users/:id", requireRole("admin"), async (req, res) => {
     try {
-      const targetUser = await storage.getUserById(req.params.id);
+      const targetUser = await storage.getUser(req.params.id);
       if (!targetUser || !verifyOrg(targetUser, req)) return res.status(404).json({ error: "User not found" });
       const { deleteUser } = await import("./services/user-service");
       const currentUser = (req as any).user;
