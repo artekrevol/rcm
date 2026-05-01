@@ -1,0 +1,286 @@
+DEMO QA — full pre-flight check before live demo with Daniela (Chajinel) 
+in 30 minutes. This is a comprehensive end-to-end test, not a code 
+change request. The goal: identify anything that would embarrass us 
+during the demo and fix only the critical issues. Document everything 
+you find, even items you don't fix.
+
+Time budget: do this fast and parallel. Triage findings into 
+DEMO BLOCKER / DEMO RISK / POST-DEMO. Only fix DEMO BLOCKERS now.
+
+────────────────────────────────────────────────────────────────────────
+SECTION 1 — DEPLOYMENT AND ENVIRONMENT SANITY
+────────────────────────────────────────────────────────────────────────
+
+1.1 Confirm production deployment at claimshield.health is live and 
+    healthy. Hit /api/health and confirm 200. Check Railway logs for 
+    any errors in the last hour.
+
+1.2 Confirm the latest commit (the four DB-1/DB-2/DB-3/bonus tickets) 
+    actually deployed to production, not just dev. Confirm the commit 
+    hash visible in Railway matches what was just shipped.
+
+1.3 Confirm STEDI_API_KEY environment variable is set in production 
+    AND that it's the production key (not a sandbox key). Test it by 
+    making one eligibility check call and confirming it succeeds.
+
+1.4 Confirm DATABASE_URL points to production database. Confirm the 
+    payer_claim_number column actually exists on the claims table in 
+    PRODUCTION (not just dev): 
+    SELECT column_name FROM information_schema.columns 
+    WHERE table_name='claims' AND column_name='payer_claim_number';
+    If it doesn't exist, the seeder didn't run on prod — fix this NOW.
+
+1.5 Confirm all 9 timeline event icons (DB-3) render correctly in 
+    production. Open any claim with mixed event types and screenshot 
+    the timeline. If anything renders gray fallback, that event type 
+    didn't get the icon update deployed.
+
+1.6 Check Stedi webhook destination is pointing at the PRODUCTION 
+    URL (claimshield.health/api/webhooks/stedi), not a Railway 
+    preview URL or localhost. Look at the Stedi webhook config OR 
+    the most recent webhook delivery log.
+
+────────────────────────────────────────────────────────────────────────
+SECTION 2 — DEMO DATA AVAILABILITY (CRITICAL)
+────────────────────────────────────────────────────────────────────────
+
+2.1 Query production for any Chajinel claims with payer_claim_number 
+    populated:
+    SELECT id, status, stedi_transaction_id, payer_claim_number, 
+           created_at, submitted_at 
+    FROM claims 
+    WHERE payer_claim_number IS NOT NULL 
+    ORDER BY submitted_at DESC LIMIT 10;
+    
+    If results exist: report the claim IDs back to me immediately. 
+    These are the only claims that can be used for the resubmit demo.
+    
+    If no results: report this immediately. I'll need to either skip 
+    the resubmit demo OR you'll need to backfill a value on a test 
+    claim with a SQL command like:
+    UPDATE claims SET payer_claim_number = 'PGBA-DEMO-001' 
+    WHERE id = '[claim_id_to_use]';
+
+2.2 Query for any Chajinel claims with status='denied' or with a 
+    rejection code attached, for use in the rejection-code-decoding 
+    demo:
+    SELECT id, status, denial_reason_code, payer_claim_number 
+    FROM claims 
+    WHERE organization_id = (SELECT id FROM organizations 
+                             WHERE name ILIKE '%chajinel%') 
+    AND (status='denied' OR denial_reason_code IS NOT NULL);
+    
+    If none exist, identify the seed script or note that we'll need 
+    to manually create a denied claim before demo for the decoded 
+    rejection demo.
+
+2.3 Confirm at least one fully complete draft Chajinel claim exists 
+    that's ready to submit live during the demo. It needs: real patient 
+    data, valid NPI in 2010AA, valid HCPCS codes, valid ICD-10, valid 
+    service date, total amount > $0. Run the validateForPGBA() check 
+    on it and confirm zero errors. If no clean draft exists, flag this 
+    NOW — the live submission demo cannot proceed without one.
+
+2.4 Confirm Daniela's user account (daniela@chajinel.com) exists in 
+    production, has the correct role (rcm_manager or admin), and that 
+    her organization_id is correctly linked to Chajinel's records. 
+    Test login with her account if you have credentials, or confirm 
+    via DB query.
+
+────────────────────────────────────────────────────────────────────────
+SECTION 3 — END-TO-END FLOW WALKTHROUGH (READ-ONLY, NO STATE CHANGES)
+────────────────────────────────────────────────────────────────────────
+
+For each flow below, manually walk through it in production as Daniela's 
+user OR a comparable test account. Do NOT fire any real Stedi 
+submissions in this section — use test-stedi only. Confirm each step 
+renders and behaves correctly.
+
+3.1 INTAKE → CLAIM CREATION
+    - Open lead pipeline, confirm leads list loads with no errors
+    - Open one lead, confirm activity timeline renders
+    - Click through to create a patient from a lead, confirm 
+      organization_id correctly attaches (this was a CRIT-02 bug — 
+      verify it's actually fixed in production)
+    - Open the claim wizard, walk through all steps, confirm no 
+      console errors, no broken validation, no missing fields
+
+3.2 RISK SCORING AND READINESS
+    - On a complete draft claim, confirm the risk score panel renders 
+      with GREEN/YELLOW/RED indicator
+    - Confirm rule explanations display correctly
+    - Confirm any prevention rules that fire show the correct 
+      remediation text
+
+3.3 EDI GENERATION
+    - On a complete claim, click "Download 837P EDI"
+    - Confirm the file downloads successfully
+    - Open it and visually confirm:
+      * ISA15='T' for test or 'P' for production (which is it?)
+      * NM1*40*2*PGBA VACCN (no space — the recent fix)
+      * REF*G2*[id] for any 2310A/B/C/D secondary provider IDs
+      * REF*G1*[auth] in 2300 if a prior auth exists on the claim
+      * BHT06=CH
+      * SV101 starts with HC:
+      * If the claim has a payer_claim_number, confirm CLM05-3=7 
+        and REF*F8*[number] are present (this is the resubmit path)
+
+3.4 TEST-STEDI SUBMISSION (SAFE — does not hit real payer)
+    - Submit one test claim via the test-stedi endpoint
+    - Confirm correlation ID returns from Stedi
+    - Confirm "Submitted via Stedi" event appears in timeline with 
+      the correct icon
+    - Wait up to 5 minutes — confirm 277CA event arrives via webhook 
+      and renders with correct icon (Accepted=green or Rejected=red)
+    - If a rejection comes back, confirm the decoded rejection text 
+      appears (rejectionCodeLookup wiring)
+
+3.5 FIX & RESUBMIT FLOW
+    - Open a claim that HAS payer_claim_number populated (from 2.1)
+    - Click Fix & Resubmit
+    - Confirm whatever UI behavior shipped: disabled button with 
+      tooltip, modal, error message — note exactly what the user sees
+    - If the button is enabled and clickable, walk through the 
+      resubmit flow but DO NOT submit to production — use test-stedi 
+      path only
+    - Confirm new EDI is generated, new stedi_transaction_id is 
+      captured, "Resubmitted to Stedi" event appears in timeline
+
+3.6 DENIAL INTELLIGENCE DASHBOARD
+    - Open the denial intelligence page
+    - Confirm it loads without errors
+    - Confirm clustering displays (even if seeded data — confirm it 
+      renders correctly)
+    - Confirm prevention rules display
+    - If any rule shows raw rejection codes instead of decoded 
+      descriptions, flag it
+
+3.7 ERA POSTING PAGE
+    - Open the ERA Posting page
+    - Confirm it loads
+    - If any seeded ERAs exist, confirm payment auto-posting fields 
+      display correctly (paid_amount, patient_responsibility, 
+      adjustment_amount)
+
+────────────────────────────────────────────────────────────────────────
+SECTION 4 — UI POLISH AND BROKEN STATES
+────────────────────────────────────────────────────────────────────────
+
+4.1 Open the dashboard. Confirm all metric cards display real numbers, 
+    not zeros or NaN or "—". If anything shows a placeholder, identify 
+    which query is failing.
+
+4.2 Open the claims list. Confirm it loads, sorts work, status badges 
+    render with correct colors, no broken icons.
+
+4.3 Open the claim detail page for the claim you'll use in the live 
+    demo submission. Click every tab/section. Confirm:
+    - Timeline renders with all icons
+    - Risk score panel renders
+    - Patient info renders
+    - Service lines render
+    - Provider info renders
+    - Any "Download" buttons work
+
+4.4 Test on the actual screen size that will be used during the demo. 
+    If Daniela will be screen-sharing or you'll be projecting, confirm 
+    nothing is cut off, modals don't overflow, tables don't horizontal- 
+    scroll awkwardly.
+
+4.5 Check console for any red errors on the pages that will be shown 
+    during demo. Yellow warnings can be ignored. Red errors need 
+    investigation.
+
+4.6 Check the Stedi webhook handler logs from the past 24 hours for 
+    any 4xx or 5xx errors. Specifically look for:
+    - 401s (auth failures — means key mismatch)
+    - 5xx (handler crashes — means a code path is broken)
+    - Timeouts (handler too slow — means the 5-second Stedi limit was hit)
+
+────────────────────────────────────────────────────────────────────────
+SECTION 5 — PREVIOUSLY KNOWN ISSUES (DOUBLE-CHECK)
+────────────────────────────────────────────────────────────────────────
+
+5.1 CRIT-01 — Lead detail route org guard. Confirm GET /api/leads/:id 
+    has verifyOrg() in place. If not, this is an info disclosure bug 
+    — patch it now or confirm it's not reachable in the demo flow.
+
+5.2 CRIT-02 — convert-to-patient sets organization_id on the new 
+    patient row. If you walk through the lead → patient flow in 3.1, 
+    confirm the resulting patient has the correct organization_id 
+    (not NULL).
+
+5.3 CRIT-03 — GET /api/billing/prior-auths org filter. Confirm the 
+    query filters by organization_id. If demo will touch the prior 
+    auths page, this MUST be fixed first.
+
+5.4 CRIT-04 through CRIT-07 — same multi-tenancy pattern. If any of 
+    these routes will be shown during the demo, fix them now. If 
+    none will be shown, document them as POST-DEMO and move on.
+
+5.5 The ISA15='P' regex auto-upgrade incident (Task #24, 
+    democlaimva004). Confirm there is a guard preventing background 
+    agents or automated processes from firing submit-stedi without 
+    an authenticated human session. If no guard exists, add a 
+    minimum check before the demo: refuse production submission if 
+    no req.user is present.
+
+5.6 277CA/835 polling jobs — confirm they're running, returning 
+    expected status codes (no 401/404 errors), and writing events 
+    correctly. Check logs for "[277 Poll]" and "[835 Poll]" entries 
+    from the past hour.
+
+5.7 VOB verification (VerifyTX integration) — was timing out per 
+    earlier context. Confirm it works OR confirm it's not in the 
+    demo path. If it's in the path and broken, scope it out of the 
+    demo narrative.
+
+5.8 The retrieve277Acknowledgments() Office Ally function — confirm 
+    it's deprecated and not running. If it's still on a polling 
+    interval and still hitting Office Ally SFTP, that's wasted log 
+    noise that could spook a screen-share.
+
+────────────────────────────────────────────────────────────────────────
+SECTION 6 — DEMO-SPECIFIC HARDENING
+────────────────────────────────────────────────────────────────────────
+
+6.1 Disable any non-critical background jobs that could fire during 
+    the demo and create noise: drip email sequences, SMS automations, 
+    Vapi outbound calls. If they can be paused for the next 90 minutes 
+    via a feature flag or env var, do it.
+
+6.2 Confirm no test data or obviously fake patient names ("Test 
+    Patient", "John Doe", "Megan Perez" democlaimva004) appear in 
+    any list view Daniela might see. Filter, hide, or rename if 
+    needed. Especially relevant given the Task #24 incident — that 
+    democlaimva004 record is in production.
+
+6.3 Confirm Daniela's view of the dashboard, claims list, and patient 
+    list shows ONLY Chajinel's data, not other test orgs or phantom 
+    records. If multi-tenancy filtering is incomplete (per CRIT-01 
+    through CRIT-07), her view might leak other orgs' data.
+
+6.4 Pre-load the demo URL in your browser before the call. Pre- 
+    authenticate. Pre-open the specific claim(s) you'll be demoing. 
+    Reduce the number of clicks needed during the live demo.
+
+────────────────────────────────────────────────────────────────────────
+DELIVERABLE
+────────────────────────────────────────────────────────────────────────
+
+Reply with three lists, fast:
+
+DEMO BLOCKERS — issues that will visibly fail or embarrass us during 
+the demo. Fix these immediately, then report what you fixed.
+
+DEMO RISKS — issues that might fail under specific conditions. Tell 
+me what to avoid clicking or what fallback to use.
+
+POST-DEMO — issues that exist but won't surface today. List them so 
+we can sprint on them after the demo.
+
+For DEMO BLOCKERS specifically: if a fix takes more than 10 minutes, 
+do NOT fix it. Tell me what to avoid in the demo flow instead.
+
+Speed matters more than completeness. Get me the lists in the next 
+15 minutes so I have 15 minutes to adjust the demo narrative.
