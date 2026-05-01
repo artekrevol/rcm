@@ -721,6 +721,7 @@ function PracticeInfoTab() {
     zip: "",
     billingLocation: "",
     defaultVaLocality: "",
+    pgbaTradingPartnerId: "",
   });
   const [npiError, setNpiError] = useState("");
   const [locationSearch, setLocationSearch] = useState("");
@@ -769,6 +770,7 @@ function PracticeInfoTab() {
         zip: addr.zip || "",
         billingLocation: settings.billing_location || "",
         defaultVaLocality: settings.default_va_locality || "",
+        pgbaTradingPartnerId: settings.pgba_trading_partner_id || "",
       });
       setInitialized(true);
     }
@@ -811,6 +813,7 @@ function PracticeInfoTab() {
       address: { street: form.street, city: form.city, state: form.state, zip: form.zip },
       billingLocation: form.billingLocation || null,
       defaultVaLocality: form.defaultVaLocality || null,
+      pgbaTradingPartnerId: form.pgbaTradingPartnerId || null,
     });
   }
 
@@ -911,6 +914,36 @@ function PracticeInfoTab() {
           </div>
         </div>
       )}
+      <div className="space-y-2">
+        <Label className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+          VA CCN Submitter ID
+          <span className="ml-1 inline-flex items-center rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+            Required for VA CCN claims
+          </span>
+        </Label>
+        <p className="text-xs text-muted-foreground">
+          Your PGBA EDIG-assigned Trading Partner Submitter ID. Goes into ISA06, GS02, and Loop 1000A
+          of every 837P sent to VA Community Care Network. This may be a Stedi Trading Partner ID,
+          an Availity submitter ID, or a direct PGBA EDIG enrollment ID — confirm with Daniela which
+          submission path applies before entering. Do not use the NPI here.
+        </p>
+        <Input
+          value={form.pgbaTradingPartnerId}
+          onChange={(e) => setForm({ ...form, pgbaTradingPartnerId: e.target.value })}
+          placeholder="e.g. 7GWNNNNAAN or your assigned EDIG submitter ID"
+          data-testid="input-pgba-trading-partner-id"
+        />
+        {!form.pgbaTradingPartnerId && (
+          <div className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>
+              VA CCN claim generation is blocked until this is set. Contact PGBA EDI at{" "}
+              <span className="font-mono">PGBA.EDI@pgba.com</span> or 1-800-259-0264 option 1 to obtain your ID.
+            </span>
+          </div>
+        )}
+      </div>
       <div>
         <h4 className="text-sm font-medium mb-3">Address</h4>
         <div className="grid gap-4">

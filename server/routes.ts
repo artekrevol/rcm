@@ -1317,6 +1317,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE submission_attempts ADD COLUMN IF NOT EXISTS block_reason VARCHAR`).catch(() => {});
     // VA locality: dedicated column separate from billing address ZIP/city
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS default_va_locality VARCHAR`).catch(() => {});
+    // PGBA VA CCN: EDIG-assigned Trading Partner Submitter ID for ISA06/GS02/NM1*41.
+    // Flexible: may hold Stedi Trading Partner ID, Availity ID, or direct PGBA EDIG ID.
+    // Confirm with Daniela which submission path applies (Stedi/Availity/direct) before populating.
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS pgba_trading_partner_id VARCHAR`).catch(() => {});
     // Migrate existing billing_location values that are actual locality names (not ZIP codes or bare city names)
     await pool.query(`
       UPDATE practice_settings SET default_va_locality = billing_location
@@ -3404,7 +3408,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation, defaultVaLocality, oa_submitter_id, oa_sftp_username, oa_sftp_password, defaultTos, defaultOrderingProviderId, homeboundDefault, excludeFacility } = req.body;
+      const { practiceName, primaryNpi, taxId, taxonomyCode, address, phone, defaultPos, billingLocation, defaultVaLocality, pgbaTradingPartnerId, oa_submitter_id, oa_sftp_username, oa_sftp_password, defaultTos, defaultOrderingProviderId, homeboundDefault, excludeFacility } = req.body;
       const orgId = getOrgId(req);
       const db = await import("./db").then(m => m.pool);
       const existing = orgId
@@ -3421,6 +3425,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (defaultOrderingProviderId !== undefined) { query += `, default_ordering_provider_id=$${params.length + 1}`; params.push(defaultOrderingProviderId || null); }
         if (homeboundDefault !== undefined) { query += `, homebound_default=$${params.length + 1}`; params.push(homeboundDefault); }
         if (excludeFacility !== undefined) { query += `, exclude_facility=$${params.length + 1}`; params.push(excludeFacility); }
+        if (pgbaTradingPartnerId !== undefined) { query += `, pgba_trading_partner_id=$${params.length + 1}`; params.push(pgbaTradingPartnerId || null); }
         query += ` WHERE id=$8 RETURNING *`;
         const { rows } = await db.query(query, params);
         res.json(rows[0]);
@@ -5875,6 +5880,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           state: (addr as any).state || "",
           zip: (addr as any).zip || "",
           phone: ps.phone || "",
+          pgba_trading_partner_id: ps.pgba_trading_partner_id || null,
         },
         provider: {
           first_name: prov.first_name || "",
@@ -6288,6 +6294,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           state: (addr as any).state || "",
           zip: (addr as any).zip || "",
           phone: ps.phone || "",
+          pgba_trading_partner_id: ps.pgba_trading_partner_id || null,
         },
         provider: {
           first_name: prov.first_name || "",
@@ -6493,6 +6500,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           state: (addr as any).state || "",
           zip: (addr as any).zip || "",
           phone: ps.phone || "",
+          pgba_trading_partner_id: ps.pgba_trading_partner_id || null,
         },
         provider: {
           first_name: prov.first_name || "",

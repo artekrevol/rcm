@@ -1,0 +1,37 @@
+Three follow-ups on the EDI audit, in priority order:
+
+1. PRIORITY — Switch NM103 from "PGBA VA CCN" to "PGBA VACCN" (no space) 
+   in both Loop 1000B and Loop 2010BB. Appendix B's working sample EDI is 
+   the authoritative source when Table 6 and Appendix B conflict — the 
+   sample is what PGBA's parser was actually tested against, and a space 
+   inside an organization name in NM1 segments creates real parser risk. 
+   Make it a single constant (PGBA_RECEIVER_NAME) so we can flip back in 
+   one line if PGBA actually rejects. Document the decision in the comment 
+   above the constant.
+
+2. PRIORITY — Replace the NPI-as-Trading-Partner-ID placeholder in 
+   ISA06/GS02 with a proper configurable field. Add a new column 
+   `pgba_trading_partner_id` to the practice_settings table (or wherever 
+   payer-specific submitter config lives). The EDI generator should read 
+   from this field; if null, throw an explicit error with a message 
+   pointing to where to configure it. Do NOT silently fall back to NPI — 
+   submitting with NPI in ISA06/GS02 will fail at the envelope level 
+   before the claim is read. Flag this in the practice settings UI as 
+   a required field for VA CCN claims.
+
+3. BACKLOG — Surface the ordering provider secondary_id field in the 
+   claim wizard UI. The interface field exists and validation warns in 
+   logs, but the data has no entry path. Add to the rendering provider 
+   sub-form when "ordering provider differs from rendering" is checked. 
+   Not a demo blocker, but tag it for the next sprint.
+
+Item 2 ambiguity to resolve before implementing: I need to confirm with 
+Daniela whether Chajinel's submission path to PGBA is via Stedi 
+(Stedi's Trading Partner ID), via Availity (Availity's ID), or direct 
+PGBA EDIG enrollment (Chajinel's own ID). Build the field with 
+flexibility to hold any of these — don't hardcode the assumption that 
+it's Chajinel's own ID. I'll get the answer to you within 24 hours.
+
+Keep the existing :  component separator decision as-is. Appendix B's 
+sample uses :  consistently and that matches industry-standard 5010 
+expectations. The > in Table 4 reads as a documentation error.

@@ -15,11 +15,13 @@ const PGBA_RECEIVER_TAX_ID = "841160004";
 const PGBA_REGION_5_TAX_ID = "841160005";
 
 /** PGBA receiver name in Loop 1000B NM103 and Loop 2010BB NM103.
- *  Per PGBA 837P CG v1.0 (March 2021), Table 6, page 15.
- *  IMPORTANT: Exact value is "PGBA VA CCN" (space between VA and CCN).
- *  NOTE: Appendix B sample shows "PGBA VACCN" — this contradicts Table 6.
- *        Table 6 is authoritative; using "PGBA VA CCN". Confirm with PGBA if rejected. */
-const PGBA_RECEIVER_NAME = "PGBA VA CCN";
+ *  DECISION (Abeer, 2026-05-01): Appendix B working sample is the authoritative source
+ *  when it conflicts with Table 6. Appendix B declares "PGBA VACCN" (no space between
+ *  VA and CCN); that is what PGBA's parser was actually tested against. A space inside
+ *  an NM1 org name creates real delimiter-parsing risk at the receiver side.
+ *  Using "PGBA VACCN". If PGBA rejects, revert to "PGBA VA CCN" by changing this single
+ *  constant — do not edit usage sites (Loop 1000B and Loop 2010BB both reference it). */
+const PGBA_RECEIVER_NAME = "PGBA VACCN";
 
 /** PGBA Loop 1000B NM108 — "46" = Electronic Transmitter Identification Number.
  *  Per PGBA 837P CG v1.0 (March 2021), Table 6, page 15. */
@@ -176,6 +178,16 @@ export interface EDI837PInput {
     state: string;
     zip: string;
     phone?: string;
+    /**
+     * PGBA EDIG-assigned Trading Partner Submitter ID.
+     * Used in ISA06, GS02, and Loop 1000A NM1*41 NM109 for PGBA VA CCN claims.
+     * May be a Stedi Trading Partner ID, Availity ID, or direct PGBA EDIG enrollment ID —
+     * confirm with Daniela which submission path applies before populating.
+     * REQUIRED for PGBA payers: if null, generate837P throws an explicit error.
+     * Do NOT fall back to NPI — NPI in ISA06/GS02 causes envelope-level rejection
+     * before the claim is parsed. Configure in Practice Settings → VA CCN Submitter ID.
+     */
+    pgba_trading_partner_id?: string | null;
   };
   provider: {
     first_name: string;
@@ -392,6 +404,23 @@ export function generate837P(input: EDI837PInput): string {
   // Catches AAT, H09, H16, LX-limit, CLM05-3, SSC/SSE errors before submission.
   if (pgba) validateForPGBA(input);
 
+  // PGBA requires the EDIG-assigned Trading Partner ID in ISA06, GS02, and NM1*41 NM109.
+  // This is NOT the practice NPI. Submitting NPI in ISA06/GS02 causes envelope-level
+  // rejection before the claim body is read by PGBA's parser.
+  // Non-PGBA payers use practice.npi as the standard X12 5010 submitter identifier.
+  if (pgba && !practice.pgba_trading_partner_id) {
+    throw new Error(
+      `[PGBA EDI] VA CCN Trading Partner ID is not configured for this practice. ` +
+      `Go to Practice Settings → VA CCN Submitter ID and enter the EDIG-assigned Trading Partner ID. ` +
+      `Do NOT use the NPI — submitting NPI in ISA06/GS02 causes envelope-level rejection before PGBA reads the claim. ` +
+      `Contact PGBA EDI at PGBA.EDI@pgba.com or 1-800-259-0264 option 1 to obtain your Trading Partner ID.`
+    );
+  }
+  // Resolved submitter identifier: EDIG Trading Partner ID for PGBA, NPI for all others.
+  const submitterId = (pgba && practice.pgba_trading_partner_id)
+    ? practice.pgba_trading_partner_id
+    : practice.npi;
+
   // Region-aware receiver tax ID. Region 5 uses 841160005; Region 4 (default) uses 841160004.
   // Per PGBA 837P CG v1.0 (March 2021), Table 6, page 15.
   const pgbaReceiverId = payer.pgba_region === 5 ? PGBA_REGION_5_TAX_ID : PGBA_RECEIVER_TAX_ID;
@@ -432,19 +461,18 @@ export function generate837P(input: EDI837PInput): string {
   //            NOTE: Table 4 lists ">" as component separator — contradiction in guide.
   //            Appendix B sample declares ":" in ISA16 and uses ":" in composites.
   //            Keeping ":" to match the binding test data. Confirm with PGBA if rejected.)
-  // ISA06 NOTE: Should be the EDIG-assigned Trading Partner submitter ID, not NPI.
-  //   Using practice.npi as fallback until Chajinel/Caritas enrolls with PGBA EDIG.
-  //   After enrollment, replace with the 15-char padded Trading Partner ID.
+  // ISA06: Interchange Sender ID = EDIG-assigned Trading Partner Submitter ID for PGBA,
+  //   or practice NPI for all other payers (X12 5010 standard).
+  //   Per PGBA 837P CG v1.0 (March 2021), Table 2: ISA05=ZZ, ISA06=Trading Partner ID.
   segments.push(
-    `ISA*03*          *00*          *ZZ*${practice.npi.padEnd(15)}*30*${isaReceiverId.padEnd(15)}*${date.slice(2)}*${time}*^*00501*${controlNumber}*0*${isa15}*:`
+    `ISA*03*          *00*          *ZZ*${submitterId.padEnd(15)}*30*${isaReceiverId.padEnd(15)}*${date.slice(2)}*${time}*^*00501*${controlNumber}*0*${isa15}*:`
   );
 
   // ── GS — Functional Group Header ───────────────────────────────────────────
   // GS03 must match ISA08 per PGBA 837P CG v1.0, Table 3.
-  // GS02: application sender's code = EDIG-assigned trading partner ID.
-  //   Using practice.npi as fallback (same enrollment caveat as ISA06).
+  // GS02: application sender's code = same submitter ID as ISA06.
   segments.push(
-    `GS*HC*${practice.npi}*${gsReceiverId}*${date}*${time}*1*X*005010X222A1`
+    `GS*HC*${submitterId}*${gsReceiverId}*${date}*${time}*1*X*005010X222A1`
   );
 
   segments.push(`ST*837*0001*005010X222A1`);
@@ -454,11 +482,11 @@ export function generate837P(input: EDI837PInput): string {
   segments.push(`BHT*0019*00*${claimControlNumber}*${date}*${time}*CH`);
 
   // ── Loop 1000A: Submitter ─────────────────────────────────────────────────
-  // NM1*41: NM108 = "46" (ETIN). NM109 = EDIG trading partner submitter ID.
+  // NM1*41: NM108 = "46" (ETIN). NM109 = EDIG Trading Partner Submitter ID for PGBA,
+  //   or practice NPI for all other payers.
   // Per PGBA 837P CG v1.0, Table 6, page 15 (NM109 = assigned submitter ID).
-  // Using practice.npi as fallback until EDIG enrollment complete.
   segments.push(
-    `NM1*41*2*${practice.name}*****${NM1_QUALIFIER["41"]}*${practice.npi}`
+    `NM1*41*2*${practice.name}*****${NM1_QUALIFIER["41"]}*${submitterId}`
   );
   const billingPhone = (practice.phone || "0000000000").replace(/\D/g, "");
   segments.push(`PER*IC*Billing Contact*TE*${billingPhone}`);
