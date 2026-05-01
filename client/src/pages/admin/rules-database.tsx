@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/admin-layout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Loader2, CheckCircle2, Clock, AlertTriangle, XCircle, Shield, BookOpen, Users, BarChart3, RefreshCw, Filter, Trophy } from "lucide-react";
+import { Loader2, CheckCircle2, Clock, AlertTriangle, XCircle, Shield, BookOpen, Users, BarChart3, RefreshCw, Filter, Trophy, Database, DollarSign, MapPin, Activity } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -55,6 +55,9 @@ export default function RulesDatabasePage() {
   const [historyUser, setHistoryUser] = useState("");
   const [historyPayer, setHistoryPayer] = useState("");
   const [historyType, setHistoryType] = useState("");
+  const [ingestLog, setIngestLog] = useState<string[]>([]);
+  const [ingestRunning, setIngestRunning] = useState(false);
+  const ingestLogRef = useRef<HTMLDivElement>(null);
 
   const { data: overview, isLoading: overviewLoading } = useQuery<any>({
     queryKey: ["/api/admin/rules-database/overview"],
@@ -96,6 +99,16 @@ export default function RulesDatabasePage() {
       if (!res.ok) return [];
       return res.json();
     },
+  });
+
+  const { data: rateCoverage, isLoading: rateCoverageLoading, refetch: refetchRateCoverage } = useQuery<any>({
+    queryKey: ["/api/admin/rate-coverage"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/rate-coverage", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    retry: false,
   });
 
   const { data: cmsConflicts = [] } = useQuery<any[]>({
@@ -425,6 +438,189 @@ export default function RulesDatabasePage() {
               )}
             </CardContent>
           </Card>
+        </div>
+
+        {/* ── Rate Reference Data Coverage (Task 9) ───────────────────────── */}
+        <div className="mt-6 space-y-4" data-testid="section-rate-coverage">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-semibold flex items-center gap-2">
+              <DollarSign className="h-4 w-4 text-green-600" />
+              Reimbursement Reference Data
+            </h3>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetchRateCoverage()}
+                disabled={rateCoverageLoading}
+                data-testid="button-refresh-rate-coverage"
+              >
+                <RefreshCw className={`h-3 w-3 mr-1 ${rateCoverageLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+              <Button
+                size="sm"
+                disabled={ingestRunning}
+                data-testid="button-run-rate-ingest"
+                onClick={async () => {
+                  setIngestLog([]);
+                  setIngestRunning(true);
+                  try {
+                    const resp = await fetch("/api/admin/rate-ingest", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      credentials: "include",
+                      body: JSON.stringify({ cms: true, va: true, localityOnly: true }),
+                    });
+                    const reader = resp.body!.getReader();
+                    const decoder = new TextDecoder();
+                    while (true) {
+                      const { done, value } = await reader.read();
+                      if (done) break;
+                      const text = decoder.decode(value);
+                      for (const line of text.split("\n")) {
+                        if (line.startsWith("data: ")) {
+                          try {
+                            const parsed = JSON.parse(line.slice(6));
+                            if (parsed.msg) setIngestLog((prev) => [...prev, parsed.msg]);
+                            if (parsed.done) { refetchRateCoverage(); }
+                          } catch {}
+                        }
+                      }
+                      if (ingestLogRef.current) ingestLogRef.current.scrollTop = ingestLogRef.current.scrollHeight;
+                    }
+                  } catch (e: any) {
+                    setIngestLog((prev) => [...prev, `Error: ${e.message}`]);
+                  } finally {
+                    setIngestRunning(false);
+                  }
+                }}
+              >
+                {ingestRunning ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Database className="h-3 w-3 mr-1" />}
+                {ingestRunning ? "Ingesting..." : "Run Ingest"}
+              </Button>
+            </div>
+          </div>
+
+          {/* Coverage stat tiles */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: "PFS RVU Codes", key: "pfs", icon: <Activity className="h-4 w-4 text-blue-500" />, desc: "Medicare Physician Fee Schedule" },
+              { label: "GPCI Localities", key: "gpci", icon: <MapPin className="h-4 w-4 text-purple-500" />, desc: "Geographic Practice Cost Indices" },
+              { label: "Locality-County", key: "locco", icon: <MapPin className="h-4 w-4 text-indigo-500" />, desc: "County-to-locality mapping" },
+              { label: "VA Fee Schedule", key: "vafs", icon: <Shield className="h-4 w-4 text-green-500" />, desc: "VA Community Care rates" },
+            ].map(({ label, key, icon, desc }) => {
+              const d = rateCoverage?.[key];
+              return (
+                <Card key={key} data-testid={`card-rate-coverage-${key}`}>
+                  <CardContent className="pt-4 pb-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      {icon}
+                      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+                    </div>
+                    {rateCoverageLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    ) : d ? (
+                      <>
+                        <p className="text-2xl font-bold">{(d.rows ?? 0).toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">{desc}{d.year ? ` · ${d.year}` : ""}</p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Not loaded</p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          {/* Chajinel locality + sample calcs */}
+          {rateCoverage && (rateCoverage.pfs?.rows > 0 || rateCoverage.vafs?.rows > 0) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Card data-testid="card-chajinel-locality">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <MapPin className="h-4 w-4" />
+                    Chajinel — Resolved Locality
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  {rateCoverage.chajinel?.localityCode ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">MAC Carrier</span>
+                        <span className="font-mono font-medium">{rateCoverage.chajinel.macCarrier}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Locality Code</span>
+                        <span className="font-mono font-medium">{rateCoverage.chajinel.localityCode}</span>
+                      </div>
+                      {rateCoverage.chajinel.localityName && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Locality Name</span>
+                          <span className="text-right text-xs max-w-[180px] leading-tight">{rateCoverage.chajinel.localityName.split("(")[0].trim()}</span>
+                        </div>
+                      )}
+                      <Badge variant="secondary" className="text-xs">San Mateo County → SF Locality</Badge>
+                    </>
+                  ) : (
+                    <p className="text-muted-foreground text-xs">Run CMS ingest to resolve locality</p>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card data-testid="card-sample-calcs">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <DollarSign className="h-4 w-4" />
+                    Sample Expected Payments (Chajinel / SF)
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {rateCoverage.sampleCalcs?.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {rateCoverage.sampleCalcs.map((s: any) => (
+                        <div key={s.code} className="flex items-center justify-between text-xs" data-testid={`rate-sample-${s.code}`}>
+                          <span className="font-mono font-medium">{s.code}</span>
+                          {s.result.expected_amount !== null ? (
+                            <span className="text-green-700 dark:text-green-400 font-medium">${s.result.expected_amount.toFixed(2)}</span>
+                          ) : (
+                            <span className="text-muted-foreground">No rate</span>
+                          )}
+                          <span className="text-[10px] text-muted-foreground max-w-[120px] truncate text-right">
+                            {s.result.rate_source === "medicare_pfs" ? "Medicare PFS" : s.result.rate_source === "va_fee_schedule" ? "VA FS" : "—"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground text-xs">Run ingest to see sample calculations</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {/* Ingest log */}
+          {ingestLog.length > 0 && (
+            <Card data-testid="card-ingest-log">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Ingest Log</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div
+                  ref={ingestLogRef}
+                  className="bg-muted/60 rounded p-3 text-xs font-mono space-y-0.5 max-h-48 overflow-y-auto"
+                  data-testid="ingest-log-output"
+                >
+                  {ingestLog.map((line, i) => (
+                    <div key={i}>{line}</div>
+                  ))}
+                  {ingestRunning && <div className="text-muted-foreground animate-pulse">Running…</div>}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </AdminLayout>

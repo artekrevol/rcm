@@ -553,6 +553,62 @@ export async function evaluateClaim(
   const pcpViolation = evaluatePCPReferral(ctx);
   if (pcpViolation) violations.push(pcpViolation);
 
+  // ── Rate check (Task 8) ─────────────────────────────────────────────────
+  // Only for VA Community Care or Medicare payer names; skip if no service lines with charges
+  const payerNameLc2 = (ctx.payerName || "").toLowerCase();
+  const isVAOrMedicare =
+    payerNameLc2.includes("va ") || payerNameLc2.includes("triwest") ||
+    payerNameLc2.includes("optum") || payerNameLc2.includes("community care") ||
+    payerNameLc2.includes("medicare") || payerNameLc2.includes("cms");
+
+  if (isVAOrMedicare && ctx.serviceDate && ctx.serviceLines.length > 0) {
+    try {
+      const { calculateExpectedPayment } = await import("./expected-payment");
+      const payerTypeForRate = (payerNameLc2.includes("va") || payerNameLc2.includes("triwest") || payerNameLc2.includes("optum") || payerNameLc2.includes("community care"))
+        ? "va_community_care" : "medicare";
+
+      for (const line of ctx.serviceLines) {
+        if (!line.code || !line.totalCharge || line.totalCharge <= 0) continue;
+        const firstMod = line.modifier ? line.modifier.split(/[\s,]+/)[0].trim() || null : null;
+        const exp = await calculateExpectedPayment(
+          pool, line.code, firstMod, ctx.organizationId, ctx.serviceDate, "non_facility", payerTypeForRate
+        );
+
+        if (exp.rate_source === "no_rate_found") {
+          violations.push({
+            ruleType: "data_quality",
+            severity: "info",
+            message: `${line.code}: No reference rate on file for this code (not in Medicare PFS or VA Fee Schedule). Billing at agency standard.`,
+            fixSuggestion: "Verify your contracted rate for this code. No CMS benchmark is available — ensure the billed amount matches your agreement.",
+            ruleId: null, sourcePage: null, sourceQuote: null, payerSpecific: false,
+          });
+        } else if (exp.expected_amount !== null && exp.expected_amount > 0) {
+          const variancePct = ((line.totalCharge - exp.expected_amount) / exp.expected_amount) * 100;
+          const src = exp.source_detail;
+          if (variancePct > 200) {
+            violations.push({
+              ruleType: "data_quality",
+              severity: "warn",
+              message: `${line.code}: Billed $${line.totalCharge.toFixed(2)} is ${Math.round(variancePct)}% above the expected rate of $${exp.expected_amount.toFixed(2)} (${src}).`,
+              fixSuggestion: "Verify the billed charge. Amounts more than 2× the Medicare benchmark may be flagged as billing errors by the payer.",
+              ruleId: null, sourcePage: null, sourceQuote: null, payerSpecific: false,
+            });
+          } else if (variancePct < -50) {
+            violations.push({
+              ruleType: "data_quality",
+              severity: "info",
+              message: `${line.code}: Billed $${line.totalCharge.toFixed(2)} is ${Math.round(Math.abs(variancePct))}% below the expected rate of $${exp.expected_amount.toFixed(2)} (${src}). Potential under-billing.`,
+              fixSuggestion: "Confirm this is intentional. Under-billing leaves reimbursement on the table and may indicate a charge entry error.",
+              ruleId: null, sourcePage: null, sourceQuote: null, payerSpecific: false,
+            });
+          }
+        }
+      }
+    } catch {
+      // Rate check is non-blocking — silently skip if DB tables not yet populated
+    }
+  }
+
   return violations;
 }
 

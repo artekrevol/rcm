@@ -1,0 +1,536 @@
+# Replit Sprint — Reimbursement Reference Data (Medicare PFS + GPCI + VA Fee Schedule)
+
+## Why this matters
+
+Currently the system has no rate reference data. When Daniela enters a CPT/HCPCS code, the system can validate the code exists, but cannot tell her:
+- What Medicare allows for that code in her locality
+- What VA Community Care should pay
+- Whether her billed amount is reasonable
+- What the expected reimbursement is for the claim
+
+This shows up most acutely as "rate not on file" warnings on VA claims — the system has no payment context to flag underpayments, no way to calculate expected payment, no way to audit ERAs against expected amounts.
+
+This sprint builds the foundation: full Medicare PFS data with GPCI locality adjustments, plus the VA Fee Schedule data, both structured and queryable. After this lands, the rules engine gains rate-validation capability and Daniela's billing has actual payment intelligence behind it.
+
+This is also strategically important. Most billing platforms have stale, hardcoded rate tables. Live sourced fee schedule data with locality-aware lookup is a moat ClaimShield should own.
+
+## How VA Community Care reimbursement actually works
+
+The reimbursement waterfall, in order:
+
+1. Contract-negotiated rate (if provider has TriWest/Optum CCN contract)
+2. Medicare Physician Fee Schedule rate (CMS PFS + GPCI locality adjustment)
+3. VA Fee Schedule (VAFS) rate (for codes Medicare doesn't price)
+4. Percentage of billed charges (fallback)
+
+For Chajinel and most home care agencies, layers 2 and 3 are the critical ones. The system should be able to tell Daniela "expected payment for this claim is $X" with the source clearly cited (Medicare PFS + GPCI for codes 1-3, VAFS for codes 4-5).
+
+## Standing constraints
+
+- All schema changes idempotent
+- All public datasets stored with provenance (source URL, retrieval date, version)
+- No tenant-scoping on these tables — they're global reference data
+- Rates are point-in-time (effective date + termination date), so historical lookups stay accurate
+- All ingest runs against PRODUCTION_DATABASE_URL after dev verification
+
+## Tasks
+
+### Task 1 — Schema for reimbursement reference data
+
+Create five new tables. All global, none tenant-scoped.
+
+```sql
+-- Master code table (HCPCS + CPT, with descriptions)
+CREATE TABLE IF NOT EXISTS hcpcs_codes (
+  code TEXT PRIMARY KEY,
+  short_description TEXT,
+  long_description TEXT,
+  code_type TEXT CHECK (code_type IN ('CPT', 'HCPCS_LEVEL_II', 'CPT_CATEGORY_II', 'CPT_CATEGORY_III')),
+  status TEXT CHECK (status IN ('active', 'deleted', 'replaced')),
+  effective_date DATE,
+  termination_date DATE,
+  source TEXT,
+  source_version TEXT,
+  ingested_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Medicare Physician Fee Schedule RVU data
+CREATE TABLE IF NOT EXISTS cms_pfs_rvu (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  hcpcs_code TEXT NOT NULL REFERENCES hcpcs_codes(code),
+  modifier TEXT,                       -- some codes have modifier-specific RVUs
+  
+  -- The RVU components
+  work_rvu NUMERIC(10,4),
+  practice_expense_rvu_facility NUMERIC(10,4),
+  practice_expense_rvu_non_facility NUMERIC(10,4),
+  malpractice_rvu NUMERIC(10,4),
+  
+  -- Status and policy indicators
+  status_indicator TEXT,              -- A=active, R=restricted, etc.
+  global_period TEXT,                 -- 0/10/90/MMM/XXX/YYY/ZZZ
+  professional_component_indicator TEXT,
+  multiple_procedure_indicator TEXT,
+  bilateral_surgery_indicator TEXT,
+  assistant_surgery_indicator TEXT,
+  co_surgeon_indicator TEXT,
+  team_surgery_indicator TEXT,
+  
+  -- Versioning
+  effective_date DATE NOT NULL,
+  termination_date DATE,
+  pfs_year INTEGER NOT NULL,           -- 2026, 2025, etc.
+  conversion_factor NUMERIC(10,4),    -- the year's CF, denormalized for fast lookup
+  
+  -- Provenance
+  source_url TEXT,
+  ingested_at TIMESTAMP DEFAULT NOW(),
+  
+  UNIQUE (hcpcs_code, modifier, effective_date, pfs_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pfs_rvu_code ON cms_pfs_rvu (hcpcs_code);
+CREATE INDEX IF NOT EXISTS idx_pfs_rvu_year ON cms_pfs_rvu (pfs_year);
+
+-- Geographic Practice Cost Index (locality adjustments)
+CREATE TABLE IF NOT EXISTS cms_gpci (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  
+  -- Locality identification
+  mac_carrier TEXT NOT NULL,           -- Medicare Administrative Contractor
+  locality_code TEXT NOT NULL,
+  locality_name TEXT NOT NULL,
+  state TEXT NOT NULL,
+  state_fips TEXT,
+  counties TEXT[],                     -- list of counties in this locality
+  
+  -- The GPCI values  
+  work_gpci NUMERIC(6,4),
+  practice_expense_gpci NUMERIC(6,4),
+  malpractice_gpci NUMERIC(6,4),
+  
+  -- Versioning
+  effective_date DATE NOT NULL,
+  termination_date DATE,
+  pfs_year INTEGER NOT NULL,
+  
+  source_url TEXT,
+  ingested_at TIMESTAMP DEFAULT NOW(),
+  
+  UNIQUE (mac_carrier, locality_code, effective_date, pfs_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gpci_state ON cms_gpci (state);
+CREATE INDEX IF NOT EXISTS idx_gpci_locality ON cms_gpci (mac_carrier, locality_code);
+
+-- ZIP code to Medicare locality mapping
+-- (CMS publishes a ZIP-to-locality crosswalk so you can find a locality from an address)
+CREATE TABLE IF NOT EXISTS cms_zip_locality (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  zip_code TEXT NOT NULL,              -- 5-digit ZIP
+  zip_plus_4 TEXT,                     -- optional ZIP+4 for boundary cases
+  state TEXT NOT NULL,
+  mac_carrier TEXT NOT NULL,
+  locality_code TEXT NOT NULL,
+  rural_indicator TEXT,                -- R = rural, B = super-rural
+  effective_date DATE NOT NULL,
+  termination_date DATE,
+  source_url TEXT,
+  ingested_at TIMESTAMP DEFAULT NOW(),
+  
+  UNIQUE (zip_code, zip_plus_4, effective_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_zip_locality_zip ON cms_zip_locality (zip_code);
+
+-- VA Fee Schedule rates (for codes Medicare doesn't price)
+CREATE TABLE IF NOT EXISTS va_fee_schedule (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  hcpcs_code TEXT NOT NULL,
+  modifier TEXT,
+  
+  schedule_type TEXT NOT NULL CHECK (schedule_type IN (
+    'national_vafs',          -- main VAFS schedule
+    'alaska_vafs',            -- Alaska-specific
+    'cnh',                    -- Community Nursing Home
+    'gec',                    -- Geriatrics & Extended Care
+    'reasonable_charges'      -- VA Reasonable Charges (for billing third-party insurers)
+  )),
+  
+  -- The rates
+  facility_rate NUMERIC(10,2),
+  non_facility_rate NUMERIC(10,2),
+  unit_rate NUMERIC(10,2),             -- some codes are unit-based (15-min increments)
+  unit_description TEXT,
+  
+  -- Geographic scope
+  geographic_scope TEXT DEFAULT 'national',  -- 'national', 'alaska', or specific locality
+  
+  -- Description (for human readability when displayed)
+  code_description TEXT,
+  
+  -- Versioning
+  effective_date DATE NOT NULL,
+  termination_date DATE,
+  fee_schedule_year INTEGER NOT NULL,  -- 2026, 2025, etc.
+  
+  source_url TEXT,
+  ingested_at TIMESTAMP DEFAULT NOW(),
+  
+  UNIQUE (hcpcs_code, modifier, schedule_type, effective_date, fee_schedule_year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vafs_code ON va_fee_schedule (hcpcs_code);
+CREATE INDEX IF NOT EXISTS idx_vafs_type_year ON va_fee_schedule (schedule_type, fee_schedule_year);
+
+-- Practice locality cache (per-tenant, derived from address)
+ALTER TABLE practice_settings 
+  ADD COLUMN IF NOT EXISTS medicare_locality_code TEXT,
+  ADD COLUMN IF NOT EXISTS medicare_mac_carrier TEXT,
+  ADD COLUMN IF NOT EXISTS locality_resolved_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS locality_resolution_method TEXT;
+```
+
+### Task 2 — Ingestion service for CMS PFS data
+
+Create `server/services/cms-pfs-ingest.ts`. Source: https://www.cms.gov/medicare/payment/fee-schedules/physician/national-payment-amount-file
+
+This page publishes the annual PFS file. The 2026 file should be available by now. If not, ingest the most recent available year (likely 2025).
+
+Steps:
+
+1. Download the PFS annual zip (typically named `RVUYYy.zip` where YY is the year suffix and y is the quarter)
+2. Extract the contents — primary file is `PPRRVUYY.csv` or similar (CMS naming varies by year)
+3. Parse the fixed-width or CSV format. CMS typically publishes both formats; the CSV is easier
+4. For each row, upsert into `cms_pfs_rvu`. Set `pfs_year = 2026`, capture the conversion factor from the annual rule
+5. Log row counts: total parsed, inserted, updated, skipped
+
+The conversion factor for 2026 needs to be researched and set. As of late 2025, CMS finalized the 2026 PFS Final Rule. The conversion factor is in that document (likely around $32.00-$34.00 — verify the exact number from the December 2025 final rule before ingest).
+
+```typescript
+// Pseudocode
+async function ingestPFS(year: number, conversionFactor: number) {
+  const sourceUrl = `https://www.cms.gov/files/zip/cy-${year}-pfs-final-rule.zip`;
+  const downloadPath = `/tmp/pfs-${year}.zip`;
+  
+  await downloadFile(sourceUrl, downloadPath);
+  const csvPath = await extractCSV(downloadPath);
+  
+  const rows = await parseCSV(csvPath);
+  for (const row of rows) {
+    await upsertPFSRow({
+      hcpcs_code: row.hcpcs,
+      modifier: row.modifier || null,
+      work_rvu: parseNumeric(row.work_rvu),
+      practice_expense_rvu_facility: parseNumeric(row.pe_rvu_facility),
+      practice_expense_rvu_non_facility: parseNumeric(row.pe_rvu_non_facility),
+      malpractice_rvu: parseNumeric(row.mp_rvu),
+      status_indicator: row.status_indicator,
+      // ... other fields
+      pfs_year: year,
+      conversion_factor: conversionFactor,
+      effective_date: `${year}-01-01`,
+      termination_date: `${year}-12-31`,
+      source_url: sourceUrl,
+    });
+  }
+}
+```
+
+Acceptance for Task 2:
+- `cms_pfs_rvu` populated with ~10,000+ rows for PFS year 2026 (or whichever year is current)
+- Sample query returns reasonable RVUs:
+
+```sql
+-- Office visit code should have known RVUs
+SELECT hcpcs_code, work_rvu, practice_expense_rvu_non_facility, conversion_factor
+FROM cms_pfs_rvu 
+WHERE hcpcs_code = '99213' AND pfs_year = 2026;
+-- Expected: work_rvu around 1.3, PE non-facility around 1.0, MP around 0.07
+```
+
+### Task 3 — Ingestion service for GPCI data
+
+Create `server/services/cms-gpci-ingest.ts`. Source: included with the PFS annual file, usually a separate sheet in the same zip.
+
+The GPCI file lists ~110 Medicare localities with their three GPCI values (work, practice expense, malpractice).
+
+For Chajinel specifically, San Mateo County is in Medicare locality "05" (San Francisco) under MAC carrier "01182" (Noridian). The PE GPCI for SF is among the highest in the nation (around 1.42 in recent years), which means Medicare pays substantially more for the same code in SF than in rural areas.
+
+Acceptance:
+- `cms_gpci` populated with ~110 rows for PFS year 2026
+- Sample query returns SF locality:
+
+```sql
+SELECT locality_name, state, work_gpci, practice_expense_gpci, malpractice_gpci 
+FROM cms_gpci 
+WHERE state = 'CA' AND pfs_year = 2026
+ORDER BY locality_name;
+-- Should include: San Francisco, Los Angeles, Anaheim/Santa Ana, Rest of California
+```
+
+### Task 4 — ZIP-to-Locality crosswalk ingestion
+
+Create `server/services/cms-zip-locality-ingest.ts`. Source: https://www.cms.gov/medicare/medicare-fee-for-service-payment/physicianfeesched/zip-code-files
+
+CMS publishes a ZIP-code to Medicare locality crosswalk file (typically updated quarterly). This is what lets you take a practice's address ZIP and resolve to the right locality for GPCI lookup.
+
+Acceptance:
+- `cms_zip_locality` populated with ~40,000+ rows
+- Sample query for Chajinel's ZIP:
+
+```sql
+SELECT * FROM cms_zip_locality WHERE zip_code = '94080';
+-- Expected: state CA, locality_code 05, mac_carrier 01182 (Noridian SF)
+```
+
+### Task 5 — VA Fee Schedule ingestion
+
+Create `server/services/va-fee-schedule-ingest.ts`. 
+
+Sources (all from https://www.va.gov/COMMUNITYCARE/revenue-ops/Fee-Schedule.asp):
+
+- **National VAFS 2026** — main schedule
+- **Alaska VAFS 2026** — Alaska-specific (skip for now unless time permits)
+- **CNH Fee Schedule** — Community Nursing Home
+- **GEC Fee Schedule** — Geriatrics & Extended Care (HIGHEST PRIORITY for home care use case — covers home care HCPCS codes)
+
+VA publishes these as PDF or Excel. The Excel files are easier to parse. Typical format:
+- HCPCS code
+- Description  
+- Non-facility rate
+- Facility rate
+- Unit description (where applicable)
+
+The GEC schedule is most relevant for Chajinel because it covers home health and home care codes that Medicare doesn't price (e.g., adult day care, escort services, certain nursing aide services).
+
+```typescript
+// Pseudocode for GEC ingest
+async function ingestGECSchedule(year: number) {
+  const sourceUrl = 'https://www.va.gov/COMMUNITYCARE/docs/.../GEC-FY2026.xlsx';
+  const xlsxPath = '/tmp/gec.xlsx';
+  await downloadFile(sourceUrl, xlsxPath);
+  
+  const rows = await parseXLSX(xlsxPath);
+  for (const row of rows) {
+    await upsertVAFSRow({
+      hcpcs_code: row.code,
+      schedule_type: 'gec',
+      facility_rate: parseNumeric(row.facility_rate),
+      non_facility_rate: parseNumeric(row.non_facility_rate),
+      unit_rate: parseNumeric(row.unit_rate),
+      unit_description: row.unit_desc,
+      code_description: row.description,
+      fee_schedule_year: year,
+      effective_date: `${year}-01-01`,
+      termination_date: `${year}-12-31`,
+      source_url: sourceUrl,
+    });
+  }
+}
+```
+
+Acceptance:
+- `va_fee_schedule` populated with at least the GEC schedule (a few hundred codes typically)
+- National VAFS also ingested if available
+- Sample query:
+
+```sql
+-- Find VA rate for a home care service code
+SELECT * FROM va_fee_schedule 
+WHERE hcpcs_code = 'G0156' AND schedule_type = 'gec' AND fee_schedule_year = 2026;
+-- G0156 = Services of home health/hospice aide in home health setting
+```
+
+### Task 6 — Locality resolution for practice settings
+
+After ingest tables are populated, resolve Chajinel's locality:
+
+```sql
+-- Backfill Chajinel's Medicare locality
+UPDATE practice_settings 
+SET 
+  medicare_locality_code = (
+    SELECT locality_code FROM cms_zip_locality 
+    WHERE zip_code = '94080' 
+    ORDER BY effective_date DESC 
+    LIMIT 1
+  ),
+  medicare_mac_carrier = (
+    SELECT mac_carrier FROM cms_zip_locality 
+    WHERE zip_code = '94080' 
+    ORDER BY effective_date DESC 
+    LIMIT 1
+  ),
+  locality_resolved_at = NOW(),
+  locality_resolution_method = 'zip_lookup_94080'
+WHERE organization_id = 'chajinel-org-001';
+```
+
+### Task 7 — Expected payment calculation service
+
+Create `server/services/expected-payment.ts` with a function:
+
+```typescript
+async function calculateExpectedPayment(
+  hcpcsCode: string,
+  modifier: string | null,
+  organizationId: string,
+  serviceDate: Date,
+  facilityType: 'facility' | 'non_facility' = 'non_facility',
+  payerType: 'medicare' | 'va_community_care' | 'commercial' = 'medicare'
+): Promise<{
+  expected_amount: number | null;
+  rate_source: 'medicare_pfs' | 'va_fee_schedule' | 'no_rate_found';
+  source_detail: string;
+  calculation: string;
+}>
+```
+
+Logic:
+
+1. Resolve practice's Medicare locality from `practice_settings.medicare_locality_code`
+2. Find the year's PFS data based on serviceDate (e.g., 2026 PFS for service dates in 2026)
+3. **For Medicare or VA Community Care payers:**
+   - First try Medicare PFS:
+     - Look up RVUs for the hcpcs_code in `cms_pfs_rvu` for that year
+     - Look up GPCI for the locality in `cms_gpci`
+     - Calculate: `(work_rvu × work_gpci + pe_rvu × pe_gpci + mp_rvu × mp_gpci) × conversion_factor`
+     - If found, return with `rate_source = 'medicare_pfs'`
+   - If no Medicare rate, try VA Fee Schedule:
+     - Look up `va_fee_schedule` where hcpcs_code matches and schedule_type IN ('gec', 'national_vafs')
+     - Use facility_rate or non_facility_rate based on facilityType
+     - Return with `rate_source = 'va_fee_schedule'`
+4. If still nothing, return null with `rate_source = 'no_rate_found'` and a clear note
+
+The `calculation` string should explain the math for transparency:
+
+```
+"Medicare PFS 2026: (1.30 × 1.000 + 1.20 × 1.420 + 0.10 × 0.640) × $33.29 = $103.85
+ (Work RVU × Work GPCI + PE RVU × PE GPCI + MP RVU × MP GPCI) × Conversion Factor"
+```
+
+This transparency is what makes the feature valuable — Daniela (and Rosemary) can see exactly how the expected amount was derived.
+
+### Task 8 — Wire into the rules engine and risk panel
+
+When a claim is being evaluated:
+
+1. For each service line, calculate expected payment
+2. Compare to billed amount
+3. Add a rule violation IF:
+   - Billed amount > 200% of expected (potential billing error or fraud flag) — severity `warn`
+   - Billed amount < 50% of expected (under-billing leaving money on the table) — severity `info`
+   - No rate found (the original "rate not on file" issue) — severity `info` with a clear message
+
+The risk panel shows:
+```
+Service Line 1: G0156 — Home health aide services
+  Billed: $25.00
+  Expected (Medicare PFS, SF locality): $42.18
+  Status: 🟡 Under-billed by $17.18 — verify charge amount
+```
+
+Or for codes without rates:
+```
+Service Line 2: T1019 — Personal care services per 15 min
+  Billed: $8.50
+  Expected: No rate on file (not in Medicare PFS or VA Fee Schedule)
+  Status: ℹ️ No reference rate available — billing at agency standard
+```
+
+This last one is exactly the "rate not on file" warning currently appearing on Daniela's claims. With this work, the system has actual context for why and what to do about it.
+
+### Task 9 — Admin coverage dashboard
+
+Add a section to `/admin/rules-database` showing:
+
+- PFS coverage: how many codes have RVU data for the current year
+- GPCI coverage: how many localities are loaded
+- ZIP coverage: how many ZIP codes are mapped
+- VA Fee Schedule coverage: rows by schedule_type
+
+Per-tenant view: for each tenant's resolved locality, show example expected-payment calculations for common codes (99213, 99214, G0156, T1019, etc.) so admins can sanity-check the data.
+
+### Task 10 — Production verification
+
+After all ingests complete, run against PRODUCTION_DATABASE_URL and post results:
+
+```sql
+-- Coverage summary
+SELECT 
+  'cms_pfs_rvu' AS dataset, COUNT(*) AS rows, MIN(pfs_year) AS oldest_year, MAX(pfs_year) AS newest_year
+FROM cms_pfs_rvu
+UNION ALL SELECT 'cms_gpci', COUNT(*), MIN(pfs_year), MAX(pfs_year) FROM cms_gpci
+UNION ALL SELECT 'cms_zip_locality', COUNT(*), NULL, NULL FROM cms_zip_locality
+UNION ALL SELECT 'va_fee_schedule', COUNT(*), MIN(fee_schedule_year), MAX(fee_schedule_year) FROM va_fee_schedule
+UNION ALL SELECT 'hcpcs_codes', COUNT(*), NULL, NULL FROM hcpcs_codes;
+
+-- Chajinel locality resolved
+SELECT name, address, medicare_locality_code, medicare_mac_carrier, locality_resolved_at
+FROM practice_settings 
+WHERE organization_id = 'chajinel-org-001';
+
+-- Test expected payment calculation for a common code
+-- (Run the new service function and capture output)
+
+-- Sample VAFS GEC rates (the ones most relevant to home care)
+SELECT hcpcs_code, code_description, non_facility_rate
+FROM va_fee_schedule 
+WHERE schedule_type = 'gec' AND fee_schedule_year = 2026
+ORDER BY hcpcs_code
+LIMIT 20;
+```
+
+## What NOT to do in this prompt
+
+- Do not seed every state's Medicaid fee schedule (that's a different sprint, much larger scope)
+- Do not seed CHAMPVA rates (they use proprietary rates not publicly downloadable)
+- Do not build dental fee schedules (separate concern)
+- Do not auto-update billed amounts on existing claims based on expected payment (display only — never modify what was billed)
+- Do not build the full ERA reconciliation feature (requires this data plus more — separate sprint after pilot has real ERA history)
+
+## Dependencies and ordering
+
+Tasks 1, 2, 3, 4 can run in parallel (independent ingests).
+
+Task 5 (VA) is independent and can run in parallel with the CMS ingests.
+
+Task 6 (locality resolution) depends on Tasks 3 and 4 completing.
+
+Task 7 (expected payment service) depends on Tasks 2, 3, 4, 5 all completing.
+
+Task 8 (wire into rules engine) depends on Task 7.
+
+Task 9 (admin dashboard) depends on data being populated (Tasks 2-5).
+
+## Production Verification format
+
+Standard format per the standing order. For each task:
+- Schema query result
+- Data count + sample rows
+- For Task 7, run the calculation against 5 sample codes and paste the output
+- For Task 8, screenshot of risk panel showing rate-aware violations on a test claim
+
+## Acceptance for the full sprint
+
+- All 5 tables populated with current-year data
+- Chajinel's locality resolved to San Francisco (locality 05, MAC 01182 Noridian)
+- Expected payment service returns sensible values for common codes (99213 should be ~$95-$110 in SF, G0156 should be ~$40-$50)
+- Risk panel surfaces rate-related observations on Chajinel's test claims
+- Admin coverage dashboard shows populated stats
+- "Rate not on file" still appears for codes genuinely missing from all sources, but with a clear explanation rather than just a warning
+
+## Estimated scope
+
+This is a substantial sprint — probably 4-6 days of focused work given the data parsing complexity (CMS files have inconsistent formats, VA files are sometimes PDFs, GPCI codes have to be researched per locality). 
+
+Suggested split if you can't do it all at once:
+
+**Phase 1 (Days 1-2):** Tasks 1, 2, 3, 4 — Medicare PFS + GPCI + ZIP ingestion. After this, the system knows Medicare rates.
+
+**Phase 2 (Days 3-4):** Task 5 — VA Fee Schedule ingestion. After this, the system knows VA-specific rates.
+
+**Phase 3 (Days 5-6):** Tasks 6, 7, 8, 9 — Locality resolution, expected payment service, rules engine integration, admin dashboard. After this, the system actually USES the data.
+
+If timeline is tight before May 12, ship Phase 1 only — gives you Medicare-rate-aware demo capability without VA-specific rates. The "rate not on file" message becomes "rate not on file in Medicare PFS — checking VA Fee Schedule (not yet loaded)" which is at least more informative than the current state.

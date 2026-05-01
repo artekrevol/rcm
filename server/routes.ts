@@ -2701,6 +2701,123 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       `);
     }
 
+    // ── Reimbursement reference tables (global, no tenant scope) ─────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS hcpcs_codes (
+        code TEXT PRIMARY KEY,
+        short_description TEXT,
+        long_description TEXT,
+        code_type TEXT CHECK (code_type IN ('CPT','HCPCS_LEVEL_II','CPT_CATEGORY_II','CPT_CATEGORY_III')),
+        status TEXT CHECK (status IN ('active','deleted','replaced')),
+        effective_date DATE,
+        termination_date DATE,
+        source TEXT,
+        source_version TEXT,
+        ingested_at TIMESTAMP DEFAULT NOW()
+      )
+    `).catch((e: any) => console.error('[SEEDER] hcpcs_codes:', e.message));
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS cms_pfs_rvu (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        hcpcs_code TEXT NOT NULL,
+        modifier TEXT,
+        work_rvu NUMERIC(10,4),
+        practice_expense_rvu_facility NUMERIC(10,4),
+        practice_expense_rvu_non_facility NUMERIC(10,4),
+        malpractice_rvu NUMERIC(10,4),
+        status_indicator TEXT,
+        global_period TEXT,
+        professional_component_indicator TEXT,
+        multiple_procedure_indicator TEXT,
+        bilateral_surgery_indicator TEXT,
+        assistant_surgery_indicator TEXT,
+        co_surgeon_indicator TEXT,
+        team_surgery_indicator TEXT,
+        effective_date DATE NOT NULL,
+        termination_date DATE,
+        pfs_year INTEGER NOT NULL,
+        conversion_factor NUMERIC(10,4),
+        source_url TEXT,
+        ingested_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE (hcpcs_code, modifier, effective_date, pfs_year)
+      )
+    `).catch((e: any) => console.error('[SEEDER] cms_pfs_rvu:', e.message));
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pfs_rvu_code ON cms_pfs_rvu (hcpcs_code)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pfs_rvu_year ON cms_pfs_rvu (pfs_year)`).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS cms_gpci (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        mac_carrier TEXT NOT NULL,
+        locality_code TEXT NOT NULL,
+        locality_name TEXT NOT NULL,
+        state TEXT NOT NULL,
+        state_fips TEXT,
+        counties TEXT[],
+        work_gpci NUMERIC(6,4),
+        practice_expense_gpci NUMERIC(6,4),
+        malpractice_gpci NUMERIC(6,4),
+        effective_date DATE NOT NULL,
+        termination_date DATE,
+        pfs_year INTEGER NOT NULL,
+        source_url TEXT,
+        ingested_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE (mac_carrier, locality_code, effective_date, pfs_year)
+      )
+    `).catch((e: any) => console.error('[SEEDER] cms_gpci:', e.message));
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gpci_state ON cms_gpci (state)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gpci_locality ON cms_gpci (mac_carrier, locality_code)`).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS cms_locality_county (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        mac_carrier TEXT NOT NULL,
+        locality_code TEXT NOT NULL,
+        state TEXT NOT NULL,
+        locality_name TEXT NOT NULL,
+        counties TEXT[],
+        pfs_year INTEGER NOT NULL,
+        source_url TEXT,
+        ingested_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE (mac_carrier, locality_code, pfs_year)
+      )
+    `).catch((e: any) => console.error('[SEEDER] cms_locality_county:', e.message));
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS va_fee_schedule (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        hcpcs_code TEXT NOT NULL,
+        modifier TEXT,
+        schedule_type TEXT NOT NULL CHECK (schedule_type IN ('national_vafs','alaska_vafs','cnh','gec','reasonable_charges')),
+        facility_rate NUMERIC(10,2),
+        non_facility_rate NUMERIC(10,2),
+        unit_rate NUMERIC(10,2),
+        unit_description TEXT,
+        geographic_scope TEXT NOT NULL DEFAULT 'national',
+        mac_carrier TEXT,
+        locality_code TEXT,
+        code_description TEXT,
+        effective_date DATE NOT NULL,
+        termination_date DATE,
+        fee_schedule_year INTEGER NOT NULL,
+        source_url TEXT,
+        ingested_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE (hcpcs_code, modifier, schedule_type, geographic_scope, effective_date, fee_schedule_year)
+      )
+    `).catch((e: any) => console.error('[SEEDER] va_fee_schedule:', e.message));
+
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vafs_code ON va_fee_schedule (hcpcs_code)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vafs_type_year ON va_fee_schedule (schedule_type, fee_schedule_year)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vafs_locality ON va_fee_schedule (mac_carrier, locality_code)`).catch(() => {});
+
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS medicare_locality_code TEXT`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS medicare_mac_carrier TEXT`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS locality_resolved_at TIMESTAMP`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS locality_resolution_method TEXT`).catch(() => {});
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -12105,6 +12222,54 @@ Warmly,
       res.json(result.rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Rate Reference Data Admin API (Tasks 2-9) ────────────────────────────
+
+  // GET /api/admin/rate-coverage — coverage stats + sample calculations
+  app.get("/api/admin/rate-coverage", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { getRateCoverageStats } = await import("./services/expected-payment");
+      const stats = await getRateCoverageStats(db);
+      res.json(stats);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // POST /api/admin/rate-ingest — trigger CMS + VA rate ingestion
+  // Body: { cms?: boolean, va?: boolean, localityOnly?: boolean }
+  app.post("/api/admin/rate-ingest", requireSuperAdmin, async (req, res) => {
+    const { cms = true, va = true, localityOnly = true } = req.body || {};
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+    const send = (msg: string) => res.write(`data: ${JSON.stringify({ msg })}\n\n`);
+    try {
+      const { pool: db } = await import("./db");
+      const { runFullIngest } = await import("./services/rate-ingest");
+      send("Starting rate data ingest...");
+      const results = await runFullIngest(db, { cms, va, localityOnly });
+      send(`Ingest complete: ${JSON.stringify(results, null, 2)}`);
+      res.write(`data: ${JSON.stringify({ done: true, results })}\n\n`);
+    } catch (e: any) {
+      send(`Error: ${e.message}`);
+      res.write(`data: ${JSON.stringify({ done: true, error: e.message })}\n\n`);
+    }
+    res.end();
+  });
+
+  // GET /api/admin/rate-lookup?code=99213&org=chajinel-org-001 — ad-hoc rate lookup
+  app.get("/api/admin/rate-lookup", requireSuperAdmin, async (req, res) => {
+    const { code, org = "chajinel-org-001", modifier, facilityType = "non_facility" } = req.query as Record<string, string>;
+    if (!code) return res.status(400).json({ error: "code required" });
+    try {
+      const { pool: db } = await import("./db");
+      const { calculateExpectedPayment } = await import("./services/expected-payment");
+      const result = await calculateExpectedPayment(db, code, modifier || null, org, new Date(), facilityType as any, "va_community_care");
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 
