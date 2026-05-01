@@ -41,12 +41,12 @@ export default function PatientList() {
     setDebounceTimer(timer);
   }
 
-  const { data: patients = [], isLoading } = useQuery<any[]>({
+  const { data: patients = [], isLoading, isError } = useQuery<any[]>({
     queryKey: ["/api/billing/patients", debouncedSearch],
     queryFn: async () => {
       const params = debouncedSearch ? `?search=${encodeURIComponent(debouncedSearch)}` : "";
-      const res = await fetch(`/api/billing/patients${params}`);
-      if (!res.ok) throw new Error("Failed to fetch patients");
+      const res = await fetch(`/api/billing/patients${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`Failed to fetch patients (${res.status})`);
       return res.json();
     },
     staleTime: 0,
@@ -121,6 +121,14 @@ export default function PatientList() {
         <div className="flex justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
+      ) : isError ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <Users className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+            <p className="font-medium mb-1 text-destructive">Unable to load patients</p>
+            <p className="text-sm text-muted-foreground">There was a problem fetching patient records. Please refresh the page.</p>
+          </CardContent>
+        </Card>
       ) : patients.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">

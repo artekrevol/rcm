@@ -649,7 +649,47 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         }
       }
 
-      // Test patients
+      // Migrate any claims/encounters that reference old random-UUID Chajinel demo patients
+      // to the canonical fixed IDs before we delete the old rows
+      await pool.query(`
+        UPDATE claims SET patient_id = 'chajinel-patient-001'
+        WHERE organization_id = 'chajinel-org-001'
+          AND patient_id IN (
+            SELECT id FROM patients
+            WHERE organization_id = 'chajinel-org-001' AND is_demo = TRUE
+              AND first_name = 'TEST: Maria' AND last_name = 'Garcia'
+              AND id != 'chajinel-patient-001'
+          )
+      `).catch(() => {});
+      await pool.query(`
+        UPDATE encounters SET patient_id = 'chajinel-patient-001'
+        WHERE organization_id = 'chajinel-org-001'
+          AND patient_id IN (
+            SELECT id FROM patients
+            WHERE organization_id = 'chajinel-org-001' AND is_demo = TRUE
+              AND first_name = 'TEST: Maria' AND last_name = 'Garcia'
+              AND id != 'chajinel-patient-001'
+          )
+      `).catch(() => {});
+      await pool.query(`
+        UPDATE claims SET patient_id = 'chajinel-patient-002'
+        WHERE organization_id = 'chajinel-org-001'
+          AND patient_id IN (
+            SELECT id FROM patients
+            WHERE organization_id = 'chajinel-org-001' AND is_demo = TRUE
+              AND first_name = 'TEST: Jose' AND last_name = 'Rodriguez'
+              AND id != 'chajinel-patient-002'
+          )
+      `).catch(() => {});
+      // Remove old random-UUID demo patients (replaced by fixed-ID equivalents below)
+      await pool.query(`
+        DELETE FROM patients
+        WHERE organization_id = 'chajinel-org-001'
+          AND is_demo = TRUE
+          AND id NOT IN ('chajinel-patient-001', 'chajinel-patient-002')
+      `).catch(() => {});
+
+      // Test patients — fixed IDs so inserts are idempotent across restarts/deployments
       const { rows: twRow } = await pool.query(
         `SELECT id FROM payers WHERE organization_id=$1 AND name='TriWest Healthcare Alliance' LIMIT 1`,
         [CHAJINEL_ORG_ID]
@@ -659,27 +699,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [CHAJINEL_ORG_ID]
       );
 
-      const { rows: p1Check } = await pool.query(
-        `SELECT id FROM patients WHERE organization_id=$1 AND first_name='TEST: Maria' AND last_name='Garcia' LIMIT 1`,
-        [CHAJINEL_ORG_ID]
-      );
-      if (p1Check.length === 0 && twRow.length > 0) {
-        await pool.query(`
-          INSERT INTO patients (id, first_name, last_name, dob, payer_id, plan_type, organization_id, created_at, updated_at)
-          VALUES (gen_random_uuid()::text, 'TEST: Maria', 'Garcia', '1955-03-12', $1, 'unknown', $2, NOW(), NOW())
-        `, [twRow[0].id, CHAJINEL_ORG_ID]);
-      }
+      await pool.query(`
+        INSERT INTO patients (id, first_name, last_name, dob, payer_id, insurance_carrier, plan_type, is_demo, organization_id, created_at, updated_at)
+        VALUES ('chajinel-patient-001', 'TEST: Maria', 'Garcia', '1955-03-12', $1, 'TriWest Healthcare Alliance', 'unknown', TRUE, $2, NOW(), NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          payer_id = EXCLUDED.payer_id,
+          insurance_carrier = EXCLUDED.insurance_carrier,
+          is_demo = TRUE,
+          updated_at = NOW()
+      `, [twRow[0]?.id ?? null, CHAJINEL_ORG_ID]);
 
-      const { rows: p2Check } = await pool.query(
-        `SELECT id FROM patients WHERE organization_id=$1 AND first_name='TEST: Jose' AND last_name='Rodriguez' LIMIT 1`,
-        [CHAJINEL_ORG_ID]
-      );
-      if (p2Check.length === 0 && ihssRow.length > 0) {
-        await pool.query(`
-          INSERT INTO patients (id, first_name, last_name, dob, payer_id, plan_type, organization_id, created_at, updated_at)
-          VALUES (gen_random_uuid()::text, 'TEST: Jose', 'Rodriguez', '1948-07-22', $1, 'unknown', $2, NOW(), NOW())
-        `, [ihssRow[0].id, CHAJINEL_ORG_ID]);
-      }
+      await pool.query(`
+        INSERT INTO patients (id, first_name, last_name, dob, payer_id, insurance_carrier, plan_type, is_demo, organization_id, created_at, updated_at)
+        VALUES ('chajinel-patient-002', 'TEST: Jose', 'Rodriguez', '1948-07-22', $1, 'San Mateo County IHSS', 'unknown', TRUE, $2, NOW(), NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          payer_id = EXCLUDED.payer_id,
+          insurance_carrier = EXCLUDED.insurance_carrier,
+          is_demo = TRUE,
+          updated_at = NOW()
+      `, [ihssRow[0]?.id ?? null, CHAJINEL_ORG_ID]);
 
       console.log("[Seeder] Chajinel practice, payers, caregivers, and test patients configured");
     }
