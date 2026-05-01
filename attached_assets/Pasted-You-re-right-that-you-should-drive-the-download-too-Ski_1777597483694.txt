@@ -1,0 +1,62 @@
+You're right that you should drive the download too. Skip the 
+file-attachment workflow.
+
+Two tasks:
+
+TASK A — Fix the existing data labels
+
+The 1.82M rows currently in production labeled '2026Q2' are 
+actually Q1 2026 data (v320r0). Update the label:
+
+UPDATE cci_edits 
+SET ncci_version = '2026Q1' 
+WHERE ncci_version = '2026Q2';
+
+Verify:
+SELECT ncci_version, COUNT(*), MIN(effective_date), MAX(effective_date) 
+FROM cci_edits 
+GROUP BY ncci_version;
+
+Expected: one row, 2026Q1, ~1.82M, max effective_date 2026-01-01.
+
+TASK B — Download and ingest the actual Q2 2026 files
+
+The CMS PTP edits page is here:
+https://www.cms.gov/medicare/coding-billing/national-correct-coding-initiative-ncci-edits/medicare-ncci-procedure-procedure-ptp-edits
+
+Under "2026 Quarter 2 Edit Files" → "Practitioner PTP Edits" 
+section, there are four ZIP files. The version identifier in 
+the filename is "v321r0" (NOT v320r0 — that's Q1 and what we 
+have already).
+
+Steps:
+1. From your shell, identify the four v321r0 Practitioner PTP 
+   download URLs by inspecting the CMS page. CMS doesn't always 
+   use predictable URL patterns, so you may need to scrape the 
+   page HTML to find the actual download links — your existing 
+   scraper service should be able to handle this. If not, fetch 
+   the page HTML and grep for "v321r0" + ".zip".
+2. Download all four ZIPs to /tmp/cci-q2-2026/
+3. Verify each file is v321r0 by checking the filename AND by 
+   running unzip -l to confirm the contents have effective_date 
+   2026-04-01 (not 2026-01-01)
+4. Run your existing ingest script against all four with 
+   ncci_version='2026Q2'
+5. Verify final state with the same SQL as Task A. Expected:
+   - 2026Q1: ~1.82M rows
+   - 2026Q2: ~2.4-2.6M rows (CMS published 675K + 675K + 675K + 
+     606K but TXT files may be smaller — report actual line 
+     counts per file)
+
+If for any reason you can't fetch the files from CMS directly 
+(network issue, requires browser session, etc.), tell me and 
+I'll download them manually as a fallback. But try the direct 
+fetch first.
+
+Use the same Production Verification format as before — actual 
+SQL queries, actual results, both quarters' counts visible.
+
+Separate from this — what's the status on the white-screen fix? 
+The error boundary is shipped but I haven't seen evidence that 
+you actually identified and fixed the underlying defect. Please 
+follow up on that.

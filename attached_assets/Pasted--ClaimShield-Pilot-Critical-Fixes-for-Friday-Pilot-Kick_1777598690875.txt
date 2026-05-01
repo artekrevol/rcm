@@ -1,0 +1,175 @@
+# ClaimShield — Pilot-Critical Fixes for Friday Pilot Kickoff
+
+## Context
+First pilot client (Chajinel, California home care agency) goes live 
+tomorrow (Friday). Their billing operator will be onboarding to the 
+platform. The fixes below are required before they can be productive 
+on day one.
+
+We are also onboarding additional clinics in the coming weeks and 
+months — including standard commercial practices and specialty clinics 
+where individual providers DO have personal NPIs. The architecture must 
+support both billing models without breaking existing tenants.
+
+## Tech Stack Reminder
+- Replit + Railway deployment
+- PostgreSQL database  
+- Multi-tenant architecture (each clinic is a tenant/practice)
+- DO NOT break existing pilot tenants — current behavior must be 
+  preserved by default
+
+---
+
+## P0 — MUST SHIP BEFORE FRIDAY MORNING
+
+### Fix 1: Practice-Level Billing Model + Conditional NPI Rules
+
+**Problem:** Current data model assumes individual providers always have 
+NPIs. This is correct for standard commercial and specialty clinics 
+(internal medicine, neurology, OB/GYN, etc.). It is NOT correct for 
+home care agencies, home health agencies, and similar 
+agency-billed practices, where the agency itself holds the NPI and 
+caregivers (RNs, aides) may not have personal NPIs at all.
+
+The fix is to make the billing model configurable per practice, with 
+the existing individual-NPI behavior remaining the default for all 
+existing and future commercial accounts.
+
+**Required Changes:**
+
+1. **Practice/Tenant table:**
+   - Add `billing_model` enum, NOT NULL, default = `individual_provider_billed`
+     - `individual_provider_billed` (default — current behavior preserved)
+     - `agency_billed` (new — used for home care and similar)
+   - Add `agency_npi` (string, nullable) — required only when 
+     billing_model == 'agency_billed'
+   - Add `agency_tax_id` (string, nullable) if not already present
+
+2. **Provider table:**
+   - Make `npi` field nullable
+   - Add `provider_type` enum, default = `individual`
+     - `individual` — has personal NPI (current behavior)
+     - `agency_worker` — no personal NPI required, billed under agency NPI
+
+3. **Validation Logic (this is the critical piece):**
+   - When practice.billing_model == 'individual_provider_billed':
+     - All providers in that practice MUST have npi populated
+     - Practice.agency_npi is optional and ignored
+     - Behavior is identical to current production behavior
+   - When practice.billing_model == 'agency_billed':
+     - Practice.agency_npi MUST be populated (validate on practice save)
+     - Provider.npi is optional
+     - Provider.provider_type can be 'individual' or 'agency_worker'
+
+4. **Claim Generation Logic (837P):**
+   - When practice.billing_model == 'individual_provider_billed':
+     - Loop 2010AA (Billing Provider) populates with provider.npi 
+       (current behavior — DO NOT change)
+   - When practice.billing_model == 'agency_billed':
+     - Loop 2010AA (Billing Provider) populates with practice.agency_npi
+     - Rendering provider (Loop 2310B) populates with provider.npi if 
+       provider has one, otherwise omit per CMS home care guidance
+
+5. **Migration:**
+   - All existing practices default to billing_model = 'individual_provider_billed'
+   - All existing providers default to provider_type = 'individual'
+   - Zero behavioral change for existing tenants
+
+**Acceptance Criteria:**
+- For Chajinel (set billing_model = 'agency_billed', populate agency_npi):
+  - Can create a caregiver provider record without an NPI
+  - Can submit a clean 837P claim where Loop 2010AA = agency NPI
+- For existing pilot tenants (billing_model defaults to individual_provider_billed):
+  - Provider creation still requires NPI (existing validation enforced)
+  - Claim generation still uses provider.npi as billing provider 
+    (no behavioral change)
+  - Smoke test: existing test claims continue to generate without errors
+- For a future commercial clinic (e.g., specialty practice):
+  - Onboarding flow defaults to individual_provider_billed
+  - Behaves exactly like existing tenants
+  - No special configuration required
+
+---
+
+### Fix 2: Payer Type Classification
+
+**Problem:** Daniela bills three different payer categories (VA Community 
+Care, San Mateo County/IHSS, LTC insurance) plus private pay. Each has 
+different rules and downstream routing. Today there is no marker on the 
+payer record to distinguish them, so the rules engine cannot route 
+correctly. This will also matter for future clinics with more diverse 
+payer mixes.
+
+**Required Changes:**
+- Payer table: add `payer_category` enum:
+  - `va_community_care`
+  - `county_ihss`
+  - `commercial`
+  - `medicare`
+  - `medicaid`  
+  - `ltc_insurance`
+  - `private_pay`
+  - `other`
+- Default existing payer records to `commercial` via migration
+- Surface `payer_category` field in the payer creation/edit UI as a 
+  required dropdown
+- Add filter on the claims list to filter by payer category
+
+**Acceptance:**
+- When creating or editing a payer, user must select a category
+- Category visible on payer record summary
+- Category appears as a column on the claims list
+
+---
+
+## P1 — NICE TO HAVE FOR FRIDAY DEMO (ship if time permits)
+
+### Fix 3: Plan Type Schema (patient/encounter level)
+- Add `plan_type` enum to Patient table: 
+  `HMO` | `PPO` | `POS` | `EPO` | `other` | `unknown`
+- Default to `unknown`
+- Surface in patient intake form
+
+### Fix 4: PCP Referral Field (HMO patients, soft warning only)
+- Patient table: add `pcp_referral_id` (string, nullable), 
+  `pcp_referral_date` (date, nullable)
+- Pre-submission check: if plan_type == 'HMO' AND pcp_referral_id IS NULL, 
+  surface non-blocking warning at claim creation
+- DO NOT block submission. Warn only.
+
+### Fix 5: IPA / Delegated Entity Field
+- Create `delegated_entities` table: id, name, npi (nullable), 
+  payer_address, notes
+- Patient table: add `delegated_entity_id` (foreign key, nullable)
+- Surface in patient record edit view
+
+---
+
+## Out of Scope (Do Not Build Now)
+
+- IHSS-specific timesheet/EVV workflow — Phase 2 module, separate scope
+- Workers Comp module — 12+ months out
+- Provider manual ingestion expansion — separate workstream
+- CCI edit logic in claim wizard — separate workstream targeting May 12
+
+---
+
+## Testing Requirements
+
+For each P0 item:
+- One end-to-end test creating the entity via the UI
+- One test that an 837P claim generates correctly with new fields populated
+- A migration script with both forward and rollback paths
+- A smoke test confirming existing pilot tenant behavior is unchanged
+
+For Fix 1 specifically, the most important test is regression:
+- Existing pilot tenant claims must generate identically to current 
+  production output. If a single byte of the 837P changes for an 
+  existing tenant, the migration is wrong.
+
+---
+
+## Slip Protocol
+
+If any P0 work will not complete before Friday morning, message me by 
+6 PM tonight so we can scope down or adjust the demo plan.

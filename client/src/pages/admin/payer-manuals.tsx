@@ -1179,10 +1179,10 @@ export default function PayerManualsPage() {
                 <div>
                   <p className="text-sm font-medium">CMS Timely Filing Validation Sweep</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Run at {format(new Date(validationResult.run_at), "MMM d, yyyy h:mm a")} ·
-                    {" "}{validationResult.summary.total_manuals_checked} manuals checked ·
-                    {" "}{validationResult.summary.passed_manuals} manuals passed ·
-                    {" "}{validationResult.summary.discrepancy_count} discrepanc{validationResult.summary.discrepancy_count === 1 ? "y" : "ies"}
+                    {validationResult.run_at ? `Run at ${format(new Date(validationResult.run_at), "MMM d, yyyy h:mm a")} · ` : ""}
+                    {validationResult.summary?.total_manuals_checked ?? 0} manuals checked ·
+                    {" "}{validationResult.summary?.passed_manuals ?? 0} manuals passed ·
+                    {" "}{validationResult.summary?.discrepancy_count ?? 0} discrepanc{(validationResult.summary?.discrepancy_count ?? 0) === 1 ? "y" : "ies"}
                   </p>
                 </div>
                 <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setValidationResult(null)}>
@@ -1190,12 +1190,12 @@ export default function PayerManualsPage() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Sources: {validationResult.reference_table.map(r => r.regulatory_source).join(" · ")}
+                Sources: {(validationResult.reference_table || []).map(r => r.regulatory_source).join(" · ")}
               </p>
-              {validationResult.discrepancies.length > 0 ? (
+              {(validationResult.discrepancies || []).length > 0 ? (
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-amber-700 dark:text-amber-400">Discrepancies requiring review:</p>
-                  {validationResult.discrepancies.map((d, i) => (
+                  {(validationResult.discrepancies || []).map((d, i) => (
                     <div key={i} className={`rounded-md p-3 text-xs border ${
                       d.severity === "error"
                         ? "bg-red-50 border-red-200 dark:bg-red-950 dark:border-red-800"
@@ -1434,7 +1434,7 @@ export default function PayerManualsPage() {
                   </div>
                 )}
                 <p className="text-xs text-muted-foreground mt-1">
-                  {manual.file_name ? manual.file_name : manual.source_url ? "URL source" : "—"} · Added {format(new Date(manual.created_at), "MMM d, yyyy")}
+                  {manual.file_name ? manual.file_name : manual.source_url ? "URL source" : "—"} · Added {manual.created_at ? format(new Date(manual.created_at), "MMM d, yyyy") : "—"}
                 </p>
               </button>
             ))
