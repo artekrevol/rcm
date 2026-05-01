@@ -27,6 +27,55 @@ UI/UX Design:
 - Modular layouts for different sections (Admin, Billing, Intake) with dedicated sidebars for navigation.
 - Data visualization through Recharts on dashboards for KPIs and analytics.
 
+## Multi-Tenancy — Intake Module (Completed Phases A–E)
+
+### Org_ Tables (seeded/idempotent at startup)
+| Table | Purpose |
+|---|---|
+| `org_message_templates` | Per-org SMS/email templates keyed by `template_key` + `channel` |
+| `org_service_types` | Per-org service codes (e.g. home_health, va_community_care) |
+| `org_payer_mappings` | Carrier name → Stedi trading partner ID per org |
+| `org_voice_personas` | Vapi assistant IDs + system prompts per org persona_key |
+| `org_lead_sources` | Lead source slugs/labels per org |
+| `org_providers` | Credentialed providers with service_types + language arrays |
+| `step_types` | Reference table of all valid flow step type keys |
+
+### Configured Organizations
+| org_id | Org name | Flow | Status |
+|---|---|---|---|
+| `caritas-org-001` | Caritas Senior Care | 8-step Standard Intake | `is_active=true` |
+| `chajinel-org-001` | Chajinel Clinic | 9-step Standard Intake | `is_active=false` (pending Vapi assistant config) |
+
+### Flow Step Executor (`server/services/flow-step-executor.ts`)
+- **Org-agnostic** — zero hardcoded org data. Loads org context via `getOrgContext()` (60s TTL cache).
+- Handles all 7 step types: `wait`, `sms_message`, `voice_call`, `email_message`, `vob_check`, `provider_match`, `appointment_schedule`, `webhook`
+- Condition evaluator on each step (`condition` JSONB column): `eq`, `neq`, `in`, `not_in`, `exists`, `not_exists`, `gt`, `gte`, `lt`, `lte`, `contains`
+- Writes `failed_at` + `failure_reason` on permanent failure; exponential backoff (5min, then 15min)
+- `voice_call` steps: per-org persona looked up by `config.persona_key` → `org_voice_personas`
+- `sms_message`/`email_message`: resolves body via `template_key` → `org_message_templates`, falls back to `template_inline`
+
+### Flow Trigger (`server/services/flow-trigger.ts`)
+- Filters active flows by `organization_id = lead.organizationId` (or NULL for legacy global flows)
+- No cross-org flow triggering
+
+### API Changes
+- `GET /api/flows` — super_admin sees all flows (with `org_name` badge); regular users see their org only
+- `GET /api/orgs/:slug/lead-sources` — queries `org_lead_sources` table (was: hardcoded CARITAS object)
+- `GET /api/orgs/:slug/service-types` — queries `org_service_types` table (was: hardcoded CARITAS object)
+
+### Frontend
+- `flows.tsx` / `flow-detail.tsx` — updated step type maps to include all new types (`voice_call`, `sms_message`, `email_message`, `provider_match`, `appointment_schedule`, `webhook`)
+- `flow-detail.tsx` — shows `template_key` and `condition` inline per step
+- `flows.tsx` — shows `org_name` badge on each flow card (visible to super_admin)
+- `lead-form-dialog.tsx`, `deals.tsx` — lead source dropdown now dynamically queries the user's actual org (no longer hardcoded to `caritas`)
+- `use-auth.ts` — added `organization_id` to `AuthUser` type + `useOrgId()` helper
+
+### Deleted
+- `server/config/caritas-constants.ts` — fully replaced by DB-backed org_ tables
+
+### Pending (requires Abeer input)
+- Chajinel Vapi assistant ID is `PLACEHOLDER_AWAITING_VAPI_CONFIG` — must be replaced with real assistant ID before `is_active` is set to true
+
 ## External Dependencies
 - **PostgreSQL**: Primary database.
 - **Drizzle ORM**: Database interaction layer.

@@ -23,7 +23,6 @@ import twilio from "twilio";
 import nodemailer from "nodemailer";
 import { triggerMatchingFlows } from "./services/flow-trigger";
 import { advanceToNextStep } from "./services/flow-step-executor";
-import { CARITAS } from "./config/caritas-constants";
 import { releaseLock, acquireLock } from "./services/comm-locks";
 import { extractInsuranceFromTranscript } from "./services/transcript-extractor";
 import { getActivatedFieldsForContext, invalidateResolverCache } from "./services/field-resolver";
@@ -2108,6 +2107,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS failure_reason TEXT`);
     await pool.query(`ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS max_attempts INTEGER DEFAULT 3`);
 
+    // ── Multi-tenancy refactor Phase A.2 — extend existing flow tables ──────────
+    await pool.query(`ALTER TABLE flows ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1`);
+    await pool.query(`ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS condition JSONB`);
+    await pool.query(`ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS success_criteria JSONB`);
+    await pool.query(`ALTER TABLE flow_steps ADD COLUMN IF NOT EXISTS template_key TEXT`);
+    await pool.query(`ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE comm_locks ADD COLUMN IF NOT EXISTS released_reason TEXT`);
+    await pool.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_email TEXT`);
+    await pool.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`);
+    await pool.query(`ALTER TABLE organizations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+
     // One-time: mark stuck flow run as failed so the orchestrator stops retrying it
     await pool.query(`
       UPDATE flow_runs SET status = 'failed', updated_at = NOW()
@@ -2128,6 +2138,124 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       )
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_comm_locks_lead ON comm_locks(lead_id, released_at, expires_at)`);
+
+    // ── Multi-tenancy refactor Phase A.2 — indexes ──────────────────────────────
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flows_org_active ON flows(organization_id, is_active)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_runs_org ON flow_runs(organization_id, status)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_runs_due_partial ON flow_runs(status, next_action_at) WHERE status = 'running'`);
+
+    // ── Multi-tenancy refactor Phase A.3 — per-org configuration tables ─────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS org_message_templates (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        template_key TEXT NOT NULL,
+        channel TEXT NOT NULL CHECK (channel IN ('sms', 'email', 'voice')),
+        subject TEXT,
+        body TEXT NOT NULL,
+        variables JSONB NOT NULL DEFAULT '[]'::jsonb,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(organization_id, template_key, channel)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS org_service_types (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        service_code TEXT NOT NULL,
+        service_name TEXT NOT NULL,
+        description TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        UNIQUE(organization_id, service_code)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS org_payer_mappings (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        payer_name TEXT NOT NULL,
+        payer_id TEXT NOT NULL,
+        payer_type TEXT,
+        is_primary BOOLEAN NOT NULL DEFAULT false,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS org_voice_personas (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        persona_key TEXT NOT NULL,
+        vapi_assistant_id TEXT NOT NULL,
+        persona_name TEXT NOT NULL,
+        greeting TEXT,
+        system_prompt TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        UNIQUE(organization_id, persona_key)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS org_lead_sources (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        slug TEXT NOT NULL,
+        label TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (source_type IN ('web', 'phone', 'referral', 'partner', 'campaign')),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        UNIQUE(organization_id, slug)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS org_providers (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        first_name TEXT NOT NULL,
+        last_name TEXT NOT NULL,
+        npi TEXT,
+        email TEXT,
+        phone TEXT,
+        specialties JSONB NOT NULL DEFAULT '[]'::jsonb,
+        service_types JSONB NOT NULL DEFAULT '[]'::jsonb,
+        languages JSONB NOT NULL DEFAULT '["en"]'::jsonb,
+        availability JSONB NOT NULL DEFAULT '{}'::jsonb,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        is_active BOOLEAN NOT NULL DEFAULT true
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS step_types (
+        step_type TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        config_schema JSONB NOT NULL,
+        description TEXT,
+        is_active BOOLEAN NOT NULL DEFAULT true
+      )
+    `);
+
+    await pool.query(`
+      INSERT INTO step_types (step_type, display_name, category, config_schema, description) VALUES
+        ('wait', 'Wait', 'control', '{}'::jsonb, 'Delays flow execution by step.delay_minutes'),
+        ('sms_message', 'SMS Message', 'communication', '{"required": ["template_key"]}'::jsonb, 'Sends SMS via Twilio using org template'),
+        ('voice_call', 'AI Voice Call', 'communication', '{"required": ["persona_key"]}'::jsonb, 'Initiates Vapi voice call using org persona'),
+        ('email_message', 'Email Message', 'communication', '{"required": ["template_key"]}'::jsonb, 'Sends email via Gmail using org template'),
+        ('vob_check', 'Insurance Verification', 'verification', '{"required": ["vendor"]}'::jsonb, 'Runs VOB via Stedi or other vendor'),
+        ('provider_match', 'Provider Matching', 'logic', '{}'::jsonb, 'Matches lead to org provider based on rules'),
+        ('appointment_schedule', 'Schedule Appointment', 'logic', '{"required": ["mode"]}'::jsonb, 'Schedules appointment (auto or manual_handoff)'),
+        ('webhook', 'External Webhook', 'integration', '{"required": ["url", "method"]}'::jsonb, 'Calls external endpoint with run context'),
+        ('conditional', 'Conditional Branch', 'logic', '{"required": ["condition"]}'::jsonb, 'Skip step if condition false (handled at executor level via flow_steps.condition)')
+      ON CONFLICT (step_type) DO NOTHING
+    `);
 
     // Add dob column to leads (needed by VOB step — transcript extractor captures it from the call)
     if (!(await seederLog('column', 'leads', 'dob'))) {
@@ -9931,12 +10059,19 @@ Warmly,
     }
   });
 
-  // GET /api/flows — list all flows with step counts and active/completed run counts
-  app.get("/api/flows", requireRole("admin", "intake"), async (req, res) => {
+  // GET /api/flows — list flows (super_admin sees all; others see own org only)
+  app.get("/api/flows", requireRole("admin", "intake", "super_admin"), async (req, res) => {
     try {
-      const orgId = requireOrgCtx(req, res);
-      if (!orgId) return;
+      const user = (req as any).user;
+      const isSuperAdmin = user?.role === "super_admin";
+      const orgId = isSuperAdmin ? null : requireOrgCtx(req, res);
+      if (!isSuperAdmin && !orgId) return;
+
       const { pool } = await import("./db");
+
+      const whereClause = isSuperAdmin ? "" : "WHERE f.organization_id = $1";
+      const params = isSuperAdmin ? [] : [orgId];
+
       const result = await pool.query(`
         SELECT
           f.id,
@@ -9945,15 +10080,18 @@ Warmly,
           f.trigger_event,
           f.trigger_conditions,
           f.is_active,
+          f.organization_id,
+          f.version,
           f.created_at,
+          o.name AS org_name,
           (SELECT COUNT(*) FROM flow_steps WHERE flow_id = f.id)::int AS step_count,
-          (SELECT COUNT(*) FROM flow_runs fr WHERE fr.flow_id = f.id AND fr.status = 'running'
-            AND EXISTS (SELECT 1 FROM leads l WHERE l.id = fr.lead_id AND l.organization_id = $1))::int AS active_run_count,
-          (SELECT COUNT(*) FROM flow_runs fr WHERE fr.flow_id = f.id AND fr.status = 'completed'
-            AND EXISTS (SELECT 1 FROM leads l WHERE l.id = fr.lead_id AND l.organization_id = $1))::int AS completed_run_count
+          (SELECT COUNT(*) FROM flow_runs fr WHERE fr.flow_id = f.id AND fr.status = 'running')::int AS active_run_count,
+          (SELECT COUNT(*) FROM flow_runs fr WHERE fr.flow_id = f.id AND fr.status = 'completed')::int AS completed_run_count
         FROM flows f
+        LEFT JOIN organizations o ON o.id = f.organization_id
+        ${whereClause}
         ORDER BY f.created_at DESC
-      `, [orgId]);
+      `, params);
       res.json(result.rows);
     } catch (err) {
       console.error("[GET /api/flows] error:", err);
@@ -10009,14 +10147,42 @@ Warmly,
     }
   });
 
-  // GET /api/orgs/:slug/service-types — returns service type options for an org
-  app.get("/api/orgs/:slug/service-types", requireAuth, (req, res) => {
-    res.json(CARITAS.serviceTypes);
+  // GET /api/orgs/:slug/service-types — returns service type options for an org from org_service_types table
+  app.get("/api/orgs/:slug/service-types", requireAuth, async (req, res) => {
+    try {
+      const { pool } = await import("./db");
+      const orgId = req.params.slug;
+      const result = await pool.query(
+        `SELECT service_code AS slug, service_name AS label, description
+         FROM org_service_types
+         WHERE organization_id = $1 AND is_active = true
+         ORDER BY service_name ASC`,
+        [orgId]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[GET /api/orgs/:slug/service-types] error:", err);
+      res.status(500).json({ error: "Failed to load service types" });
+    }
   });
 
-  // GET /api/orgs/:slug/lead-sources — returns lead source options for an org
-  app.get("/api/orgs/:slug/lead-sources", requireAuth, (req, res) => {
-    res.json(CARITAS.leadSources);
+  // GET /api/orgs/:slug/lead-sources — returns lead source options for an org from org_lead_sources table
+  app.get("/api/orgs/:slug/lead-sources", requireAuth, async (req, res) => {
+    try {
+      const { pool } = await import("./db");
+      const orgId = req.params.slug;
+      const result = await pool.query(
+        `SELECT slug, label, source_type
+         FROM org_lead_sources
+         WHERE organization_id = $1 AND is_active = true
+         ORDER BY label ASC`,
+        [orgId]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error("[GET /api/orgs/:slug/lead-sources] error:", err);
+      res.status(500).json({ error: "Failed to load lead sources" });
+    }
   });
 
   // GET /api/flow-runs/active — all currently running flow_runs across all flows

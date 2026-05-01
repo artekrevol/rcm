@@ -18,22 +18,34 @@ import {
 
 const STEP_TYPE_ICONS: Record<string, any> = {
   call: Phone,
+  voice_call: Phone,
   sms: MessageSquare,
+  sms_message: MessageSquare,
   email: Mail,
+  email_message: Mail,
   wait: Clock,
   vob_check: Activity,
   branch: GitBranch,
   human_task: Pause,
+  provider_match: GitBranch,
+  appointment_schedule: Clock,
+  webhook: Activity,
 };
 
 const STEP_TYPE_COLORS: Record<string, string> = {
   call: "bg-blue-50 text-blue-700 border-blue-200",
+  voice_call: "bg-blue-50 text-blue-700 border-blue-200",
   sms: "bg-green-50 text-green-700 border-green-200",
+  sms_message: "bg-green-50 text-green-700 border-green-200",
   email: "bg-purple-50 text-purple-700 border-purple-200",
+  email_message: "bg-purple-50 text-purple-700 border-purple-200",
   wait: "bg-gray-50 text-gray-600 border-gray-200",
   vob_check: "bg-amber-50 text-amber-700 border-amber-200",
   branch: "bg-indigo-50 text-indigo-700 border-indigo-200",
   human_task: "bg-rose-50 text-rose-700 border-rose-200",
+  provider_match: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  appointment_schedule: "bg-teal-50 text-teal-700 border-teal-200",
+  webhook: "bg-orange-50 text-orange-700 border-orange-200",
 };
 
 function formatDistance(date: Date): string {
@@ -134,12 +146,17 @@ export default function FlowsPage() {
             <CardHeader className="pb-3">
               <div className="flex items-start justify-between">
                 <div>
-                  <CardTitle className="text-lg flex items-center gap-2">
+                  <CardTitle className="text-lg flex items-center gap-2 flex-wrap">
                     {flow.name}
                     {flow.is_active ? (
                       <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Active</Badge>
                     ) : (
                       <Badge variant="secondary">Paused</Badge>
+                    )}
+                    {flow.org_name && (
+                      <Badge variant="outline" className="text-xs font-normal text-muted-foreground">
+                        {flow.org_name}
+                      </Badge>
                     )}
                   </CardTitle>
                   {flow.description && (

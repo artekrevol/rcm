@@ -19,32 +19,50 @@ import {
 
 const STEP_TYPE_LABELS: Record<string, string> = {
   call: "AI Voice Call",
+  voice_call: "AI Voice Call",
   sms: "SMS Message",
+  sms_message: "SMS Message",
   email: "Email",
+  email_message: "Email",
   wait: "Wait",
   vob_check: "Insurance Verification (Stedi)",
   branch: "Conditional Branch",
   human_task: "Human Review",
+  provider_match: "Provider Matching",
+  appointment_schedule: "Schedule Appointment",
+  webhook: "Webhook",
 };
 
 const STEP_TYPE_ICONS: Record<string, any> = {
   call: Phone,
+  voice_call: Phone,
   sms: MessageSquare,
+  sms_message: MessageSquare,
   email: Mail,
+  email_message: Mail,
   wait: Clock,
   vob_check: Activity,
   branch: GitBranch,
   human_task: Pause,
+  provider_match: GitBranch,
+  appointment_schedule: Clock,
+  webhook: Activity,
 };
 
 const STEP_TYPE_COLORS: Record<string, string> = {
   call: "bg-blue-50 text-blue-700 border-blue-200",
+  voice_call: "bg-blue-50 text-blue-700 border-blue-200",
   sms: "bg-green-50 text-green-700 border-green-200",
+  sms_message: "bg-green-50 text-green-700 border-green-200",
   email: "bg-purple-50 text-purple-700 border-purple-200",
+  email_message: "bg-purple-50 text-purple-700 border-purple-200",
   wait: "bg-gray-50 text-gray-600 border-gray-200",
   vob_check: "bg-amber-50 text-amber-700 border-amber-200",
   branch: "bg-indigo-50 text-indigo-700 border-indigo-200",
   human_task: "bg-rose-50 text-rose-700 border-rose-200",
+  provider_match: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  appointment_schedule: "bg-teal-50 text-teal-700 border-teal-200",
+  webhook: "bg-orange-50 text-orange-700 border-orange-200",
 };
 
 function formatDelay(min: number): string {
@@ -158,9 +176,22 @@ export default function FlowDetailPage() {
                             {formatDelay(step.delay_minutes || 0)}
                           </Badge>
                         </div>
+                        {step.template_key && (
+                          <div className="text-xs mt-2 opacity-70 flex items-center gap-1">
+                            <span className="font-mono bg-white/60 px-1.5 py-0.5 rounded border">
+                              template: {step.template_key}
+                            </span>
+                          </div>
+                        )}
                         {step.template_inline && (
                           <div className="text-sm mt-2 italic opacity-80 bg-white/50 p-2 rounded border">
                             "{step.template_inline}"
+                          </div>
+                        )}
+                        {step.condition && (
+                          <div className="text-xs mt-2 font-mono opacity-70 flex items-center gap-1">
+                            <GitBranch className="h-3 w-3" />
+                            <span>only if: {step.condition.field} {step.condition.operator} {JSON.stringify(step.condition.value)}</span>
                           </div>
                         )}
                         {step.success_condition && (

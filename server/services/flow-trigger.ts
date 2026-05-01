@@ -10,12 +10,15 @@ interface LeadForTrigger {
 
 export async function triggerMatchingFlows(lead: LeadForTrigger): Promise<void> {
   try {
-    // Find all active flows triggered by lead_created
+    // Find active flows triggered by lead_created that match the lead's org
+    // A flow matches if its organization_id equals the lead's org, OR if organization_id is NULL (legacy global flows)
     const flowsResult = await pool.query(
       `SELECT id, name, trigger_conditions, organization_id
        FROM flows
        WHERE trigger_event = 'lead_created'
-         AND is_active = true`
+         AND is_active = true
+         AND (organization_id = $1 OR organization_id IS NULL)`,
+      [lead.organizationId || null]
     );
 
     for (const flow of flowsResult.rows) {

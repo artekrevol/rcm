@@ -34,8 +34,15 @@ interface LeadFormDialogProps {
 export function LeadFormDialog({ open, onOpenChange, lead, mode }: LeadFormDialogProps) {
   const { toast } = useToast();
 
+  const { data: authUser } = useQuery<any>({ queryKey: ["/api/auth/me"] });
+  const effectiveOrgId = authUser?.role === "super_admin"
+    ? (authUser?.impersonatingOrgId || null)
+    : (authUser?.organization_id || null);
+
   const { data: leadSourceOptions = [] } = useQuery<{ slug: string; label: string }[]>({
-    queryKey: ["/api/orgs/caritas/lead-sources"],
+    queryKey: ["/api/orgs", effectiveOrgId, "lead-sources"],
+    queryFn: () => fetch(`/api/orgs/${effectiveOrgId}/lead-sources`).then((r) => r.json()),
+    enabled: !!effectiveOrgId,
     staleTime: 300_000,
   });
 

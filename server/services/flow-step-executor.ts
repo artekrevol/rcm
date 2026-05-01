@@ -4,9 +4,9 @@ import { pool } from "../db";
 import { acquireLock, releaseLock } from "./comm-locks";
 import { logFlowEvent } from "./flow-events";
 import { checkEligibility, isStediConfigured } from "./stedi-eligibility";
-import { CARITAS } from "../config/caritas-constants";
+import { getOrgContext, resolveCarrierToPayerId, OrgContext } from "./org-context";
 
-// ── Twilio / email config (mirror routes.ts inline pattern) ───────────────────
+// ── Twilio / email config ──────────────────────────────────────────────────────
 const twilioClient =
   process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
     ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
@@ -41,20 +41,70 @@ function formatPhone(phone: string): string {
   return `+1${digits}`;
 }
 
+// ── Condition evaluator (Phase C.3) ───────────────────────────────────────────
+interface StepCondition {
+  field: string;
+  operator: "eq" | "neq" | "in" | "not_in" | "exists" | "not_exists" | "gt" | "gte" | "lt" | "lte" | "contains";
+  value?: unknown;
+}
+
+function evaluateCondition(
+  condition: StepCondition | null | undefined,
+  lead: Record<string, unknown>,
+  run: Record<string, unknown>
+): boolean {
+  if (!condition) return true;
+
+  const { field, operator, value } = condition;
+
+  // Resolve field path: lead.*, run.*, run.metadata.*
+  let actual: unknown;
+  if (field.startsWith("lead.")) {
+    actual = lead[field.slice(5)];
+  } else if (field.startsWith("run.metadata.")) {
+    const meta = (run.metadata as Record<string, unknown>) || {};
+    actual = meta[field.slice(13)];
+  } else if (field.startsWith("run.")) {
+    actual = run[field.slice(4)];
+  } else {
+    actual = lead[field];
+  }
+
+  switch (operator) {
+    case "eq":
+      return actual === value;
+    case "neq":
+      return actual !== value;
+    case "in":
+      return Array.isArray(value) && value.includes(actual);
+    case "not_in":
+      return Array.isArray(value) && !value.includes(actual);
+    case "exists":
+      return actual !== null && actual !== undefined && actual !== "";
+    case "not_exists":
+      return actual === null || actual === undefined || actual === "";
+    case "gt":
+      return typeof actual === "number" && typeof value === "number" && actual > value;
+    case "gte":
+      return typeof actual === "number" && typeof value === "number" && actual >= value;
+    case "lt":
+      return typeof actual === "number" && typeof value === "number" && actual < value;
+    case "lte":
+      return typeof actual === "number" && typeof value === "number" && actual <= value;
+    case "contains":
+      return typeof actual === "string" && typeof value === "string" && actual.includes(value);
+    default:
+      return true;
+  }
+}
+
 // ── Retry / failure helper ────────────────────────────────────────────────────
-/**
- * Called whenever a retryable step failure occurs (e.g. Vapi call rejected).
- * Increments attempt_count; if still under the step's max_attempts cap, reschedules
- * with exponential backoff. At cap, marks the flow run as permanently failed.
- * Returns true if the run was permanently failed, false if rescheduled.
- */
 export async function handleStepFailure(
   flowRunId: string,
   stepId: string,
   failureReason: string
 ): Promise<boolean> {
   try {
-    // Fetch current attempt_count and the step's max_attempts
     const runRes = await pool.query(
       `SELECT attempt_count FROM flow_runs WHERE id = $1`,
       [flowRunId]
@@ -69,39 +119,40 @@ export async function handleStepFailure(
     const newAttemptCount = currentAttempts + 1;
 
     if (newAttemptCount >= maxAttempts) {
-      // At cap — permanently fail the run
       await pool.query(
         `UPDATE flow_runs
-         SET status = 'failed', attempt_count = $1, failure_reason = $2, updated_at = NOW()
+         SET status = 'failed',
+             attempt_count = $1,
+             failure_reason = $2,
+             failed_at = NOW(),
+             updated_at = NOW()
          WHERE id = $3`,
         [newAttemptCount, failureReason, flowRunId]
       );
-      await logFlowEvent(flowRunId, "flow_failed", {
+      await logFlowEvent(flowRunId, "step_failed_terminal", {
         message: `Failed permanently after ${newAttemptCount} attempt(s)`,
-        failureReason,
-        stepId,
+        reason: failureReason,
       });
-      console.log(
-        `[flow-step-executor] Flow run ${flowRunId} failed after ${newAttemptCount} attempt(s): ${failureReason}`
+      console.warn(
+        `[flow-step-executor] Run ${flowRunId} permanently failed after ${newAttemptCount} attempt(s): ${failureReason}`
       );
       return true;
     }
 
-    // Under cap — reschedule with backoff
-    // attempt_count=1 → immediate, 2 → +5 min, 3+ → +15 min
-    let delayMinutes = 0;
-    if (newAttemptCount === 2) delayMinutes = 5;
-    else if (newAttemptCount >= 3) delayMinutes = 15;
-
+    // Exponential backoff: attempt 1 = +5min, attempt 2 = +15min
+    const backoffMinutes = newAttemptCount === 1 ? 5 : 15;
     await pool.query(
       `UPDATE flow_runs
-       SET attempt_count = $1, next_action_at = NOW() + ($2 || ' minutes')::INTERVAL, updated_at = NOW()
-       WHERE id = $3`,
-      [newAttemptCount, String(delayMinutes), flowRunId]
+       SET attempt_count = $1,
+           failure_reason = $2,
+           next_action_at = NOW() + ($3 || ' minutes')::INTERVAL,
+           updated_at = NOW()
+       WHERE id = $4`,
+      [newAttemptCount, failureReason, String(backoffMinutes), flowRunId]
     );
     console.log(
-      `[flow-step-executor] Flow run ${flowRunId} step failed (attempt ${newAttemptCount}/${maxAttempts}), ` +
-      `retrying in ${delayMinutes} min`
+      `[flow-step-executor] Run ${flowRunId} step failed (attempt ${newAttemptCount}/${maxAttempts}), ` +
+      `retrying in ${backoffMinutes} min`
     );
     return false;
   } catch (err) {
@@ -129,7 +180,6 @@ export async function advanceToNextStep(
 
     const nextIndex = (run.current_step_index ?? 0) + 1;
 
-    // Find next step
     const nextStep = await pool.query(
       `SELECT id, step_order, delay_minutes, step_type
        FROM flow_steps
@@ -140,7 +190,6 @@ export async function advanceToNextStep(
     );
 
     if (!nextStep.rows.length) {
-      // No more steps — complete the run
       await pool.query(
         `UPDATE flow_runs
          SET status = 'completed', completed_at = NOW(), updated_at = NOW()
@@ -158,7 +207,6 @@ export async function advanceToNextStep(
     const delayMs = (step.delay_minutes ?? 0) * 60 * 1000;
     const nextActionAt = new Date(Date.now() + delayMs);
 
-    // Reset per-step retry state when moving to a new step
     await pool.query(
       `UPDATE flow_runs
        SET current_step_index = $1, next_action_at = $2,
@@ -177,6 +225,144 @@ export async function advanceToNextStep(
   }
 }
 
+// ── Provider matching helper ───────────────────────────────────────────────────
+async function executeProviderMatch(
+  flowRunId: string,
+  step: Record<string, unknown>,
+  lead: Record<string, unknown>,
+  orgCtx: OrgContext
+): Promise<void> {
+  const leadId = lead.id as string;
+  const serviceTypeRequested = (lead.service_type_requested || lead.service_needed) as string | null;
+  const languagePref = (lead.language_preference || "en") as string;
+
+  let candidates = orgCtx.providers.filter((p) => p.is_active);
+
+  if (serviceTypeRequested) {
+    const byService = candidates.filter((p) =>
+      (p.service_types as string[]).includes(serviceTypeRequested)
+    );
+    if (byService.length > 0) candidates = byService;
+  }
+
+  if (languagePref) {
+    const byLang = candidates.filter((p) =>
+      (p.languages as string[]).includes(languagePref)
+    );
+    if (byLang.length > 0) candidates = byLang;
+  }
+
+  if (candidates.length === 0) {
+    await logFlowEvent(flowRunId, "no_provider_match", {
+      message: "No provider matched lead criteria",
+      serviceTypeRequested,
+      languagePref,
+      stepId: step.id,
+    });
+    await advanceToNextStep(flowRunId, "failure");
+    return;
+  }
+
+  // Round-robin: pick based on lead ID hash for determinism
+  const idx = Math.abs(leadId.charCodeAt(0)) % candidates.length;
+  const matched = candidates[idx];
+
+  await pool.query(
+    `UPDATE leads SET matched_provider_id = $1, updated_at = NOW() WHERE id = $2`,
+    [matched.id, leadId]
+  );
+
+  await logFlowEvent(flowRunId, "provider_matched", {
+    providerId: matched.id,
+    providerName: `${matched.first_name} ${matched.last_name}`,
+    stepId: step.id,
+  });
+
+  await advanceToNextStep(flowRunId, "success");
+}
+
+// ── Appointment schedule helper ────────────────────────────────────────────────
+async function executeAppointmentSchedule(
+  flowRunId: string,
+  step: Record<string, unknown>,
+  lead: Record<string, unknown>,
+  orgCtx: OrgContext
+): Promise<void> {
+  const config = (step.config as Record<string, unknown>) || {};
+  const mode = config.mode || "manual_handoff";
+
+  if (mode === "manual_handoff") {
+    const admins = await pool.query(
+      `SELECT email, first_name FROM users WHERE organization_id = $1 AND role = 'admin'`,
+      [orgCtx.organization_id]
+    );
+
+    const providerResult = lead.matched_provider_id
+      ? await pool.query(
+          `SELECT first_name, last_name FROM org_providers WHERE id = $1`,
+          [lead.matched_provider_id]
+        )
+      : { rows: [] };
+
+    const providerName = providerResult.rows.length > 0
+      ? `${providerResult.rows[0].first_name} ${providerResult.rows[0].last_name}`
+      : "your provider";
+
+    const leadUrl = `https://claimshield.health/intake/leads/${lead.id}`;
+    const notifyMsg = `New lead ${lead.first_name || ""} ${lead.last_name || ""} matched to ${providerName}. Please schedule appointment: ${leadUrl}`;
+
+    for (const admin of admins.rows) {
+      if (twilioClient && lead.phone) {
+        await twilioClient.messages.create({
+          body: notifyMsg,
+          to: formatPhone(admin.phone || ""),
+          ...(twilioMessagingServiceSid
+            ? { messagingServiceSid: twilioMessagingServiceSid }
+            : { from: process.env.TWILIO_PHONE_NUMBER }),
+        } as any).catch((e: unknown) =>
+          console.error("[appointment_schedule] SMS to admin failed:", e)
+        );
+      }
+      if (emailTransporter && admin.email) {
+        const templateKey = "admin_handoff_email";
+        const tmpl = orgCtx.templates[`${templateKey}::email`] || orgCtx.templates[templateKey];
+        const subject = tmpl?.subject
+          ? applyTemplateVars(tmpl.subject, {
+              first_name: String(lead.first_name || ""),
+              last_name: String(lead.last_name || ""),
+              provider_name: providerName,
+            })
+          : `New lead for scheduling: ${lead.first_name || ""}`;
+        const body = tmpl?.body
+          ? applyTemplateVars(tmpl.body, {
+              first_name: String(lead.first_name || ""),
+              last_name: String(lead.last_name || ""),
+              provider_name: providerName,
+              service_type: String(lead.service_type_requested || lead.service_needed || ""),
+              lead_id: String(lead.id),
+            })
+          : notifyMsg;
+        await emailTransporter.sendMail({
+          from: gmailUser,
+          to: admin.email,
+          subject,
+          text: body,
+        }).catch((e: unknown) =>
+          console.error("[appointment_schedule] Email to admin failed:", e)
+        );
+      }
+    }
+
+    await logFlowEvent(flowRunId, "appointment_handoff_sent", {
+      adminsNotified: admins.rows.length,
+      providerName,
+      stepId: step.id,
+    });
+  }
+
+  await advanceToNextStep(flowRunId, "success");
+}
+
 // ── Main execute step ──────────────────────────────────────────────────────────
 export async function executeStep(
   flowRunId: string,
@@ -188,13 +374,23 @@ export async function executeStep(
   try {
     // Load flow run + current step
     const runResult = await pool.query(
-      `SELECT fr.current_step_index, fr.flow_id, fr.organization_id
+      `SELECT fr.current_step_index, fr.flow_id, fr.organization_id, fr.metadata
        FROM flow_runs fr
        WHERE fr.id = $1`,
       [flowRunId]
     );
     if (!runResult.rows.length) return;
     const run = runResult.rows[0];
+
+    // Determine org — run's organization_id takes priority, then flow's
+    let organizationId = run.organization_id as string | null;
+    if (!organizationId) {
+      const flowRes = await pool.query(
+        `SELECT organization_id FROM flows WHERE id = $1`,
+        [run.flow_id]
+      );
+      organizationId = flowRes.rows[0]?.organization_id || null;
+    }
 
     const stepResult = await pool.query(
       `SELECT *
@@ -222,9 +418,7 @@ export async function executeStep(
     }
     const lead = leadResult.rows[0];
 
-    // ── Engagement halt guard ─────────────────────────────────────────────────
-    // Staff can manually halt all future engagement for a lead. This check runs
-    // before EVERY step type so no channel (call/SMS/email) can slip through.
+    // ── Engagement halt guard ──────────────────────────────────────────────────
     if (lead.engagement_halted === true) {
       await pool.query(
         `UPDATE flow_runs SET status = 'halted', halted_at = NOW(), updated_at = NOW()
@@ -234,17 +428,41 @@ export async function executeStep(
       await logFlowEvent(flowRunId, "flow_halted", {
         reason: "Lead engagement_halted flag is set — all steps blocked",
       });
-      console.warn(`[flow-step-executor] Flow run ${flowRunId} halted — lead ${leadId} has engagement_halted=true`);
+      console.warn(`[flow-step-executor] Run ${flowRunId} halted — lead ${leadId} has engagement_halted=true`);
+      return;
+    }
+
+    // ── Load org context (cached 60s) ──────────────────────────────────────────
+    const orgCtx = organizationId
+      ? await getOrgContext(organizationId)
+      : { organization_id: "", templates: {}, personas: {}, service_types: [], payers: [], lead_sources: [], providers: [] };
+
+    // ── Condition evaluator (Phase C.3) ───────────────────────────────────────
+    const condition = step.condition as StepCondition | null;
+    if (condition && !evaluateCondition(condition, lead, run)) {
+      await logFlowEvent(flowRunId, "step_skipped", {
+        reason: `condition_false: ${condition.field} ${condition.operator} ${JSON.stringify(condition.value)}`,
+        stepId: step.id,
+        stepType: step.step_type,
+      });
+      console.log(
+        `[flow-step-executor] Step ${step.step_order} (${step.step_type}) skipped — condition false`
+      );
+      await advanceToNextStep(flowRunId, "success");
       return;
     }
 
     const firstName = lead.first_name || lead.name?.split(" ")[0] || "";
-    const state = lead.state || "";
-    const templateVars = {
+    const templateVars: Record<string, string> = {
       first_name: firstName,
       last_name: lead.last_name || "",
       name: lead.name || firstName,
-      state,
+      state: lead.state || "",
+      service_type: lead.service_needed || lead.service_type_requested || "",
+      appointment_date: lead.appointment_date || "",
+      appointment_time: lead.appointment_time || "",
+      provider_name: "",
+      lead_id: String(lead.id),
     };
 
     await logFlowEvent(flowRunId, "step_started", {
@@ -253,25 +471,23 @@ export async function executeStep(
       stepOrder: step.step_order,
     });
 
-    // ── Handle each step type ────────────────────────────────────────────────
+    // ── Step type handlers ─────────────────────────────────────────────────────
 
     if (step.step_type === "wait") {
-      // Nothing to do — advance immediately (delay was already baked into next_action_at)
       await advanceToNextStep(flowRunId, "success");
       return;
     }
 
-    if (step.step_type === "sms") {
+    // ── sms_message ────────────────────────────────────────────────────────────
+    if (step.step_type === "sms_message" || step.step_type === "sms") {
       if (!twilioClient) {
-        console.warn("[flow-step-executor] Twilio not configured; skipping SMS step");
         await logFlowEvent(flowRunId, "step_skipped", {
-          reason: "Twilio not configured (missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN)",
+          reason: "Twilio not configured",
           stepId: step.id,
         });
         await advanceToNextStep(flowRunId, "failure");
         return;
       }
-
       if (!lead.phone) {
         await logFlowEvent(flowRunId, "step_skipped", {
           reason: "Lead has no phone",
@@ -289,9 +505,7 @@ export async function executeStep(
         reason: `Flow SMS step ${step.step_order}`,
         durationMinutes: 5,
       });
-
       if (!lockId) {
-        // Lead is locked — reschedule in 2 minutes
         await pool.query(
           `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1`,
           [flowRunId]
@@ -299,9 +513,15 @@ export async function executeStep(
         return;
       }
 
-      const body = step.template_inline
-        ? applyTemplateVars(step.template_inline, templateVars)
-        : "Hi, this is Caritas Senior Care following up on your inquiry.";
+      // Resolve body: template_key lookup → template_inline fallback
+      let body: string;
+      if (step.template_key && orgCtx.templates[step.template_key]) {
+        body = applyTemplateVars(orgCtx.templates[step.template_key].body, templateVars);
+      } else if (step.template_inline) {
+        body = applyTemplateVars(step.template_inline, templateVars);
+      } else {
+        body = `Hi ${firstName}, this is a follow-up from our team.`;
+      }
 
       let smsSent = false;
       try {
@@ -314,7 +534,6 @@ export async function executeStep(
         } else if (process.env.TWILIO_PHONE_NUMBER) {
           msgParams.from = process.env.TWILIO_PHONE_NUMBER;
         }
-
         await twilioClient!.messages.create(msgParams as any);
         smsSent = true;
 
@@ -323,8 +542,7 @@ export async function executeStep(
            VALUES ($1, 'sms_sent', $2, NOW(), $3)`,
           [leadId, `[Flow] SMS sent: ${body.slice(0, 80)}`, lead.organization_id]
         );
-
-        await logFlowEvent(flowRunId, "step_completed", {
+        await logFlowEvent(flowRunId, "sms_sent", {
           message: `SMS sent: ${body.slice(0, 60)}`,
           stepId: step.id,
         });
@@ -343,21 +561,23 @@ export async function executeStep(
       return;
     }
 
-    if (step.step_type === "call") {
+    // ── voice_call ─────────────────────────────────────────────────────────────
+    if (step.step_type === "voice_call" || step.step_type === "call") {
       const vapiApiKey = process.env.VAPI_API_KEY;
-      const assistantId = process.env.VAPI_ASSISTANT_ID;
       const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+      const stepConfig = (step.config as Record<string, unknown>) || {};
+      const personaKey = (stepConfig.persona_key as string) || "intake_coordinator";
+      const persona = orgCtx.personas[personaKey];
+      const assistantId = persona?.vapi_assistant_id || process.env.VAPI_ASSISTANT_ID;
 
       if (!vapiApiKey || !assistantId || !phoneNumberId) {
-        console.warn("[flow-step-executor] Vapi not configured; skipping call step");
         await logFlowEvent(flowRunId, "step_skipped", {
-          reason: "Vapi not configured",
+          reason: "Vapi not configured (missing API key, assistant ID, or phone number ID)",
           stepId: step.id,
         });
         await advanceToNextStep(flowRunId, "failure");
         return;
       }
-
       if (!lead.phone) {
         await logFlowEvent(flowRunId, "step_skipped", {
           reason: "Lead has no phone",
@@ -366,12 +586,7 @@ export async function executeStep(
         await advanceToNextStep(flowRunId, "failure");
         return;
       }
-
-      // ── Fix 1: Consent check ─────────────────────────────────────────────────
-      // If the lead explicitly declined consent (captured from a prior call transcript),
-      // skip ALL future call steps for this lead permanently.
       if (lead.consent_to_call === false) {
-        console.warn(`[flow-step-executor] Lead ${leadId} has consent_to_call=false — skipping call step`);
         await logFlowEvent(flowRunId, "step_skipped", {
           reason: "Lead declined consent to call (consent_to_call=false)",
           stepId: step.id,
@@ -380,30 +595,17 @@ export async function executeStep(
         return;
       }
 
-      // ── Fix 2: Business hours guard (Eastern Time) ───────────────────────────
-      // Only place calls between 8:00 AM and 8:00 PM ET (UTC-5 standard / UTC-4 daylight).
-      // We use UTC-5 as a safe conservative offset (never earlier than 8am ET).
-      // CALL_WINDOW_OVERRIDE=true in env skips this guard for dev/testing.
-      const CALL_HOUR_START = 8;  // 8:00 AM ET
-      const CALL_HOUR_END   = 20; // 8:00 PM ET
-      const ET_UTC_OFFSET   = -5; // conservative (EST); EDT is -4 but -5 is safer
+      // Business hours guard (8am-8pm ET)
       if (!process.env.CALL_WINDOW_OVERRIDE) {
         const utcHour = new Date().getUTCHours();
-        const etHour  = ((utcHour + ET_UTC_OFFSET) % 24 + 24) % 24;
-        if (etHour < CALL_HOUR_START || etHour >= CALL_HOUR_END) {
-          // Reschedule to 8:00 AM ET today (or tomorrow if already past 8pm ET)
-          const now = new Date();
-          const nextCallAt = new Date(now);
-          // Target 8am ET = 13:00 UTC (EST) — set hours in UTC
+        const etHour = ((utcHour - 5) % 24 + 24) % 24;
+        if (etHour < 8 || etHour >= 20) {
+          const nextCallAt = new Date();
           nextCallAt.setUTCHours(13, 0, 0, 0);
-          if (nextCallAt <= now) nextCallAt.setUTCDate(nextCallAt.getUTCDate() + 1);
+          if (nextCallAt <= new Date()) nextCallAt.setUTCDate(nextCallAt.getUTCDate() + 1);
           await pool.query(
             `UPDATE flow_runs SET next_action_at = $1, updated_at = NOW() WHERE id = $2`,
             [nextCallAt, flowRunId]
-          );
-          console.log(
-            `[flow-step-executor] Call step deferred — outside business hours ` +
-            `(ET hour: ${etHour}). Rescheduled to ${nextCallAt.toISOString()}`
           );
           await logFlowEvent(flowRunId, "step_deferred", {
             reason: `Outside calling hours (ET hour: ${etHour}). Next attempt at ${nextCallAt.toISOString()}`,
@@ -413,9 +615,7 @@ export async function executeStep(
         }
       }
 
-      // ── Fix 3: In-progress call dedup ────────────────────────────────────────
-      // If a Vapi call is already in_progress for this lead (e.g. webhook not yet
-      // received from a prior attempt), do NOT fire a second call. Reschedule.
+      // In-progress call dedup guard
       const existingCall = await pool.query(
         `SELECT id FROM calls WHERE lead_id = $1 AND disposition = 'in_progress' LIMIT 1`,
         [leadId]
@@ -425,10 +625,6 @@ export async function executeStep(
           `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '30 minutes', updated_at = NOW() WHERE id = $1`,
           [flowRunId]
         );
-        console.warn(
-          `[flow-step-executor] Call step deferred — lead ${leadId} already has an in_progress call. ` +
-          `Rescheduling in 30 min.`
-        );
         await logFlowEvent(flowRunId, "step_deferred", {
           reason: "Existing in_progress call found for lead — waiting for webhook",
           stepId: step.id,
@@ -436,18 +632,14 @@ export async function executeStep(
         return;
       }
 
-      // ── Fix 4: Lock duration extended to match next_action_at window ─────────
-      // The call step pushes next_action_at to +4 hours. The lock must cover at
-      // least that window, otherwise it expires and a concurrent tick can re-fire.
       lockId = await acquireLock({
         leadId,
         acquiredByType: "flow",
         acquiredById: flowRunId,
         channel: "call",
         reason: `Flow Vapi call step ${step.step_order}`,
-        durationMinutes: 240, // 4 hours — matches the next_action_at offset below
+        durationMinutes: 240,
       });
-
       if (!lockId) {
         await pool.query(
           `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1`,
@@ -456,9 +648,8 @@ export async function executeStep(
         return;
       }
 
-      const nameParts = (lead.name || "").split(" ");
-      const lFirstName = lead.first_name || nameParts[0] || "Unknown";
-      const lLastName = lead.last_name || nameParts.slice(1).join(" ") || "";
+      const lFirstName = lead.first_name || (lead.name as string)?.split(" ")[0] || "Unknown";
+      const lLastName = lead.last_name || (lead.name as string)?.split(" ").slice(1).join(" ") || "";
 
       const vapiPayload = {
         assistantId,
@@ -471,6 +662,7 @@ export async function executeStep(
           leadId,
           flowRunId,
           lockId,
+          orgId: organizationId,
         },
         assistantOverrides: {
           variableValues: {
@@ -481,8 +673,7 @@ export async function executeStep(
             patient_state: lead.state || "Unknown",
             service_needed: lead.service_needed || "Unknown",
             insurance_carrier: lead.insurance_carrier || "Unknown",
-            clinic_name: "Caritas Senior Care",
-            clinic_callback_number: "(888) 555-0100",
+            clinic_name: persona?.persona_name || "Care Coordinator",
           },
           transcriber: {
             provider: "deepgram",
@@ -527,43 +718,126 @@ export async function executeStep(
           stepId: step.id,
           error: errMsg,
         });
-        // Increment attempt_count; reschedule with backoff or fail permanently
         await handleStepFailure(flowRunId, step.id, `Vapi call initiation failed: ${errMsg}`);
         return;
       }
 
       const callData = await response.json();
       console.log(`[flow-step-executor] Vapi call created: vapi_call_id=${callData.id}`);
+
       await pool.query(
         `INSERT INTO calls
-           (id, lead_id, vapi_call_id, transcript, summary, disposition, organization_id)
-         VALUES (gen_random_uuid()::text, $1, $2, '', 'Flow call initiated', 'in_progress', $3)
+           (id, lead_id, vapi_call_id, transcript, summary, disposition, organization_id, channel)
+         VALUES (gen_random_uuid()::text, $1, $2, '', 'Flow call initiated', 'in_progress', $3, 'vapi')
          ON CONFLICT DO NOTHING`,
         [leadId, callData.id, lead.organization_id]
       );
 
-      await logFlowEvent(flowRunId, "step_started_call", {
+      await logFlowEvent(flowRunId, "voice_call_initiated", {
         message: `Vapi call initiated: ${callData.id}`,
         vapiCallId: callData.id,
+        assistantId,
+        personaKey,
         stepId: step.id,
       });
 
-      // Push next_action_at far out so the orchestrator does not re-fire
-      // this step while we wait for the Vapi end-of-call-report webhook.
-      // The webhook will call advanceToNextStep() when the call ends.
-      // If the webhook never arrives within 4 hours the orchestrator will
-      // treat this as a timeout and retry (or an operator can manually advance).
+      // Push next_action_at far out — webhook advances when call ends
       await pool.query(
         `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '4 hours', updated_at = NOW() WHERE id = $1`,
         [flowRunId]
       );
-
-      // NOTE: lock is intentionally NOT released here — it will be released
-      // in the Vapi webhook end-of-call-report handler (server/routes.ts),
-      // which also calls advanceToNextStep().
+      // Lock intentionally NOT released here — webhook handler releases it
       return;
     }
 
+    // ── email_message ──────────────────────────────────────────────────────────
+    if (step.step_type === "email_message" || step.step_type === "email") {
+      if (!emailTransporter || !gmailUser) {
+        await logFlowEvent(flowRunId, "step_skipped", {
+          reason: "Gmail not configured",
+          stepId: step.id,
+        });
+        await advanceToNextStep(flowRunId, "failure");
+        return;
+      }
+      if (!lead.email) {
+        await logFlowEvent(flowRunId, "step_skipped", {
+          reason: "Lead has no email",
+          stepId: step.id,
+        });
+        await advanceToNextStep(flowRunId, "failure");
+        return;
+      }
+
+      lockId = await acquireLock({
+        leadId,
+        acquiredByType: "flow",
+        acquiredById: flowRunId,
+        channel: "email",
+        reason: `Flow email step ${step.step_order}`,
+        durationMinutes: 5,
+      });
+      if (!lockId) {
+        await pool.query(
+          `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1`,
+          [flowRunId]
+        );
+        return;
+      }
+
+      let subject: string;
+      let body: string;
+
+      if (step.template_key) {
+        const tmplSms = orgCtx.templates[`${step.template_key}::email`] || orgCtx.templates[step.template_key];
+        subject = tmplSms?.subject
+          ? applyTemplateVars(tmplSms.subject, templateVars)
+          : `Follow-up from our team`;
+        body = tmplSms?.body
+          ? applyTemplateVars(tmplSms.body, templateVars)
+          : `Hi ${firstName}, this is a follow-up from our team.`;
+      } else {
+        subject = applyTemplateVars(step.subject_inline || "Follow-up from our team", templateVars);
+        body = step.template_inline
+          ? applyTemplateVars(step.template_inline, templateVars)
+          : `Hi ${firstName}, this is a follow-up from our team.`;
+      }
+
+      let emailSent = false;
+      try {
+        await emailTransporter!.sendMail({
+          from: gmailUser,
+          to: lead.email,
+          subject,
+          text: body,
+        });
+        emailSent = true;
+
+        await logFlowEvent(flowRunId, "email_sent", {
+          message: `Email sent to ${lead.email}`,
+          stepId: step.id,
+        });
+        await pool.query(
+          `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+           VALUES ($1, 'email_sent', $2, NOW(), $3)`,
+          [leadId, `[Flow] Email sent: ${subject}`, lead.organization_id]
+        );
+      } catch (emailErr: any) {
+        console.error("[flow-step-executor] Gmail error:", emailErr?.message || emailErr);
+        await logFlowEvent(flowRunId, "step_failed", {
+          reason: `Gmail error: ${emailErr?.message || String(emailErr)}`,
+          stepId: step.id,
+        });
+      } finally {
+        await releaseLock(lockId);
+        lockId = null;
+      }
+
+      await advanceToNextStep(flowRunId, emailSent ? "success" : "failure");
+      return;
+    }
+
+    // ── vob_check ──────────────────────────────────────────────────────────────
     if (step.step_type === "vob_check") {
       if (!isStediConfigured()) {
         await logFlowEvent(flowRunId, "step_skipped", {
@@ -577,9 +851,8 @@ export async function executeStep(
       const carrier = lead.insurance_carrier || "";
       const memberId = lead.insurance_member_id || lead.member_id || "";
       const dob = lead.date_of_birth || lead.dob || "";
-      const lFirstName = lead.first_name || lead.name?.split(" ")[0] || "";
-      const lLastName =
-        lead.last_name || lead.name?.split(" ").slice(1).join(" ") || "";
+      const lFirstName = lead.first_name || (lead.name as string)?.split(" ")[0] || "";
+      const lLastName = lead.last_name || (lead.name as string)?.split(" ").slice(1).join(" ") || "";
 
       if (!memberId || !dob || !lFirstName || !lLastName) {
         await logFlowEvent(flowRunId, "step_skipped", {
@@ -590,27 +863,20 @@ export async function executeStep(
         return;
       }
 
-      // Fetch practice settings for provider NPI
       const settingsResult = await pool.query(
-        `SELECT primary_npi, practice_name FROM practice_settings LIMIT 1`
+        `SELECT primary_npi, practice_name FROM practice_settings WHERE organization_id = $1 LIMIT 1`,
+        [organizationId]
       );
       const providerNpi = settingsResult.rows[0]?.primary_npi || "1234567890";
-      const providerName = settingsResult.rows[0]?.practice_name || "Caritas Senior Care";
+      const providerName = settingsResult.rows[0]?.practice_name || "Care Provider";
 
-      // Map common carrier names to Stedi trading partner IDs using CARITAS.payerMappings
-      const carrierToPayerId = (carrierName: string): string => {
-        const n = carrierName.toLowerCase();
-        for (const [key, id] of Object.entries(CARITAS.payerMappings)) {
-          if (n.includes(key.toLowerCase())) return id;
-        }
-        return "00010";
-      };
+      const tradingPartnerId = resolveCarrierToPayerId(carrier, orgCtx.payers);
 
       let vobSucceeded = false;
       try {
         const result = await checkEligibility({
           controlNumber: String(Math.floor(Math.random() * 900000000) + 100000000),
-          tradingPartnerServiceId: carrierToPayerId(carrier),
+          tradingPartnerServiceId: tradingPartnerId,
           providerNpi,
           providerName,
           subscriberFirstName: lFirstName,
@@ -621,24 +887,18 @@ export async function executeStep(
         });
 
         const vobScore = result.status === "active" ? 100 : 25;
-
         await pool.query(
           `UPDATE leads SET vob_score = $1, vob_status = $2, updated_at = NOW() WHERE id = $3`,
-          [
-            vobScore,
-            result.status === "active" ? "verified" : "incomplete",
-            leadId,
-          ]
+          [vobScore, result.status === "active" ? "verified" : "incomplete", leadId]
         );
 
-        await logFlowEvent(flowRunId, "step_completed", {
+        await logFlowEvent(flowRunId, "vob_completed", {
           message: `VOB check complete: ${result.status}`,
           vobScore,
           policyStatus: result.policyStatus,
           planName: result.planName,
           stepId: step.id,
         });
-
         await pool.query(
           `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
            VALUES ($1, 'vob_completed', $2, NOW(), $3)`,
@@ -662,83 +922,65 @@ export async function executeStep(
       return;
     }
 
-    if (step.step_type === "email") {
-      if (!emailTransporter || !gmailUser) {
-        console.warn("[flow-step-executor] Gmail not configured; skipping email step");
+    // ── provider_match ─────────────────────────────────────────────────────────
+    if (step.step_type === "provider_match") {
+      await executeProviderMatch(flowRunId, step, lead, orgCtx);
+      return;
+    }
+
+    // ── appointment_schedule ───────────────────────────────────────────────────
+    if (step.step_type === "appointment_schedule") {
+      await executeAppointmentSchedule(flowRunId, step, lead, orgCtx);
+      return;
+    }
+
+    // ── webhook ────────────────────────────────────────────────────────────────
+    if (step.step_type === "webhook") {
+      const config = (step.config as Record<string, unknown>) || {};
+      const url = config.url as string;
+      const method = ((config.method as string) || "POST").toUpperCase();
+      const headers = (config.headers as Record<string, string>) || {};
+      const timeout = (config.timeout as number) || 10000;
+
+      if (!url) {
         await logFlowEvent(flowRunId, "step_skipped", {
-          reason: "Gmail not configured",
+          reason: "Webhook step missing url in config",
           stepId: step.id,
         });
         await advanceToNextStep(flowRunId, "failure");
         return;
       }
 
-      if (!lead.email) {
-        await logFlowEvent(flowRunId, "step_skipped", {
-          reason: "Lead has no email",
-          stepId: step.id,
-        });
-        await advanceToNextStep(flowRunId, "failure");
-        return;
-      }
-
-      lockId = await acquireLock({
-        leadId,
-        acquiredByType: "flow",
-        acquiredById: flowRunId,
-        channel: "email",
-        reason: `Flow email step ${step.step_order}`,
-        durationMinutes: 5,
-      });
-
-      if (!lockId) {
-        await pool.query(
-          `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1`,
-          [flowRunId]
-        );
-        return;
-      }
-
-      const subject = applyTemplateVars(
-        step.subject_inline || CARITAS.emailTemplates.nurture.subject,
-        templateVars
-      );
-      const body = step.template_inline
-        ? applyTemplateVars(step.template_inline, templateVars)
-        : applyTemplateVars(CARITAS.emailTemplates.nurture.body, templateVars);
-
-      let emailSent = false;
       try {
-        await emailTransporter!.sendMail({
-          from: gmailUser,
-          to: lead.email,
-          subject,
-          text: body,
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), timeout);
+        const resp = await fetch(url, {
+          method,
+          headers: { "Content-Type": "application/json", ...headers },
+          body: method !== "GET" ? JSON.stringify({ lead, flowRunId, orgId: organizationId }) : undefined,
+          signal: controller.signal,
         });
-        emailSent = true;
+        clearTimeout(tid);
 
-        await logFlowEvent(flowRunId, "step_completed", {
-          message: `Email sent to ${lead.email}`,
+        await logFlowEvent(flowRunId, "webhook_called", {
+          url,
+          method,
+          status: resp.status,
           stepId: step.id,
         });
 
-        await pool.query(
-          `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
-           VALUES ($1, 'email_sent', $2, NOW(), $3)`,
-          [leadId, `[Flow] Email sent: ${subject}`, lead.organization_id]
-        );
-      } catch (emailErr: any) {
-        console.error("[flow-step-executor] Gmail error:", emailErr?.message || emailErr);
+        if (!resp.ok) {
+          throw new Error(`Webhook returned ${resp.status}`);
+        }
+        await advanceToNextStep(flowRunId, "success");
+      } catch (err: any) {
+        console.error("[flow-step-executor] Webhook error:", err);
         await logFlowEvent(flowRunId, "step_failed", {
-          reason: `Gmail error: ${emailErr?.message || String(emailErr)}`,
+          reason: `Webhook error: ${err?.message || String(err)}`,
           stepId: step.id,
         });
-      } finally {
-        await releaseLock(lockId);
-        lockId = null;
+        await handleStepFailure(flowRunId, step.id, `Webhook failed: ${err?.message}`);
       }
-
-      await advanceToNextStep(flowRunId, emailSent ? "success" : "failure");
       return;
     }
 

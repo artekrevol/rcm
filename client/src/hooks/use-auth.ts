@@ -6,9 +6,20 @@ export type AuthUser = {
   email: string;
   role: string;
   name: string;
+  organization_id: string | null;
   impersonatingOrgId: string | null;
   impersonatingOrgName: string | null;
 };
+
+/** Returns the effective org ID for the current user.
+ *  - super_admin uses impersonatingOrgId when set
+ *  - regular users use their own organization_id
+ */
+export function useOrgId(user: AuthUser | null): string | null {
+  if (!user) return null;
+  if (user.role === "super_admin") return user.impersonatingOrgId || null;
+  return user.organization_id || null;
+}
 
 export function useAuth() {
   const queryClient = useQueryClient();
