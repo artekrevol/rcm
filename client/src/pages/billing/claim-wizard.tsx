@@ -1019,6 +1019,7 @@ export default function ClaimWizard() {
   const [step, setStep] = useState(0);
   const [patient, setPatient] = useState<any>(null);
   const [claimId, setClaimId] = useState<string | null>(null);
+  const [claimPayerUuid, setClaimPayerUuid] = useState<string | null>(null);
   const [encounterId, setEncounterId] = useState<string | null>(null);
 
   const [providerId, setProviderId] = useState("");
@@ -1083,6 +1084,11 @@ export default function ClaimWizard() {
 
   // Resolve matched payer from patient's payer_id or insurance_carrier name
   const matchedPayer = payers.find((p: any) => p.id === patient?.payer_id || p.name === patient?.insurance_carrier) || null;
+  // When editing an existing claim, the claim may have a different payer than the patient's default.
+  // claimMatchedPayer is the payer the 837P will actually route to.
+  const claimMatchedPayer = claimPayerUuid
+    ? (payers.find((p: any) => p.id === claimPayerUuid) || null)
+    : matchedPayer;
   const isVAPayer = !!matchedPayer && (
     matchedPayer.payer_id === "VACCN" || matchedPayer.payer_id === "TWVACCN" || matchedPayer.payer_id === "TRWST" ||
     (matchedPayer.name || "").toLowerCase().includes("va community care") ||
@@ -1126,8 +1132,10 @@ export default function ClaimWizard() {
   const stediConfigured = stediStatus?.configured ?? false;
   // ediMode from server environment — 'T' in dev/staging, 'P' only in production
   const ediMode: "P" | "T" = stediStatus?.ediMode ?? "T";
-  // FRCPB is the Stedi E2E test payer — always force test mode for it
-  const isFrcpbPayer = matchedPayer?.payer_id === "FRCPB";
+  // FRCPB is the Stedi E2E test payer — always force test mode for it.
+  // Use claimMatchedPayer (the actual payer on the claim) so this triggers correctly
+  // even when the patient's default insurance is different from the claim's payer.
+  const isFrcpbPayer = claimMatchedPayer?.payer_id === "FRCPB";
 
   const [stediSubmitting, setStediSubmitting] = useState(false);
   const [stediResult, setStediResult] = useState<{ success: boolean; transactionId?: string; status?: string; error?: string; validationErrors?: any[]; blockedBy?: "claimshield" | "stedi" } | null>(null);
@@ -1172,6 +1180,7 @@ export default function ClaimWizard() {
 
   const populateFromClaim = (claim: any) => {
     if (!claim || !claim.id) return;
+    if (claim.payer_id || claim.payerId) setClaimPayerUuid(claim.payer_id || claim.payerId);
     if (claim.encounterId) setEncounterId(claim.encounterId);
     if (claim.providerId) setProviderId(claim.providerId);
     if (claim.serviceDate) setServiceDate(claim.serviceDate);
@@ -2683,9 +2692,56 @@ export default function ClaimWizard() {
                     )}
                   </div>
 
+                  {/* ── EDI Payer Routing banner ────────────────────────── */}
+                  {claimMatchedPayer ? (
+                    <div
+                      className={`w-full rounded-md border px-3 py-2 text-xs flex items-start gap-2 ${
+                        isFrcpbPayer
+                          ? "bg-green-50 border-green-300 text-green-800 dark:bg-green-950/30 dark:border-green-700 dark:text-green-300"
+                          : isProductionMode
+                          ? "bg-red-50 border-red-300 text-red-800 dark:bg-red-950/30 dark:border-red-700 dark:text-red-300"
+                          : "bg-amber-50 border-amber-300 text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300"
+                      }`}
+                      data-testid="banner-edi-routing"
+                    >
+                      {isFrcpbPayer ? (
+                        <Shield className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      )}
+                      <div className="space-y-0.5">
+                        <p className="font-semibold">
+                          {isFrcpbPayer ? "Test payer — safe to submit" : isProductionMode ? "Live claim — real payer" : "Real payer — sending as test"}
+                        </p>
+                        <p className="font-mono">
+                          {claimMatchedPayer.name}
+                          {claimMatchedPayer.payer_id && (
+                            <span className="ml-1.5 px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 text-[10px] tracking-wide">
+                              {claimMatchedPayer.payer_id}
+                            </span>
+                          )}
+                        </p>
+                        {isFrcpbPayer && (
+                          <p className="text-[10px] opacity-75">FRCPB is Stedi's E2E test payer — no real adjudication occurs.</p>
+                        )}
+                        {!isFrcpbPayer && !isProductionMode && (
+                          <p className="text-[10px] opacity-75">ISA15=T is set — this claim will reach Stedi validation only, not the payer.</p>
+                        )}
+                        {!isFrcpbPayer && isProductionMode && (
+                          <p className="text-[10px] opacity-75">ISA15=P — this payer will receive and adjudicate this claim.</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : patient && (
+                    <div className="w-full rounded-md border border-muted px-3 py-2 text-xs text-muted-foreground flex items-center gap-2" data-testid="banner-edi-routing-unknown">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      <span>Payer EDI routing could not be resolved — verify patient insurance before submitting.</span>
+                    </div>
+                  )}
+
                   {/* ── FRCPB auto-lock notice (Task 4f) ───────────────── */}
                   {isFrcpbPayer && (
-                    <p className="text-xs text-blue-600 dark:text-blue-400 text-right max-w-[240px]" data-testid="notice-frcpb-lock">
+                    <p className="text-xs text-green-700 dark:text-green-400 text-right max-w-[240px]" data-testid="notice-frcpb-lock">
                       <Shield className="h-3 w-3 inline mr-1" />
                       FRCPB is the Stedi E2E test payer. Test mode locked.
                     </p>
