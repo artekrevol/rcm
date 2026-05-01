@@ -1,0 +1,321 @@
+{
+  "_source": "PGBA VA CCN 837P Companion Guide v1.0, March 2021 — Table 5: 837 Business Requirement Edits (page 13)",
+  "_note": "Codes appearing on RPT/RSP response reports for claims that pass TR3/999 compliance but are rejected at business level.",
+  "codes": {
+    "AAT": {
+      "code": "AAT",
+      "description": "MODIFIER INDICATING SERVICE PVDR/LEVEL REQ",
+      "segment": "2400|SV101-3",
+      "detail": "Anesthesia procedure codes (00000–09999) require a modifier indicating service provider level: AA (anesthesiologist) or QX (CRNA).",
+      "action": "Add AA or QX modifier to the anesthesia service line."
+    },
+    "BG5": {
+      "code": "BG5",
+      "description": "STATE AND ZIP CODE INCONSISTENT — Professional",
+      "segment": "2010AA or 2010CA|N402+N403",
+      "detail": "The state code and ZIP code combination is not consistent with USPS data.",
+      "action": "Verify the billing provider or patient address state/ZIP combination and correct."
+    },
+    "BT4": {
+      "code": "BT4",
+      "description": "PROC INVALID FOR DOS",
+      "segment": "2400|SV101-2",
+      "detail": "The procedure code is not valid for the date of service.",
+      "action": "Verify HCPCS/CPT code is active and billable on the date of service."
+    },
+    "DGQ": {
+      "code": "DGQ",
+      "description": "NDC# MUST BE 11 DIGITS",
+      "segment": "2410|LIN03",
+      "detail": "The NDC number must be exactly 11 digits.",
+      "action": "Correct the NDC number to 11 digits (no dashes)."
+    },
+    "DP1": {
+      "code": "DP1",
+      "description": "Duplicate of claim submitted same day",
+      "segment": "2300|CLM",
+      "detail": "A claim with the same patient, provider, date of service, and procedure was submitted on the same day.",
+      "action": "Do not resubmit. If this was not a duplicate, contact PGBA EDI at PGBA.EDI@pgba.com."
+    },
+    "DUP": {
+      "code": "DUP",
+      "description": "Duplicate of a claim paid in last 60 days",
+      "segment": "2300|CLM",
+      "detail": "A matching claim was paid within the last 60 days.",
+      "action": "Do not resubmit. If a corrected claim is needed, submit as frequency code 7 (replacement)."
+    },
+    "EB6": {
+      "code": "EB6",
+      "description": "S AND R CODE NOT COMPATIBLE W/ DIAGNOSIS CODE",
+      "segment": "2400|SV101-2 or 2300|HI",
+      "detail": "The service or revenue code is gender-specific or age-specific and is not compatible with the diagnosis code or patient demographics.",
+      "action": "Verify diagnosis codes match patient demographics and procedure codes."
+    },
+    "H09": {
+      "code": "H09",
+      "description": "TOTAL CHARGE MUST BE GREATER THAN ZERO",
+      "segment": "2300|CLM02",
+      "detail": "The total claim charge amount (CLM02) must be greater than $0.",
+      "action": "Ensure at least one service line has a positive charge and CLM02 reflects the sum."
+    },
+    "H10": {
+      "code": "H10",
+      "description": "FROM DATE NOT ENTERED OR IS INVALID",
+      "segment": "2400|DTP03",
+      "detail": "The service date (DTP*472) is missing or is an invalid date.",
+      "action": "Provide a valid CCYYMMDD date in DTP*472 for each service line."
+    },
+    "H16": {
+      "code": "H16",
+      "description": "CHARGE MUST BE GREATER THAN ZERO",
+      "segment": "2400|SV102",
+      "detail": "Each service line charge (SV102) must be greater than $0. Also must be less than $100,000 per PGBA Table 6.",
+      "action": "Correct the line-level charge. Remove $0 lines. Split lines exceeding $99,999."
+    },
+    "H64": {
+      "code": "H64",
+      "description": "STATE IS INVALID",
+      "segment": "2010CA|N402",
+      "detail": "The state code in the patient address is not a valid two-letter USPS state abbreviation.",
+      "action": "Correct the state code in N4 for the patient address loop."
+    },
+    "H65": {
+      "code": "H65",
+      "description": "INVALID SPONSOR ID",
+      "segment": "2010BA|NM109",
+      "detail": "The subscriber/sponsor member ID is invalid or not found in PGBA's eligibility database.",
+      "action": "Verify member ID. For veterans: use SSN (9 digits, qualifier SY), EDIPI (10 digits, qualifier MI), or MVI ICN (17 digits, qualifier MI)."
+    },
+    "H68": {
+      "code": "H68",
+      "description": "SUBS/SPON LAST/FIRST NAME MISSING OR INVALID",
+      "segment": "2010BA|NM103+NM104",
+      "detail": "The subscriber/sponsor last name or first name is missing or does not match PGBA records.",
+      "action": "Verify the subscriber name matches the name on file with PGBA."
+    },
+    "H76": {
+      "code": "H76",
+      "description": "AMT PD BY OTHER CARRIER INVALID",
+      "segment": "2320|AMT02",
+      "detail": "The amount paid by another carrier in the COB loop is invalid.",
+      "action": "Verify the COB paid amount in the 2320 loop AMT segment."
+    },
+    "LM1": {
+      "code": "LM1",
+      "description": "MODIFIER 1 IS INVALID",
+      "segment": "2400|SV101-3",
+      "detail": "The first procedure modifier is not a valid X12/CMS modifier.",
+      "action": "Verify modifier 1 is a valid 2-character HCPCS/CPT modifier."
+    },
+    "LM2": {
+      "code": "LM2",
+      "description": "MODIFIER 2 IS INVALID",
+      "segment": "2400|SV101-4",
+      "detail": "The second procedure modifier is not a valid X12/CMS modifier.",
+      "action": "Verify modifier 2 is a valid 2-character HCPCS/CPT modifier."
+    },
+    "LM3": {
+      "code": "LM3",
+      "description": "MODIFIER 3 IS INVALID",
+      "segment": "2400|SV101-5",
+      "detail": "The third procedure modifier is not a valid X12/CMS modifier.",
+      "action": "Verify modifier 3 is a valid 2-character HCPCS/CPT modifier."
+    },
+    "LM4": {
+      "code": "LM4",
+      "description": "MODIFIER 4 IS INVALID",
+      "segment": "2400|SV101-6",
+      "detail": "The fourth procedure modifier is not a valid X12/CMS modifier.",
+      "action": "Verify modifier 4 is a valid 2-character HCPCS/CPT modifier."
+    },
+    "N04": {
+      "code": "N04",
+      "description": "DUT'S MUST EQUAL 1",
+      "segment": "2400|SV101-2",
+      "detail": "Units of service (SV104) must equal 1 for this procedure code.",
+      "action": "Correct units to 1 for procedures that do not allow multiple units."
+    },
+    "NP1": {
+      "code": "NP1",
+      "description": "INVALID BILLING PROVIDER NPI",
+      "segment": "2010AA|NM109",
+      "detail": "The billing provider NPI is not found or invalid in the NPPES registry.",
+      "action": "Verify the billing provider NPI is active and enrolled with PGBA."
+    },
+    "NP4": {
+      "code": "NP4",
+      "description": "INVALID REFERRING PROVIDER NPI",
+      "segment": "2310A|NM109",
+      "detail": "The referring provider NPI is not found or invalid.",
+      "action": "Verify referring provider NPI. If no referral, omit the 2310A loop."
+    },
+    "NP5": {
+      "code": "NP5",
+      "description": "INVALID PAY-TO-PROVIDER NPI",
+      "segment": "2010AB|NM109",
+      "detail": "The pay-to-provider NPI (Loop 2010AB) is invalid.",
+      "action": "Verify pay-to NPI or omit the 2010AB loop if pay-to is same as billing."
+    },
+    "NP6": {
+      "code": "NP6",
+      "description": "INVALID RENDERING PHYSICIAN NPI",
+      "segment": "2310B|NM109",
+      "detail": "The rendering provider NPI (Loop 2310B) is not found or invalid.",
+      "action": "Verify rendering provider NPI is active and credentialed with PGBA for this payer."
+    },
+    "NP7": {
+      "code": "NP7",
+      "description": "INVALID SERVICE FACILITY LOCATION NPI",
+      "segment": "2310D|NM109",
+      "detail": "The service facility location NPI (Loop 2310D) is not found or invalid.",
+      "action": "Verify the facility NPI or omit if facility same as billing provider."
+    },
+    "PCI": {
+      "code": "PCI",
+      "description": "PRIOR CLAIM NUMBER INVALID",
+      "segment": "2300|REF*F8",
+      "detail": "The original/prior claim control number referenced in REF*F8 is not found.",
+      "action": "Verify the original claim ICN/TCN in REF*F8 before submitting a replacement (freq 7)."
+    },
+    "PST": {
+      "code": "PST",
+      "description": "PAYER RESPONSIBILITY CODE MUST EQUAL P, S or T",
+      "segment": "2000B|SBR01 or 2320|SBR01",
+      "detail": "The payer responsibility sequence code must be P (Primary), S (Secondary), or T (Tertiary).",
+      "action": "Set SBR01 to P, S, or T as appropriate."
+    },
+    "QSE": {
+      "code": "QSE",
+      "description": "PRINCIPAL DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI01-2",
+      "detail": "The first (principal) ICD-10-CM diagnosis code is not valid for the date of service.",
+      "action": "Verify the principal diagnosis code is active in ICD-10-CM for the service date."
+    },
+    "QSF": {
+      "code": "QSF",
+      "description": "PRINCIPAL DIAGNOSIS CANNOT CONTAIN AN E-CODE",
+      "segment": "2300|HI01-2",
+      "detail": "The principal diagnosis cannot be an external cause of morbidity (formerly E-code; now V/W/X/Y codes in ICD-10).",
+      "action": "Move the external cause code to a secondary diagnosis position. Ensure the principal diagnosis is a condition code."
+    },
+    "Q69": {
+      "code": "Q69",
+      "description": "FIRST DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI01-2",
+      "detail": "The first ICD-10-CM diagnosis code is invalid.",
+      "action": "Verify ICD-10-CM code is valid and active for the date of service."
+    },
+    "Q70": {
+      "code": "Q70",
+      "description": "SECOND DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI02-2",
+      "detail": "The second ICD-10-CM diagnosis code is invalid.",
+      "action": "Verify ICD-10-CM code is valid and active for the date of service."
+    },
+    "Q71": {
+      "code": "Q71",
+      "description": "THIRD DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI03-2",
+      "detail": "The third ICD-10-CM diagnosis code is invalid.",
+      "action": "Verify ICD-10-CM code is valid and active for the date of service."
+    },
+    "Q72": {
+      "code": "Q72",
+      "description": "FOURTH DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI04-2",
+      "detail": "The fourth ICD-10-CM diagnosis code is invalid.",
+      "action": "Verify ICD-10-CM code is valid and active for the date of service."
+    },
+    "Q73": {
+      "code": "Q73",
+      "description": "FIFTH DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI05-2",
+      "detail": "The fifth ICD-10-CM diagnosis code is invalid.",
+      "action": "Verify ICD-10-CM code is valid and active for the date of service."
+    },
+    "Q74": {
+      "code": "Q74",
+      "description": "SIXTH DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI06-2",
+      "detail": "The sixth ICD-10-CM diagnosis code is invalid.",
+      "action": "Verify ICD-10-CM code is valid and active for the date of service."
+    },
+    "Q75": {
+      "code": "Q75",
+      "description": "SEVENTH DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI07-2",
+      "detail": "The seventh ICD-10-CM diagnosis code is invalid.",
+      "action": "Verify ICD-10-CM code is valid and active for the date of service."
+    },
+    "Q76": {
+      "code": "Q76",
+      "description": "EIGHTH DIAGNOSIS IS NOT VALID",
+      "segment": "2300|HI08-2",
+      "detail": "The eighth ICD-10-CM diagnosis code is invalid.",
+      "action": "Verify ICD-10-CM code is valid and active for the date of service."
+    },
+    "REF": {
+      "code": "REF",
+      "description": "REFERRING PROVIDER SECONDARY ID QUALIFIER MUST = G2",
+      "segment": "2310A|REF01",
+      "detail": "The REF qualifier for the referring provider secondary ID must be G2 (Provider Commercial Number).",
+      "action": "Set REF01 = G2 in the 2310A loop for referring provider secondary identification."
+    },
+    "RPO": {
+      "code": "RPO",
+      "description": "NEED PROVIDER PHYSICAL ADDRESS",
+      "segment": "2010AA or 2310C",
+      "detail": "A physical (non-PO Box) address is required for the billing provider (2010AA) or service facility (2310C).",
+      "action": "Provide a physical street address in N3 for the billing provider or service facility."
+    },
+    "RXO": {
+      "code": "RXO",
+      "description": "DUPLICATE DIAGNOSIS CODE",
+      "segment": "2300|HI",
+      "detail": "The same ICD-10-CM code appears more than once in the HI segment.",
+      "action": "Remove duplicate diagnosis codes. Each code should appear only once."
+    },
+    "SLO": {
+      "code": "SLO",
+      "description": "SERVICE FACILITY LOCATION SECONDARY ID QUALIFIER MUST = G2",
+      "segment": "2310C|REF01",
+      "detail": "The REF qualifier for the service facility location secondary ID must be G2.",
+      "action": "Set REF01 = G2 in the 2310C loop for service facility secondary identification."
+    },
+    "SSC": {
+      "code": "SSC",
+      "description": "SUBMIT WITH SSN, EDI PI (10) or MVI ICN (17)",
+      "segment": "2010BA|NM109",
+      "detail": "The veteran's subscriber ID must be a 9-digit SSN (qualifier SY), 10-digit EDI PI (EDIPI, qualifier MI), or 17-digit MVI ICN (qualifier MI).",
+      "action": "Use the correct veteran identifier format. Length and qualifier must match."
+    },
+    "SSE": {
+      "code": "SSE",
+      "description": "RESUBMIT A 9 DIGIT SSN or 10 DIGIT EDI PI",
+      "segment": "2010BA|NM109",
+      "detail": "The provided subscriber ID does not match the expected length for the declared ID type.",
+      "action": "Correct the subscriber ID to 9 digits (SSN) or 10 digits (EDIPI) and match the NM108 qualifier accordingly."
+    },
+    "SUP": {
+      "code": "SUP",
+      "description": "SUPERVISING PROVIDER SECONDARY ID QUALIFIER MUST = G2",
+      "segment": "2310D|REF01",
+      "detail": "The REF qualifier for the supervising provider secondary ID must be G2.",
+      "action": "Set REF01 = G2 in the 2310D loop for supervising provider secondary identification."
+    },
+    "S04": {
+      "code": "S04",
+      "description": "ORDERING PROVIDER SECONDARY ID QUALIFIER MUST = G2",
+      "segment": "2420E|REF01",
+      "detail": "The REF qualifier for the ordering provider secondary ID must be G2.",
+      "action": "Set REF01 = G2 in the 2420E loop for ordering provider secondary identification."
+    },
+    "365": {
+      "code": "365",
+      "description": "MORE SPECIFIC DIAGNOSIS REQUIRED",
+      "segment": "2300|HI01-2 (and subsequent)",
+      "detail": "The ICD-10-CM diagnosis code is valid but PGBA requires a more specific (higher-specificity) code.",
+      "action": "Select the most specific ICD-10-CM code available for the documented condition."
+    }
+  }
+}
