@@ -2929,6 +2929,50 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS locality_resolution_method TEXT`).catch(() => {});
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS locality_source_url TEXT`).catch(() => {});
 
+    // ── hcpcs_rates: legacy rate flag ────────────────────────────────────────
+    await pool.query(`ALTER TABLE hcpcs_rates ADD COLUMN IF NOT EXISTS is_legacy BOOLEAN DEFAULT FALSE`).catch(() => {});
+
+    // ── Performance indexes (multi-tenant org isolation + common filters) ─────
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_claim_id   ON activity_logs(claim_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs(created_at)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_org        ON activity_logs(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_patient_id ON activity_logs(patient_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_created_at  ON claims(created_at)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_org         ON claims(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_patient_id  ON claims(patient_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_payer       ON claims(payer_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_status      ON claims(status)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_patients_first_name ON patients(first_name)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_patients_last_name  ON patients(last_name)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_patients_lead_id    ON patients(lead_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_patients_org        ON patients(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_prior_authorizations_org ON prior_authorizations(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_providers_org       ON providers(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rules_org           ON rules(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_org           ON users(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_org           ON leads(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_email         ON leads(email)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_status        ON leads(status)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_encounters_org      ON encounters(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_denials_org         ON denials(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vob_verifications_org ON vob_verifications(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claim_events_org    ON claim_events(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_logs_org      ON email_logs(organization_id)`).catch(() => {});
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS cpt_codes_code_key  ON cpt_codes(code)`).catch(() => {});
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS hcpcs_codes_code_key ON hcpcs_codes(code)`).catch(() => {});
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS icd10_codes_code_key ON icd10_codes(code)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_appointments_org       ON appointments(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_availability_slots_org ON availability_slots(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_calls_org              ON calls(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_analytics_org     ON chat_analytics(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_org      ON chat_messages(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_org      ON chat_sessions(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claim_templates_org    ON claim_templates(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_cpt_codes_description  ON cpt_codes USING gin(to_tsvector('english', description))`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_templates_org    ON email_templates(organization_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_icd10_codes_description ON icd10_codes USING gin(to_tsvector('english', description))`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_nurture_sequences_org  ON nurture_sequences(organization_id)`).catch(() => {});
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
