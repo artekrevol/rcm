@@ -314,7 +314,7 @@ function DenialRecoveryPanel({ claimId, claimStatus, onNavigate }: { claimId: st
             <Button
               size="sm"
               variant="outline"
-              onClick={() => onNavigate(`/billing/claims/${claimId}/edit`)}
+              onClick={() => onNavigate(`/billing/claims/new?claimId=${claimId}`)}
               data-testid="button-fix-claim"
               className="flex-1"
             >
@@ -1068,29 +1068,29 @@ export default function ClaimDetailPage() {
                 <HelpCircle className="h-4 w-4 mr-2" />
                 View Risk Analysis
               </Button>
-              {claim.status === "draft" && (
-                <>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-start"
-                    onClick={() => setLocation(`/billing/claims/new?claimId=${claim.id}`)}
-                    data-testid="button-continue-editing"
-                  >
-                    <Pencil className="h-4 w-4 mr-2" />
-                    Continue Editing Draft
-                  </Button>
-                  <Button
-                    className="w-full justify-start"
-                    onClick={() => markReadyMutation.mutate()}
-                    disabled={markReadyMutation.isPending}
-                    data-testid="button-mark-ready"
-                  >
-                    {markReadyMutation.isPending
-                      ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      : <CheckCircle className="h-4 w-4 mr-2" />}
-                    Mark Ready to Submit
-                  </Button>
-                </>
+              {["draft", "created", "denied", "returned"].includes(claim.status) && (
+                <Button
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={() => setLocation(`/billing/claims/new?claimId=${claim.id}${claim.patientId ? `&patientId=${claim.patientId}` : ""}`)}
+                  data-testid="button-continue-editing"
+                >
+                  <Pencil className="h-4 w-4 mr-2" />
+                  {claim.status === "draft" ? "Continue Editing Draft" : "Edit Claim"}
+                </Button>
+              )}
+              {["draft", "created"].includes(claim.status) && (
+                <Button
+                  className="w-full justify-start"
+                  onClick={() => markReadyMutation.mutate()}
+                  disabled={markReadyMutation.isPending}
+                  data-testid="button-mark-ready"
+                >
+                  {markReadyMutation.isPending
+                    ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    : <CheckCircle className="h-4 w-4 mr-2" />}
+                  Mark Ready to Submit
+                </Button>
               )}
               {practiceSettings?.oa_connected &&
                 ["exported", "draft", "created"].includes(claim.status) && (

@@ -1134,8 +1134,41 @@ export default function ClaimWizard() {
     }
   }, [wizardData, defaultsApplied, resumeClaimId]);
 
+  const populateFromClaim = (claim: any) => {
+    if (!claim || !claim.id) return;
+    if (claim.encounterId) setEncounterId(claim.encounterId);
+    if (claim.providerId) setProviderId(claim.providerId);
+    if (claim.serviceDate) setServiceDate(claim.serviceDate);
+    if (claim.placeOfService) setPlaceOfService(claim.placeOfService);
+    if (claim.authorizationNumber) setAuthNumber(claim.authorizationNumber);
+    if (claim.icd10Primary) setIcd10Primary({ code: claim.icd10Primary, desc: "" });
+    if (claim.icd10Secondary && Array.isArray(claim.icd10Secondary)) {
+      const sec = claim.icd10Secondary.map((c: string) => ({ code: c, desc: "" }));
+      while (sec.length < 3) sec.push({ code: "", desc: "" });
+      setIcd10Secondary(sec.slice(0, 3));
+    }
+    if (claim.serviceLines && Array.isArray(claim.serviceLines) && claim.serviceLines.length > 0) {
+      setServiceLines(claim.serviceLines.map((sl: any) => ({
+        id: crypto.randomUUID(),
+        code: sl.code || "",
+        description: sl.description || "",
+        modifier: sl.modifier || "",
+        units: sl.units || "1",
+        ratePerUnit: sl.ratePerUnit ? String(sl.ratePerUnit) : "",
+        total: sl.total ? String(sl.total) : "",
+        unitType: sl.unitType || "per_visit",
+        unitIntervalMinutes: sl.unitIntervalMinutes || null,
+        manualEntry: true,
+        hours: "",
+        minutes: "",
+      })));
+    }
+    setStep(1);
+  };
+
   useEffect(() => {
     if (resumeClaimId && preselectedPatientId && !patient) {
+      // Both claimId and patientId provided — fast path
       fetch(`/api/billing/patients/${preselectedPatientId}`, { credentials: "include" })
         .then((r) => r.json())
         .then((p) => {
@@ -1145,40 +1178,30 @@ export default function ClaimWizard() {
             setClaimId(resumeClaimId);
             fetch(`/api/claims/${resumeClaimId}`, { credentials: "include" })
               .then((r) => r.json())
-              .then((claim) => {
-                if (claim && claim.id) {
-                  if (claim.encounterId) setEncounterId(claim.encounterId);
-                  if (claim.providerId) setProviderId(claim.providerId);
-                  if (claim.serviceDate) setServiceDate(claim.serviceDate);
-                  if (claim.placeOfService) setPlaceOfService(claim.placeOfService);
-                  if (claim.authorizationNumber) setAuthNumber(claim.authorizationNumber);
-                  if (claim.icd10Primary) setIcd10Primary({ code: claim.icd10Primary, desc: "" });
-                  if (claim.icd10Secondary && Array.isArray(claim.icd10Secondary)) {
-                    const sec = claim.icd10Secondary.map((c: string) => ({ code: c, desc: "" }));
-                    while (sec.length < 3) sec.push({ code: "", desc: "" });
-                    setIcd10Secondary(sec.slice(0, 3));
-                  }
-                  if (claim.serviceLines && Array.isArray(claim.serviceLines) && claim.serviceLines.length > 0) {
-                    setServiceLines(claim.serviceLines.map((sl: any) => ({
-                      id: crypto.randomUUID(),
-                      code: sl.code || "",
-                      description: sl.description || "",
-                      modifier: sl.modifier || "",
-                      units: sl.units || "1",
-                      ratePerUnit: sl.ratePerUnit ? String(sl.ratePerUnit) : "",
-                      total: sl.total ? String(sl.total) : "",
-                      unitType: sl.unitType || "per_visit",
-                      unitIntervalMinutes: sl.unitIntervalMinutes || null,
-                      manualEntry: true,
-                      hours: "",
-                      minutes: "",
-                    })));
-                  }
-                  setStep(1);
-                }
-              })
+              .then(populateFromClaim)
               .catch(() => setStep(1));
           }
+        })
+        .catch(() => {});
+    } else if (resumeClaimId && !preselectedPatientId && !patient) {
+      // Only claimId provided — fetch claim first to get patient, then populate
+      setClaimId(resumeClaimId);
+      fetch(`/api/claims/${resumeClaimId}`, { credentials: "include" })
+        .then((r) => r.json())
+        .then((claim) => {
+          if (!claim || !claim.id) return;
+          const pid = claim.patientId || claim.patient_id;
+          if (!pid) { populateFromClaim(claim); return; }
+          fetch(`/api/billing/patients/${pid}`, { credentials: "include" })
+            .then((r) => r.json())
+            .then((p) => {
+              if (p && p.id) {
+                setPatient(p);
+                if (p.authorization_number) setAuthNumber(p.authorization_number);
+              }
+              populateFromClaim(claim);
+            })
+            .catch(() => populateFromClaim(claim));
         })
         .catch(() => {});
     } else if (preselectedPatientId && !patient && !resumeClaimId) {

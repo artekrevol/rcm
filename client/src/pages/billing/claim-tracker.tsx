@@ -160,10 +160,11 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
                   <FileText className="h-3.5 w-3.5 mr-1" /> Open Claim
                 </Button>
               </Link>
-              {claim.status === "draft" && (
-                <Link href={`/billing/claims/new?claimId=${claim.id}`}>
-                  <Button variant="outline" size="sm" data-testid={`button-edit-draft-${claim.id?.slice(0, 8)}`}>
-                    <Pencil className="h-3.5 w-3.5 mr-1" /> Continue Editing
+              {["draft", "created", "denied", "returned"].includes(claim.status) && (
+                <Link href={`/billing/claims/new?claimId=${claim.id}${claim.patient_record_id ? `&patientId=${claim.patient_record_id}` : ""}`}>
+                  <Button variant="outline" size="sm" data-testid={`button-edit-claim-${claim.id?.slice(0, 8)}`}>
+                    <Pencil className="h-3.5 w-3.5 mr-1" />
+                    {claim.status === "draft" ? "Continue Editing" : "Edit Claim"}
                   </Button>
                 </Link>
               )}
