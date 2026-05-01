@@ -2265,6 +2265,77 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       ON CONFLICT (step_type) DO NOTHING
     `);
 
+    // ── Org_ table seed data — idempotent, safe to re-run ─────────────────
+    // org_lead_sources
+    await pool.query(`
+      INSERT INTO org_lead_sources (organization_id, slug, label, source_type, is_active) VALUES
+        ('caritas-org-001','caritas_web',    'Caritas Website',   'web',      true),
+        ('caritas-org-001','phone_inquiry',  'Phone Inquiry',     'phone',    true),
+        ('caritas-org-001','doctor_referral','Doctor Referral',   'referral', true),
+        ('caritas-org-001','family_referral','Family Referral',   'referral', true),
+        ('caritas-org-001','hospital',       'Hospital Discharge','referral', true),
+        ('chajinel-org-001','chajinel_web',  'Chajinel Website',  'web',      true),
+        ('chajinel-org-001','phone_inquiry', 'Phone Inquiry',     'phone',    true),
+        ('chajinel-org-001','doctor_referral','Doctor Referral',  'referral', true),
+        ('chajinel-org-001','va_referral',   'VA Referral',       'referral', true),
+        ('chajinel-org-001','hospital',      'Hospital Discharge','referral', true)
+      ON CONFLICT (organization_id, slug) DO NOTHING
+    `).catch((e: any) => console.error('[SEEDER] org_lead_sources:', e.message));
+
+    // org_service_types
+    await pool.query(`
+      INSERT INTO org_service_types (organization_id, service_code, service_name, description, is_active) VALUES
+        ('caritas-org-001','home_health',       'Home Health',        'Skilled nursing and therapy in the home',        true),
+        ('caritas-org-001','personal_care',     'Personal Care',      'Non-medical personal care and ADL support',      true),
+        ('caritas-org-001','companionship',     'Companionship',      'Social support and companionship services',      true),
+        ('caritas-org-001','respite_care',      'Respite Care',       'Temporary relief for family caregivers',         true),
+        ('chajinel-org-001','home_health',      'Home Health',        'Skilled nursing and therapy in the home',        true),
+        ('chajinel-org-001','va_community_care','VA Community Care',  'VA-authorized home health and skilled nursing',  true),
+        ('chajinel-org-001','personal_care',    'Personal Care',      'Non-medical personal care and ADL support',      true),
+        ('chajinel-org-001','skilled_nursing',  'Skilled Nursing',    'RN/LPN skilled nursing visits',                  true)
+      ON CONFLICT (organization_id, service_code) DO NOTHING
+    `).catch((e: any) => console.error('[SEEDER] org_service_types:', e.message));
+
+    // org_message_templates
+    await pool.query(`
+      INSERT INTO org_message_templates (organization_id, template_key, channel, subject, body, variables, is_active) VALUES
+        ('caritas-org-001','welcome_sms','sms',NULL,
+         'Hi {{lead_name}}, thank you for reaching out to Caritas Senior Care! We will be in touch shortly. Questions? Call (555) 800-1000.',
+         '["lead_name"]'::jsonb, true),
+        ('caritas-org-001','voicemail_followup_sms','sms',NULL,
+         'Hi {{lead_name}}, we tried reaching you from Caritas Senior Care but missed you. Please call us at (555) 800-1000.',
+         '["lead_name"]'::jsonb, true),
+        ('caritas-org-001','nurture_email','email',
+         'Following up on your Caritas Senior Care inquiry',
+         E'Dear {{lead_name}},\n\nThank you for your interest in Caritas Senior Care. We specialize in compassionate home care for seniors.\n\nWarm regards,\nCaritas Senior Care Team',
+         '["lead_name"]'::jsonb, true),
+        ('chajinel-org-001','welcome_sms','sms',NULL,
+         'Hi {{lead_name}}, thank you for contacting Chajinel Clinic! A care coordinator will reach out soon. Questions? Call (650) 219-5049.',
+         '["lead_name"]'::jsonb, true),
+        ('chajinel-org-001','voicemail_followup_sms','sms',NULL,
+         'Hi {{lead_name}}, we tried reaching you from Chajinel Clinic but missed you. Please call us at (650) 219-5049 or reply here.',
+         '["lead_name"]'::jsonb, true),
+        ('chajinel-org-001','nurture_email','email',
+         'Following up on your Chajinel Clinic inquiry',
+         E'Dear {{lead_name}},\n\nThank you for contacting Chajinel Clinic. We are committed to providing high-quality home health and community care services.\n\nSincerely,\nChajinel Clinic Care Team',
+         '["lead_name"]'::jsonb, true)
+      ON CONFLICT (organization_id, template_key, channel) DO NOTHING
+    `).catch((e: any) => console.error('[SEEDER] org_message_templates:', e.message));
+
+    // org_voice_personas — is_active=false until real Vapi assistant IDs are configured
+    await pool.query(`
+      INSERT INTO org_voice_personas (organization_id, persona_key, vapi_assistant_id, persona_name, greeting, is_active) VALUES
+        ('caritas-org-001','intake_coordinator','PLACEHOLDER_AWAITING_VAPI_CONFIG',
+         'Caritas Intake Coordinator',
+         'Hello, this is Sofia calling from Caritas Senior Care. Am I speaking with {{lead_name}}?',
+         false),
+        ('chajinel-org-001','intake_coordinator','PLACEHOLDER_AWAITING_VAPI_CONFIG',
+         'Chajinel Intake Coordinator',
+         'Hello, this is calling from Chajinel Clinic. Am I speaking with {{lead_name}}?',
+         false)
+      ON CONFLICT (organization_id, persona_key) DO NOTHING
+    `).catch((e: any) => console.error('[SEEDER] org_voice_personas:', e.message));
+
     // Add dob column to leads (needed by VOB step — transcript extractor captures it from the call)
     if (!(await seederLog('column', 'leads', 'dob'))) {
       await pool.query(`ALTER TABLE leads ADD COLUMN dob TEXT`);
