@@ -1921,12 +1921,12 @@ export default function PayerManualsPage() {
 
             <div className="space-y-1.5">
               <Label htmlFor="pm-payer-id">Link to Payer Record (optional)</Label>
-              <Select value={addForm.payerId} onValueChange={(v) => setAddForm({ ...addForm, payerId: v })}>
+              <Select value={addForm.payerId || "__none__"} onValueChange={(v) => setAddForm({ ...addForm, payerId: v === "__none__" ? "" : v })}>
                 <SelectTrigger id="pm-payer-id" data-testid="select-payer-id">
                   <SelectValue placeholder="Select existing payer record…" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None / unlisted payer</SelectItem>
+                  <SelectItem value="__none__">None / unlisted payer</SelectItem>
                   {payers.map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                   ))}
