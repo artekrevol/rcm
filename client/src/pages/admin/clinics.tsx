@@ -1,17 +1,43 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { format } from "date-fns";
-import { Building2, Search } from "lucide-react";
+import { Building2, Search, Plus, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { useState } from "react";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 export default function AdminClinics() {
   const [search, setSearch] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const { data: orgs = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/super-admin/orgs"],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (name: string) => {
+      const res = await apiRequest("POST", "/api/super-admin/orgs", { name });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/super-admin/orgs"] });
+      setShowCreate(false);
+      setNewName("");
+      toast({ title: "Clinic created", description: "The new organization is ready." });
+    },
+    onError: async (err: any) => {
+      let msg = "Failed to create clinic";
+      try { const j = await err.json?.(); msg = j?.error || msg; } catch {}
+      toast({ title: "Error", description: msg, variant: "destructive" });
+    },
   });
 
   const filtered = orgs.filter((o: any) =>
@@ -20,9 +46,15 @@ export default function AdminClinics() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold" data-testid="text-clinics-title">All Clinics</h1>
-        <p className="text-muted-foreground text-sm mt-0.5">{orgs.length} organizations on the platform</p>
+      <div className="mb-6 flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold" data-testid="text-clinics-title">All Clinics</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">{orgs.length} organizations on the platform</p>
+        </div>
+        <Button onClick={() => setShowCreate(true)} data-testid="button-create-clinic" className="gap-2">
+          <Plus className="h-4 w-4" />
+          New Clinic
+        </Button>
       </div>
 
       <div className="relative mb-4 max-w-sm">
@@ -67,7 +99,7 @@ export default function AdminClinics() {
                   </td>
                   <td className="px-4 py-3 text-center">{org.user_count}</td>
                   <td className="px-4 py-3 text-center">{org.total_claims}</td>
-                  <td className="px-4 py-3 text-center">{org.claims_last_30d}</td>
+                  <td className="px-4 py-3 text-center">{org.claims_last_30d ?? 0}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
                       {org.has_billing && <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">Billing</Badge>}
@@ -98,6 +130,46 @@ export default function AdminClinics() {
           </table>
         </div>
       )}
+
+      {/* Create New Clinic Dialog */}
+      <Dialog open={showCreate} onOpenChange={(v) => { setShowCreate(v); if (!v) setNewName(""); }}>
+        <DialogContent className="max-w-md" data-testid="dialog-create-clinic">
+          <DialogHeader>
+            <DialogTitle>Create New Clinic</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="clinic-name">Clinic / Organization Name</Label>
+              <Input
+                id="clinic-name"
+                placeholder="e.g. Sunrise Home Health"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newName.trim()) createMutation.mutate(newName.trim());
+                }}
+                data-testid="input-clinic-name"
+                autoFocus
+              />
+              <p className="text-xs text-muted-foreground">
+                A unique ID will be generated automatically. You can add users and configure modules after creation.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowCreate(false); setNewName(""); }} data-testid="button-cancel-create">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => createMutation.mutate(newName.trim())}
+              disabled={!newName.trim() || createMutation.isPending}
+              data-testid="button-confirm-create"
+            >
+              {createMutation.isPending ? "Creating..." : "Create Clinic"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

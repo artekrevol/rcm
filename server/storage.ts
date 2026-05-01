@@ -163,10 +163,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getLeads(orgId?: string): Promise<Lead[]> {
-    if (orgId) {
-      return db.select().from(leads).where(eq(leads.organizationId, orgId)).orderBy(desc(leads.createdAt));
-    }
-    return db.select().from(leads).orderBy(desc(leads.createdAt));
+    if (!orgId) return [];
+    return db.select().from(leads).where(eq(leads.organizationId, orgId)).orderBy(desc(leads.createdAt));
   }
 
   async getLead(id: string): Promise<Lead | undefined> {
@@ -215,10 +213,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getClaims(orgId?: string): Promise<Claim[]> {
-    if (orgId) {
-      return db.select().from(claims).where(eq(claims.organizationId, orgId)).orderBy(desc(claims.createdAt));
-    }
-    return db.select().from(claims).orderBy(desc(claims.createdAt));
+    if (!orgId) return [];
+    return db.select().from(claims).where(eq(claims.organizationId, orgId)).orderBy(desc(claims.createdAt));
   }
 
   async getClaim(id: string): Promise<Claim | undefined> {
@@ -252,10 +248,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDenials(orgId?: string): Promise<Denial[]> {
-    if (orgId) {
-      return db.select().from(denials).where(eq(denials.organizationId, orgId)).orderBy(desc(denials.createdAt));
-    }
-    return db.select().from(denials).orderBy(desc(denials.createdAt));
+    if (!orgId) return [];
+    return db.select().from(denials).where(eq(denials.organizationId, orgId)).orderBy(desc(denials.createdAt));
   }
 
   async getDenialsByClaimId(claimId: string): Promise<Denial[]> {
@@ -268,10 +262,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRules(orgId?: string): Promise<Rule[]> {
-    if (orgId) {
-      return db.select().from(rules).where(eq(rules.organizationId, orgId)).orderBy(desc(rules.createdAt));
-    }
-    return db.select().from(rules).orderBy(desc(rules.createdAt));
+    if (!orgId) return [];
+    return db.select().from(rules).where(eq(rules.organizationId, orgId)).orderBy(desc(rules.createdAt));
   }
 
   async getRule(id: string): Promise<Rule | undefined> {
@@ -635,10 +627,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getEmailTemplates(orgId?: string): Promise<EmailTemplate[]> {
-    if (orgId) {
-      return db.select().from(emailTemplates).where(eq(emailTemplates.organizationId, orgId)).orderBy(desc(emailTemplates.createdAt));
-    }
-    return db.select().from(emailTemplates).orderBy(desc(emailTemplates.createdAt));
+    if (!orgId) return [];
+    return db.select().from(emailTemplates).where(eq(emailTemplates.organizationId, orgId)).orderBy(desc(emailTemplates.createdAt));
   }
 
   async getEmailTemplate(id: string): Promise<EmailTemplate | undefined> {
@@ -661,10 +651,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getNurtureSequences(orgId?: string): Promise<NurtureSequence[]> {
-    if (orgId) {
-      return db.select().from(nurtureSections).where(eq(nurtureSections.organizationId, orgId)).orderBy(desc(nurtureSections.createdAt));
-    }
-    return db.select().from(nurtureSections).orderBy(desc(nurtureSections.createdAt));
+    if (!orgId) return [];
+    return db.select().from(nurtureSections).where(eq(nurtureSections.organizationId, orgId)).orderBy(desc(nurtureSections.createdAt));
   }
 
   async getNurtureSequence(id: string): Promise<NurtureSequence | undefined> {
@@ -715,10 +703,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAvailabilitySlots(orgId?: string): Promise<AvailabilitySlot[]> {
-    if (orgId) {
-      return db.select().from(availabilitySlots).where(eq(availabilitySlots.organizationId, orgId)).orderBy(availabilitySlots.dayOfWeek, availabilitySlots.startTime);
-    }
-    return db.select().from(availabilitySlots).orderBy(availabilitySlots.dayOfWeek, availabilitySlots.startTime);
+    if (!orgId) return [];
+    return db.select().from(availabilitySlots).where(eq(availabilitySlots.organizationId, orgId)).orderBy(availabilitySlots.dayOfWeek, availabilitySlots.startTime);
   }
 
   async createAvailabilitySlot(slot: InsertAvailabilitySlot): Promise<AvailabilitySlot> {
@@ -736,10 +722,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAppointments(orgId?: string): Promise<Appointment[]> {
-    if (orgId) {
-      return db.select().from(appointments).where(eq(appointments.organizationId, orgId)).orderBy(desc(appointments.scheduledAt));
-    }
-    return db.select().from(appointments).orderBy(desc(appointments.scheduledAt));
+    if (!orgId) return [];
+    return db.select().from(appointments).where(eq(appointments.organizationId, orgId)).orderBy(desc(appointments.scheduledAt));
   }
 
   async getAppointmentsByLeadId(leadId: string): Promise<Appointment[]> {
@@ -762,10 +746,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getChatSessions(orgId?: string): Promise<ChatSession[]> {
-    if (orgId) {
-      return db.select().from(chatSessions).where(eq(chatSessions.organizationId, orgId)).orderBy(desc(chatSessions.startedAt));
-    }
-    return db.select().from(chatSessions).orderBy(desc(chatSessions.startedAt));
+    if (!orgId) return [];
+    return db.select().from(chatSessions).where(eq(chatSessions.organizationId, orgId)).orderBy(desc(chatSessions.startedAt));
   }
 
   async getChatSessionByVisitorToken(visitorToken: string): Promise<ChatSession | undefined> {
@@ -806,17 +788,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getChatAnalytics(startDate?: string, endDate?: string, orgId?: string): Promise<ChatAnalytics[]> {
-    const conditions = [];
-    if (orgId) conditions.push(eq(chatAnalytics.organizationId, orgId));
+    if (!orgId) return [];
+    const conditions: any[] = [eq(chatAnalytics.organizationId, orgId)];
     if (startDate) conditions.push(sql`${chatAnalytics.date} >= ${startDate}`);
     if (endDate) conditions.push(sql`${chatAnalytics.date} <= ${endDate}`);
-
-    if (conditions.length > 0) {
-      return db.select().from(chatAnalytics)
-        .where(and(...conditions))
-        .orderBy(desc(chatAnalytics.date));
-    }
-    return db.select().from(chatAnalytics).orderBy(desc(chatAnalytics.date)).limit(30);
+    return db.select().from(chatAnalytics)
+      .where(and(...conditions))
+      .orderBy(desc(chatAnalytics.date));
   }
 
   async getChatAnalyticsByDate(date: string): Promise<ChatAnalytics | undefined> {
@@ -845,12 +823,10 @@ export class DatabaseStorage implements IStorage {
     conversionRate: number;
     dropoffByStep: Record<string, number>;
   }> {
-    let allSessions;
-    if (orgId) {
-      allSessions = await db.select().from(chatSessions).where(eq(chatSessions.organizationId, orgId));
-    } else {
-      allSessions = await db.select().from(chatSessions);
+    if (!orgId) {
+      return { totalSessions: 0, completedSessions: 0, abandonedSessions: 0, activeSessions: 0, leadsGenerated: 0, appointmentsBooked: 0, avgSessionDuration: 0, conversionRate: 0, dropoffByStep: {} };
     }
+    const allSessions = await db.select().from(chatSessions).where(eq(chatSessions.organizationId, orgId));
     
     const totalSessions = allSessions.length;
     const completedSessions = allSessions.filter(s => s.status === "completed").length;

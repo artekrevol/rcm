@@ -169,9 +169,21 @@ function diagPointerToNumeric(ptr: string): string {
 function verifyOrg(entity: any, req: any): boolean {
   if (!entity) return true;
   const orgId = getOrgId(req);
-  if (!orgId) return true;
+  // No org context means super_admin is NOT impersonating — deny access to org-scoped data.
+  // Super admins must impersonate an org to access its data through regular endpoints.
+  if (!orgId) return false;
   const entityOrgId = entity.organizationId || entity.organization_id;
   return entityOrgId === orgId;
+}
+
+// Returns orgId or sends 400 and returns null — use at the top of any list endpoint.
+function requireOrgCtx(req: any, res: any): string | null {
+  const orgId = getOrgId(req);
+  if (!orgId) {
+    res.status(400).json({ error: "No organization context. Please select an organization to manage." });
+    return null;
+  }
+  return orgId;
 }
 
 async function _autoArchiveDemoPatients(db: any, orgId: string, triggeredBy: string): Promise<void> {
@@ -3787,7 +3799,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/claim-tracker", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const orgId = getOrgId(req);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { status, payer_id, patient, q, date_from, date_to } = req.query;
 
       let baseQuery = `
@@ -3810,7 +3823,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const params: any[] = [];
       let idx = 1;
 
-      if (orgId) { baseQuery += ` AND c.organization_id = $${idx}`; params.push(orgId); idx++; }
+      baseQuery += ` AND c.organization_id = $${idx}`; params.push(orgId); idx++;
       baseQuery += ` AND c.archived_at IS NULL`;
       if (status && status !== "all") { baseQuery += ` AND c.status = $${idx}`; params.push(status); idx++; }
       if (payer_id && payer_id !== "all") { baseQuery += ` AND (c.payer_id = $${idx} OR c.payer = (SELECT name FROM payers WHERE id = $${idx}))`; params.push(payer_id); idx++; }
@@ -4185,27 +4198,32 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/intake/dashboard/stats", requireRole("admin", "intake"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const [pipelineResult, appointmentsResult, chatsResult] = await Promise.all([
         db.query(`
           SELECT l.status, COUNT(*)::int as count,
             COUNT(*) FILTER (WHERE l.sla_deadline_at IS NOT NULL AND l.sla_deadline_at < NOW())::int as sla_breach_count
           FROM leads l
+          WHERE l.organization_id = $1
           GROUP BY l.status
-        `),
+        `, [orgId]),
         db.query(`
           SELECT a.id, a.title, a.scheduled_at, a.status, l.name as lead_name
           FROM appointments a
           LEFT JOIN leads l ON a.lead_id = l.id
           WHERE DATE(a.scheduled_at) = CURRENT_DATE
+            AND a.organization_id = $1
           ORDER BY a.scheduled_at ASC
-        `),
+        `, [orgId]),
         db.query(`
           SELECT cs.id, cs.status, cs.started_at, l.name as lead_name
           FROM chat_sessions cs
           LEFT JOIN leads l ON cs.lead_id = l.id
+          WHERE cs.organization_id = $1
           ORDER BY cs.started_at DESC
           LIMIT 5
-        `),
+        `, [orgId]),
       ]);
       res.json({
         pipeline: pipelineResult.rows,
@@ -4220,10 +4238,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/dashboard/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const orgId = getOrgId(req);
-      const orgFilter = orgId ? `AND organization_id = '${orgId.replace(/'/g, "''")}'` : "";
-      const orgPatientFilter = orgId ? `AND p.organization_id = '${orgId.replace(/'/g, "''")}'` : "";
-      const orgClaimFilter = orgId ? `AND c.organization_id = '${orgId.replace(/'/g, "''")}'` : "";
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
+      const safeOrgId = orgId.replace(/'/g, "''");
+      const orgFilter = `AND organization_id = '${safeOrgId}'`;
+      const orgPatientFilter = `AND p.organization_id = '${safeOrgId}'`;
+      const orgClaimFilter = `AND c.organization_id = '${safeOrgId}'`;
 
       const [pipelineResult, staleDraftsResult, highRiskResult, timelyResult, recentPatientsResult, recentClaimsResult, fprrResult, arDaysResult] = await Promise.all([
         db.query(`
@@ -7089,7 +7109,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const search = (req.query.search as string || "").trim().toLowerCase();
       const showArchived = req.query.archived === "true";
       const db = await import("./db").then(m => m.pool);
-      const orgId = getOrgId(req);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       let query = `
         SELECT p.*, l.name as lead_name,
           (SELECT MAX(COALESCE(c.service_date::text, c.created_at::text)) FROM claims c WHERE c.patient_id = p.id AND c.archived_at IS NULL) as last_claim_date,
@@ -7100,7 +7121,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       `;
       const params: any[] = [];
       let idx = 1;
-      if (orgId) { query += ` AND p.organization_id = $${idx}`; params.push(orgId); idx++; }
+      query += ` AND p.organization_id = $${idx}`; params.push(orgId); idx++;
       if (showArchived) {
         query += ` AND p.archived_at IS NOT NULL`;
       } else {
@@ -7554,13 +7575,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
-  app.get("/api/dashboard/metrics", async (req, res) => {
-    const metrics = await storage.getDashboardMetrics(getOrgId(req));
+  app.get("/api/dashboard/metrics", requireRole("admin", "rcm_manager", "intake"), async (req, res) => {
+    const orgId = requireOrgCtx(req, res);
+    if (!orgId) return;
+    const metrics = await storage.getDashboardMetrics(orgId);
     res.json(metrics);
   });
 
-  app.get("/api/dashboard/alerts", async (req, res) => {
-    const claims = await storage.getClaims(getOrgId(req));
+  app.get("/api/dashboard/alerts", requireRole("admin", "rcm_manager", "intake"), async (req, res) => {
+    const orgId = requireOrgCtx(req, res);
+    if (!orgId) return;
+    const claims = await storage.getClaims(orgId);
     const alerts = [];
     
     for (const claim of claims.filter(c => c.readinessStatus === "RED").slice(0, 3)) {
@@ -7686,6 +7711,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     res.json(lead);
   });
 
+  // NOTE: This endpoint is intentionally open (no requireRole) because it is also
+  // used by the public patient intake chat widget to create leads without a session.
+  // Authenticated requests use the caller's org; unauthenticated requests get org=null
+  // (visible only to super_admin until associated with a real org via widget config).
   app.post("/api/leads", async (req, res) => {
     const parsed = insertLeadSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -8493,7 +8522,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/rules", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const orgId = getOrgId(req);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { rows } = await db.query(
         `SELECT *, COALESCE(specialty_tags, '{}') as specialty_tags FROM rules WHERE organization_id = $1 OR organization_id IS NULL ORDER BY created_at DESC`,
         [orgId]
@@ -9244,7 +9274,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   // Get SMS templates
-  app.get("/api/sms/templates", async (req, res) => {
+  app.get("/api/sms/templates", requireRole("admin", "intake"), async (req, res) => {
     const templates = [
       { id: "welcome", name: "Welcome Message", description: "Initial greeting to new leads" },
       { id: "insurance_request", name: "Insurance Request", description: "Request insurance information" },
@@ -9835,6 +9865,8 @@ Warmly,
   // GET /api/flows — list all flows with step counts and active/completed run counts
   app.get("/api/flows", requireRole("admin", "intake"), async (req, res) => {
     try {
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { pool } = await import("./db");
       const result = await pool.query(`
         SELECT
@@ -9846,11 +9878,13 @@ Warmly,
           f.is_active,
           f.created_at,
           (SELECT COUNT(*) FROM flow_steps WHERE flow_id = f.id)::int AS step_count,
-          (SELECT COUNT(*) FROM flow_runs WHERE flow_id = f.id AND status = 'running')::int AS active_run_count,
-          (SELECT COUNT(*) FROM flow_runs WHERE flow_id = f.id AND status = 'completed')::int AS completed_run_count
+          (SELECT COUNT(*) FROM flow_runs fr WHERE fr.flow_id = f.id AND fr.status = 'running'
+            AND EXISTS (SELECT 1 FROM leads l WHERE l.id = fr.lead_id AND l.organization_id = $1))::int AS active_run_count,
+          (SELECT COUNT(*) FROM flow_runs fr WHERE fr.flow_id = f.id AND fr.status = 'completed'
+            AND EXISTS (SELECT 1 FROM leads l WHERE l.id = fr.lead_id AND l.organization_id = $1))::int AS completed_run_count
         FROM flows f
         ORDER BY f.created_at DESC
-      `);
+      `, [orgId]);
       res.json(result.rows);
     } catch (err) {
       console.error("[GET /api/flows] error:", err);
@@ -9919,6 +9953,8 @@ Warmly,
   // GET /api/flow-runs/active — all currently running flow_runs across all flows
   app.get("/api/flow-runs/active", requireRole("admin", "intake"), async (req, res) => {
     try {
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { pool } = await import("./db");
       const result = await pool.query(`
         SELECT
@@ -9947,9 +9983,10 @@ Warmly,
           LIMIT 1 OFFSET fr.current_step_index
         ) fs ON true
         WHERE fr.status = 'running'
+          AND l.organization_id = $1
         ORDER BY fr.next_action_at ASC
         LIMIT 100
-      `);
+      `, [orgId]);
       res.json(result.rows);
     } catch (err) {
       console.error("[GET /api/flow-runs/active] error:", err);
@@ -9966,7 +10003,7 @@ Warmly,
   });
 
   // Send confirmation email after chat widget submission
-  app.post("/api/leads/:id/send-confirmation", async (req, res) => {
+  app.post("/api/leads/:id/send-confirmation", requireRole("admin", "intake"), async (req, res) => {
     try {
       const lead = await storage.getLead(req.params.id);
       if (!lead) {
@@ -10139,6 +10176,8 @@ Warmly,
 
   // Get appointments for a lead
   app.get("/api/leads/:id/appointments", requireRole("admin", "intake"), async (req, res) => {
+    const lead = await storage.getLead(req.params.id);
+    if (!lead || !verifyOrg(lead, req)) return res.status(404).json({ error: "Lead not found" });
     const appointments = await storage.getAppointmentsByLeadId(req.params.id);
     res.json(appointments);
   });
@@ -10559,7 +10598,9 @@ Warmly,
 
   // Get chat analytics stats
   app.get("/api/chat-analytics/stats", requireRole("admin", "intake"), async (req, res) => {
-    const stats = await storage.getChatSessionStats(getOrgId(req));
+    const orgId = requireOrgCtx(req, res);
+    if (!orgId) return;
+    const stats = await storage.getChatSessionStats(orgId);
     res.json(stats);
   });
 
@@ -10576,6 +10617,8 @@ Warmly,
       voicemailRate: 0,
     };
     try {
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const db = await import("./db").then(m => m.pool);
       const { rows } = await db.query(`
         SELECT
@@ -10586,7 +10629,9 @@ Warmly,
           COALESCE(ROUND(AVG(c.duration))::int, 0) AS "avgDuration",
           COALESCE(SUM(COALESCE(c.duration, 0))::int, 0) AS "totalDuration"
         FROM calls c
-      `);
+        LEFT JOIN leads l ON l.id = c.lead_id
+        WHERE l.organization_id = $1
+      `, [orgId]);
       const stats = rows[0];
       const totalCalls = stats.totalCalls || 0;
       const answeredRate = totalCalls > 0 ? Math.round((stats.answeredCalls / totalCalls) * 100) : 0;
@@ -11186,6 +11231,50 @@ Warmly,
       });
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  // ── Create New Organization ───────────────────────────────────────────────
+  app.post("/api/super-admin/orgs", requireSuperAdmin, async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { name, modules } = req.body;
+      if (!name || typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ error: "Organization name is required" });
+      }
+      const trimmedName = name.trim();
+      // Generate a slug-style org ID from the name
+      const slug = trimmedName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 40);
+      const orgId = `${slug}-${Date.now().toString(36)}`;
+
+      const existing = await db.query("SELECT id FROM organizations WHERE LOWER(name) = LOWER($1)", [trimmedName]);
+      if (existing.rows.length > 0) {
+        return res.status(409).json({ error: "An organization with that name already exists" });
+      }
+
+      const { rows: [org] } = await db.query(
+        `INSERT INTO organizations (id, name, created_at, updated_at)
+         VALUES ($1, $2, NOW(), NOW())
+         RETURNING id, name, created_at`,
+        [orgId, trimmedName]
+      );
+
+      // Seed initial practice settings row so onboarding works
+      await db.query(
+        `INSERT INTO practice_settings (id, organization_id, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, NOW(), NOW())
+         ON CONFLICT DO NOTHING`,
+        [orgId]
+      ).catch(() => {});
+
+      res.status(201).json({ ...org, user_count: 0, total_claims: 0, total_leads: 0, onboarding_steps: 0, has_billing: false, has_intake: false });
+    } catch (err: any) {
+      console.error('[API] Error creating org:', err);
+      res.status(500).json({ error: 'Failed to create organization' });
     }
   });
 
@@ -11995,15 +12084,16 @@ Warmly,
 
   // ── RCM Reports ───────────────────────────────────────────────────────────
 
-  app.get("/api/billing/reports/ar-aging", requireAuth, async (req, res) => {
+  app.get("/api/billing/reports/ar-aging", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const orgId = getOrgId(req);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { startDate, endDate, payerId, providerId } = req.query as Record<string, string>;
       const start = startDate || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
       const end = endDate || new Date().toISOString().slice(0, 10);
       const conditions: string[] = [`c.status NOT IN ('paid', 'draft')`];
       const params: any[] = [];
-      if (orgId) { params.push(orgId); conditions.push(`c.organization_id = $${params.length}`); }
+      params.push(orgId); conditions.push(`c.organization_id = $${params.length}`);
       if (start) { params.push(start); conditions.push(`COALESCE(c.service_date, c.created_at::date) >= $${params.length}`); }
       if (end) { params.push(end); conditions.push(`COALESCE(c.service_date, c.created_at::date) <= $${params.length}`); }
       if (payerId && payerId !== "all") { params.push(payerId); conditions.push(`c.payer_id = $${params.length}`); }
@@ -12023,20 +12113,21 @@ Warmly,
     } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
-  app.get("/api/billing/reports/denial-analysis", requireAuth, async (req, res) => {
+  app.get("/api/billing/reports/denial-analysis", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const orgId = getOrgId(req);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { startDate, endDate, payerId, providerId } = req.query as Record<string, string>;
       const start = startDate || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
       const end = endDate || new Date().toISOString().slice(0, 10);
       const claimParams: any[] = [];
       const claimConds: string[] = [];
-      if (orgId) { claimParams.push(orgId); claimConds.push(`c.organization_id = $${claimParams.length}`); }
+      claimParams.push(orgId); claimConds.push(`c.organization_id = $${claimParams.length}`);
       if (start) { claimParams.push(start); claimConds.push(`COALESCE(c.service_date, c.created_at::date) >= $${claimParams.length}`); }
       if (end) { claimParams.push(end); claimConds.push(`COALESCE(c.service_date, c.created_at::date) <= $${claimParams.length}`); }
       if (payerId && payerId !== "all") { claimParams.push(payerId); claimConds.push(`c.payer_id = $${claimParams.length}`); }
       if (providerId && providerId !== "all") { claimParams.push(providerId); claimConds.push(`c.provider_id = $${claimParams.length}`); }
-      const cw = claimConds.length ? `WHERE ${claimConds.join(" AND ")}` : "";
+      const cw = `WHERE ${claimConds.join(" AND ")}`;
       const byPayer = await db.query(`
         SELECT c.payer, COUNT(DISTINCT c.id) AS total_submitted,
           COUNT(DISTINCT d.claim_id) AS total_denied,
@@ -12048,7 +12139,7 @@ Warmly,
       `, claimParams);
       const denialParams: any[] = [];
       const denialConds: string[] = [];
-      if (orgId) { denialParams.push(orgId); denialConds.push(`d.organization_id = $${denialParams.length}`); }
+      denialParams.push(orgId); denialConds.push(`d.organization_id = $${denialParams.length}`);
       if (start) { denialParams.push(start); denialConds.push(`d.created_at::date >= $${denialParams.length}`); }
       if (end) { denialParams.push(end); denialConds.push(`d.created_at::date <= $${denialParams.length}`); }
       const dw = denialConds.length ? `WHERE ${denialConds.join(" AND ")}` : "";
@@ -12066,15 +12157,16 @@ Warmly,
     } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
-  app.get("/api/billing/reports/collections", requireAuth, async (req, res) => {
+  app.get("/api/billing/reports/collections", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const orgId = getOrgId(req);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { startDate, endDate, payerId, providerId } = req.query as Record<string, string>;
       const start = startDate || new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
       const end = endDate || new Date().toISOString().slice(0, 10);
       const params: any[] = [];
       const conds: string[] = [];
-      if (orgId) { params.push(orgId); conds.push(`c.organization_id = $${params.length}`); }
+      params.push(orgId); conds.push(`c.organization_id = $${params.length}`);
       if (start) { params.push(start); conds.push(`COALESCE(c.service_date, c.created_at::date) >= $${params.length}`); }
       if (end) { params.push(end); conds.push(`COALESCE(c.service_date, c.created_at::date) <= $${params.length}`); }
       if (payerId && payerId !== "all") { params.push(payerId); conds.push(`c.payer_id = $${params.length}`); }
@@ -12101,15 +12193,16 @@ Warmly,
     } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
-  app.get("/api/billing/reports/clean-claim-rate", requireAuth, async (req, res) => {
+  app.get("/api/billing/reports/clean-claim-rate", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const orgId = getOrgId(req);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { startDate, endDate, payerId, providerId } = req.query as Record<string, string>;
       const start = startDate || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
       const end = endDate || new Date().toISOString().slice(0, 10);
       const params: any[] = [];
       const conds: string[] = [`c.status != 'draft'`];
-      if (orgId) { params.push(orgId); conds.push(`c.organization_id = $${params.length}`); }
+      params.push(orgId); conds.push(`c.organization_id = $${params.length}`);
       if (start) { params.push(start); conds.push(`COALESCE(c.service_date, c.created_at::date) >= $${params.length}`); }
       if (end) { params.push(end); conds.push(`COALESCE(c.service_date, c.created_at::date) <= $${params.length}`); }
       if (payerId && payerId !== "all") { params.push(payerId); conds.push(`c.payer_id = $${params.length}`); }
@@ -12131,9 +12224,10 @@ Warmly,
     } catch (err: any) { console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' }); }
   });
 
-  app.post("/api/billing/eras/upload", requireAuth, async (req, res) => {
+  app.post("/api/billing/eras/upload", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const orgId = getOrgId(req);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
       const { content, filename, preview } = req.body;
       if (!content) return res.status(400).json({ error: "No file content provided" });
       const parsed = parse835Manual(content);
