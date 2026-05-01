@@ -2822,10 +2822,34 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_vafs_type_year ON va_fee_schedule (schedule_type, fee_schedule_year)`).catch(() => {});
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_vafs_locality ON va_fee_schedule (mac_carrier, locality_code)`).catch(() => {});
 
+    // ── CMS ZIP-to-Carrier-Locality crosswalk (global, no tenant scope) ──────
+    // Source: CMS Fee Schedules General Information page (quarterly)
+    // URL: https://www.cms.gov/medicare/medicare-fee-for-service-payment/prospmedicarefeesvcpmtgen/index.html
+    // Populated via rate-ingest admin tool; ~43K rows covering all U.S. ZIPs.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS cms_zip_locality (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        zip_code TEXT NOT NULL,
+        zip_plus_4 TEXT,
+        state TEXT NOT NULL,
+        mac_carrier TEXT NOT NULL,
+        locality_code TEXT NOT NULL,
+        rural_indicator TEXT,
+        effective_date DATE NOT NULL,
+        termination_date DATE,
+        source_url TEXT,
+        ingested_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE (zip_code, effective_date)
+      )
+    `).catch((e: any) => console.error('[SEEDER] cms_zip_locality:', e.message));
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_zip_locality_zip ON cms_zip_locality (zip_code)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_zip_locality_carrier ON cms_zip_locality (mac_carrier, locality_code)`).catch(() => {});
+
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS medicare_locality_code TEXT`).catch(() => {});
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS medicare_mac_carrier TEXT`).catch(() => {});
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS locality_resolved_at TIMESTAMP`).catch(() => {});
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS locality_resolution_method TEXT`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS locality_source_url TEXT`).catch(() => {});
 
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {

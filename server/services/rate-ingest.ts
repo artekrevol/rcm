@@ -346,28 +346,125 @@ export async function resolveLocalityForOrg(pool: Pool, orgId: string): Promise<
 // ──────────────────────────────────────────────────────────────────────────────
 // Task 6: Backfill Chajinel's locality (San Mateo → SF locality 05, MAC 01112)
 // ──────────────────────────────────────────────────────────────────────────────
-export async function backfillChajinelLocality(pool: Pool): Promise<void> {
-  // Verify data is present first
-  const check = await pool.query(
-    `SELECT locality_code, mac_carrier, locality_name FROM cms_gpci
-     WHERE state = 'CA' AND locality_code = '05' AND pfs_year = $1 LIMIT 1`,
-    [PFS_YEAR]
+/**
+ * Resolve Medicare locality for a single org by looking up their practice ZIP
+ * in the cms_zip_locality crosswalk table (most authoritative — data-driven from
+ * CMS quarterly crosswalk file, not a hardcoded guess).
+ *
+ * Falls back to cms_gpci state lookup if the crosswalk table is not yet populated.
+ *
+ * Source: CMS ZIP-to-Carrier-Locality File (quarterly)
+ * URL: https://www.cms.gov/medicare/medicare-fee-for-service-payment/prospmedicarefeesvcpmtgen/index.html
+ */
+export async function resolveLocalityByZip(pool: Pool, orgId: string): Promise<{
+  zip: string; locality_code: string; mac_carrier: string; method: string;
+} | null> {
+  // Get the org's practice ZIP from address JSONB
+  const psRow = await pool.query(
+    `SELECT address->>'zip' AS zip FROM practice_settings WHERE organization_id = $1 LIMIT 1`,
+    [orgId]
   );
-  if (!check.rows.length) {
-    console.warn("[locality] cms_gpci not populated yet — run CMS ingest first");
+  if (!psRow.rows.length || !psRow.rows[0].zip) {
+    console.warn(`[locality] No ZIP found for org ${orgId}`);
+    return null;
+  }
+  const zip = (psRow.rows[0].zip as string).trim().slice(0, 5);
+
+  // ── Primary: cms_zip_locality crosswalk ───────────────────────────────────
+  const crosswalk = await pool.query(
+    `SELECT locality_code, mac_carrier FROM cms_zip_locality
+     WHERE zip_code = $1
+     ORDER BY effective_date DESC LIMIT 1`,
+    [zip]
+  );
+  if (crosswalk.rows.length) {
+    const { locality_code, mac_carrier } = crosswalk.rows[0];
+    console.log(`[locality] ${orgId} zip=${zip} → locality=${locality_code} MAC=${mac_carrier} (cms_zip_crosswalk)`);
+    return { zip, locality_code, mac_carrier, method: "cms_zip_crosswalk_lookup" };
+  }
+
+  // ── Fallback: cms_gpci state lookup ──────────────────────────────────────
+  // Used only when zip crosswalk table is empty (not yet ingested).
+  const stateRow = await pool.query(
+    `SELECT address->>'state' AS state FROM practice_settings WHERE organization_id = $1 LIMIT 1`,
+    [orgId]
+  );
+  const state = stateRow.rows[0]?.state?.toUpperCase() || null;
+  if (!state) return null;
+
+  const gpci = await pool.query(
+    `SELECT locality_code, mac_carrier FROM cms_gpci
+     WHERE state = $1 AND pfs_year = $2
+     ORDER BY locality_code ASC LIMIT 1`,
+    [state, PFS_YEAR]
+  );
+  if (gpci.rows.length) {
+    const { locality_code, mac_carrier } = gpci.rows[0];
+    console.warn(`[locality] ${orgId} zip crosswalk empty — fell back to GPCI state lookup (state=${state})`);
+    return { zip, locality_code, mac_carrier, method: "gpci_state_fallback" };
+  }
+
+  console.warn(`[locality] ${orgId} — no locality resolved from crosswalk or GPCI`);
+  return null;
+}
+
+/**
+ * Backfill Medicare locality for all orgs whose practice_settings have no
+ * locality data yet. Uses resolveLocalityByZip() for each.
+ * Designed to be idempotent — skips orgs already resolved.
+ */
+export async function backfillAllTenantLocalities(pool: Pool): Promise<{ resolved: number; skipped: number; failed: number }> {
+  const orgs = await pool.query(
+    `SELECT DISTINCT organization_id FROM practice_settings
+     WHERE medicare_locality_code IS NULL OR medicare_mac_carrier IS NULL`
+  );
+  let resolved = 0, skipped = 0, failed = 0;
+  for (const row of orgs.rows) {
+    const orgId = row.organization_id;
+    try {
+      const result = await resolveLocalityByZip(pool, orgId);
+      if (!result) { skipped++; continue; }
+      await pool.query(`
+        UPDATE practice_settings SET
+          medicare_locality_code   = $1,
+          medicare_mac_carrier     = $2,
+          locality_resolved_at     = NOW(),
+          locality_resolution_method = $3,
+          locality_source_url      = 'https://www.cms.gov/medicare/medicare-fee-for-service-payment/prospmedicarefeesvcpmtgen/index.html'
+        WHERE organization_id = $4
+          AND (medicare_locality_code IS NULL OR medicare_mac_carrier IS NULL)
+      `, [result.locality_code, result.mac_carrier, result.method, orgId]);
+      resolved++;
+    } catch (e: any) {
+      console.error(`[locality] Failed for ${orgId}:`, e.message);
+      failed++;
+    }
+  }
+  console.log(`[locality] Backfill complete — resolved: ${resolved}, skipped: ${skipped}, failed: ${failed}`);
+  return { resolved, skipped, failed };
+}
+
+/**
+ * Backfill Chajinel specifically — convenience wrapper around resolveLocalityByZip.
+ * Kept for backward compatibility with runFullIngest().
+ */
+export async function backfillChajinelLocality(pool: Pool): Promise<void> {
+  const result = await resolveLocalityByZip(pool, "chajinel-org-001");
+  if (!result) {
+    console.warn("[locality] Could not resolve Chajinel locality — cms_zip_locality may not be populated yet");
     return;
   }
-  const { locality_code, mac_carrier } = check.rows[0];
   await pool.query(`
     UPDATE practice_settings SET
-      medicare_locality_code = $1,
-      medicare_mac_carrier = $2,
-      locality_resolved_at = NOW(),
-      locality_resolution_method = 'county_lookup_san_mateo_ca'
+      medicare_locality_code     = $1,
+      medicare_mac_carrier       = $2,
+      locality_resolved_at       = NOW(),
+      locality_resolution_method = $3,
+      locality_source_url        = 'https://www.cms.gov/medicare/medicare-fee-for-service-payment/prospmedicarefeesvcpmtgen/index.html'
     WHERE organization_id = 'chajinel-org-001'
       AND (medicare_locality_code IS NULL OR medicare_locality_code != $1)
-  `, [locality_code, mac_carrier]);
-  console.log(`[locality] Chajinel resolved: locality ${locality_code}, MAC ${mac_carrier}`);
+  `, [result.locality_code, result.mac_carrier, result.method]);
+  console.log(`[locality] Chajinel resolved: locality=${result.locality_code} MAC=${result.mac_carrier} via ${result.method}`);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -393,10 +490,11 @@ export async function runFullIngest(pool: Pool, opts: {
     results.va = await ingestVASchedule(pool, PFS_YEAR, localityFilter);
   }
 
-  // Always backfill Chajinel's locality if GPCI data is present
+  // Backfill locality for all tenants using ZIP crosswalk (data-driven, not hardcoded).
+  // Falls back to GPCI state lookup if crosswalk not yet populated.
   try {
-    await backfillChajinelLocality(pool);
-    results.localityBackfill = { status: "ok", org: "chajinel-org-001" };
+    const localityResult = await backfillAllTenantLocalities(pool);
+    results.localityBackfill = { status: "ok", ...localityResult };
   } catch (e: any) {
     results.localityBackfill = { status: "error", message: e.message };
   }

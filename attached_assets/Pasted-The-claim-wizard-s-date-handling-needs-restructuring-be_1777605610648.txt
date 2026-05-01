@@ -1,0 +1,138 @@
+The claim wizard's date handling needs restructuring before VA 
+claims go live. Currently it forces a single fixed date — that 
+doesn't match how home care agencies actually bill.
+
+VERIFIED CONTEXT:
+
+X12 standard (per X12.org RFI 1970) supports both:
+- DTP*472*D8*CCYYMMDD~ for single-day services
+- DTP*472*RD8*CCYYMMDD-CCYYMMDD~ for span-of-days services
+
+CMS guidance (MLN006976 December 2025) confirms: line "From" 
+date is what drives timely filing windows, services spanning 
+days use range format, claim cannot be submitted until service 
+is complete.
+
+For Chajinel specifically, three scenarios need to be supported:
+
+SCENARIO 1 — Single visit, single day (most common)
+- Caregiver visits patient once on one day
+- Service line: DTP*472*D8*20260415~
+- One line per visit
+
+SCENARIO 2 — Multiple visits across a billing period (THE 
+PRIMARY CHAJINEL CASE)
+- Same caregiver visits same patient multiple specific days  
+  in a billing period
+- Each visit is a SEPARATE service line with its own D8 date
+- NOT a range — these are discrete events
+- Example: 3 visits per week × 2 weeks = 6 service lines, each 
+  with its own D8 date
+
+SCENARIO 3 — Continuous span service (less common)
+- One service genuinely spans consecutive days
+- Single service line with RD8 range
+- Example: 72-hour respite care across 3 days
+
+REQUIRED CHANGES:
+
+A. Claim header — add Statement Period
+
+The claim itself needs a date range covering the whole billing 
+period (Loop 2300 DTP*434). UI: "Billing period: April 1 - 
+April 14, 2026" at the claim level.
+
+ALTER TABLE claims 
+  ADD COLUMN IF NOT EXISTS statement_period_start DATE,
+  ADD COLUMN IF NOT EXISTS statement_period_end DATE;
+
+Validation: statement_period_start <= statement_period_end. 
+All service line dates must fall within the statement period.
+
+B. Service line — date can be single OR range
+
+Currently service lines have a single date. Change to support both:
+
+ALTER TABLE claim_service_lines
+  RENAME COLUMN service_date TO service_date_from;
+ALTER TABLE claim_service_lines
+  ADD COLUMN IF NOT EXISTS service_date_to DATE;
+
+When service_date_from = service_date_to (or service_date_to 
+is NULL), generate D8 in the EDI.
+When service_date_from < service_date_to, generate RD8.
+
+C. Wizard UI changes
+
+Step "Service Lines" should:
+
+1. Show the claim's statement period prominently at top: 
+   "Billing for April 1-14, 2026"
+
+2. Allow rapid entry of multiple visits via a calendar/list view:
+   - Click dates on a calendar within the statement period
+   - For each clicked date, create a service line
+   - Bulk-set HCPCS code, units, charge across selected dates
+   - Edit individual lines if needed
+
+3. For each service line, default to single-day (D8 mode) but 
+   allow toggling to range-mode (RD8) when service spans days
+
+4. Validate: every service line must have date(s) within 
+   statement period
+
+D. EDI generator update
+
+When generating Loop 2400 DTP*472:
+- If service_date_to IS NULL OR service_date_from = service_date_to:
+  generate "DTP*472*D8*" + format_yyyymmdd(service_date_from) + "~"
+- Else:
+  generate "DTP*472*RD8*" + format_yyyymmdd(service_date_from) 
+  + "-" + format_yyyymmdd(service_date_to) + "~"
+
+When generating Loop 2300 DTP*434 (statement period):
+- "DTP*434*RD8*" + format_yyyymmdd(statement_period_start) 
+  + "-" + format_yyyymmdd(statement_period_end) + "~"
+
+E. Demo data update
+
+For Chajinel's seed claims, restructure Maria Garcia's claim 
+to reflect realistic home care billing:
+
+- Statement period: 2026-04-01 to 2026-04-14
+- 6 service lines, one per actual visit date:
+  - 2026-04-02 (Thu), G0156, 16 units (4 hours)
+  - 2026-04-04 (Sat), G0156, 16 units
+  - 2026-04-07 (Tue), G0156, 16 units
+  - 2026-04-09 (Thu), G0156, 16 units
+  - 2026-04-11 (Sat), G0156, 16 units
+  - 2026-04-14 (Tue), G0156, 16 units
+
+This shows Daniela the system handles her actual workflow.
+
+F. Risk engine update
+
+The Timely Filing Guardian uses the EARLIEST line "From" date 
+on the claim, not the statement period start. Per CMS: line 
+"From" date drives timely filing.
+
+If you currently use claim.service_date for filing alerts, 
+update to:
+  MIN(service_date_from) FROM claim_service_lines WHERE 
+  claim_id = ?
+
+This matters because TriWest's 180-day clock starts from the 
+earliest service date on each line. A claim with lines from 
+April 1 and April 14 has TWO different timely filing 
+deadlines (Sept 28 and Oct 11).
+
+VERIFICATION:
+
+After implementation, generate test EDI for Maria Garcia's 
+restructured claim. Confirm:
+- Loop 2300 DTP*434 shows the statement period RD8 range
+- Loop 2400 DTP*472 shows D8 single dates per line (6 lines)
+- All dates are valid YYYYMMDD format
+- Submit through Stedi test mode and confirm 999 = AK9*A
+
+Production verification format as before.
