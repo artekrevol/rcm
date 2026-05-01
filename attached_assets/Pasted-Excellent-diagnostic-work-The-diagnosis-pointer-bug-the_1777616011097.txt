@@ -1,0 +1,96 @@
+Excellent diagnostic work. The diagnosis pointer bug, the Medicare 
+vs contracted rate confusion, and the locality bypass for ZIP-coded 
+billing_location are all real catches I didn't have on the radar.
+
+Before I sign off, a few verification gaps to close:
+
+GAP 1 — Identity check output not pasted
+
+Per the standing order, every verification report must START with the 
+verbatim output of:
+
+npx tsx server/utils/verify-db-identity.ts PRODUCTION_DATABASE_URL
+
+You said "confirmed production" but didn't paste the output. Please 
+re-run and paste the output verbatim now. This is the protocol going 
+forward — no exceptions.
+
+GAP 2 — Stedi round-trip not done
+
+The acceptance criteria required submitting the corrected EDI through 
+Stedi test mode (FRCPB) and confirming 999 returns AK9*A. Internal 
+segment validation passed, which is good, but Stedi may still reject 
+for reasons unrelated to Loop 2310B (taxonomy code, authorization 
+number format, etc.).
+
+Please:
+1. Generate EDI for Maria Garcia's test claim
+2. Submit through Stedi test mode (ISA15='T', FRCPB receiver)
+3. Capture: submission timestamp, Stedi correlation ID, TA1 response, 
+   999 response with full AK9 segment
+
+If 999 = AK9*A, we're solid. If AK9*R, paste every IK3, IK4, CTX, 
+and AK9 segment so we can see what's still wrong.
+
+GAP 3 — Full EDI envelope not pasted
+
+You showed individual segments but not a complete envelope. Please 
+paste the FULL generated 837P for Maria Garcia's test claim — from 
+ISA segment through IEA, every segment in order, verbatim. Then I 
+can do my own segment-by-segment review against the PGBA/EmblemHealth 
+guides we have.
+
+GAP 4 — Payer tenant isolation needs before/after evidence
+
+You fixed /api/billing/payers but didn't show evidence. Please run:
+
+-- Against production
+SELECT 
+  COUNT(*) AS total_payers,
+  COUNT(*) FILTER (WHERE organization_id IS NULL) AS global_payers,
+  COUNT(*) FILTER (WHERE organization_id = 'chajinel-org-001') AS chajinel_payers,
+  COUNT(*) FILTER (WHERE organization_id NOT IN ('chajinel-org-001') 
+                     AND organization_id IS NOT NULL) AS other_org_payers
+FROM payers;
+
+Then test the actual API:
+
+curl -s https://www.claimshield.health/api/billing/payers \
+  -H "Cookie: <chajinel-user-session>" | jq '.[] | .organization_id' | sort | uniq -c
+
+The API output should show ONLY chajinel-org-001 IDs and NULLs (globals). 
+If any other org IDs appear, the fix didn't actually work.
+
+GAP 5 — Existing saved claims with wrong rates
+
+This is a follow-up question, not a fix request: now that the rate 
+lookup is using the correct contracted rates, what about the 85 
+existing production claims that were saved with the WRONG rates from 
+the Medicare-averages source? Specifically:
+
+SELECT 
+  c.id, 
+  csl.hcpcs_code,
+  csl.charge AS saved_charge,
+  csl.units,
+  hr.rate_per_unit AS correct_va_cc_rate,
+  (csl.charge / NULLIF(csl.units, 0)) AS effective_per_unit_charge,
+  ((csl.charge / NULLIF(csl.units, 0)) - hr.rate_per_unit) AS variance
+FROM claims c
+JOIN claim_service_lines csl ON csl.claim_id = c.id
+LEFT JOIN hcpcs_rates hr ON hr.hcpcs_code = csl.hcpcs_code 
+  AND hr.organization_id = c.organization_id
+WHERE c.organization_id = 'chajinel-org-001'
+ORDER BY ABS((csl.charge / NULLIF(csl.units, 0)) - hr.rate_per_unit) DESC
+LIMIT 20;
+
+Show me the variance. If existing claims are over-billed by meaningful 
+amounts, we need a separate decision about whether to correct them or 
+let them ride. Don't take action yet — just show me the data.
+
+Once Gaps 1-4 are closed, this fix is ready to ship. Gap 5 is 
+informational and helps us decide on a follow-up sprint.
+
+Standing order reminder for any future report: identity check at top, 
+verbatim. Stedi round-trip required for EDI changes. Full EDI envelope 
+pasted, not summarized. Before/after evidence for behavior changes.
