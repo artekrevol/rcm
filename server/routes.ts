@@ -3330,7 +3330,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const orgId = getOrgId(req);
       if (!orgId) return res.status(400).json({ error: "No organization context" });
-      const { rows } = await pool.query(
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
         `SELECT ppe.id, ppe.payer_id, ppe.plan_product_code, ppe.enrolled_at, ppe.disabled_at,
                 ppe.notes, p.name AS payer_name, u.name AS enrolled_by_name
            FROM practice_payer_enrollments ppe
@@ -3354,12 +3355,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!orgId) return res.status(400).json({ error: "No organization context" });
       const { payerId, planProductCode, notes } = req.body;
       if (!payerId || typeof payerId !== "string") return res.status(400).json({ error: "payerId is required" });
+      const db = await import("./db").then(m => m.pool);
 
       // Check payer exists
-      const { rows: payerRows } = await pool.query(`SELECT id FROM payers WHERE id = $1`, [payerId]);
+      const { rows: payerRows } = await db.query(`SELECT id FROM payers WHERE id = $1`, [payerId]);
       if (payerRows.length === 0) return res.status(404).json({ error: "Payer not found" });
 
-      const { rows } = await pool.query(
+      const { rows } = await db.query(
         `INSERT INTO practice_payer_enrollments (organization_id, payer_id, plan_product_code, enrolled_by, notes, disabled_at)
          VALUES ($1, $2, $3, $4, $5, NULL)
          ON CONFLICT (organization_id, payer_id, plan_product_code) DO UPDATE
@@ -3379,7 +3381,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const orgId = getOrgId(req);
       if (!orgId) return res.status(400).json({ error: "No organization context" });
-      const { rows } = await pool.query(
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
         `UPDATE practice_payer_enrollments
             SET disabled_at = now()
           WHERE id = $1 AND organization_id = $2
