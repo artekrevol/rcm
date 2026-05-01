@@ -459,7 +459,7 @@ export default function ClaimDetailPage() {
     : 0;
 
   const isBlocked = claim.readinessStatus === "RED";
-  const canSubmit = claim.readinessStatus === "GREEN" && claim.status === "created";
+  const canSubmit = claim.readinessStatus === "GREEN" && ["created", "ready"].includes(claim.status);
 
   return (
     <div className="p-6 space-y-6">
@@ -681,7 +681,7 @@ export default function ClaimDetailPage() {
             <HelpCircle className="h-4 w-4" />
             Why this decision?
           </Button>
-          {stediConfigured && ["draft", "created", "pending"].includes(claim.status) && (
+          {stediConfigured && ["draft", "created", "ready", "pending"].includes(claim.status) && (
             <Button
               variant="outline"
               className="gap-2"
