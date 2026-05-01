@@ -391,15 +391,38 @@ export default function ClaimDetailPage() {
 
   const submitClaimMutation = useMutation({
     mutationFn: async () => {
-      return apiRequest("POST", `/api/claims/${id}/submit`);
+      const res = await fetch(`/api/billing/claims/${id}/submit-stedi`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ testMode: false }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+      return data;
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/claims", id, "events"] });
-      toast({ title: "Claim submitted successfully" });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
+      if (data.success) {
+        toast({
+          title: "Claim submitted to Stedi",
+          description: data.transactionId
+            ? `Transaction ID: ${data.transactionId}`
+            : "Claim submitted successfully",
+        });
+      } else {
+        const errDetail = (data.validationErrors || []).map((e: any) => e.message || e).join("; ");
+        toast({
+          title: "Stedi rejected the claim",
+          description: data.error || errDetail || "Submission failed",
+          variant: "destructive",
+        });
+      }
     },
-    onError: () => {
-      toast({ title: "Failed to submit claim", variant: "destructive" });
+    onError: (err: Error) => {
+      toast({ title: "Submission failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -459,7 +482,7 @@ export default function ClaimDetailPage() {
     : 0;
 
   const isBlocked = claim.readinessStatus === "RED";
-  const canSubmit = claim.readinessStatus === "GREEN" && ["created", "ready"].includes(claim.status);
+  const canSubmit = stediConfigured && claim.readinessStatus === "GREEN" && ["created", "ready"].includes(claim.status);
 
   return (
     <div className="p-6 space-y-6">
@@ -728,8 +751,9 @@ export default function ClaimDetailPage() {
               disabled={submitClaimMutation.isPending}
               data-testid="button-submit-claim"
             >
-              <Send className="h-4 w-4" />
-              Submit Claim
+              {submitClaimMutation.isPending
+                ? <><Loader2 className="h-4 w-4 animate-spin" />Submitting…</>
+                : <><Send className="h-4 w-4" />Submit via Stedi</>}
             </Button>
           )}
         </div>
