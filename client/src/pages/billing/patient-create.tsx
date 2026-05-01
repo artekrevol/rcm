@@ -138,6 +138,25 @@ export default function PatientCreate() {
     },
   });
 
+  const { data: enrollments = [] } = useQuery<any[]>({
+    queryKey: ["/api/practice/payer-enrollments"],
+    queryFn: async () => {
+      const res = await fetch("/api/practice/payer-enrollments", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  // Only show payers that the practice is enrolled with — so the claim will
+  // actually process. Fall back to all active payers if no enrollments exist yet.
+  const enrolledPayerIds = new Set(
+    enrollments.filter((e: any) => !e.disabled_at).map((e: any) => e.payer_id)
+  );
+  const enrolledPayers = enrolledPayerIds.size > 0
+    ? payers.filter((p: any) => p.is_active && enrolledPayerIds.has(p.id))
+    : payers.filter((p: any) => p.is_active);
+  const hasEnrollmentFilter = enrolledPayerIds.size > 0;
+
   // ── Activated fields (resolver) ───────────────────────────────────────────
   const activatedQuery = useQuery<ActivatedField[]>({
     queryKey: ["/api/practice/activated-fields", form.payerId, form.planProductCode],
@@ -370,7 +389,12 @@ export default function PatientCreate() {
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Insurance Carrier</Label>
+              <Label className="flex items-center gap-1.5">
+                Insurance Carrier
+                {hasEnrollmentFilter && (
+                  <span className="text-[10px] font-normal text-muted-foreground border rounded px-1 py-0.5">Enrolled only</span>
+                )}
+              </Label>
               <Select
                 value={f.payerId || "__custom__"}
                 onValueChange={handlePayerChange}
@@ -379,7 +403,7 @@ export default function PatientCreate() {
                   <SelectValue placeholder="Select payer..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {payers.filter((p: any) => p.is_active).map((p: any) => (
+                  {enrolledPayers.map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                   ))}
                   <SelectItem value="__custom__">Other / Enter manually</SelectItem>
@@ -553,7 +577,7 @@ export default function PatientCreate() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">None</SelectItem>
-                  {payers.filter((p: any) => p.is_active).map((p: any) => (
+                  {enrolledPayers.map((p: any) => (
                     <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>
                   ))}
                 </SelectContent>

@@ -83,6 +83,21 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [npiError, setNpiError] = useState("");
 
+  const { data: enrollments = [] } = useQuery<any[]>({
+    queryKey: ["/api/practice/payer-enrollments"],
+    queryFn: async () => {
+      const res = await fetch("/api/practice/payer-enrollments", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const enrolledPayerIds = new Set(
+    enrollments.filter((e: any) => !e.disabled_at).map((e: any) => e.payer_id)
+  );
+  const enrolledPayers = enrolledPayerIds.size > 0
+    ? payers.filter((p: any) => p.is_active && enrolledPayerIds.has(p.id))
+    : payers.filter((p: any) => p.is_active);
+
   useEffect(() => {
     if (patient && patient.id !== loadedId) {
       let firstName = patient.first_name || "";
@@ -269,7 +284,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
               <Label>Insurance Carrier</Label>
               <Input value={form.insuranceCarrier} onChange={(e) => set({ insuranceCarrier: e.target.value })} list="payer-edit-list" data-testid="input-edit-insurance" />
               <datalist id="payer-edit-list">
-                {payers.filter((p: any) => p.is_active).map((p: any) => (
+                {enrolledPayers.map((p: any) => (
                   <option key={p.id} value={p.name} />
                 ))}
               </datalist>
@@ -347,7 +362,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">None</SelectItem>
-                  {payers.filter((p: any) => p.is_active).map((p: any) => (
+                  {enrolledPayers.map((p: any) => (
                     <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -1331,6 +1346,22 @@ export default function PatientDetail() {
       return res.json();
     },
   });
+
+  const { data: enrollments = [] } = useQuery<any[]>({
+    queryKey: ["/api/practice/payer-enrollments"],
+    queryFn: async () => {
+      const res = await fetch("/api/practice/payer-enrollments", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const enrolledPayerIds = new Set(
+    enrollments.filter((e: any) => !e.disabled_at).map((e: any) => e.payer_id)
+  );
+  const enrolledPayers = enrolledPayerIds.size > 0
+    ? payers.filter((p: any) => p.is_active && enrolledPayerIds.has(p.id))
+    : payers.filter((p: any) => p.is_active);
 
   const archiveMutation = useMutation({
     mutationFn: async (reason: string) =>
