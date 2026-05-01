@@ -3328,7 +3328,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/practice/payer-enrollments", requireAuth, async (req, res) => {
     try {
-      const orgId = (req.user as any)?.organization_id;
+      const orgId = getOrgId(req);
       if (!orgId) return res.status(400).json({ error: "No organization context" });
       const { rows } = await pool.query(
         `SELECT ppe.id, ppe.payer_id, ppe.plan_product_code, ppe.enrolled_at, ppe.disabled_at,
@@ -3349,7 +3349,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.post("/api/practice/payer-enrollments", requireAuth, async (req, res) => {
     try {
-      const orgId = (req.user as any)?.organization_id;
+      const orgId = getOrgId(req);
       const userId = (req.user as any)?.id;
       if (!orgId) return res.status(400).json({ error: "No organization context" });
       const { payerId, planProductCode, notes } = req.body;
@@ -3377,7 +3377,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.delete("/api/practice/payer-enrollments/:id", requireAuth, async (req, res) => {
     try {
-      const orgId = (req.user as any)?.organization_id;
+      const orgId = getOrgId(req);
       if (!orgId) return res.status(400).json({ error: "No organization context" });
       const { rows } = await pool.query(
         `UPDATE practice_payer_enrollments
@@ -3397,7 +3397,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/practice/activated-fields", requireAuth, async (req, res) => {
     try {
-      const orgId = (req.user as any)?.organization_id;
+      const orgId = getOrgId(req);
       if (!orgId) return res.status(400).json({ error: "No organization context" });
       const { payerId, planProductCode, delegatedEntityId, includeDemoSeed } = req.query as Record<string, string>;
       const fields = await getActivatedFieldsForContext({
