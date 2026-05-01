@@ -104,7 +104,7 @@ export function BillingSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {billingNavItems
-                .filter((item) => !("adminOnly" in item && (item as any).adminOnly) || user?.role === "admin")
+                .filter((item) => !("adminOnly" in item && (item as any).adminOnly) || user?.role === "admin" || user?.role === "super_admin")
                 .map((item) => {
                 const hasBadge = (item as any).badge && unacknowledgedCount > 0;
                 return (
