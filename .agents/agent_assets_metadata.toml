@@ -18,3 +18,9 @@ id = "aVt7bu-fNUd_SJd38ImT_"
 uri = "file://SCOPE.md"
 type = "text"
 title = "Claim Shield Health — Full Platform Scope"
+
+[[outputs]]
+id = "fklmH2TwKeDCk47QaT4fz"
+uri = "file://docs/QA_DEMO_RUNBOOK.md"
+type = "text"
+title = "ClaimShield Health — Pre-Demo QA Runbook"
