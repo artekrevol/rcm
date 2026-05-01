@@ -1,0 +1,47 @@
+Thanks for the build. Before I sign off on staging, I need verification 
+on six things. Don't deploy anywhere until I've reviewed your responses.
+
+1. Caritas configuration — show me the contents of:
+   SELECT * FROM org_lead_sources WHERE organization_id='caritas-org-001';
+   SELECT * FROM org_service_types WHERE organization_id='caritas-org-001';
+   SELECT * FROM org_message_templates WHERE organization_id='caritas-org-001';
+   SELECT system_prompt FROM org_voice_personas WHERE organization_id='caritas-org-001';
+   
+   Confirm whether you used the original caritas-constants.ts content OR 
+   the revised bilingual config from the latest spec (the one with mode 1 
+   internal home health services + mode 2 referral-out paths, the 7-section 
+   bilingual coordinator persona, the path-triage flow). If you used the 
+   original content, we need to upgrade to the revised config now.
+
+2. Caritas flow — confirm whether the 11-step revised flow was applied or 
+   the original 8-step Caritas Senior Care flow was kept. Show me:
+   SELECT step_order, step_type, channel, delay_minutes, template_key, 
+          condition::text 
+   FROM flow_steps 
+   WHERE flow_id IN (SELECT id FROM flows WHERE organization_id='caritas-org-001')
+   ORDER BY step_order;
+
+3. Lead schema additions — confirm these columns exist on the leads table:
+   care_recipient_name, preferred_language, recommended_path, 
+   requested_services, consultation_preference, consultation_scheduled_at, 
+   matched_provider_id, considering_alf, start_urgency, insurance_status, 
+   payment_method, location_city, spanish_caregiver_preferred.
+   
+   If any are missing, add them now. The voice assistant cannot write 
+   structured data without these.
+
+4. Provider matching — show me the code path for the provider_match step 
+   type in flow-step-executor. Is the matching logic built (filter by 
+   service_types/languages/availability, pick best match, write 
+   matched_provider_id to lead), or is it stubbed?
+
+5. Appointment scheduling manual handoff — show me the appointment_schedule 
+   step type code path. Does it actually send notifications to org admins 
+   when mode='manual_handoff', or is it stubbed?
+
+6. Acceptance test results — which Phase F tests did you actually execute? 
+   For any tests you ran, show me the flow_run_events for the test flow_run 
+   so I can verify the steps executed. If none ran, mark that explicitly so 
+   I know not to assume verification.
+
+Don't merge to main until I've seen these answers.
