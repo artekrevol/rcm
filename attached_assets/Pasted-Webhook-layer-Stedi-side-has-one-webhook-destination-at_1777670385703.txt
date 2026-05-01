@@ -1,0 +1,78 @@
+Webhook layer — Stedi side has one webhook destination at 
+/api/webhooks/stedi with two bindings (transaction.processed.v2 for 
+277 and 835), API Key auth via the claimshield-webhook-auth credential. 
+No HMAC; Stedi sends the configured API key as a header on each 
+delivery. Webhook payloads are notifications only — they do NOT contain 
+the 277CA or 835 content. They contain a transactionId that the handler 
+must use to call Stedi's 277CA Report or 835 ERA Report endpoint to 
+retrieve the actual parsed JSON.
+
+Verification asks (no new code unless an issue is found):
+
+1. AUTH — Confirm the webhook handler at /api/webhooks/stedi reads 
+   the inbound API key header (whatever header name was configured 
+   for the claimshield-webhook-auth credential — check the Stedi 
+   portal Manage credentials view to confirm the exact header name) 
+   and rejects requests where the value doesn't match the stored 
+   secret. Reject with 401, log the rejection, do not process the 
+   payload.
+
+2. TIMEOUT ARCHITECTURE — Stedi enforces a hard 5-second timeout. If 
+   the handler doesn't return 2xx within 5 seconds, Stedi marks the 
+   delivery as failed and retries up to 4 more times at 90-second 
+   intervals. Confirm the handler follows the acknowledge-first 
+   pattern: verify auth, persist the raw event payload + eventId to 
+   a queue/jobs table, return 200, and process asynchronously in a 
+   background worker. If the handler is doing all the work 
+   synchronously (auth → parse → fetch from Stedi 277CA Report API → 
+   parse that → write to DB → update timeline), under any Stedi-side 
+   latency this will timeout and retry, causing duplicate processing 
+   races. If sync, refactor to async. State the current architecture 
+   explicitly in the report.
+
+3. DISPATCH — Confirm the handler dispatches in two stages:
+   a. Top-level dispatch on event.detail-type:
+      - transaction.processed.v2 → process inbound transaction
+      - file.delivered.v2 → log delivery confirmation (if binding added)
+      - file.failed.v2 → alert on failure (if binding added)
+   b. Within transaction.processed.v2, dispatch on 
+      detail.x12.metadata.transaction.transactionSetIdentifier:
+      - "277" → 277CA flow
+      - "835" → 835 ERA flow
+      - any other value → log and store but don't fail
+   State the file path and line numbers where each dispatch happens.
+
+4. DATA RETRIEVAL — Confirm the 277CA flow makes a follow-up API call 
+   to Stedi's 277CA Report endpoint using detail.transactionId from the 
+   webhook payload to retrieve the actual parsed response. State the 
+   exact endpoint URL the handler is calling and the auth header format 
+   (should be `Authorization: Key {STEDI_API_KEY}`). Same for the 835 
+   flow against the 835 ERA Report endpoint.
+
+5. PAYER CLAIM NUMBER CAPTURE — In the 277CA Report response (the 
+   parsed JSON, not the webhook payload), confirm the handler extracts 
+   PGBA's payer-assigned claim control number and persists it on the 
+   claims table. This is the value that needs to populate REF*F8 on 
+   resubmissions per DB-2. If extraction is missing, add it. If 
+   captured but not persisted, add the column write. Name the exact 
+   column on the claims table that holds it.
+
+6. IDEMPOTENCY — Stedi explicitly recommends using event.id (the 
+   top-level event ID in the webhook payload) as the idempotency key. 
+   Confirm the handler stores processed event IDs and no-ops on 
+   replay. Most common pattern is a unique constraint on a 
+   stedi_event_id column on claim_events, or a dedicated 
+   processed_webhook_events table. State the implementation path.
+
+7. NEW BINDINGS NEEDED — The current Stedi setup is missing two 
+   event bindings that matter:
+   a. file.failed.v2 — without this, claim delivery failures to PGBA 
+      happen silently. Claim shows submitted, never gets a 277CA, no 
+      idea why. Add the binding in the Stedi portal AND add a handler 
+      branch that writes a "Delivery failed" event to the claim 
+      timeline with the error message from detail.errors[].message.
+   b. file.delivered.v2 — gives a "delivered to payer" confirmation 
+      distinct from "submitted to Stedi." Lower priority. Add the 
+      binding and write a "Delivered to TriWest" timeline event.
+   I will add the bindings in the Stedi portal myself once the handler 
+   branches exist. Don't try to add them programmatically.

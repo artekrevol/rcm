@@ -12689,19 +12689,32 @@ Warmly,
 
   // ── Section 3: Stedi main webhook — 277CA and 835 ERA ─────────────────────
   app.post("/api/webhooks/stedi", async (req, res) => {
+    // ── AUTH — checked synchronously BEFORE returning 200 ──────────────────
+    // Stedi sends the configured API key as: Authorization: Key {secret}
+    // STEDI_WEBHOOK_SECRET must be set in environment secrets to enforce auth.
+    // If unset, all requests pass (logs a warning) — avoid this in production.
+    const webhookSecret = process.env.STEDI_WEBHOOK_SECRET;
+    const authHeader = req.headers['authorization'];
+    if (webhookSecret) {
+      if (authHeader !== `Key ${webhookSecret}`) {
+        console.warn(
+          `[Webhook] REJECTED — bad or missing auth. IP: ${req.ip} ` +
+          `Header: ${String(authHeader || '').slice(0, 30)}`
+        );
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+    } else {
+      console.warn('[Webhook] STEDI_WEBHOOK_SECRET not configured — auth bypass active. Set it in environment secrets.');
+    }
+
+    // ── ACK immediately — Stedi enforces a 5-second timeout ────────────────
     res.status(200).json({ received: true });
 
+    // ── All processing is async (setImmediate) — never blocks the 5s window ─
     setImmediate(async () => {
       try {
         const db = await import("./db").then(m => m.pool);
         const body = req.body;
-
-        const webhookSecret = process.env.STEDI_WEBHOOK_SECRET;
-        const authHeader = req.headers['authorization'];
-        if (webhookSecret && authHeader !== `Key ${webhookSecret}`) {
-          console.warn('[Webhook] Unauthorized — bad secret');
-          return;
-        }
 
         const eventObj = body?.event || body;
         const eventId = eventObj?.id || eventObj?.detail?.transactionId;
@@ -12721,6 +12734,7 @@ Warmly,
           return;
         }
 
+        // ── IDEMPOTENCY — deduplicate on event_id (PRIMARY KEY) ────────────
         const existing = await db.query(
           'SELECT event_id FROM webhook_events WHERE event_id=$1',
           [eventId]
@@ -12736,15 +12750,64 @@ Warmly,
           [eventId, detailType, transactionId, transactionSetIdentifier]
         );
 
+        // ── DISPATCH Stage 1: on detail-type ───────────────────────────────
+
+        // file.failed.v2 — claim delivery to payer failed silently without this
         if (detailType?.includes('file.failed') || detailType === 'file.failed.v2') {
           const errors = detail?.errors || [];
-          const msg = errors.map((e: any) => e.message).join('; ');
-          console.error('[Webhook FileFailed]', msg);
+          const msg = errors.map((e: any) => e.message || e.code || JSON.stringify(e)).join('; ') || 'Unknown delivery error';
+          const fileExecId = detail?.fileExecutionId || detail?.fileId || null;
+          console.error(`[Webhook FileFailed] ${msg} fileExecutionId=${fileExecId}`);
+
+          // Best-effort: find the claim whose stedi_transaction_id matches the file execution ID
+          if (fileExecId) {
+            const claimMatch = await db.query(
+              `SELECT id, organization_id FROM claims WHERE stedi_transaction_id = $1 LIMIT 1`,
+              [fileExecId]
+            );
+            if (claimMatch.rows.length) {
+              const cl = claimMatch.rows[0];
+              await db.query(
+                `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+                 VALUES ($1,$2,'Delivery Failed',$3,NOW(),$4)`,
+                [crypto.randomUUID(), cl.id, `File delivery to payer failed: ${msg}`, cl.organization_id]
+              );
+              await db.query(
+                `UPDATE claims SET status='error', updated_at=NOW() WHERE id=$1 AND status='submitted'`,
+                [cl.id]
+              );
+            }
+          }
+          // Always persist to system_settings as a fallback alert
           await db.query(
             `INSERT INTO system_settings (key, value, updated_at) VALUES ($1,$2,NOW())
              ON CONFLICT (key) DO UPDATE SET value=$2, updated_at=NOW()`,
-            [`file_failed_${Date.now()}`, JSON.stringify({ error: msg, fileExecutionId: detail?.fileExecutionId, time: new Date().toISOString() })]
+            [`file_failed_${Date.now()}`, JSON.stringify({ error: msg, fileExecutionId: fileExecId, time: new Date().toISOString() })]
           );
+          return;
+        }
+
+        // file.delivered.v2 — payer confirmed receipt of the file (distinct from Stedi acceptance)
+        if (detailType?.includes('file.delivered') || detailType === 'file.delivered.v2') {
+          const fileExecId = detail?.fileExecutionId || detail?.fileId || null;
+          const partnerIds = detail?.tradingPartnerIds || detail?.tradingPartnerId ? [detail.tradingPartnerId] : [];
+          const partnerLabel = partnerIds[0] || 'Payer';
+          console.log(`[Webhook FileDelivered] fileExecutionId=${fileExecId} partner=${partnerLabel}`);
+
+          if (fileExecId) {
+            const claimMatch = await db.query(
+              `SELECT id, organization_id FROM claims WHERE stedi_transaction_id = $1 LIMIT 1`,
+              [fileExecId]
+            );
+            if (claimMatch.rows.length) {
+              const cl = claimMatch.rows[0];
+              await db.query(
+                `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+                 VALUES ($1,$2,'Delivered to Payer',$3,NOW(),$4)`,
+                [crypto.randomUUID(), cl.id, `File delivered to ${partnerLabel} via Stedi. File execution ID: ${fileExecId}.`, cl.organization_id]
+              );
+            }
+          }
           return;
         }
 
@@ -12762,6 +12825,7 @@ Warmly,
           return;
         }
 
+        // ── DISPATCH Stage 2: on transactionSetIdentifier ──────────────────
         const { fetchStediTransaction, process277CA, process835ERA } = await import('./services/stedi-webhooks');
 
         if (transactionSetIdentifier === '277') {
@@ -12771,10 +12835,10 @@ Warmly,
           const data = await fetchStediTransaction(transactionId, '835');
           if (data) await process835ERA(data, transactionId, db);
         } else {
-          console.log('[Webhook] Unknown set:', transactionSetIdentifier);
+          console.log('[Webhook] Unknown transactionSetIdentifier:', transactionSetIdentifier);
         }
       } catch (err) {
-        console.error('[Webhook] Error:', err);
+        console.error('[Webhook] Error in async handler:', err);
       }
     });
   });

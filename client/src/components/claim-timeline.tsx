@@ -14,6 +14,7 @@ import {
   ShieldAlert,
   ReceiptText,
   Ban,
+  Truck,
 } from "lucide-react";
 import type { ClaimEvent } from "@shared/schema";
 
@@ -125,6 +126,16 @@ const eventConfig: Record<
     icon: Ban,
     color: "text-red-600 dark:text-red-400",
     bgColor: "bg-red-100 dark:bg-red-900/30",
+  },
+  "Delivery Failed": {
+    icon: Ban,
+    color: "text-red-600 dark:text-red-400",
+    bgColor: "bg-red-100 dark:bg-red-900/30",
+  },
+  "Delivered to Payer": {
+    icon: Truck,
+    color: "text-blue-600 dark:text-blue-400",
+    bgColor: "bg-blue-100 dark:bg-blue-900/30",
   },
 };
 
