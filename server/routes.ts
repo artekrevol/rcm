@@ -6303,6 +6303,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         payer: payerInfo,
       });
 
+      const isFrcpbTestPayer = (payerInfo as any).payer_id === "FRCPB";
+      console.log(
+        `[TestStedi] claimId=${req.params.id} ` +
+        `payer="${payerInfo.name}" payerEdiId="${(payerInfo as any).payer_id}" ISA15=T(forced) ` +
+        (isFrcpbTestPayer
+          ? "✓ FRCPB test payer — Stedi will validate & accept"
+          : "⚠ Non-FRCPB payer — Stedi validates EDI structure only, real payer routing not triggered")
+      );
+
       const result = await stediTestClaim({ ediContent: ediString, claimId: c.id });
 
       const errCount = (result.validationErrors || []).length;
@@ -6344,6 +6353,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         validationErrors: result.validationErrors || [],
         summary,
         payerName: payerInfo.name,
+        payerEdiId: (payerInfo as any).payer_id,
+        isFrcpbTestPayer,
         error: result.error,
       });
     } catch (err: any) {

@@ -691,11 +691,21 @@ export default function ClaimDetailPage() {
                 try {
                   const res = await fetch(`/api/billing/claims/${id}/test-stedi`, { method: "POST", credentials: "include" });
                   const data = await res.json();
+                  const payerLabel = data.payerName
+                    ? `${data.payerName}${data.payerEdiId ? ` (${data.payerEdiId})` : ""}`
+                    : "payer";
                   if (data.success) {
-                    toast({ title: "Claim passed validation", description: "EDI structure is valid and ready to submit." });
+                    toast({
+                      title: "Claim passed validation",
+                      description: `EDI validated against ${payerLabel}${data.isFrcpbTestPayer ? " — Stedi test payer" : ""}. Ready to submit.`,
+                    });
                   } else {
                     const errCount = (data.validationErrors || []).length;
-                    toast({ title: "Validation failed", description: errCount > 0 ? `${errCount} issue(s) found. See Validation Status for details.` : (data.error || "Stedi validation failed"), variant: "destructive" });
+                    toast({
+                      title: `Validation failed — ${payerLabel}`,
+                      description: errCount > 0 ? `${errCount} issue(s) found. See Validation Status for details.` : (data.error || "Stedi validation failed"),
+                      variant: "destructive",
+                    });
                   }
                   queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
                   queryClient.invalidateQueries({ queryKey: ["/api/claims", id, "events"] });
