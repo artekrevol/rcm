@@ -1083,7 +1083,7 @@ export default function ClaimDetailPage() {
                 <HelpCircle className="h-4 w-4 mr-2" />
                 View Risk Analysis
               </Button>
-              {["draft", "created", "denied", "returned"].includes(claim.status) && (
+              {["draft", "created", "ready", "denied", "returned"].includes(claim.status) && (
                 <Button
                   variant="outline"
                   className="w-full justify-start"
@@ -1094,7 +1094,7 @@ export default function ClaimDetailPage() {
                   {claim.status === "draft" ? "Continue Editing Draft" : "Edit Claim"}
                 </Button>
               )}
-              {["draft", "created"].includes(claim.status) && (
+              {claim.status === "draft" && (
                 <Button
                   className="w-full justify-start"
                   onClick={() => markReadyMutation.mutate()}
@@ -1104,7 +1104,7 @@ export default function ClaimDetailPage() {
                   {markReadyMutation.isPending
                     ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     : <CheckCircle className="h-4 w-4 mr-2" />}
-                  Mark Ready to Submit
+                  Finalize Draft
                 </Button>
               )}
               {practiceSettings?.oa_connected &&
@@ -1147,7 +1147,7 @@ export default function ClaimDetailPage() {
                     )}
                   </Button>
                 )}
-              {!practiceSettings?.oa_connected &&
+              {!practiceSettings?.oa_connected && !stediConfigured &&
                 ["exported", "created", "draft"].includes(claim.status) && (
                   <Button
                     variant="outline"
@@ -1159,12 +1159,6 @@ export default function ClaimDetailPage() {
                     Configure a clearinghouse to submit electronically
                   </Button>
                 )}
-              {claim.status === "denied" && (
-                <Button variant="outline" className="w-full justify-start">
-                  <AlertTriangle className="h-4 w-4 mr-2" />
-                  File Appeal
-                </Button>
-              )}
               {!claim.archived_at && ["draft", "submitted", "denied", "paid", "exported", "created", "rejected", "void"].includes(claim.status) && (
                 <Button
                   variant="ghost"
