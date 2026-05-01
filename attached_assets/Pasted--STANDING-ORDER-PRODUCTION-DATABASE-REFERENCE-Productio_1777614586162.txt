@@ -1,0 +1,81 @@
+=== STANDING ORDER: PRODUCTION DATABASE REFERENCE ===
+
+Production database access:
+
+- Connection secret: PRODUCTION_DATABASE_URL (already set in Replit secrets)
+
+- Host: hopper.proxy.rlwy.net:45126
+
+- Database: railway
+
+- Expected state markers: ~85+ claims, ~4.4M+ cci_edits rows, 2 organizations
+
+- Identity check utility: server/utils/verify-db-identity.ts
+
+Replit's local DATABASE_URL is NOT production. It points at the dev Neon 
+
+sandbox (helium / heliumdb). Do not assume queries against the running 
+
+Express app reflect production state. Two distinct query paths exist:
+
+PATH A — Direct SQL against PRODUCTION_DATABASE_URL → hits Railway production
+
+PATH B — HTTP requests to localhost:5000/api/* → hits dev sandbox
+
+PATH C — HTTP requests to https://www.claimshield.health/api/* → hits Railway production
+
+Use Path A for database state verification.
+
+Use Path C for production API behavior verification.
+
+NEVER use Path B and report results as production.
+
+VERIFICATION RULES (non-negotiable):
+
+1. Every verification report STARTS by running:
+
+   npx tsx server/utils/verify-db-identity.ts PRODUCTION_DATABASE_URL
+
+   
+
+   Paste the output verbatim at the top of the report. The output must 
+
+   show "Target: PRODUCTION" and exit code 0. If anything else, stop 
+
+   and escalate.
+
+2. All SQL state checks use direct connections to PRODUCTION_DATABASE_URL, 
+
+   not API calls.
+
+3. All production API behavior tests curl https://www.claimshield.health, 
+
+   not localhost:5000.
+
+4. If a check produces unexpected results, re-run the identity check 
+
+   to confirm the connection target before assuming the data is wrong. 
+
+   The most common cause of "weird" results is connecting to dev by 
+
+   accident.
+
+5. "I tested it on dev" does not satisfy a production verification 
+
+   requirement. If something cannot be tested against production for 
+
+   any reason, mark it INCONCLUSIVE with the specific reason.
+
+6. Never modify production data unless explicitly authorized in the 
+
+   prompt. Even read-heavy verifications should not run UPDATE, DELETE, 
+
+   ALTER, or DROP against PRODUCTION_DATABASE_URL.
+
+If PRODUCTION_DATABASE_URL becomes unreachable mid-task, stop and 
+
+report the access issue. Do not substitute dev as a proxy for 
+
+production state.
+
+=== END STANDING ORDER ===

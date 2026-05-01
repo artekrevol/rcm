@@ -29,6 +29,80 @@ const PGBA_PAYER_ID = "TWVACCN";
 const PGBA_PAYER_ID_QUALIFIER = "PI";
 
 // ─────────────────────────────────────────────────────────────────────────────
+// A1: NM1 element 08 (Identification Code Qualifier) lookup keyed by NM101.
+// Per X12 5010 TR3 Section 2.2. Every NM1 emission must pull from this map.
+// This is the single source of truth — never hardcode qualifiers inline.
+// ─────────────────────────────────────────────────────────────────────────────
+const NM1_QUALIFIER: Record<string, string> = {
+  "41": "46", // Submitter              → ETIN
+  "40": "46", // Receiver               → ETIN
+  "85": "XX", // Billing Provider       → NPI
+  "87": "XX", // Pay-To Provider        → NPI
+  "82": "XX", // Rendering Provider     → NPI
+  "77": "XX", // Service Facility       → NPI
+  DN:   "XX", // Referring Provider     → NPI
+  DK:   "XX", // Ordering Provider      → NPI
+  "71": "XX", // Attending Provider     → NPI
+  "72": "XX", // Operating Provider     → NPI
+  IL:   "MI", // Subscriber (Insured)   → Member ID  (overrideable for veterans)
+  QC:   "MI", // Patient                → Member ID
+  PR:   "PI", // Payer                  → Payer Identifier
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A2: Canonical diagnosis pointer serializer.
+// This is the ONLY place pointer conversion happens — routes.ts re-exports this.
+// Accepts any valid X12 5010 SV107 input format:
+//   Letter chars  A–L  (CMS-1500 Box 21 order, 1–4 per line)
+//   Numeric chars 1–12 (already-converted)
+//   Colon-separated composites "A:B" or "1:2"
+//   Compact multi-char "AB" → "1:2"
+// Returns colon-separated numeric string per X12 5010 spec.
+// ─────────────────────────────────────────────────────────────────────────────
+const DX_PTR_ALPHA_MAP: Record<string, string> = {
+  A: "1",  B: "2",  C: "3",  D: "4",
+  E: "5",  F: "6",  G: "7",  H: "8",
+  I: "9",  J: "10", K: "11", L: "12",
+};
+
+export function serializeDiagnosisPointer(raw: string | null | undefined): string {
+  const s = String(raw || "A").trim().toUpperCase();
+
+  // Already colon-separated: "A:B", "1:2", "1:2:3"
+  if (s.includes(":")) {
+    return s
+      .split(":")
+      .map((p) => DX_PTR_ALPHA_MAP[p] ?? p)
+      .join(":");
+  }
+
+  // Single alpha "A" → "1"
+  if (s.length === 1 && DX_PTR_ALPHA_MAP[s]) {
+    return DX_PTR_ALPHA_MAP[s];
+  }
+
+  // Single numeric "1" through "12" — pass through
+  if (/^\d{1,2}$/.test(s) && parseInt(s, 10) >= 1 && parseInt(s, 10) <= 12) {
+    return s;
+  }
+
+  // Compact multi-char alpha "AB" → "1:2", "ABCD" → "1:2:3:4"
+  // Only process if ALL chars are valid alpha pointers
+  if (/^[A-L]{2,4}$/.test(s)) {
+    return s
+      .split("")
+      .map((c) => DX_PTR_ALPHA_MAP[c] ?? c)
+      .join(":");
+  }
+
+  // Colon-separated numeric already "1:2:3" — pass through unchanged
+  if (/^[\d:]+$/.test(s)) return s;
+
+  // Unrecognized — default to "1" to avoid rejecting the claim
+  return "1";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface EDI837PInput {
   /**
@@ -101,8 +175,8 @@ export interface EDI837PInput {
   provider: {
     first_name: string;
     last_name: string;
-    npi: string;
-    taxonomy_code: string;
+    npi: string | null;
+    taxonomy_code: string | null;
     license_number?: string | null;
     entity_type?: string | null;
   };
@@ -224,14 +298,14 @@ export function generate837P(input: EDI837PInput): string {
   // Per PGBA 837I CG v1.3, Table 5, page 17:
   //   NM103 = "PGBA VACCN", NM108 = "46", NM109 = "841160004"
   const loop1000bName = pgba ? PGBA_RECEIVER_NAME : payer.name;
-  const loop1000bQual = pgba ? PGBA_RECEIVER_ID_QUALIFIER : "46";
+  const loop1000bQual = pgba ? PGBA_RECEIVER_ID_QUALIFIER : NM1_QUALIFIER["40"];
   const loop1000bId   = pgba ? PGBA_RECEIVER_TAX_ID : payer.payer_id;
 
   // Loop 2010BB NM1*PR: Payer identification at claim level.
   // Per PGBA 837I CG v1.3, Table 6, page 18:
   //   NM103 = "PGBA VACCN", NM108 = "PI", NM109 = "TWVACCN"
   const loop2010bbName = pgba ? PGBA_RECEIVER_NAME : payer.name;
-  const loop2010bbQual = pgba ? PGBA_PAYER_ID_QUALIFIER : "PI";
+  const loop2010bbQual = pgba ? PGBA_PAYER_ID_QUALIFIER : NM1_QUALIFIER["PR"] ?? "PI";
   const loop2010bbId   = pgba ? PGBA_PAYER_ID : payer.payer_id;
 
   const segments: string[] = [];
@@ -252,19 +326,17 @@ export function generate837P(input: EDI837PInput): string {
   segments.push(`BHT*0019*00*${claimControlNumber}*${date}*${time}*CH`);
 
   // ── Loop 1000A: Submitter ─────────────────────────────────────────────────
-  // NM1*41: Submitter — qualifier 46 (Electronic Transmitter ID) per X12 5010 spec.
-  // NM109: billing provider NPI (used as submitter ID for direct EDI).
+  // NM1*41: NM108 = "46" (ETIN) per NM1_QUALIFIER lookup. NM109 = submitter NPI.
   // Per PGBA 837I CG v1.3, page 18: NM108 = "46", NM109 = agency NPI.
   segments.push(
-    `NM1*41*2*${practice.name}*****46*${practice.npi}`
+    `NM1*41*2*${practice.name}*****${NM1_QUALIFIER["41"]}*${practice.npi}`
   );
   const billingPhone = (practice.phone || "0000000000").replace(/\D/g, "");
   segments.push(`PER*IC*Billing Contact*TE*${billingPhone}`);
 
   // ── Loop 1000B: Receiver ─────────────────────────────────────────────────
+  // NM1*40: NM108 = "46" (ETIN) per NM1_QUALIFIER lookup.
   // PGBA: NM103 = "PGBA VACCN", NM108 = "46", NM109 = "841160004" (Region 4).
-  // Other payers: payer name and payer_id from practice settings.
-  // Per PGBA 837I CG v1.3, Table 5, page 17.
   segments.push(
     `NM1*40*2*${loop1000bName}*****${loop1000bQual}*${loop1000bId}`
   );
@@ -274,12 +346,11 @@ export function generate837P(input: EDI837PInput): string {
   segments.push(`PRV*BI*PXC*${practice.taxonomy_code}`);
 
   // ── Loop 2010AA: Billing Provider ────────────────────────────────────────
-  // NM108 = "XX" (NPI qualifier); NM109 = agency NPI.
-  // Per PGBA 837I CG v1.3, page 18: use agency NPI 1184288680 for Chajinel.
-  // REF*EI: federal tax ID — Chajinel 47-1075172.
-  // Per X12 5010 Section 2.2.1 and PGBA companion guide.
+  // NM108 = "XX" (NPI) per NM1_QUALIFIER["85"]; NM109 = agency NPI.
+  // Billing provider is always an organization (practice) → NM102 = 2.
+  // REF*EI: federal tax ID.
   segments.push(
-    `NM1*85*2*${practice.name}*****XX*${practice.npi}`
+    `NM1*85*2*${practice.name}*****${NM1_QUALIFIER["85"]}*${practice.npi}`
   );
   segments.push(`N3*${street}`);
   segments.push(`N4*${city}*${state}*${zip}`);
@@ -299,14 +370,10 @@ export function generate837P(input: EDI837PInput): string {
   // ── Loop 2010BA: Subscriber (Insured/Patient) ─────────────────────────────
   // NM108/NM109: Patient identifier qualifier and value.
   // For PGBA: use veteran_id_type to select qualifier (SY = SSN, MI = EDIPI/MVI ICN).
-  // Per PGBA 837I CG v1.3, page 20 (error codes LFN/LFM/SSC/SSE):
-  //   - 9-byte SSN → qualifier "SY"
-  //   - 10-byte EDIPI → qualifier "MI"
-  //   - 17-byte MVI ICN → qualifier "MI"
-  //   System preference: EDIPI > MVI ICN > SSN.
+  // NM1_QUALIFIER["IL"] = "MI" (default); PGBA resolveVeteranId may override to "SY".
   const { qualifier: patientIdQual, id: patientIdVal } = pgba
     ? resolveVeteranId(patient)
-    : { qualifier: "MI", id: patient.member_id };
+    : { qualifier: NM1_QUALIFIER["IL"], id: patient.member_id };
 
   segments.push(
     `NM1*IL*1*${patient.last_name}*${patient.first_name}****${patientIdQual}*${patientIdVal}`
@@ -322,9 +389,8 @@ export function generate837P(input: EDI837PInput): string {
   );
 
   // ── Loop 2010BB: Payer ────────────────────────────────────────────────────
+  // NM1*PR: NM108 = "PI" per NM1_QUALIFIER["PR"].
   // PGBA: NM103 = "PGBA VACCN", NM108 = "PI", NM109 = "TWVACCN".
-  // Other payers: payer name/id from settings.
-  // Per PGBA 837I CG v1.3, Table 6, page 18.
   segments.push(
     `NM1*PR*2*${loop2010bbName}*****${loop2010bbQual}*${loop2010bbId}`
   );
@@ -383,24 +449,50 @@ export function generate837P(input: EDI837PInput): string {
   }
 
   // ── Loop 2310B: Rendering Provider ────────────────────────────────────────
-  const isOrgProvider = provider.entity_type === "organization";
-  if (isOrgProvider) {
-    const orgName = [provider.first_name, provider.last_name].filter(Boolean).join(" ");
-    segments.push(`NM1*82*2*${orgName}*****XX*${provider.npi}`);
-  } else {
-    segments.push(`NM1*82*1*${provider.last_name}*${provider.first_name}****XX*${provider.npi}`);
-  }
-  segments.push(`PRV*PE*PXC*${provider.taxonomy_code}`);
-  // REF*1C: State license number — required by CareFirst, some VA companions, and commercial payers
-  if (provider.license_number) {
-    segments.push(`REF*1C*${provider.license_number}`);
+  // A3 FIX: Omit this loop entirely when the provider has no NPI (agency worker,
+  // home health aide, etc.). For agency-billed claims, the billing provider (NM1*85)
+  // acts as the rendering provider per X12 5010 TR3 §2.5.1. Emitting NM1*82 with
+  // a null/empty NPI produces an invalid segment that causes Stedi to reject.
+  const providerNpi = provider.npi && provider.npi !== "null" && provider.npi.trim()
+    ? provider.npi.trim()
+    : null;
+  const isAgencyWorker = provider.entity_type === "agency_worker" || !providerNpi;
+
+  if (!isAgencyWorker && providerNpi) {
+    const isOrgProvider = provider.entity_type === "organization";
+    if (isOrgProvider) {
+      // NM102 = 2 (organization); NM103 = full org name; NM104/NM105 empty.
+      // Org name stored across first_name + last_name — join both non-empty parts.
+      const orgName = [provider.first_name, provider.last_name]
+        .map((s) => (s || "").trim())
+        .filter(Boolean)
+        .join(" ");
+      segments.push(
+        `NM1*82*2*${orgName}*****${NM1_QUALIFIER["82"]}*${providerNpi}`
+      );
+    } else {
+      // NM102 = 1 (individual); NM103 = last name; NM104 = first name.
+      segments.push(
+        `NM1*82*1*${provider.last_name}*${provider.first_name}****${NM1_QUALIFIER["82"]}*${providerNpi}`
+      );
+    }
+    const taxonomyCode = provider.taxonomy_code && provider.taxonomy_code !== "null"
+      ? provider.taxonomy_code.trim()
+      : null;
+    if (taxonomyCode) {
+      segments.push(`PRV*PE*PXC*${taxonomyCode}`);
+    }
+    // REF*1C: State license number — required by CareFirst, some VA companions, and commercial payers
+    if (provider.license_number) {
+      segments.push(`REF*1C*${provider.license_number}`);
+    }
   }
 
   // ── Loop 2310D: Ordering Provider ────────────────────────────────────────
-  // NM1*DK: only emit if different from rendering provider
-  if (ordering_provider && ordering_provider.npi !== provider.npi) {
+  // NM1*DK: only emit if different from rendering provider and has a valid NPI
+  if (ordering_provider && ordering_provider.npi && ordering_provider.npi !== providerNpi) {
     segments.push(
-      `NM1*DK*1*${ordering_provider.last_name}*${ordering_provider.first_name}****XX*${ordering_provider.npi}`
+      `NM1*DK*1*${ordering_provider.last_name}*${ordering_provider.first_name}****${NM1_QUALIFIER["DK"]}*${ordering_provider.npi}`
     );
   }
 
@@ -416,13 +508,10 @@ export function generate837P(input: EDI837PInput): string {
       ? line.modifier.split(",").map(m => m.trim()).filter(m => m.length === 2)
       : [];
     const composite = ["HC", line.hcpcs_code, ...modifiers].join(":");
-    // A–L = 1–12; also accepts already-numeric strings passed from diagPointerToNumeric
-    const ptrMap: Record<string, string> = {
-      A: '1', B: '2',  C: '3',  D: '4',  E: '5',  F: '6',
-      G: '7', H: '8',  I: '9',  J: '10', K: '11', L: '12',
-    };
-    const rawPtr = line.diagnosis_pointer || 'A';
-    const diagPtr = ptrMap[rawPtr?.toUpperCase()] || rawPtr || '1';
+    // A2 FIX: Use the canonical serializeDiagnosisPointer for all input formats.
+    // Handles single chars ("A"→"1"), multi-char composites ("AB"→"1:2"),
+    // already-numeric ("1", "1:2"), and colon-separated mixed forms.
+    const diagPtr = serializeDiagnosisPointer(line.diagnosis_pointer);
     segments.push(
       `SV1*${composite}*${line.charge.toFixed(2)}*UN*${line.units}***${diagPtr}`
     );

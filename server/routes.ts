@@ -27,6 +27,7 @@ import { CARITAS } from "./config/caritas-constants";
 import { releaseLock, acquireLock } from "./services/comm-locks";
 import { extractInsuranceFromTranscript } from "./services/transcript-extractor";
 import { getActivatedFieldsForContext, invalidateResolverCache } from "./services/field-resolver";
+import { serializeDiagnosisPointer } from "./services/edi-generator";
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
@@ -159,19 +160,10 @@ function getOrgId(req: any): string | null {
   return user.organization_id || null;
 }
 
+// Delegates to serializeDiagnosisPointer — the single source of truth in edi-generator.ts.
+// All generate837P call sites must use this wrapper to ensure A2-compliant serialization.
 function diagPointerToNumeric(ptr: string): string {
-  // A–L map to 1–12 per 837P SV1 element (up to 12 ICD-10 pointers allowed)
-  const map: Record<string, string> = {
-    A: "1", B: "2",  C: "3",  D: "4",  E: "5",  F: "6",
-    G: "7", H: "8",  I: "9",  J: "10", K: "11", L: "12",
-  };
-  const s = String(ptr || "A");
-  // Handle colon-separated format "A:B" → "1:2"
-  if (s.includes(":")) {
-    return s.split(":").map(p => map[p.toUpperCase()] || p).join(":");
-  }
-  // Handle compact format "AB" → "1:2", single "A" → "1"
-  return s.split("").map(p => map[p.toUpperCase()] || p).join(":");
+  return serializeDiagnosisPointer(ptr);
 }
 
 function verifyOrg(entity: any, req: any): boolean {
@@ -3039,7 +3031,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.get("/api/billing/payers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const { rows } = await import("./db").then(m => m.pool.query("SELECT * FROM payers ORDER BY is_active DESC, name"));
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      // Return global payers (organization_id IS NULL) plus payers owned by this org.
+      // Tenant isolation: org-scoped payers are never visible to other organizations.
+      const { rows } = await db.query(
+        `SELECT * FROM payers
+          WHERE organization_id IS NULL
+             OR organization_id = $1
+          ORDER BY is_active DESC, name`,
+        [orgId]
+      );
       res.json(rows);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
@@ -3397,110 +3399,58 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/va-rate", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const code = (req.query.code as string || "").trim().toUpperCase();
-      const location = (req.query.location as string || "").trim().toUpperCase();
+      const locationParam = (req.query.location as string || "").trim();
+      const payerParam = (req.query.payer as string || "").trim();
       if (!code) return res.status(400).json({ error: "code is required" });
       const db = await import("./db").then(m => m.pool);
 
-      // B3: Check custom contracted rate first (hcpcs_rates table, VA Community Care payer)
+      // Resolve practice locality for this org — needed for fallback lookup.
+      // billing_location may be a ZIP code (e.g. "41884") which does NOT match
+      // va_location_rates.location_name (city names). Skip locality lookup for ZIPs.
       const orgId = getOrgId(req);
-      const customRateResult = await db.query(
-        `SELECT rate_per_unit, payer_name, hc.unit_type, hc.unit_interval_minutes, hc.description_plain
-         FROM hcpcs_rates hr
-         LEFT JOIN hcpcs_codes hc ON hc.code = hr.hcpcs_code
-         WHERE hr.hcpcs_code = $1 AND LOWER(hr.payer_name) LIKE '%va community care%'
-         ORDER BY hr.effective_date DESC LIMIT 1`,
+      let resolvedLocality: string | null = locationParam || null;
+      if (!resolvedLocality) {
+        try {
+          const psQuery = orgId
+            ? await db.query(`SELECT default_va_locality, billing_location FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+            : await db.query(`SELECT default_va_locality, billing_location FROM practice_settings LIMIT 1`);
+          const ps = psQuery.rows[0];
+          const candidateLocality = ps?.default_va_locality || ps?.billing_location || null;
+          // Only use locality if it looks like a place name, not a ZIP code
+          if (candidateLocality && !/^\d{5}(-\d{4})?$/.test(candidateLocality.trim())) {
+            resolvedLocality = candidateLocality;
+          }
+        } catch (_) { /* fall through */ }
+      }
+
+      // Determine effective payer name — prefer query param, fall back to practice payer
+      const effectivePayerName = payerParam || "VA Community Care";
+
+      // B: Use unified rate lookup — contracted rate always wins over locality/average
+      const { lookupHcpcsRate } = await import("./lib/rate-lookup");
+      const rateResult = await lookupHcpcsRate(code, effectivePayerName, resolvedLocality, orgId);
+
+      if (!rateResult) {
+        return res.json({ rate_per_unit: null, location_name: null, is_average: false });
+      }
+
+      // Enrich with hcpcs_codes metadata (unit_type, description)
+      const { rows: hcpcsRows } = await db.query(
+        `SELECT unit_type, unit_interval_minutes, description_plain FROM hcpcs_codes WHERE code = $1`,
         [code]
       );
-      if (customRateResult.rows.length > 0) {
-        return res.json({ ...customRateResult.rows[0], is_custom_rate: true });
-      }
+      const hcpcsMeta = hcpcsRows[0] || {};
 
-      // Locality-specific rate lookup
-      if (location) {
-        const { rows } = await db.query(
-          `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
-                  hc.unit_type, hc.unit_interval_minutes, hc.description_plain
-           FROM va_location_rates vlr
-           LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
-           WHERE vlr.hcpcs_code = $1 AND UPPER(vlr.location_name) = $2
-             AND vlr.is_non_reimbursable = false
-           LIMIT 1`,
-          [code, location]
-        );
-        if (rows.length > 0) return res.json(rows[0]);
-      }
-
-      // Read default_va_locality (dedicated column) then fall back to billing_location from practice_settings
-      const HARDCODED_DEFAULT = 'SAN FRANCISCO-OAKLAND-BERKELEY (ALAMEDA/CONTRA COSTA CNTY)';
-      let defaultLocality = HARDCODED_DEFAULT;
-      try {
-        const psQuery = orgId
-          ? await db.query(`SELECT default_va_locality, billing_location FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
-          : await db.query(`SELECT default_va_locality, billing_location FROM practice_settings LIMIT 1`);
-        const ps = psQuery.rows[0];
-        if (ps?.default_va_locality) {
-          defaultLocality = ps.default_va_locality.toUpperCase();
-        } else if (ps?.billing_location) {
-          defaultLocality = ps.billing_location.toUpperCase();
-        }
-      } catch (_) { /* fall through to hardcoded default */ }
-
-      // Try exact locality-name match against the practice's default
-      const { rows: locRows } = await db.query(
-        `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
-                hc.unit_type, hc.unit_interval_minutes, hc.description_plain
-         FROM va_location_rates vlr
-         LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
-         WHERE vlr.hcpcs_code = $1 AND UPPER(vlr.location_name) = $2
-           AND vlr.is_non_reimbursable = false
-         LIMIT 1`,
-        [code, defaultLocality]
-      );
-      if (locRows.length > 0) {
-        return res.json({ ...locRows[0], is_default_locality: true });
-      }
-
-      // Try fuzzy match (handles partial names like "AUSTIN" → "AUSTIN-ROUND ROCK-SAN MARCOS")
-      const { rows: fuzzyRows } = await db.query(
-        `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
-                hc.unit_type, hc.unit_interval_minutes, hc.description_plain
-         FROM va_location_rates vlr
-         LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
-         WHERE vlr.hcpcs_code = $1
-           AND UPPER(vlr.location_name) LIKE $2
-           AND vlr.is_non_reimbursable = false
-         ORDER BY LENGTH(vlr.location_name) LIMIT 1`,
-        [code, `%${defaultLocality}%`]
-      );
-      if (fuzzyRows.length > 0) {
-        return res.json({ ...fuzzyRows[0], is_default_locality: true });
-      }
-
-      // Last resort: fall back to hard-coded SF Bay Area default
-      const { rows: sfRows } = await db.query(
-        `SELECT vlr.facility_rate as rate_per_unit, vlr.location_name,
-                hc.unit_type, hc.unit_interval_minutes, hc.description_plain
-         FROM va_location_rates vlr
-         LEFT JOIN hcpcs_codes hc ON hc.code = vlr.hcpcs_code
-         WHERE vlr.hcpcs_code = $1 AND UPPER(vlr.location_name) = $2
-           AND vlr.is_non_reimbursable = false
-         LIMIT 1`,
-        [code, HARDCODED_DEFAULT]
-      );
-      if (sfRows.length > 0) {
-        return res.json({ ...sfRows[0], is_default_locality: true });
-      }
-
-      const { rows: avgRows } = await db.query(
-        `SELECT ROUND(AVG(facility_rate)::numeric, 2) as rate_per_unit
-         FROM va_location_rates
-         WHERE hcpcs_code = $1 AND is_non_reimbursable = false`,
-        [code]
-      );
-      res.json({
-        rate_per_unit: avgRows[0]?.rate_per_unit || null,
-        location_name: null,
-        is_average: true,
+      return res.json({
+        rate_per_unit: rateResult.rate_per_unit,
+        location_name: rateResult.locality_name || null,
+        source: rateResult.source,
+        is_custom_rate: rateResult.source === "contracted",
+        is_default_locality: rateResult.source === "locality",
+        is_average: rateResult.source === "national_average",
+        unit_type: hcpcsMeta.unit_type || null,
+        unit_interval_minutes: hcpcsMeta.unit_interval_minutes || null,
+        description_plain: hcpcsMeta.description_plain || null,
       });
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
@@ -6408,20 +6358,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/hcpcs/search", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const q = (req.query.q as string || "").trim();
+      const payerParam = (req.query.payer as string || "").trim();
       if (!q) return res.json([]);
       const db = await import("./db").then(m => m.pool);
       const codePattern = `${q}%`;
+
+      // Search codes — va_rate is populated in a post-query step using the
+      // unified rate lookup so the dropdown always shows the contracted rate
+      // (hcpcs_rates) when available, not the Medicare locality average.
       const { rows } = await db.query(
         `SELECT code, description_official, description_plain, unit_type,
                 unit_interval_minutes, default_pos, requires_modifier, notes,
-                source, va_rate
+                source
          FROM (
            SELECT h.code, h.description_official, h.description_plain, h.unit_type,
                   h.unit_interval_minutes, h.default_pos, h.requires_modifier, h.notes,
-                  'hcpcs' as source,
-                  (SELECT ROUND(AVG(facility_rate)::numeric, 2) FROM va_location_rates
-                   WHERE hcpcs_code = h.code
-                   AND is_non_reimbursable = false) as va_rate
+                  'hcpcs' as source
            FROM hcpcs_codes h
            WHERE h.is_active = true
              AND (h.code ILIKE $1
@@ -6434,10 +6386,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
                   NULL as description_plain, c.unit_type,
                   NULL as unit_interval_minutes, NULL as default_pos,
                   false as requires_modifier, NULL as notes,
-                  'cpt' as source,
-                  (SELECT ROUND(AVG(facility_rate)::numeric, 2) FROM va_location_rates
-                   WHERE hcpcs_code = c.code
-                   AND is_non_reimbursable = false) as va_rate
+                  'cpt' as source
            FROM cpt_codes c
            WHERE c.is_active = true
              AND (c.code ILIKE $1
@@ -6451,6 +6400,22 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
          LIMIT 20`,
         [codePattern, q, q]
       );
+
+      // B: Enrich va_rate using the unified rate lookup (contracted > locality > average).
+      // This ensures the wizard dropdown shows the same rate source as the auto-populate
+      // field — eliminating the "$40.89 vs $11.50" discrepancy between surfaces.
+      if (rows.length > 0) {
+        const { lookupHcpcsRateBatch } = await import("./lib/rate-lookup");
+        const codes = rows.map((r: any) => r.code);
+        const effectivePayer = payerParam || "VA Community Care";
+        const rateMap = await lookupHcpcsRateBatch(codes, effectivePayer, null);
+        for (const row of rows) {
+          const rateEntry = rateMap.get(row.code);
+          (row as any).va_rate = rateEntry ? rateEntry.rate_per_unit : null;
+          (row as any).va_rate_source = rateEntry ? rateEntry.source : null;
+        }
+      }
+
       res.json(rows);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });

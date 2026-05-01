@@ -1,0 +1,202 @@
+# Replit Task — Universal EDI Builder + Rate Consistency Fixes
+
+## Meta-instruction (read first)
+
+This task fixes four bugs surfaced by Stedi EDI inspector validation and a rate inconsistency between Settings, the wizard, and EDI output. **Do not patch the specific symptoms.** Each section below requires:
+
+1. **Diagnose** — audit the current state across ALL affected entities (every NM1 loop, every HCPCS code, every rate-reading code path), not just the one that surfaced the bug.
+2. **Unify** — fix at the root by centralizing logic and using a single source of truth.
+3. **Verify** — prove the fix works for the entire class of problem, not just the one example.
+
+If during diagnosis you discover the bug goes deeper than described — for example, more wrong NM1 qualifiers across other loops, or more rate sources than the four listed — fix them all in this change, not just what's specified. Surface what you found in the final output.
+
+Do not hardcode values for specific codes (G0299, NM1*41, etc.). Every fix must work universally.
+
+---
+
+## TASK A — EDI Builder Universal Fixes
+
+### A1. NM1 Identifier Qualifier (element 08) per loop role
+
+**Bug evidence:** Stedi inspector flagged Line 5 of a test 837P: `Element NM1-08 must equal '46'; value found was 'XX'`. The offending segment was NM1*41 (Submitter loop). Line 7 (NM1*40 Receiver) correctly uses `46`, so the rule exists in the codebase but isn't applied consistently.
+
+**Root cause hypothesis:** the EDI builder is reusing a single qualifier value (`XX`, the NPI qualifier) across multiple NM1 segments instead of selecting per-loop.
+
+**Universal fix:** centralize NM1 element 08 into a lookup keyed by NM1 element 01 (entity identifier code). Use this exact mapping per X12 5010 spec:
+
+```
+41 (Submitter)              → 46 (ETIN)
+40 (Receiver)               → 46 (ETIN)
+85 (Billing Provider)       → XX (NPI)
+87 (Pay-To Provider)        → XX (NPI)
+82 (Rendering Provider)     → XX (NPI)
+77 (Service Facility)       → XX (NPI)
+DN (Referring Provider)     → XX (NPI)
+DK (Ordering Provider)      → XX (NPI)
+71 (Attending Provider)     → XX (NPI)
+72 (Operating Provider)     → XX (NPI)
+IL (Subscriber)             → MI (Member ID)
+QC (Patient)                → MI (Member ID)
+PR (Payer)                  → PI (Payer Identifier)
+```
+
+Refactor the EDI builder so every NM1 segment pulls its qualifier from this lookup. Audit every NM1 emission in a sample 837P after the change and confirm each matches.
+
+### A2. Diagnosis Pointer composite serialization (SV107)
+
+**Bug evidence:** Stedi inspector flagged Line 30: `Element SV1-07-01 must use N0 number format; value found was 'AB'`. Looking at the EDI:
+
+```
+Line 27: SV1*HC:G0299*1030.08*UN*32***1~       ← single pointer "1" — works
+Line 30: SV1*HC:G0156*152.00*UN*16***AB~       ← composite "AB" — broken
+Line 33: SV1*HC:G0151:GT*844.56*UN*24***2~     ← single pointer "2" — works
+```
+
+**Root cause hypothesis:** the converter handles single-character pointers (A→1, B→2) but not multi-character composite values.
+
+**Universal fix:** build one pointer serializer that handles any valid X12 5010 input:
+
+- Accepts a string of 1 to 4 characters (X12 SV107 max is 4 composite values per service line)
+- Each character is A through L (CMS-1500 Box 21 allows up to 12 diagnoses)
+- Maps each character: A=1, B=2, C=3, D=4, E=5, F=6, G=7, H=8, I=9, J=10, K=11, L=12
+- Joins with `:` (X12 composite element separator)
+- Examples: `A`→`1`, `AB`→`1:2`, `ABCD`→`1:2:3:4`, `BD`→`2:4`
+
+**Also fix upstream validation in the wizard:**
+
+- The pointer dropdown should only offer combinations corresponding to diagnoses actually present on the claim. With 2 ICD codes, selectable pointers are A, B, AB only — not C, D, ABC, etc.
+- Reject duplicate letters and non-alphabetical order at input time (no `BA`, no `AA`, no `ABDCD`).
+- Limit to 4 letters max per pointer per X12 spec.
+
+Build claims with 1, 2, 3, and 4 diagnoses and confirm every selectable pointer combination serializes to valid numeric EDI output.
+
+### A3. NM1*82 (and NM1*85) entity type and name structure
+
+**Bug evidence:** the test EDI Line 24 emitted `NM1*82*1*LLC*CHAJINEL HOME CARE SERVICE****XX*1184288680~`. Entity type qualifier `1` means Person, but the name is split as if "LLC" were a last name and "CHAJINEL HOME CARE SERVICE" were a first name. The provider here is an organization, not a person.
+
+**Root cause hypothesis:** the EDI builder assumes all rendering providers are individuals and parses a single name string into first/last positions. The data model may also have organization names stored in person-name fields.
+
+**Universal fix in two layers:**
+
+**Data model layer:** confirm the provider record has an `entity_type` field with values like `individual` and `organization`. If absent, add it. Backfill existing records based on the data — Chajinel Home Care Service is an organization. Validate the org name is stored in a single canonical field, not split.
+
+**EDI builder layer:**
+- If provider.entity_type = 'individual' → emit NM1 element 02 = `1`, element 03 = last name, element 04 = first name, element 05 = middle name/initial
+- If provider.entity_type = 'organization' → emit NM1 element 02 = `2`, element 03 = full organization name, elements 04 and 05 empty
+
+Apply the same logic to NM1*85 (Billing Provider) and NM1*87 (Pay-To Provider) since they likely share the same code path. Audit every NM1 segment that can represent either an individual or an organization.
+
+### A4. Acceptance criteria for Task A
+
+Generate a fresh 837P from a fully-populated VA Community Care claim with:
+- 2 ICD codes (E11.9, I10)
+- 3 service lines using DX pointers A, AB, B respectively
+- Rendering provider as organization (Chajinel Home Care Service LLC)
+- Billing provider as same organization
+- Submitter as ClaimShield with ETIN
+
+Paste into https://www.stedi.com/edi/inspector. Confirm:
+- **0 errors**
+- NM1*41 element 08 = `46`
+- NM1*40 element 08 = `46`
+- NM1*85 element 02 = `2`, element 03 = full org name
+- NM1*82 element 02 = `2`, element 03 = full org name
+- SV107 values across the three lines = `1`, `1:2`, `2`
+- Regression: DTP*472 placement still correct, N3/N4 still populated, SBR still ends in CH
+
+Task A is not complete until the inspector shows 0 errors on this test claim AND on a separate test claim with an individual rendering provider.
+
+---
+
+## TASK B — Rate Consistency Investigation and Unification
+
+### B1. Diagnose first, do not patch
+
+We have evidence of FOUR different rates for G0299 across the system at the same moment:
+
+- Settings → Rate Tables UI: **$120.00**
+- Wizard code search dropdown: **$40.89**
+- Wizard rate field after selection: **blank** with "Rate not on file — enter manually" warning
+- Generated 837P EDI: **$32.19/unit** (32 units × $32.19 = $1030.08 in the test claim)
+
+Four values means at least three different rate-reading code paths and likely separate sources of truth. Before changing any code, complete this audit and write up findings:
+
+**B1a. Inventory the rate sources in the database:**
+- List every table that stores HCPCS/CPT/code-related rates
+- For each table, query the rate for all 9 VA priority codes: G0299, G0300, G0151, G0152, G0153, G0154, G0155, G0156, T1019
+- Show the stored rate per code per table
+- Identify which is the seeded VA Community Care rate table per original spec
+- Identify any rate values that exist as defaults, fallbacks, or demo data
+
+**B1b. Trace each rate-reading code path:**
+- Settings → Rate Tables UI: which table, which query, which join?
+- Code Lookup tool: which table, which query?
+- Wizard code search dropdown (the $40.89 source): which query is producing this number?
+- Wizard rate field auto-population: why does it return empty when the dropdown found a value? Is it a different query or the same query reading a different field?
+- EDI generator unit calculation: which table, which query? Why is it returning $32.19?
+
+**B1c. Identify the merge/join/fallback logic:**
+- If multiple rate tables exist (e.g., a Medicare CMS-synced fee schedule + a custom payer-specific table + defaults), how are they being combined?
+- Is there a precedence rule? Is it being applied correctly?
+- Is the locality filter (Austin CBSA) being passed to every query that needs it?
+- Is the effective_date / end_date filter being respected?
+
+**Output a written diagnosis** before writing fix code. Explicitly answer:
+- Which value is the canonical seeded VA Community Care rate for G0299 (and where is it stored)?
+- Where is each of the four observed rates coming from?
+- Run the same audit for at least 3 other VA priority codes (G0156, G0151, T1019) and confirm whether the inconsistency is universal or G0299-specific.
+
+### B2. Unify on a single source of truth
+
+After diagnosis, refactor so every rate-reading code path uses one shared lookup function with these inputs:
+
+- HCPCS/CPT code (string)
+- Payer ID (e.g., VA Community Care, Medicare)
+- Locality / CBSA (e.g., Austin 12420)
+- Date of service (Date)
+
+…returning one rate value (or null with a structured reason if not on file).
+
+**Every UI surface and the EDI generator must call this function.** Remove direct table queries from component code. The function is the only legitimate path to a rate.
+
+If the diagnosis revealed that multiple tables legitimately hold rates (e.g., Medicare CMS sync + custom payer rates), the function decides precedence internally — callers don't know about it.
+
+### B3. Acceptance criteria for Task B
+
+For each of the 9 priority VA codes (G0299, G0300, G0151, G0152, G0153, G0154, G0155, G0156, T1019):
+
+- Settings → Rate Tables shows the seeded value
+- Code Lookup tool shows the same value
+- Wizard search dropdown shows the same value
+- Wizard rate field auto-populates with the same value — no "Rate not on file" warning
+- Generated 837P EDI multiplies the same value × correct units
+
+All five surfaces must show identical rates for all 9 codes. "Rate not on file" should appear ONLY for codes genuinely absent from the rate table — never for seeded codes.
+
+Then test with a non-VA payer (Medicare) for one of the same codes:
+- If Medicare rates are loaded, switching payer changes the rate correctly
+- If Medicare rates aren't loaded, the "Rate not on file — enter manually" warning surfaces correctly
+
+---
+
+## TASK C — Final Output
+
+When all of Task A and Task B are complete, return:
+
+1. **Diagnosis summary** for Task B — which rate sources existed before, which was canonical, what was changed, what root cause was identified
+2. **List of every file modified**, grouped by task (A1, A2, A3, B). Note any files modified beyond what's specified above and why.
+3. **Fresh 837P EDI sample** from a test claim using an organization rendering provider, with screenshot or paste of the Stedi inspector showing 0 errors
+4. **Second 837P EDI sample** from a test claim using an individual rendering provider, also showing 0 inspector errors
+5. **Unit tests added** for the NM1 qualifier lookup, the DX pointer serializer, and the rate lookup function. Each function should have at least 5 test cases covering edge conditions.
+6. **Anything unexpected** found during diagnosis — extra wrong qualifiers, additional rate sources, related bugs that were also fixed
+
+---
+
+## What "done" looks like
+
+- Stedi inspector returns 0 errors on test claims with both individual and organization providers
+- All 9 VA priority codes show consistent rates across Settings, Code Lookup, wizard dropdown, wizard rate field, and EDI output
+- The fixes are universal — they would have prevented these bugs from ever happening, not just patched the specific surfaces where they appeared
+- No hardcoded code-specific or qualifier-specific patches anywhere in the diff
+
+Begin with diagnosis. Do not start writing fix code until the diagnosis is complete and surfaces the actual scope of each problem.

@@ -1571,12 +1571,12 @@ function PayersTab() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Payer Classification</Label>
-                    <Select value={editForm.payerClassification} onValueChange={(v) => setEditForm({ ...editForm, payerClassification: v })}>
+                    <Select value={editForm.payerClassification || "_none"} onValueChange={(v) => setEditForm({ ...editForm, payerClassification: v === "_none" ? "" : v })}>
                       <SelectTrigger data-testid="select-payer-classification">
                         <SelectValue placeholder="Select classification" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">— Unclassified —</SelectItem>
+                        <SelectItem value="_none">— Unclassified —</SelectItem>
                         <SelectItem value="va_community_care">VA Community Care</SelectItem>
                         <SelectItem value="medicare_part_b">Medicare Part B</SelectItem>
                         <SelectItem value="medicare_advantage">Medicare Advantage</SelectItem>
@@ -1592,12 +1592,12 @@ function PayersTab() {
                   </div>
                   <div className="space-y-2">
                     <Label>Claim Filing Indicator (SBR09)</Label>
-                    <Select value={editForm.claimFilingIndicator} onValueChange={(v) => setEditForm({ ...editForm, claimFilingIndicator: v })}>
+                    <Select value={editForm.claimFilingIndicator || "_default"} onValueChange={(v) => setEditForm({ ...editForm, claimFilingIndicator: v === "_default" ? "" : v })}>
                       <SelectTrigger data-testid="select-claim-filing-indicator">
                         <SelectValue placeholder="Select code" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">— Use default (CI) —</SelectItem>
+                        <SelectItem value="_default">— Use default (CI) —</SelectItem>
                         <SelectItem value="CI">CI — Commercial Insurance</SelectItem>
                         <SelectItem value="VA">VA — Veterans Affairs Plan</SelectItem>
                         <SelectItem value="MB">MB — Medicare Part B</SelectItem>
