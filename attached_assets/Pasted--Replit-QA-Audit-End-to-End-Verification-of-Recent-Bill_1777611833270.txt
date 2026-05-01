@@ -1,0 +1,792 @@
+# Replit QA Audit — End-to-End Verification of Recent Billing Sprint Changes
+
+## Purpose of this audit
+
+Over the past several days, multiple sprints have shipped changes affecting the billing pipeline: rules engine wiring, CCI ingestion, snapshot bug fixes, extraction history hooks, white-screen Radix Select fix, schema additions for Chajinel tenant, agency-billed model, soft delete groundwork, Medicare locality data, plus various smaller fixes. The volume of changes is high enough that I am genuinely concerned things may have been declared "complete" without proper verification at all layers.
+
+This audit's job is to catch the bugs BEFORE the May 12 Rosemary meeting and before the Daniela kickoff. The standard is verifiable proof, not assertion. Every claim of "this works" must be accompanied by SQL output, EDI output, screenshots, HTTP response codes, log snippets, or some other piece of independently-verifiable evidence.
+
+A failure to find anything wrong is also a valid result — but it has to be a result based on actual testing, not "I read the code and it looks right."
+
+## Standing constraints — read these before starting
+
+1. **Production database is the source of truth.** All SQL queries run against `PRODUCTION_DATABASE_URL`, not the dev / Replit Postgres. If you cannot connect to production, stop and flag that.
+
+2. **Code reading is not testing.** "I checked the code and the logic looks correct" is not an acceptable answer for any item in this audit. Every assertion needs a runtime check.
+
+3. **Be honest about uncertainty.** If you cannot verify something for any reason — production access denied, data unavailable, environment not reproducible — say so explicitly. Do NOT fabricate verification results. Do NOT skip items silently. A clearly-flagged "could not verify because X" is far more useful than a fabricated success.
+
+4. **Use the standing Production Verification format** for every section. Each item gets: what was checked, the actual command/query/action used, the actual result observed (pasted verbatim, not summarized), and a pass/fail/inconclusive determination.
+
+5. **Do not modify production data** during this audit unless explicitly identified as part of testing (e.g., creating a test claim is fine; running UPDATE statements that change real records is not).
+
+6. **Take screenshots** for any UI verification. Logged-in views, error states, before/after comparisons. These are part of the deliverable.
+
+7. **Capture full HTTP request/response cycles** for any API verification. Method, URL, headers, body, status code, response body, response time. This is proof endpoints actually behave as claimed.
+
+8. **Do not mark anything "complete" until verification has actually run.** If a section of this audit can't be tested for any reason, mark it INCONCLUSIVE with the reason — do not mark it PASS based on assumption.
+
+## What is in scope — verify ALL of these
+
+### LAYER 1 — Database integrity
+
+#### 1.1 Schema verification
+
+Run against production:
+
+```sql
+-- All expected tables exist
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_schema = 'public' 
+ORDER BY table_name;
+
+-- Specifically verify these tables exist and report which are present and which are missing:
+-- claims, claim_service_lines, patients, organizations, practice_settings, payers, providers,
+-- payer_manuals, payer_manual_items, payer_manual_extraction_history, 
+-- cci_edits, scraper_monitor_log,
+-- timely_filing_alerts, rules_engine_evaluations,
+-- (any tables added for soft delete: archived_at columns, etc.)
+```
+
+For each table that should have columns added recently, verify:
+
+```sql
+-- Patients schema (soft delete + demo + VA identifiers if SSN handling shipped)
+SELECT column_name, data_type, is_nullable 
+FROM information_schema.columns 
+WHERE table_name = 'patients'
+ORDER BY ordinal_position;
+
+-- Claims schema (soft delete, statement period if shipped)
+SELECT column_name, data_type, is_nullable 
+FROM information_schema.columns 
+WHERE table_name = 'claims'
+ORDER BY ordinal_position;
+
+-- Practice_settings (agency NPI, billing model, locality)
+SELECT column_name, data_type, is_nullable 
+FROM information_schema.columns 
+WHERE table_name = 'practice_settings'
+ORDER BY ordinal_position;
+
+-- Payers (organization_id for tenant scoping)
+SELECT column_name, data_type, is_nullable 
+FROM information_schema.columns 
+WHERE table_name = 'payers'
+ORDER BY ordinal_position;
+
+-- Providers (provider_type, NPI nullable)
+SELECT column_name, data_type, is_nullable 
+FROM information_schema.columns 
+WHERE table_name = 'providers'
+ORDER BY ordinal_position;
+```
+
+Report what columns exist vs. what was supposed to be added. Flag any discrepancies.
+
+#### 1.2 Data integrity checks
+
+```sql
+-- All claims have a status
+SELECT COUNT(*) FILTER (WHERE status IS NULL) AS null_status,
+       COUNT(*) FILTER (WHERE status NOT IN ('draft','submitted','accepted','rejected','paid','denied','exported','archived')) AS invalid_status,
+       COUNT(*) AS total
+FROM claims;
+-- null_status and invalid_status must both be 0
+
+-- All claims have an organization_id (tenant integrity)
+SELECT COUNT(*) FILTER (WHERE organization_id IS NULL) AS missing_org_id,
+       COUNT(DISTINCT organization_id) AS distinct_orgs
+FROM claims;
+-- missing_org_id must be 0
+
+-- All claims with last_risk_factors are evaluated
+SELECT COUNT(*) FILTER (WHERE last_risk_evaluation_at IS NULL AND last_risk_factors IS NOT NULL) AS factors_without_eval_timestamp,
+       COUNT(*) FILTER (WHERE last_risk_evaluation_at IS NOT NULL AND last_risk_factors IS NULL) AS eval_without_factors
+FROM claims;
+-- Both should be 0 — internal consistency
+
+-- Patients all have organization_id
+SELECT COUNT(*) FILTER (WHERE organization_id IS NULL) AS orphan_patients FROM patients;
+-- Must be 0
+
+-- Service lines all reference valid claims
+SELECT COUNT(*) AS orphan_service_lines
+FROM claim_service_lines csl
+LEFT JOIN claims c ON c.id = csl.claim_id
+WHERE c.id IS NULL;
+-- Must be 0
+
+-- CCI data integrity
+SELECT ncci_version, COUNT(*) AS rows, MIN(effective_date), MAX(effective_date)
+FROM cci_edits
+GROUP BY ncci_version
+ORDER BY ncci_version;
+-- Should show 2026Q1 (~1.82M, max effective_date 2026-01-01) and possibly 2026Q2 if re-ingested with v321r0
+
+-- Tenant isolation check
+SELECT 
+  organization_id,
+  COUNT(*) AS payer_count
+FROM payers 
+GROUP BY organization_id
+ORDER BY organization_id NULLS FIRST;
+-- Confirm chajinel-org-001 has its own payers AND no leakage from other orgs
+```
+
+#### 1.3 Index verification (performance)
+
+```sql
+-- Verify indexes exist on tenant-critical query paths
+SELECT tablename, indexname, indexdef 
+FROM pg_indexes 
+WHERE schemaname = 'public' 
+  AND (
+    tablename IN ('claims', 'patients', 'payers', 'providers') 
+    OR indexname LIKE '%organization_id%'
+    OR indexname LIKE '%archived_at%'
+  )
+ORDER BY tablename, indexname;
+-- Verify queries by organization_id will use indexes, not table scans
+```
+
+### LAYER 2 — Backend / API verification
+
+#### 2.1 Authentication and authorization
+
+Test the following with actual HTTP requests. Use both your super_admin credentials AND a tenant user (Chajinel) credentials:
+
+For each test, capture:
+- Method + full URL
+- Request headers (include auth)
+- Request body (if applicable)
+- Response status code
+- Response body (verbatim, not summarized)
+- Response time
+
+```
+TEST 2.1.1 — Unauthenticated requests blocked
+- GET /api/claims (no auth header) → expected 401
+- POST /api/claims (no auth) → expected 401
+- GET /api/admin/payer-manuals (no auth) → expected 401
+
+TEST 2.1.2 — Tenant isolation on read
+- Login as Chajinel user, GET /api/claims → expected: only Chajinel claims returned
+- Verify response does not include claim IDs from other organizations
+- Same test for /api/patients, /api/payers, /api/providers
+
+TEST 2.1.3 — Tenant isolation on write
+- Login as Chajinel user, POST /api/patients with valid data
+- Verify created record has organization_id = chajinel-org-001
+- Attempt to POST a patient with organization_id explicitly set to a different org in body
+- Expected: server overrides to current user's org OR rejects request — must NOT create patient under another org
+
+TEST 2.1.4 — Cross-tenant access denied
+- Get a patient ID from organization X
+- Login as user from organization Y
+- GET /api/patients/{X-patient-id} → expected 404 or 403
+- PATCH /api/patients/{X-patient-id} → expected 403 or 404
+```
+
+#### 2.2 Critical endpoint contracts
+
+For each of these endpoints, document the request/response and verify the contract holds:
+
+```
+TEST 2.2.1 — POST /api/billing/claims/draft
+- Send a valid draft claim payload as Chajinel user
+- Capture full request body
+- Expected response: 200 or 201 with claim ID
+- Verify claim was inserted in DB with correct organization_id
+- Verify last_risk_evaluation_at populated within 5 seconds
+- Verify last_risk_factors is a JSONB array (not null)
+
+TEST 2.2.2 — POST /api/billing/claims/:id/submit-stedi (test mode)
+- Use a test claim from 2.2.1
+- Submit with test-mode flag
+- Expected: response time > 1000ms (real Stedi call)
+- Expected: response includes Stedi correlation ID
+- Verify submission_attempts row created with stedi_correlation_id NOT NULL
+- Verify NO "EDI envelope malformed" error in response or logs
+- This test is critical — last week we identified this endpoint failing silently
+
+TEST 2.2.3 — GET /api/billing/filing-alerts
+- Returns alerts grouped by urgency (critical / urgent / caution / safe)
+- Each alert has claim_id, days_until_deadline, payer_name
+- Filtered by current user's organization
+
+TEST 2.2.4 — GET /api/admin/cci-conflicts (or whichever endpoint queries CCI data)
+- Pass a known CCI pair (column_1=11042, column_2=11000)
+- Verify returns the edit with modifier_indicator
+- Confirm the query hits the cci_edits table for the right ncci_version
+
+TEST 2.2.5 — POST /api/admin/payer-manual-items/:id (review action)
+- Test approve, reject, needs_revision actions
+- Verify history row created in payer_manual_extraction_history
+- Verify payer_name is populated correctly (was a previous bug)
+- Verify changed_at timestamp accurate
+
+TEST 2.2.6 — Patient archive endpoint (if shipped)
+- POST /api/patients/:id/archive with reason
+- Verify archived_at populated, archived_by = current user
+- GET /api/patients should NOT return archived patient
+- POST /api/patients/:id/restore returns it
+- Attempting to archive a patient with active claims returns 409
+```
+
+#### 2.3 Error handling
+
+```
+TEST 2.3.1 — Bad payload handling
+- POST malformed JSON to /api/billing/claims/draft
+- Expected: 400 with descriptive error, NOT 500
+- POST with missing required fields → 400 with field-level errors
+
+TEST 2.3.2 — Invalid IDs
+- GET /api/claims/invalid-uuid-format → 400 or 404, not 500
+- GET /api/claims/00000000-0000-0000-0000-000000000000 (valid UUID, doesn't exist) → 404
+
+TEST 2.3.3 — Database connection failure simulation
+- Not feasible to test in production without disrupting service
+- Instead: review logs from recent operations to see if there are unhandled exceptions
+- grep server logs for "ECONNREFUSED", "timeout", "ETIMEDOUT"
+```
+
+### LAYER 3 — EDI generation verification
+
+This is the most consequential layer because EDI errors cause claim rejections in production.
+
+#### 3.1 837P envelope generation
+
+For Maria Garcia (Chajinel test patient, TriWest):
+
+1. Create or open a draft claim with at least one service line
+2. Trigger EDI generation (via the appropriate endpoint or admin tool)
+3. **Capture the full raw EDI output** — paste verbatim in the report
+4. Verify each segment manually against the PGBA companion guide
+
+Specific items to verify in the EDI output:
+
+```
+ISA SEGMENT (Interchange):
+  ISA01 = 03  (Authorization Info Qualifier)
+  ISA03 = 00  (Security Information Qualifier)
+  ISA07 = 30  (Receiver ID Qualifier — Federal Tax ID)
+  ISA08 = 841160004  (PGBA Region 4 Federal Tax ID)
+  ISA15 = T  (Test mode indicator — must be T, not P)
+  ISA16 = >  (Component element separator)
+
+GS SEGMENT (Functional Group):
+  GS01 = HC  (Health Care Claim)
+  GS03 = 841160004  (Must match ISA08)
+  GS08 = 005010X222A1  (837P standard, not X223A2 which is 837I)
+
+ST SEGMENT:
+  ST01 = 837
+  ST03 = 005010X222A1
+
+LOOP 1000A (Submitter):
+  NM1*41 segment present with submitter info
+
+LOOP 1000B (Receiver):
+  NM103 = "PGBA VACCN" (or "PGBA VA CCN")
+  NM108 = 46
+  NM109 = 841160004
+
+LOOP 2010AA (Billing Provider — CRITICAL FOR CHAJINEL):
+  NM103 = Chajinel (or full org name)
+  NM108 = XX  (NPI qualifier)
+  NM109 = 1184288680  (Chajinel's agency NPI)
+  N3 = 208 Cypress Ave
+  N4 = South San Francisco CA 94080
+  REF*EI = 47-1075172  (Tax ID)
+  PRV*BI*PXC = [taxonomy code from NPPES record]
+
+LOOP 2010BB (Payer):
+  NM103 = "PGBA VACCN"
+  NM108 = PI
+  NM109 = TWVACCN
+
+LOOP 2010CA (Patient — Maria Garcia):
+  NM108 = MI (if using EDIPI/Member ID) OR SY (if using SSN)
+  NM109 = [Member ID OR SSN — confirm what got used]
+  N3, N4 = patient address
+  DMG = patient DOB and gender
+
+LOOP 2300 (Claim Information):
+  CLM01 = patient control number
+  CLM02 = total claim charge
+  CLM05 = facility code (12 for Home for Chajinel)
+  
+LOOP 2300 REF*G1 (CRITICAL — VA AUTHORIZATION):
+  REF*G1*[auth_number]
+  This MUST be present for every TriWest claim
+  Without this, claim auto-rejects per TriWest handbook
+
+LOOP 2300 DTP*434 (Statement period — if implemented):
+  DTP*434*RD8*YYYYMMDD-YYYYMMDD
+
+LOOP 2310B (Rendering Provider):
+  CRITICAL: This loop should be ABSENT for agency-billed claims
+  If present, that's a bug — caregivers don't have NPIs
+
+LOOP 2400 (Service Lines):
+  For each service line:
+    SV1*HC:[hcpcs]*charge*UN*units***diagnosis_pointer
+    DTP*472*D8*YYYYMMDD (single date) OR
+    DTP*472*RD8*YYYYMMDD-YYYYMMDD (range, if implemented)
+```
+
+For each item above, verify against the actual EDI generated and report:
+- What was expected
+- What was actually generated
+- Match / mismatch / not applicable
+
+#### 3.2 Stedi round-trip test
+
+Submit the EDI through Stedi test mode (FRCPB) and capture the full response cycle:
+
+1. Submission timestamp
+2. Stedi correlation ID assigned
+3. TA1 (interchange acknowledgment) — should be received within seconds, AK = "A" (accepted)
+4. 999 (functional acknowledgment) — should be received, AK9 = "A" (accepted)
+5. 277CA (claim acknowledgment) — should arrive eventually with status
+
+If 999 returns AK9*R (rejected), extract the error code and segment reference. Common rejections:
+- ISA-level errors (envelope structure)
+- Missing required segments
+- Invalid qualifier codes
+
+#### 3.3 Place of service code
+
+Verify that Chajinel's claims default to Place of Service 12 (Home), since that matches their actual care setting per VA Community Care rules for Homemaker/HHA care.
+
+```
+Look at SV105 (place of service) in service lines.
+Expected: "12" for Home
+If anything else, that's a bug for Chajinel's use case.
+```
+
+### LAYER 4 — UI / Frontend verification
+
+This layer requires actual browser testing. Take screenshots for each test.
+
+#### 4.1 Login and dashboard
+
+```
+TEST 4.1.1 — Login as super_admin
+- Navigate to www.claimshield.health/login
+- Login with super_admin credentials
+- Confirm dashboard renders
+- Check browser console — no errors should appear during page load
+- Screenshot: dashboard view with clean console
+
+TEST 4.1.2 — Login as Chajinel tenant user
+- Use Daniela's credentials (or a test user in Chajinel org)
+- Confirm dashboard renders Chajinel-specific data only
+- Screenshot: tenant dashboard
+```
+
+#### 4.2 Critical admin pages
+
+For each, load the page, screenshot the result, verify console is clean:
+
+```
+TEST 4.2.1 — /admin/payer-manuals
+- Page should render the Source Registry / Manuals / Coverage view
+- Click "Add Source Document" — modal should open WITHOUT white screen
+- Verify the Radix Select fix — payer dropdown should work
+- Cancel out of modal
+- Screenshot: page rendered, modal opens cleanly
+
+TEST 4.2.2 — /admin/rules-database
+- Coverage cards should render with current counts
+- Click into one of the 12 approved items — detail view should load
+- Verify provenance information shows source attribution
+- Screenshot: rules database overview, detail view of an approved item
+
+TEST 4.2.3 — /admin/data-tools
+- Page should render
+- Backfill Plan Products section visible
+- Screenshot: data tools page
+
+TEST 4.2.4 — /admin/cci-edits (or wherever CCI data is queryable in UI)
+- Should show count of edits (~1.82M for 2026Q1)
+- Should allow lookup of code pairs
+- Screenshot: CCI dashboard
+```
+
+#### 4.3 Claim wizard end-to-end
+
+```
+TEST 4.3.1 — Walk through new claim creation as Chajinel user
+For Maria Garcia (TriWest TEST patient):
+
+Step 1: Patient selection
+- Patient dropdown should show ONLY Chajinel patients
+- Should NOT show patients from other orgs
+- Select Maria Garcia
+
+Step 2: Payer selection  
+- Payer dropdown should show ONLY Chajinel's payers (TriWest, San Mateo IHSS, LTC placeholder)
+- Should NOT show demo org's payers
+- Select TriWest VHPVI VA Community Care
+
+Step 3: Service date
+- Verify date picker works
+- If statement period feature shipped: range selector visible
+
+Step 4: Service codes
+- Add HCPCS G0156 (home health aide)
+- Verify code lookup works
+- Verify rate validation works (or shows "rate not on file" if PFS data not yet loaded)
+
+Step 5: Authorization number
+- VA auth number field should be REQUIRED (cannot proceed without it)
+- Enter test value
+- If field allows blank submission, that's a bug
+
+Step 6: Review and risk panel
+- Risk panel should populate with rules engine output
+- Should show specific factors, not blank
+- Should show CCI conflicts if any apply
+
+Step 7: Save as draft
+- Verify draft saved in DB
+- Verify last_risk_factors populated
+
+Screenshot each step. Capture browser console output.
+```
+
+#### 4.4 Browser console error scan
+
+For each major page, check the browser console BEFORE and AFTER user interactions:
+
+```
+Pages to check (load each, click around, check console):
+- /
+- /dashboard  
+- /patients
+- /claims
+- /admin/payer-manuals
+- /admin/rules-database
+- /admin/data-tools
+- /admin/users
+- /admin/organizations
+- /settings/practice
+- Claim wizard (each step)
+
+For each page report:
+- Errors observed in console (JavaScript exceptions)
+- Warnings observed in console
+- Failed network requests (404s, 500s, CORS errors)
+- Slow loads (>3 seconds)
+
+Capture screenshots of any error or warning.
+```
+
+#### 4.5 Mobile / responsive (light check)
+
+```
+Open key pages at 375px width (iPhone size):
+- Login
+- Dashboard
+- Claim list
+- Claim detail
+
+Verify pages don't break catastrophically. Not aiming for perfection here, just "works enough" — Daniela may pull this up on her phone occasionally.
+```
+
+### LAYER 5 — Network / deployment verification
+
+#### 5.1 Service health
+
+```
+TEST 5.1.1 — Production health endpoint
+- GET https://www.claimshield.health/api/health (or equivalent)
+- Expected: 200 with { status: "ok" } or similar
+- Capture response time
+
+TEST 5.1.2 — Database connectivity from production
+- From within Railway environment, verify the app connects to production DB
+- Check Railway logs for recent successful queries
+- Verify no recent connection errors in logs
+
+TEST 5.1.3 — Stedi connectivity
+- Verify recent Stedi API calls succeeded (look at submission_attempts table)
+- Look for failed attempts — if any, capture error details
+```
+
+#### 5.2 Cron jobs
+
+```
+TEST 5.2.1 — Filing alerts cron
+- Check timely_filing_alerts table for recent rows
+- Should show evaluations from this morning (if cron is daily)
+- SQL: SELECT MAX(evaluated_at) FROM timely_filing_alerts;
+
+TEST 5.2.2 — Scraper cron (if running)
+- Check scraper_monitor_log for recent entries
+- Should show daily scrape activity at 03:00 UTC
+- SQL: SELECT * FROM scraper_monitor_log ORDER BY created_at DESC LIMIT 10;
+
+TEST 5.2.3 — Rules engine evaluation cron
+- If a periodic re-evaluation runs, verify recent activity
+- Confirm no claims have stale evaluations (>24 hours old)
+```
+
+#### 5.3 Logs review
+
+```
+Pull last 24-48 hours of production logs and grep for:
+- "ERROR" — should be very few; investigate any
+- "Exception" or "Error:" 
+- "ECONNREFUSED" or connection failures
+- "envelope malformed" — should be ZERO (this was a recent bug)
+- "PageErrorBoundary" — error boundary fires (which would indicate the white-screen fix didn't fully work)
+- 500 status codes
+- Slow query warnings if logged
+
+For each error pattern, paste sample lines and frequency count.
+```
+
+### LAYER 6 — Security spot checks
+
+These are quick sanity tests, not a full security audit.
+
+#### 6.1 SQL injection resistance
+
+```
+TEST 6.1.1 — Search parameter injection
+- Send GET /api/patients?search=' OR '1'='1
+- Expected: returns no patients (or only matches the literal string), NOT a list of all patients
+- If returns all patients, that's SQL injection vulnerability
+
+TEST 6.1.2 — Path parameter injection  
+- GET /api/claims/' DROP TABLE claims --
+- Expected: 400 invalid UUID
+- DB should not be affected
+```
+
+#### 6.2 Sensitive data exposure
+
+```
+TEST 6.2.1 — SSN in response bodies
+- Get a patient with SSN populated
+- GET /api/patients/:id as authorized user
+- Verify response shows masked SSN (***-**-1234) by default
+- If full SSN appears in default responses, that's a privacy bug
+
+TEST 6.2.2 — Logs contain no PHI
+- Grep production logs for SSN patterns: \d{3}-\d{2}-\d{4}
+- Grep for full patient names appearing alongside DOB
+- Should find none in normal operation logs
+
+TEST 6.2.3 — API tokens not in response bodies
+- Login response should set HTTP-only cookie or return token securely
+- Subsequent responses should NOT include the auth token
+```
+
+### LAYER 7 — Specific items to verify from recent sprints
+
+These are concrete claims made in recent verification reports that need independent re-verification:
+
+#### 7.1 "All 81 claims have populated risk factors"
+
+```sql
+SELECT 
+  COUNT(*) AS total,
+  COUNT(*) FILTER (WHERE last_risk_factors IS NOT NULL) AS with_factors,
+  COUNT(*) FILTER (WHERE last_risk_evaluation_at IS NOT NULL) AS evaluated,
+  COUNT(*) FILTER (WHERE jsonb_array_length(last_risk_factors) = 0) AS empty_factor_arrays
+FROM claims;
+```
+
+Expected from prior claim: total=81, with_factors=81, evaluated=81. Verify or refute.
+
+#### 7.2 "12 approved items have history rows"
+
+```sql
+SELECT 
+  COUNT(*) AS approved_items,
+  (SELECT COUNT(*) FROM payer_manual_extraction_history WHERE change_type = 'approved') AS history_rows
+FROM payer_manual_items 
+WHERE review_status = 'approved';
+```
+
+Expected: equal counts. Verify.
+
+#### 7.3 "CCI Q1 2026 ingested with 1,821,352 rows"
+
+```sql
+SELECT ncci_version, COUNT(*) FROM cci_edits GROUP BY ncci_version ORDER BY ncci_version;
+```
+
+Verify counts match prior claims. If Q2 2026 (v321r0) was also re-ingested, verify that count too.
+
+#### 7.4 "Snapshot bug fix applied to existing claims"
+
+```sql
+SELECT 
+  COUNT(*) AS total_with_snapshot,
+  COUNT(*) FILTER (WHERE jsonb_array_length(rules_snapshot->'applied_rules') = 0) AS empty_snapshots,
+  COUNT(*) FILTER (WHERE jsonb_array_length(rules_snapshot->'applied_rules') > 0) AS populated_snapshots
+FROM claims
+WHERE rules_snapshot IS NOT NULL;
+```
+
+If empty_snapshots > 0, the bug fix didn't apply retroactively to those claims.
+
+#### 7.5 "White screen fix shipped (Radix SelectItem value=\"\")"
+
+Browser test: open `/admin/payer-manuals`, click "Add Source Document". Should open cleanly. Screenshot.
+
+Also grep codebase for residual instances:
+```bash
+grep -rn 'value=""' client/src/
+```
+Any matches inside `<SelectItem>` are unfixed bugs. Report findings.
+
+#### 7.6 "Chajinel seeder configured tenant correctly"
+
+```sql
+-- Practice settings
+SELECT 
+  organization_id, 
+  agency_npi, 
+  agency_tax_id, 
+  billing_model, 
+  city, 
+  state, 
+  zip_code,
+  medicare_locality_code
+FROM practice_settings 
+WHERE organization_id = 'chajinel-org-001';
+
+-- Expected:
+-- agency_npi = 1184288680
+-- agency_tax_id = 47-1075172
+-- billing_model = agency_billed
+-- city = South San Francisco
+-- state = CA
+-- zip_code = 94080
+-- medicare_locality_code = 05 (if locality work shipped)
+
+-- Payers (tenant-scoped)
+SELECT id, name, payer_id, organization_id, status 
+FROM payers 
+WHERE organization_id = 'chajinel-org-001'
+ORDER BY name;
+
+-- Expected: 3 payers (TriWest, San Mateo IHSS, LTC placeholder)
+
+-- Caregivers
+SELECT id, first_name, last_name, provider_type, npi 
+FROM providers 
+WHERE organization_id = 'chajinel-org-001'
+ORDER BY last_name;
+
+-- Expected: Lucia Hernandez (RN), Carlos Mendoza (CNA), Ana Reyes (HHA)
+-- All should have NULL or no NPI
+
+-- Test patients
+SELECT id, first_name, last_name, dob, organization_id 
+FROM patients 
+WHERE organization_id = 'chajinel-org-001'
+ORDER BY last_name;
+
+-- Expected: Maria Garcia (1955-03-12), Jose Rodriguez (1948-07-22)
+```
+
+Verify all expected values. Flag any that don't match.
+
+#### 7.7 "Submit-stedi bug fixed"
+
+This was an open issue from earlier this week. The submit endpoint was failing with "EDI envelope malformed" before reaching Stedi. Test it now end-to-end:
+
+1. Pick a Chajinel test claim
+2. POST /api/billing/claims/:id/submit-stedi with test mode flag
+3. Capture full request and response
+4. Verify response time > 1 second
+5. Verify response includes Stedi correlation ID
+6. Verify NO "envelope malformed" error
+7. Check submission_attempts table for the row
+
+If this fails, it's a critical demo blocker.
+
+### LAYER 8 — Performance / load sanity check
+
+Light testing only — not aiming for a full load test, just confirming the system isn't on the edge.
+
+```
+TEST 8.1 — Query response times
+- GET /api/claims with pagination — should return in <500ms for 50 rows
+- GET /api/patients — same expectation
+- GET /api/admin/payer-manuals — should return in <1s
+
+TEST 8.2 — Concurrent operations
+- Open three browser tabs
+- Trigger three different operations simultaneously (e.g., load dashboard, save a draft claim, load patient list)
+- Verify all complete successfully with no race conditions
+
+TEST 8.3 — Large list rendering
+- View a list with 50+ items (claims, patients, etc.)
+- Verify it doesn't freeze the browser
+- Verify pagination or virtualization works
+```
+
+## Required deliverables
+
+Submit the QA report with the following structure:
+
+### Section 1: Executive Summary
+
+- Pass / Fail / Inconclusive count by layer
+- Top 5 issues found (if any) — by severity
+- Recommendation: ready for May 12 demo? Daniela kickoff? 
+- If NOT ready, what specifically must be fixed first
+
+### Section 2: Layer-by-layer results
+
+For each of the 8 layers above, provide:
+- All test results with verbatim evidence (SQL output, EDI output, HTTP responses, screenshots)
+- Pass / Fail / Inconclusive determination per test
+- Notes on any anomalies, even if they passed
+
+### Section 3: Issues found
+
+For each issue, document:
+- Severity (P0 = blocks demo, P1 = visible to Daniela/Rosemary but not blocking, P2 = internal cleanup)
+- Layer (database, API, EDI, UI, deployment, security)
+- Description of the bug or anomaly
+- Steps to reproduce
+- Evidence (logs, screenshots, queries)
+- Suggested fix or escalation
+
+### Section 4: Untested areas
+
+- List anything you could not test and why
+- Recommend follow-up if needed
+
+## What honest looks like
+
+Acceptable response: "Tested 73 of 89 items. Found 4 P1 issues and 2 P2 issues. Could not verify Stedi round-trip because FRCPB sandbox returned 503 — flagging for retry tomorrow. Could not verify mobile responsive because no mobile browser available — recommending separate quick test."
+
+Unacceptable response: "All 89 items pass."
+
+If everything passes that's possible too — but the report needs to show evidence for each pass, not assertions. The standard is "I observed X result, here's the evidence."
+
+## Time scope
+
+This is a substantial audit — I expect 4-6 hours of focused work given the layer count and verification depth. If something can't be tested in that window, flag it as INCONCLUSIVE rather than skipping.
+
+Critical items (must verify even if running short on time):
+- Layer 1.2 (data integrity)
+- Layer 2.1 (auth + tenant isolation) 
+- Layer 2.2 (critical endpoints, especially submit-stedi)
+- Layer 3.1 (EDI envelope contents)
+- Layer 4.3 (claim wizard end-to-end as Chajinel user)
+- Layer 7 items (re-verifying recent claims)
+
+If those critical items pass, the rest can be reported as "deferred to next session" rather than blocking.
