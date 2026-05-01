@@ -2426,16 +2426,25 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
 
     // ── Prompt C T1: Add FK on practice_payer_enrollments.plan_product_code ──
-    if (!(await seederLog('column', 'practice_payer_enrollments', 'plan_product_code_fk'))) {
-      // Add FK constraint if not already present (column exists, just not constrained)
-      await pool.query(`
-        ALTER TABLE practice_payer_enrollments
-          ADD CONSTRAINT fk_ppe_plan_product
-          FOREIGN KEY (plan_product_code) REFERENCES plan_products(code) ON DELETE RESTRICT
-      `).catch((e: any) => {
-        // 42710 = duplicate_object (constraint already exists) — safe to ignore
-        if (e.code !== '42710') console.warn('[SEEDER] practice_payer_enrollments FK skipped:', e.message);
-      });
+    {
+      const { rows: fkRows } = await pool.query(`
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_schema = 'public'
+          AND table_name = 'practice_payer_enrollments'
+          AND constraint_name = 'fk_ppe_plan_product'
+      `);
+      if (fkRows.length === 0) {
+        console.log('[SEEDER] constraint practice_payer_enrollments.fk_ppe_plan_product: adding');
+        await pool.query(`
+          ALTER TABLE practice_payer_enrollments
+            ADD CONSTRAINT fk_ppe_plan_product
+            FOREIGN KEY (plan_product_code) REFERENCES plan_products(code) ON DELETE RESTRICT
+        `).catch((e: any) => {
+          if (e.code !== '42710') console.warn('[SEEDER] practice_payer_enrollments FK skipped:', e.message);
+        });
+      } else {
+        console.log('[SEEDER] constraint practice_payer_enrollments.fk_ppe_plan_product: already present');
+      }
     }
 
     // ── Prompt C T2: delegated_entities table ────────────────────────────────
@@ -3673,7 +3682,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const { status, payer_id, patient, q, date_from, date_to } = req.query;
 
       let baseQuery = `
-        SELECT c.*,
+        SELECT
+          c.id, c.status, c.amount, c.payer, c.payer_id,
+          c.service_date, c.created_at, c.updated_at,
+          c.organization_id, c.archived_at, c.archived_by,
+          c.last_test_status, c.last_test_errors, c.last_test_at,
+          c.plan_product, c.timely_filing_status, c.timely_filing_days_remaining,
+          c.pcp_referral_check_status,
           COALESCE(p.first_name || ' ' || p.last_name, l.name, 'Unknown') as patient_name,
           p.id as patient_record_id,
           py.name as payer_name

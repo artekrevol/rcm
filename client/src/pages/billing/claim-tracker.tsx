@@ -296,7 +296,7 @@ export default function ClaimTrackerPage() {
   const [patientSearch, setPatientSearch] = useState("");
   const [applied, setApplied] = useState<Record<string, string>>({});
 
-  const { data: claims = [], isLoading } = useQuery<any[]>({
+  const { data: claims = [], isLoading, isError, error } = useQuery<any[]>({
     queryKey: ["/api/billing/claim-tracker", applied],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -306,8 +306,14 @@ export default function ClaimTrackerPage() {
       if (applied.dateFrom) params.set("date_from", applied.dateFrom);
       if (applied.dateTo) params.set("date_to", applied.dateTo);
       const res = await fetch(`/api/billing/claim-tracker?${params}`, { credentials: "include" });
-      return res.json();
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Server error ${res.status}`);
+      }
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     },
+    retry: 1,
   });
 
   const { data: payers = [] } = useQuery<any[]>({ queryKey: ["/api/payers"] });
@@ -390,6 +396,14 @@ export default function ClaimTrackerPage() {
         <div className="space-y-2">
           {[1, 2, 3].map((i) => <Skeleton key={i} className="h-16" />)}
         </div>
+      ) : isError ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            <AlertCircle className="h-8 w-8 mx-auto mb-3 text-destructive opacity-70" />
+            <p className="font-medium text-destructive">Failed to load claims</p>
+            <p className="text-sm mt-1">{(error as Error)?.message || "An unexpected error occurred. Please refresh and try again."}</p>
+          </CardContent>
+        </Card>
       ) : claims.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
