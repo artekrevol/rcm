@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AuthGuard } from "@/components/auth-guard";
+import { PageErrorBoundary } from "@/components/page-error-boundary";
 import { IntakeLayout } from "@/components/intake-layout";
 import { BillingLayout } from "@/components/billing-layout";
 import { AdminLayout } from "@/components/admin-layout";
@@ -124,7 +125,11 @@ function Router() {
       </Route>
       <Route path="/admin/payer-manuals">
         <AuthGuard allowedRoles={["super_admin"]}>
-          <AdminLayout><PayerManualsPage /></AdminLayout>
+          <AdminLayout>
+            <PageErrorBoundary pageName="Payer Manuals">
+              <PayerManualsPage />
+            </PageErrorBoundary>
+          </AdminLayout>
         </AuthGuard>
       </Route>
       <Route path="/admin/rules-database">
@@ -134,7 +139,9 @@ function Router() {
       </Route>
       <Route path="/admin/data-tools">
         <AuthGuard allowedRoles={["super_admin"]}>
-          <DataToolsPage />
+          <PageErrorBoundary pageName="Data Tools">
+            <DataToolsPage />
+          </PageErrorBoundary>
         </AuthGuard>
       </Route>
       <Route path="/admin/scrapers">

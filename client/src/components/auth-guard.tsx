@@ -1,10 +1,11 @@
+import { type ReactNode } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Redirect, useLocation, Link } from "wouter";
 import { Loader2, ShieldOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface AuthGuardProps {
-  children: React.ReactNode;
+  children: ReactNode;
   allowedRoles?: string[];
 }
 

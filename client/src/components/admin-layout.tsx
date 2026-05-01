@@ -1,3 +1,4 @@
+import { type ReactNode, type CSSProperties } from "react";
 import { useLocation, Link } from "wouter";
 import {
   LayoutDashboard,
@@ -164,9 +165,9 @@ const style = {
   "--sidebar-width-icon": "3.5rem",
 };
 
-export function AdminLayout({ children }: { children: React.ReactNode }) {
+export function AdminLayout({ children }: { children: ReactNode }) {
   return (
-    <SidebarProvider style={style as React.CSSProperties}>
+    <SidebarProvider style={style as CSSProperties}>
       <div className="flex h-screen w-full">
         <AdminSidebar />
         <div className="flex flex-col flex-1 min-w-0">

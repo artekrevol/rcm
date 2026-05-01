@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
@@ -120,7 +120,7 @@ function confidenceBadge(confidence: number | null) {
   return <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${color}`}>{pct}% confident</span>;
 }
 
-function formatExtractedJson(json: any, sectionType: string): React.ReactNode {
+function formatExtractedJson(json: any, sectionType: string): ReactNode {
   if (!json) return null;
   const items: { label: string; value: string }[] = [];
   if (sectionType === "timely_filing") {
