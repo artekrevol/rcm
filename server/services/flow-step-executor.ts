@@ -351,13 +351,85 @@ export async function executeStep(
         return;
       }
 
+      // ── Fix 1: Consent check ─────────────────────────────────────────────────
+      // If the lead explicitly declined consent (captured from a prior call transcript),
+      // skip ALL future call steps for this lead permanently.
+      if (lead.consent_to_call === false) {
+        console.warn(`[flow-step-executor] Lead ${leadId} has consent_to_call=false — skipping call step`);
+        await logFlowEvent(flowRunId, "step_skipped", {
+          reason: "Lead declined consent to call (consent_to_call=false)",
+          stepId: step.id,
+        });
+        await advanceToNextStep(flowRunId, "failure");
+        return;
+      }
+
+      // ── Fix 2: Business hours guard (Eastern Time) ───────────────────────────
+      // Only place calls between 8:00 AM and 8:00 PM ET (UTC-5 standard / UTC-4 daylight).
+      // We use UTC-5 as a safe conservative offset (never earlier than 8am ET).
+      // CALL_WINDOW_OVERRIDE=true in env skips this guard for dev/testing.
+      const CALL_HOUR_START = 8;  // 8:00 AM ET
+      const CALL_HOUR_END   = 20; // 8:00 PM ET
+      const ET_UTC_OFFSET   = -5; // conservative (EST); EDT is -4 but -5 is safer
+      if (!process.env.CALL_WINDOW_OVERRIDE) {
+        const utcHour = new Date().getUTCHours();
+        const etHour  = ((utcHour + ET_UTC_OFFSET) % 24 + 24) % 24;
+        if (etHour < CALL_HOUR_START || etHour >= CALL_HOUR_END) {
+          // Reschedule to 8:00 AM ET today (or tomorrow if already past 8pm ET)
+          const now = new Date();
+          const nextCallAt = new Date(now);
+          // Target 8am ET = 13:00 UTC (EST) — set hours in UTC
+          nextCallAt.setUTCHours(13, 0, 0, 0);
+          if (nextCallAt <= now) nextCallAt.setUTCDate(nextCallAt.getUTCDate() + 1);
+          await pool.query(
+            `UPDATE flow_runs SET next_action_at = $1, updated_at = NOW() WHERE id = $2`,
+            [nextCallAt, flowRunId]
+          );
+          console.log(
+            `[flow-step-executor] Call step deferred — outside business hours ` +
+            `(ET hour: ${etHour}). Rescheduled to ${nextCallAt.toISOString()}`
+          );
+          await logFlowEvent(flowRunId, "step_deferred", {
+            reason: `Outside calling hours (ET hour: ${etHour}). Next attempt at ${nextCallAt.toISOString()}`,
+            stepId: step.id,
+          });
+          return;
+        }
+      }
+
+      // ── Fix 3: In-progress call dedup ────────────────────────────────────────
+      // If a Vapi call is already in_progress for this lead (e.g. webhook not yet
+      // received from a prior attempt), do NOT fire a second call. Reschedule.
+      const existingCall = await pool.query(
+        `SELECT id FROM calls WHERE lead_id = $1 AND disposition = 'in_progress' LIMIT 1`,
+        [leadId]
+      );
+      if (existingCall.rows.length > 0) {
+        await pool.query(
+          `UPDATE flow_runs SET next_action_at = NOW() + INTERVAL '30 minutes', updated_at = NOW() WHERE id = $1`,
+          [flowRunId]
+        );
+        console.warn(
+          `[flow-step-executor] Call step deferred — lead ${leadId} already has an in_progress call. ` +
+          `Rescheduling in 30 min.`
+        );
+        await logFlowEvent(flowRunId, "step_deferred", {
+          reason: "Existing in_progress call found for lead — waiting for webhook",
+          stepId: step.id,
+        });
+        return;
+      }
+
+      // ── Fix 4: Lock duration extended to match next_action_at window ─────────
+      // The call step pushes next_action_at to +4 hours. The lock must cover at
+      // least that window, otherwise it expires and a concurrent tick can re-fire.
       lockId = await acquireLock({
         leadId,
         acquiredByType: "flow",
         acquiredById: flowRunId,
         channel: "call",
         reason: `Flow Vapi call step ${step.step_order}`,
-        durationMinutes: 120,
+        durationMinutes: 240, // 4 hours — matches the next_action_at offset below
       });
 
       if (!lockId) {

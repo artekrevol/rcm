@@ -1,0 +1,102 @@
+We finally have the real PGBA 837P Companion Guide for VA CCN — attaching the PDF (VACCN_Final837PCompanionGuideMarch2021.pdf). The previous two attempts were the 837I (Institutional) by mistake. This one is the 837P (Professional, X222A1) and is the source of truth for our EDI generator going forward.
+
+I need you to audit the current EDI generator against this guide and fix every divergence. This must be done before we generate another test claim for the Daniela demo.
+
+## Required changes to the EDI generator
+
+Apply these as hard rules for any claim where the payer is VA CCN / TriWest:
+
+1. **Authorization REF qualifier in Loop 2300 — use G1.**
+   Confirmed in Appendix B sample EDI (page 17): `REF*G1*0000-17124015226`. If a claim has a VA prior authorization number, emit `REF*G1*[authNumber]` in Loop 2300. Not 9F. Not F8. G1.
+
+2. **G2 qualifier on every secondary provider REF segment.**
+   Per Table 5 error codes REF, SLO, SUP, S04 and Table 6 explicit rules:
+   - Loop 2310A (Referring Provider) REF01 = G2
+   - Loop 2310B (Rendering Provider) REF01 = G2
+   - Loop 2310C (Service Facility Location) REF01 = G2
+   - Loop 2310D (Supervising Provider) REF01 = G2
+   - Loop 2420E (Ordering Provider) REF01 = G2
+   Anything else and PGBA rejects at the business edit level.
+
+3. **BHT06 must be CH** (chargeable). All non-subrogation claims. No exceptions for VA CCN.
+
+4. **SV101-1 must be HC** (HCPCS qualifier). Anything else triggers business edit rejection.
+
+5. **Receiver IDs by region.** Confirm both are configured:
+   - Region 4: ISA08 = `841160004`, GS03 = `841160004`
+   - Region 5: ISA08 = `841160005`, GS03 = `841160005`
+   - Loop 1000B NM103 must be exactly `PGBA VA CCN`
+   - Loop 1000B NM109 must match ISA08 (region-dependent)
+
+6. **Payer ID in Loop 2010BB:** NM108 = `PI`, NM109 = `TWVACCN` for both regions.
+
+7. **Subscriber rules in Loop 2010BA:**
+   - NM102 (Entity Type Qualifier) must = 1 (person)
+   - NM103 (Last Name) must be present and valid — error H68 fires if missing
+   - Patient identifier must be valid SSN (9 digits), EDI PI (10 digits), or MVI ICN (17 digits). Error codes SSC and SSE fire on bad format. Add validation before EDI generation.
+
+8. **Claim-level rules in Loop 2300 CLM:**
+   - CLM05-3 (Frequency Code) restricted to `1` (original) or `7` (replacement). No `8` (void) — PGBA does not accept voids via this path.
+   - CLM08 (Related Causes) must be `Y`, `N`, or `W` if present.
+   - Max 100 CLM segments per ST/SE.
+
+9. **Service line rules in Loop 2400:**
+   - Max 50 LX segments per claim
+   - SV102 (charge) must be greater than 0 AND less than $100,000
+   - Anesthesia codes (00000–09999) require modifier indicating service provider level (AA for anesthesiologist, QX for CRNA) — add validation rule
+
+10. **Diagnosis qualifiers in Loop 2300 HI:**
+    - Use ABK for principal ICD-10 diagnosis
+    - Use ABF for additional ICD-10 diagnoses
+    - Per Table 6, AA/AB/AD condition information codes default to Y when present
+
+11. **ISA segment specifics (Table 2):**
+    - ISA01 = `03`
+    - ISA03 = `00`
+    - ISA07 = `30` (U.S. Federal Tax ID qualifier)
+    - ISA13 (Interchange Control Number) must be unique per submitter for 12 months — confirm our generation logic prevents collision
+    - ISA15 = `T` for test, `P` for production (we should be emitting T until Stedi enrollment is approved)
+
+12. **Delimiters (Table 4):**
+    - `*` data element separator
+    - `>` component element separator
+    - `~` segment terminator
+    - `^` repetition separator
+    Confirm we're not using `:` as component separator anywhere — the sample uses `>` for that role.
+
+## Build the rejection code dictionary
+
+Table 5 of the Companion Guide lists every business-level rejection code PGBA uses (NP1, NP4, NP5, NP6, NP7, REF, SLO, SUP, S04, SSC, SSE, PST, H64, H65, H68, BG5, DUP, DP1, H09, H10, H16, H76, LM1–4, BT4, AAT, DGQ, EB6, PCI, QSE, QSF, Q69–Q76, RXO, RPO, 365, N04, and others).
+
+Extract the full table from the PDF and create a structured JSON file at `server/data/pgba_rejection_codes.json` with:
+- code (e.g. "NP1")
+- description (e.g. "Invalid Billing Provider NPI")
+- loop_segment (e.g. "2010AA|NM109")
+- category (NPI, identifier, diagnosis, modifier, charge, duplicate, etc.)
+- suggested_remediation (one-line plain English fix)
+
+This dictionary will be consumed by the denial intelligence module so when 277CAs come back with rejection codes, the platform decodes them automatically instead of showing raw codes.
+
+## Verification deliverable
+
+After making the changes, do all of the following:
+
+1. Regenerate the test 837P for Daniela Jonguitud (or generate a fresh test claim for a Chajinel patient with a VA prior auth number) and attach the .edi file to your reply.
+
+2. Paste the regenerated EDI into stedi.com/edi/inspector and report the error count and screenshot. Target: 0 errors.
+
+3. Manually verify the following segments appear correctly in the generated EDI:
+   - `ISA*03*...*30*841160004` (or 841160005)
+   - `GS*HC*[submitterID]*841160004*...*X*005010X222A1`
+   - `BHT*0019*00*...*CH`
+   - `NM1*40*2*PGBA VA CCN*****46*841160004`
+   - `NM1*PR*2*...*PI*TWVACCN`
+   - `REF*G1*[authNumber]` in Loop 2300 when auth is present
+   - `REF*G2*[secondaryID]` for any 2310A/B/C/D or 2420E provider with secondary ID
+   - `SV1*HC:[code]:[modifier]*[charge]*UN*[units]`
+
+4. Provide a written audit report listing every change made, every file touched, and every business edit code from Table 5 that the generator now actively prevents (vs. the ones that still depend on user input being correct, like H68 for missing subscriber name).
+
+Do not skip the Stedi inspector validation step. We need a clean inspector pass before we generate a real claim for Daniela's billing person to push through Availity.
+
+The Companion Guide PDF is the binding reference. Any conflict between current code behavior and the PDF — the PDF wins. Flag anything ambiguous rather than guessing.
