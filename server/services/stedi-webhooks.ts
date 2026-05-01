@@ -47,6 +47,8 @@ export async function process277CA(
   transactionId: string,
   db: any
 ): Promise<void> {
+  const { enrichStatusNotes } = await import('./rejectionCodeLookup');
+
   const claimStatuses =
     data?.claimStatuses ||
     data?.claims ||
@@ -65,6 +67,21 @@ export async function process277CA(
       claimStatus?.statusCategoryCode ||
       claimStatus?.status?.categoryCode ||
       data?.statusCategoryCode;
+
+    // PGBA business-edit rejection code (Table 5), if present in status detail
+    const statusCode: string | null =
+      claimStatus?.statusInformation?.[0]?.statusCode ||
+      claimStatus?.statusCode ||
+      claimStatus?.status?.statusCode ||
+      null;
+
+    // Payer's own claim control number — required for REF*F8 on resubmission (CLM05-3=7)
+    const payerClaimNumber: string | null =
+      claimStatus?.claimReference?.payerClaimControlNumber ||
+      claimStatus?.claimReference?.claimControlNumber ||
+      claimStatus?.payerClaimControlNumber ||
+      claimStatus?.claimInformation?.payerClaimControlNumber ||
+      null;
 
     const payerName =
       data?.payer?.name ||
@@ -87,6 +104,8 @@ export async function process277CA(
       'A8': 'acknowledged',
     };
     const newStatus = statusMap[statusCategoryCode] || 'acknowledged';
+    const isRejected = newStatus === 'rejected';
+    const eventType = isRejected ? '277CA Rejected' : '277CA Accepted';
 
     const claimResult = await db.query(
       `SELECT id, status, organization_id FROM claims 
@@ -103,9 +122,27 @@ export async function process277CA(
     const claim = claimResult.rows[0];
     if (claim.status !== 'submitted') continue;
 
+    // Store the payer's claim control number — needed for REF*F8 on corrected resubmissions
+    if (payerClaimNumber) {
+      await db.query(
+        `ALTER TABLE claims ADD COLUMN IF NOT EXISTS payer_claim_number VARCHAR`,
+      ).catch(() => {});
+      await db.query(
+        `UPDATE claims SET payer_claim_number = $1, updated_at = NOW() WHERE id = $2`,
+        [payerClaimNumber, claim.id]
+      );
+    }
+
     await db.query(
-      `UPDATE claims SET status=$1, updated_at=NOW() WHERE id=$2`,
+      `UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2`,
       [newStatus, claim.id]
+    );
+
+    const enrichedNotes = enrichStatusNotes(
+      statusCategoryCode,
+      statusCode,
+      payerName,
+      payerClaimNumber
     );
 
     await db.query(
@@ -115,13 +152,13 @@ export async function process277CA(
       [
         crypto.randomUUID(),
         claim.id,
-        '277CA Received',
-        `Payer acknowledgment via webhook. Status: ${newStatus}. Code: ${statusCategoryCode}. Payer: ${payerName}`,
+        eventType,
+        enrichedNotes,
         claim.organization_id
       ]
     );
 
-    console.log(`[277CA] Claim ${claim.id} → ${newStatus}`);
+    console.log(`[277CA] Claim ${claim.id} → ${newStatus} (${eventType}) payerClaimNumber=${payerClaimNumber || 'none'}`);
   }
 
   if (!claimStatuses.length) {

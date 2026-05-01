@@ -1354,6 +1354,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await seederLog('column', 'claims', 'last_risk_factors');
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_risk_factors JSONB`).catch(() => {});
 
+    // Payer-assigned claim control number from 277CA — required for REF*F8 on corrected resubmissions (DB-2)
+    await seederLog('column', 'claims', 'payer_claim_number');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS payer_claim_number VARCHAR`).catch(() => {});
+
     // ── Section 1: payer enrollment status columns ────────────────────────────
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_status_835 VARCHAR DEFAULT 'not_enrolled'`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS enrollment_status_837 VARCHAR DEFAULT 'not_enrolled'`);
@@ -3996,30 +4000,199 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/billing/claims/:id/mark-fixed", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const { resubmit, eventId } = req.body;
+      const { resubmit } = req.body;
       const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
       if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
       if (!verifyOrg(claimResult.rows[0], req)) return res.status(404).json({ error: "Claim not found" });
+      const c = claimResult.rows[0];
 
-      const allowedResubmitStatuses = ['denied', 'error', 'appeal_needed', 'review_needed'];
-      if (resubmit) {
-        if (!allowedResubmitStatuses.includes(claimResult.rows[0].status)) {
-          return res.status(400).json({ error: `Cannot resubmit a claim in '${claimResult.rows[0].status}' status. Only denied or error claims may be resubmitted.` });
-        }
-        await db.query(`UPDATE claims SET status = 'submitted', updated_at = NOW() WHERE id = $1`, [req.params.id]);
-        await db.query(
-          `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1, $2, 'Resubmitted', 'Claim resubmitted after error was fixed', $3)`,
-          [crypto.randomUUID(), req.params.id, claimResult.rows[0].organization_id]
-        );
-      } else {
+      const allowedResubmitStatuses = ['denied', 'error', 'appeal_needed', 'review_needed', 'rejected'];
+      if (!resubmit) {
         await db.query(
           `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1, $2, 'MarkedFixed', 'Error marked as fixed without resubmission', $3)`,
-          [crypto.randomUUID(), req.params.id, claimResult.rows[0].organization_id]
+          [crypto.randomUUID(), req.params.id, c.organization_id]
         );
+        return res.json({ success: true });
       }
-      res.json({ success: true });
+
+      // ── Resubmit path ────────────────────────────────────────────────────────
+      if (!allowedResubmitStatuses.includes(c.status)) {
+        return res.status(400).json({ error: `Cannot resubmit a claim in '${c.status}' status. Only denied, rejected, error, appeal_needed, or review_needed claims may be resubmitted.` });
+      }
+
+      // DB-2: Payer's claim control number required for REF*F8 (CLM05-3=7 replacement)
+      if (!c.payer_claim_number) {
+        return res.status(400).json({
+          error: "Cannot resubmit: no payer claim number on record. PGBA must return a 277CA acknowledgment with their claim control number before a corrected replacement claim (frequency code 7) can be submitted. Wait for the 277CA or contact PGBA directly for the claim control number, then set it manually before resubmitting.",
+        });
+      }
+
+      const { isStediConfigured, submitClaim: stediSubmitClaim, testClaim: stediTestClaim } = await import("./services/stedi-claims");
+      if (!isStediConfigured()) {
+        return res.status(400).json({ success: false, error: "Stedi API key not configured." });
+      }
+
+      // Fetch supporting data (same pattern as submit-stedi)
+      const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
+      const stOrgId = getOrgId(req);
+      const settingsResult = stOrgId
+        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [stOrgId])
+        : await db.query("SELECT * FROM practice_settings LIMIT 1");
+      const ps = settingsResult.rows[0];
+      if (!ps) return res.status(400).json({ success: false, error: "Practice settings not configured" });
+
+      let provId = c.provider_id;
+      if (!provId) {
+        const dp = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
+        if (dp.rows.length) provId = dp.rows[0].id;
+      }
+      let prov: any = { first_name: "Rendering", last_name: "Provider", npi: ps.primary_npi || "0000000000", taxonomy_code: ps.taxonomy_code || "163W00000X" };
+      if (provId) {
+        const provResult = await db.query("SELECT first_name, last_name, npi, taxonomy_code, license_number, entity_type FROM providers WHERE id = $1", [provId]);
+        if (provResult.rows.length) prov = provResult.rows[0];
+      }
+
+      let payerInfo: any = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      if (c.payer_id) {
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      } else if (c.payer) {
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        if (payerResult.rows.length) payerInfo = payerResult.rows[0];
+      }
+
+      const pat = patientResult.rows[0] || {};
+      const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
+      const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
+
+      const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
+      const serviceLines = rawLines
+        .map((sl: any) => ({
+          hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
+          units: Number(sl.units) || 1,
+          charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
+          modifier: sl.modifier || null,
+          diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
+          service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
+          service_date_to: sl.service_date_to || null,
+        }))
+        .filter((sl: any) => sl.hcpcs_code);
+      if (serviceLines.length === 0) {
+        return res.status(400).json({ success: false, error: "VALIDATION_ERROR: Claim has no service lines." });
+      }
+
+      const icd10Codes: string[] = [];
+      if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
+      if (Array.isArray(c.icd10_secondary)) {
+        for (const code of c.icd10_secondary) {
+          if (code && !icd10Codes.includes(code)) icd10Codes.push(code);
+        }
+      }
+      if (!icd10Codes.length) {
+        return res.status(400).json({ success: false, error: "VALIDATION_ERROR: Claim has no ICD-10 diagnosis codes." });
+      }
+
+      // DB-2: Force CLM05-3=7 and REF*F8=[payer_claim_number] on every resubmission
+      const { generate837P } = await import("./services/edi-generator");
+      const isFrcpbPayer = payerInfo.payer_id === "FRCPB";
+      const useTestMode = !!(c.last_test_status) || isFrcpbPayer || !!(req.body?.testMode);
+      const isa15 = useTestMode ? "T" : resolveISA15(false);
+
+      const ediString = generate837P({
+        isa15,
+        claim: {
+          id: c.id,
+          patient_id: c.patient_id,
+          service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+          place_of_service: c.place_of_service || "12",
+          auth_number: c.authorization_number || null,
+          payer: c.payer || payerInfo.name,
+          amount: Number(c.amount) || 0,
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          delay_reason_code: c.delay_reason_code || null,
+          claim_frequency_code: "7",
+          orig_claim_number: c.payer_claim_number,
+          statement_period_start: c.statement_period_start ? new Date(c.statement_period_start).toISOString().slice(0, 10) : null,
+          statement_period_end: c.statement_period_end ? new Date(c.statement_period_end).toISOString().slice(0, 10) : null,
+          service_lines: serviceLines,
+          icd10_codes: icd10Codes,
+        },
+        patient: {
+          first_name: pat.first_name || "",
+          last_name: pat.last_name || "",
+          dob: pat.dob || "1900-01-01",
+          member_id: pat.member_id || pat.insurance_id || "",
+          insurance_carrier: pat.insurance_carrier || c.payer || "",
+          sex: pat.sex || null,
+          address: (patAddr as any).street || (patAddr as any).street1 || null,
+          city: (patAddr as any).city || null,
+          state: (patAddr as any).state || pat.state || null,
+          zip: (patAddr as any).zip || null,
+        },
+        practice: {
+          name: ps.practice_name || "Practice",
+          npi: ps.primary_npi || "0000000000",
+          tax_id: ps.tax_id || "000000000",
+          taxonomy_code: ps.taxonomy_code || "163W00000X",
+          address: (addr as any).street || (addr as any).street1 || (addr as any).address || "",
+          city: (addr as any).city || "",
+          state: (addr as any).state || "",
+          zip: (addr as any).zip || "",
+          phone: ps.phone || "",
+          pgba_trading_partner_id: ps.pgba_trading_partner_id || null,
+        },
+        provider: {
+          first_name: prov.first_name || "",
+          last_name: prov.last_name || "",
+          npi: prov.npi || ps.primary_npi || "0000000000",
+          taxonomy_code: prov.taxonomy_code || ps.taxonomy_code || "163W00000X",
+          license_number: prov.license_number || null,
+          entity_type: prov.entity_type || null,
+        },
+        payer: payerInfo,
+      });
+
+      // Submit — test path if the original was a test submission or FRCPB payer
+      const result = useTestMode
+        ? await stediTestClaim({ ediContent: ediString, claimId: c.id, hasUserSession: true, userAgent: req.headers["user-agent"] })
+        : await stediSubmitClaim({ ediContent: ediString, claimId: c.id, hasUserSession: true, userAgent: req.headers["user-agent"] });
+
+      if (result.success || (result as any).status) {
+        const newTxId = result.transactionId || (result as any).correlationId || null;
+        if (useTestMode) {
+          await db.query(
+            `UPDATE claims SET last_test_status = $1, last_test_at = NOW(), last_test_correlation_id = $2, claim_frequency_code = '7', orig_claim_number = $3, updated_at = NOW() WHERE id = $4`,
+            ["resubmitted_test", newTxId, c.payer_claim_number, c.id]
+          );
+        } else {
+          await db.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS stedi_transaction_id VARCHAR`).catch(() => {});
+          await db.query(
+            `UPDATE claims SET status = 'submitted', submission_method = 'stedi', stedi_transaction_id = $1, claim_frequency_code = '7', orig_claim_number = $2, updated_at = NOW() WHERE id = $3`,
+            [newTxId, c.payer_claim_number, c.id]
+          );
+        }
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+          [
+            crypto.randomUUID(),
+            c.id,
+            "Resubmitted to Stedi",
+            `Corrected 837P resubmitted (CLM05-3=7, REF*F8=${c.payer_claim_number}).${useTestMode ? " TEST MODE." : ""} New transaction ID: ${newTxId || "N/A"}.`,
+            c.organization_id,
+          ]
+        );
+        return res.json({ success: true, transactionId: newTxId, testMode: useTestMode });
+      } else {
+        const errMsg = result.error || "Stedi rejected the resubmission";
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+          [crypto.randomUUID(), c.id, "Submission Failed", `Resubmission failed: ${errMsg}`, c.organization_id]
+        );
+        return res.status(422).json({ success: false, error: errMsg });
+      }
     } catch (err: any) {
-      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+      console.error('[mark-fixed] Error:', err);
+      res.status(500).json({ error: err.message || 'An unexpected error occurred during resubmission.' });
     }
   });
 
@@ -6595,11 +6768,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       if (match) {
         const newStatus = match.status === "4" ? "rejected" : "acknowledged";
+        const manualEventType = newStatus === "rejected" ? "277CA Rejected" : "277CA Accepted";
         if (claimResult.rows[0].status === "submitted") {
           await db.query("UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2", [newStatus, req.params.id]);
           await db.query(
             `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
-            [crypto.randomUUID(), req.params.id, "277CA Received", `Payer acknowledgment: ${match.statusDescription}. Payer: ${match.payer}`, orgId]
+            [crypto.randomUUID(), req.params.id, manualEventType, `Payer acknowledgment (manual check): ${match.statusDescription}. Payer: ${match.payer}.`, orgId]
           );
         }
         res.json({ found: true, status: newStatus, acknowledgment: match });
@@ -13407,10 +13581,11 @@ async function pollStedi277Acknowledgments() {
       else if (ack.status === "1" || ack.status === "3") newStatus = "acknowledged";
       else continue;
       if (claim.status !== "submitted") continue;
+      const pollEventType = newStatus === "rejected" ? "277CA Rejected" : "277CA Accepted";
       await db.query("UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2", [newStatus, claim.id]);
       await db.query(
         `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
-        [crypto.randomUUID(), claim.id, "277CA Received", `Payer acknowledgment: ${ack.statusDescription}. Payer: ${ack.payer}`, claim.organization_id]
+        [crypto.randomUUID(), claim.id, pollEventType, `Payer acknowledgment (polling): ${ack.statusDescription}. Payer: ${ack.payer}.`, claim.organization_id]
       );
     }
     await db.query(

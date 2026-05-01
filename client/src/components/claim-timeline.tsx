@@ -10,6 +10,10 @@ import {
   XCircle,
   RefreshCw,
   DollarSign,
+  ShieldCheck,
+  ShieldAlert,
+  ReceiptText,
+  Ban,
 } from "lucide-react";
 import type { ClaimEvent } from "@shared/schema";
 
@@ -32,12 +36,22 @@ const eventConfig: Record<
     color: "text-indigo-600 dark:text-indigo-400",
     bgColor: "bg-indigo-100 dark:bg-indigo-900/30",
   },
+  "Submitted via Stedi": {
+    icon: Send,
+    color: "text-indigo-600 dark:text-indigo-400",
+    bgColor: "bg-indigo-100 dark:bg-indigo-900/30",
+  },
   Acknowledged: {
     icon: Eye,
     color: "text-purple-600 dark:text-purple-400",
     bgColor: "bg-purple-100 dark:bg-purple-900/30",
   },
   Pending: {
+    icon: Clock,
+    color: "text-amber-600 dark:text-amber-400",
+    bgColor: "bg-amber-100 dark:bg-amber-900/30",
+  },
+  "Follow-Up Scheduled": {
     icon: Clock,
     color: "text-amber-600 dark:text-amber-400",
     bgColor: "bg-amber-100 dark:bg-amber-900/30",
@@ -57,10 +71,60 @@ const eventConfig: Record<
     color: "text-rose-600 dark:text-rose-400",
     bgColor: "bg-rose-100 dark:bg-rose-900/30",
   },
+  Resubmitted: {
+    icon: RefreshCw,
+    color: "text-indigo-600 dark:text-indigo-400",
+    bgColor: "bg-indigo-100 dark:bg-indigo-900/30",
+  },
+  "Resubmitted to Stedi": {
+    icon: RefreshCw,
+    color: "text-indigo-600 dark:text-indigo-400",
+    bgColor: "bg-indigo-100 dark:bg-indigo-900/30",
+  },
+  MarkedFixed: {
+    icon: CheckCircle2,
+    color: "text-blue-600 dark:text-blue-400",
+    bgColor: "bg-blue-100 dark:bg-blue-900/30",
+  },
   Paid: {
     icon: DollarSign,
     color: "text-emerald-600 dark:text-emerald-400",
     bgColor: "bg-emerald-100 dark:bg-emerald-900/30",
+  },
+  Payment: {
+    icon: DollarSign,
+    color: "text-emerald-600 dark:text-emerald-400",
+    bgColor: "bg-emerald-100 dark:bg-emerald-900/30",
+  },
+  "ERA Payment Posted": {
+    icon: DollarSign,
+    color: "text-emerald-600 dark:text-emerald-400",
+    bgColor: "bg-emerald-100 dark:bg-emerald-900/30",
+  },
+  "ERA Adjustment": {
+    icon: ReceiptText,
+    color: "text-blue-600 dark:text-blue-400",
+    bgColor: "bg-blue-100 dark:bg-blue-900/30",
+  },
+  "277CA Accepted": {
+    icon: ShieldCheck,
+    color: "text-emerald-600 dark:text-emerald-400",
+    bgColor: "bg-emerald-100 dark:bg-emerald-900/30",
+  },
+  "277CA Rejected": {
+    icon: ShieldAlert,
+    color: "text-red-600 dark:text-red-400",
+    bgColor: "bg-red-100 dark:bg-red-900/30",
+  },
+  "277CA Received": {
+    icon: ShieldCheck,
+    color: "text-purple-600 dark:text-purple-400",
+    bgColor: "bg-purple-100 dark:bg-purple-900/30",
+  },
+  "Submission Failed": {
+    icon: Ban,
+    color: "text-red-600 dark:text-red-400",
+    bgColor: "bg-red-100 dark:bg-red-900/30",
   },
 };
 

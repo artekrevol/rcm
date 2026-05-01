@@ -1,0 +1,103 @@
+Three demo prep tickets, in priority order. All three need to ship before 
+the demo. None should require more than a few hours combined.
+
+──────────────────────────────────────────────────────────────────────
+1. DB-1 — Fix & Resubmit must actually generate and submit a new claim
+──────────────────────────────────────────────────────────────────────
+
+Current behavior: "Fix & Resubmit" sets claim status to 'submitted' but 
+generates no new 837P and makes no Stedi API call. Silent failure.
+
+Required behavior:
+- On Fix & Resubmit, regenerate the 837P EDI from the corrected claim 
+  data (same path as initial submission)
+- Submit it through the existing submit-stedi or test-stedi endpoint 
+  depending on context (default to submit-stedi for production claims; 
+  if the original was test-stedi, keep using test-stedi)
+- Capture the new stedi_transaction_id on the claim record (or in a 
+  resubmissions linkage table if you've already modeled corrected claims 
+  separately — pick whichever matches the existing schema)
+- Write a "Resubmitted to Stedi" event to the claim timeline with the 
+  new transaction ID
+- Status transitions to 'resubmitted' (or stays 'submitted' if there's 
+  no separate status — confirm in your report which path you took)
+
+──────────────────────────────────────────────────────────────────────
+2. DB-2 — Auto-set frequency code 7 on every resubmission
+──────────────────────────────────────────────────────────────────────
+
+Per PGBA Companion Guide Table 6: CLM05-3 must be 1 (original) or 7 
+(replacement). PGBA does not accept 8 (void). Current generator always 
+emits 1.
+
+Required behavior:
+- The EDI generator needs to know whether a given claim is an original 
+  submission or a resubmission
+- On resubmission, set CLM05-3 = 7
+- ALSO populate the prior claim number reference. Per the PGBA 
+  Companion Guide sample (Appendix B): REF*F8*[priorClaimControlNumber] 
+  in Loop 2300, where the prior claim control number is the original 
+  claim's identifier from PGBA's 277CA acknowledgment
+- If the prior claim number is unknown (i.e. we never received a 277CA 
+  with a payer claim number), throw an explicit error rather than 
+  submitting a malformed replacement claim
+- The original claim's stedi_transaction_id is NOT the right value here 
+  — we need PGBA's claim control number that came back on the 277CA. 
+  Verify the 277CA parser captures and stores this value somewhere on 
+  the claim record (likely a payer_claim_number column). If it doesn't, 
+  add it to the parser as a prerequisite to this fix.
+
+──────────────────────────────────────────────────────────────────────
+3. DB-3 — Timeline event styling for 277CA Received and ERA Adjustment
+──────────────────────────────────────────────────────────────────────
+
+Both event types render with gray fallback styling instead of the 
+appropriate semantic icon. Map them to the existing success/warning 
+icon set used elsewhere in the timeline:
+- 277CA Received (accepted) → success/check icon, green accent
+- 277CA Received (rejected) → warning/error icon, red accent  
+- ERA Adjustment → info/document icon, blue accent
+- ERA Payment Posted → success/dollar icon, green accent
+
+──────────────────────────────────────────────────────────────────────
+4. Bonus if time permits — wrap rejectionCodeLookup in a service
+──────────────────────────────────────────────────────────────────────
+
+The PGBA rejection codes JSON exists at server/data/pgba_rejection_codes.json 
+but no service consumes it. Wrap it now per the original audit prompt:
+
+- Create server/services/rejectionCodeLookup.ts with the loader, 
+  in-memory map, lookupRejectionCode(), and decodeAndEnrich() functions
+- Wire decodeAndEnrich() into the existing 277CA webhook handler in 
+  stedi-webhooks (whatever file path that lives at — your audit will 
+  show it)
+- When a 277CA arrives with a rejection code, the timeline event should 
+  display the decoded description and remediation, not just the raw code
+
+This is bonus rather than blocker because the demo is unlikely to 
+trigger a real rejection on a Chajinel test claim. But if it does fire 
+during demo, having decoded text instead of "NP1" makes the platform 
+look meaningfully more polished.
+
+──────────────────────────────────────────────────────────────────────
+Verification before declaring complete
+──────────────────────────────────────────────────────────────────────
+
+a. Run a full denial → fix → resubmit cycle in the dev environment. 
+   Take a claim, manually flag it as denied with a CARC code, click 
+   Fix & Resubmit, and verify:
+   - New 837P is generated with CLM05-3=7 and REF*F8*[priorClaimNumber]
+   - test-stedi (or submit-stedi) is actually called
+   - New stedi_transaction_id appears on the claim
+   - Timeline shows "Resubmitted to Stedi" event with proper styling
+   - Stedi portal shows the new transaction (screenshot for the report)
+
+b. Confirm the new timeline icons render correctly for all four event 
+   types listed in DB-3. Screenshot the claim detail timeline.
+
+c. If you completed the bonus item, seed a test 277CA with a known 
+   PGBA rejection code (NP1, REF, or H68) and confirm the timeline 
+   displays the decoded description.
+
+Report what shipped, what was deferred, and any new gaps discovered 
+during the work.
