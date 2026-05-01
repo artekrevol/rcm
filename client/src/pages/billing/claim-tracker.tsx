@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronDown, ChevronRight, ExternalLink, CheckCircle2, AlertCircle, AlertTriangle,
-  XCircle, Search, Radio, FileText, Loader2, Clock, FlaskConical, Pencil,
+  XCircle, Search, Radio, FileText, Loader2, Clock, FlaskConical, Pencil, Trash2, Archive,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
@@ -97,6 +97,7 @@ function EventRow({ event }: { event: any }) {
 function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
   const [expanded, setExpanded] = useState(false);
   const [showFixDialog, setShowFixDialog] = useState(false);
+  const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const { toast } = useToast();
 
   const markFixedMutation = useMutation({
@@ -110,6 +111,21 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
       setShowFixDialog(false);
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: async () => apiRequest("PATCH", `/api/billing/claims/${claim.id}/archive`, {}),
+    onSuccess: () => {
+      setShowArchiveDialog(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/claim-tracker"] });
+      toast({
+        title: claim.status === "draft" ? "Draft discarded" : "Claim archived",
+        description: claim.status === "draft"
+          ? "The draft has been removed."
+          : "The claim has been hidden from your dashboard but retained per HIPAA requirements.",
+      });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to archive claim", variant: "destructive" }),
   });
 
   const events: any[] = claim.events || [];
@@ -186,6 +202,21 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
                   <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Mark as Fixed
                 </Button>
               )}
+              {!claim.archived_at && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={() => setShowArchiveDialog(true)}
+                  data-testid={`button-discard-claim-${claim.id?.slice(0, 8)}`}
+                >
+                  {claim.status === "draft" ? (
+                    <><Trash2 className="h-3.5 w-3.5 mr-1" />Discard</>
+                  ) : (
+                    <><Archive className="h-3.5 w-3.5 mr-1" />Archive</>
+                  )}
+                </Button>
+              )}
             </div>
           </div>
 
@@ -224,6 +255,31 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
             >
               {markFixedMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Resubmit Claim
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showArchiveDialog} onOpenChange={setShowArchiveDialog}>
+        <DialogContent data-testid="dialog-archive-claim">
+          <DialogHeader>
+            <DialogTitle>{claim.status === "draft" ? "Discard Draft" : "Archive Claim"}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {claim.status === "draft"
+              ? "This draft will be permanently discarded. This action cannot be undone."
+              : "This claim will be hidden from your dashboard but retained in the system per HIPAA and state retention requirements."}
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowArchiveDialog(false)} data-testid="button-cancel-archive">Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => archiveMutation.mutate()}
+              disabled={archiveMutation.isPending}
+              data-testid="button-confirm-archive"
+            >
+              {archiveMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {claim.status === "draft" ? "Discard Draft" : "Archive Claim"}
             </Button>
           </DialogFooter>
         </DialogContent>

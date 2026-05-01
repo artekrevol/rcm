@@ -33,6 +33,7 @@ import BillingDashboard from "@/pages/billing/dashboard";
 import PatientList from "@/pages/billing/patient-list";
 import PatientCreate from "@/pages/billing/patient-create";
 import PatientDetail from "@/pages/billing/patient-detail";
+import ArchivedPatients from "@/pages/billing/archived-patients";
 import BillingHcpcs from "@/pages/billing/hcpcs";
 import ClaimWizard from "@/pages/billing/claim-wizard";
 import BillingSettings from "@/pages/billing/settings";
@@ -179,6 +180,11 @@ function Router() {
       <Route path="/billing/patients/new">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><PatientCreate /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/patients/archived">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ArchivedPatients /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/patients/:id">

@@ -60,6 +60,8 @@ import {
   ChevronDown,
   ChevronUp,
   Stethoscope,
+  Archive,
+  RotateCcw,
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -1297,6 +1299,11 @@ export default function PatientDetail() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
   const patientId = params.id!;
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+  const [archiveReason, setArchiveReason] = useState("");
+  const [archiveError, setArchiveError] = useState("");
 
   const { data: patient, isLoading, error } = useQuery<any>({
     queryKey: ["/api/billing/patients", patientId],
@@ -1325,6 +1332,42 @@ export default function PatientDetail() {
     },
   });
 
+  const archiveMutation = useMutation({
+    mutationFn: async (reason: string) =>
+      apiRequest("PATCH", `/api/billing/patients/${patientId}/archive`, { reason }),
+    onSuccess: () => {
+      setShowArchiveDialog(false);
+      setArchiveReason("");
+      setArchiveError("");
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patientId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/patients"] });
+      toast({ title: "Patient archived", description: "The patient has been archived and hidden from default views." });
+    },
+    onError: async (err: any) => {
+      try {
+        const body = await err.response?.json();
+        if (body?.code === "ACTIVE_CLAIMS") {
+          setArchiveError(body.error);
+          return;
+        }
+        setArchiveError(body?.error || "Failed to archive patient");
+      } catch {
+        setArchiveError("Failed to archive patient");
+      }
+    },
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: async () =>
+      apiRequest("PATCH", `/api/billing/patients/${patientId}/restore`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patientId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/patients"] });
+      toast({ title: "Patient restored", description: "The patient is now visible in your patient list again." });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to restore patient", variant: "destructive" }),
+  });
+
   function displayName(p: any): string {
     if (p.first_name && p.last_name) return `${p.first_name} ${p.last_name}`;
     if (p.first_name) return p.first_name;
@@ -1348,6 +1391,70 @@ export default function PatientDetail() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* Archive dialog */}
+      <Dialog open={showArchiveDialog} onOpenChange={(open) => { setShowArchiveDialog(open); if (!open) { setArchiveReason(""); setArchiveError(""); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Archive Patient</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              This patient will be hidden from your patient list and cannot be used in new claims. Their record and history are permanently retained.
+            </p>
+            {archiveError && (
+              <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive" data-testid="text-archive-error">
+                {archiveError}
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label htmlFor="archive-reason">Reason (optional)</Label>
+              <Input
+                id="archive-reason"
+                value={archiveReason}
+                onChange={(e) => setArchiveReason(e.target.value)}
+                placeholder="e.g. Discharged, duplicate record…"
+                data-testid="input-archive-reason"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowArchiveDialog(false)} data-testid="button-archive-cancel">Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => archiveMutation.mutate(archiveReason)}
+              disabled={archiveMutation.isPending}
+              data-testid="button-archive-confirm"
+            >
+              {archiveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Archive className="h-4 w-4 mr-2" />}
+              Archive Patient
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Archived banner */}
+      {patient.archived_at && (
+        <div className="flex items-center justify-between rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-4 py-2.5" data-testid="banner-archived">
+          <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 text-sm">
+            <Archive className="h-4 w-4 shrink-0" />
+            <span>
+              This patient was archived on {new Date(patient.archived_at).toLocaleDateString()}
+              {patient.archive_reason ? ` · ${patient.archive_reason}` : ""}
+            </span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => restoreMutation.mutate()}
+            disabled={restoreMutation.isPending}
+            data-testid="button-restore-patient"
+          >
+            {restoreMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RotateCcw className="h-4 w-4 mr-2" />}
+            Restore
+          </Button>
+        </div>
+      )}
+
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="sm" onClick={() => navigate("/billing/patients")} data-testid="button-back">
           <ArrowLeft className="h-4 w-4" />
@@ -1359,6 +1466,18 @@ export default function PatientDetail() {
               <Badge variant="outline" className="text-emerald-600 border-emerald-200 bg-emerald-50 dark:bg-emerald-950 dark:border-emerald-800 gap-1">
                 From Intake ✓
               </Badge>
+            )}
+            {patient.is_demo && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="text-violet-600 border-violet-200 bg-violet-50 dark:bg-violet-950 dark:border-violet-800 cursor-default" data-testid="badge-demo-patient">
+                      DEMO
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent>Sample data — will hide automatically once you have 5+ real patients</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
           </div>
           <p className="text-muted-foreground text-sm">
@@ -1380,6 +1499,18 @@ export default function PatientDetail() {
             )}
           </p>
         </div>
+        {!patient.archived_at && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+            onClick={() => { setArchiveError(""); setShowArchiveDialog(true); }}
+            data-testid="button-archive-patient"
+          >
+            <Archive className="h-4 w-4 mr-1.5" />
+            Archive Patient
+          </Button>
+        )}
       </div>
 
       <Tabs defaultValue="profile" className="space-y-4">

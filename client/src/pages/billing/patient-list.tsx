@@ -14,11 +14,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Plus,
   Search,
   FileText,
   Users,
   Loader2,
+  Archive,
 } from "lucide-react";
 
 export default function PatientList() {
@@ -85,10 +92,16 @@ export default function PatientList() {
           <h1 className="text-2xl font-semibold" data-testid="text-page-title">Patients</h1>
           <p className="text-muted-foreground">Manage patient records, demographics, and insurance information</p>
         </div>
-        <Button onClick={() => navigate("/billing/patients/new")} data-testid="button-new-patient">
-          <Plus className="h-4 w-4 mr-2" />
-          New Patient
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigate("/billing/patients/archived")} data-testid="button-view-archived">
+            <Archive className="h-4 w-4 mr-2" />
+            Archived
+          </Button>
+          <Button onClick={() => navigate("/billing/patients/new")} data-testid="button-new-patient">
+            <Plus className="h-4 w-4 mr-2" />
+            New Patient
+          </Button>
+        </div>
       </div>
 
       <div className="relative">
@@ -144,7 +157,21 @@ export default function PatientList() {
                   data-testid={`row-patient-${p.id}`}
                 >
                   <TableCell className="font-medium">
-                    {displayName(p)}
+                    <div className="flex items-center gap-2">
+                      {displayName(p)}
+                      {p.is_demo && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge variant="outline" className="text-violet-600 border-violet-200 bg-violet-50 dark:bg-violet-950 dark:border-violet-800 text-[10px] px-1.5 py-0 cursor-default" data-testid={`badge-demo-${p.id}`}>
+                                DEMO
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent>Sample data — will hide automatically once you have 5+ real patients</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>{p.dob || "—"}</TableCell>
                   <TableCell>{p.insurance_carrier || "—"}</TableCell>

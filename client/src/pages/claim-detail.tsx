@@ -51,6 +51,8 @@ import {
   CheckCircle,
   AlarmClock,
   BellOff,
+  Archive,
+  Trash2,
 } from "lucide-react";
 import { format, differenceInDays, formatDistanceToNow } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
@@ -356,6 +358,7 @@ export default function ClaimDetailPage() {
   const [check277Result, setCheck277Result] = useState<{ found: boolean; status?: string; message?: string } | null>(null);
   const [validationErrorsExpanded, setValidationErrorsExpanded] = useState(false);
   const [testingClaim, setTestingClaim] = useState(false);
+  const [showArchiveClaimDialog, setShowArchiveClaimDialog] = useState(false);
 
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
@@ -412,6 +415,18 @@ export default function ClaimDetailPage() {
     onError: () => {
       toast({ title: "Failed to update claim status", variant: "destructive" });
     },
+  });
+
+  const archiveClaimMutation = useMutation({
+    mutationFn: async () => apiRequest("PATCH", `/api/billing/claims/${id}/archive`, {}),
+    onSuccess: () => {
+      setShowArchiveClaimDialog(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/claim-tracker"] });
+      setLocation("/billing/claims");
+      toast({ title: claim?.status === "draft" ? "Draft discarded" : "Claim archived", description: claim?.status === "draft" ? "The draft has been removed." : "The claim has been hidden from your dashboard but retained per HIPAA requirements." });
+    },
+    onError: () => toast({ title: "Error", description: "Failed to archive claim", variant: "destructive" }),
   });
 
   if (claimLoading) {
@@ -1150,10 +1165,56 @@ export default function ClaimDetailPage() {
                   File Appeal
                 </Button>
               )}
+              {!claim.archived_at && ["draft", "submitted", "denied", "paid", "exported", "created", "rejected", "void"].includes(claim.status) && (
+                <Button
+                  variant="ghost"
+                  className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={() => setShowArchiveClaimDialog(true)}
+                  data-testid="button-archive-claim"
+                >
+                  {claim.status === "draft" ? (
+                    <><Trash2 className="h-4 w-4 mr-2" />Discard Draft</>
+                  ) : (
+                    <><Archive className="h-4 w-4 mr-2" />Archive Claim</>
+                  )}
+                </Button>
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
+
+      {/* Archive / Discard dialog */}
+      <Dialog open={showArchiveClaimDialog} onOpenChange={setShowArchiveClaimDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {claim.status === "draft" ? "Discard Draft" : "Archive Claim"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2 text-sm text-muted-foreground">
+            {claim.status === "draft" ? (
+              <p>This draft will be permanently discarded. This action cannot be undone.</p>
+            ) : (
+              <p>This claim will be hidden from your dashboard but retained in the system per HIPAA and state retention requirements.</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowArchiveClaimDialog(false)} data-testid="button-archive-claim-cancel">
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => archiveClaimMutation.mutate()}
+              disabled={archiveClaimMutation.isPending}
+              data-testid="button-archive-claim-confirm"
+            >
+              {archiveClaimMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {claim.status === "draft" ? "Discard Draft" : "Archive Claim"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ExplainabilityDrawer
         open={explainOpen}

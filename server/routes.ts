@@ -178,6 +178,25 @@ function verifyOrg(entity: any, req: any): boolean {
   return entityOrgId === orgId;
 }
 
+async function _autoArchiveDemoPatients(db: any, orgId: string, triggeredBy: string): Promise<void> {
+  try {
+    const { rows: realCount } = await db.query(
+      `SELECT COUNT(*)::int AS cnt FROM patients WHERE organization_id = $1 AND is_demo = FALSE AND archived_at IS NULL`,
+      [orgId]
+    );
+    if ((realCount[0]?.cnt ?? 0) >= 5) {
+      await db.query(
+        `UPDATE patients
+         SET archived_at = NOW(), archived_by = 'system', archive_reason = 'auto-archived after onboarding milestone'
+         WHERE organization_id = $1 AND is_demo = TRUE AND archived_at IS NULL`,
+        [orgId]
+      );
+    }
+  } catch (e: any) {
+    console.error('[autoArchiveDemo] error:', e.message);
+  }
+}
+
 export async function registerRoutes(server: Server, app: Express): Promise<void> {
 
   try {
@@ -2173,6 +2192,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`UPDATE manual_extraction_items SET is_demo_seed = TRUE WHERE notes ILIKE '%[demo_seed]%'`);
     }
 
+    // ── Soft-delete / archive columns ────────────────────────────────────────
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`).catch(() => {});
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS archived_by TEXT`).catch(() => {});
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS archive_reason TEXT`).catch(() => {});
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`).catch(() => {});
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS archived_by TEXT`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_patients_archived ON patients (organization_id) WHERE archived_at IS NULL`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_archived ON claims (organization_id) WHERE archived_at IS NULL`).catch(() => {});
+    // Mark Chajinel demo patients as is_demo
+    await pool.query(`
+      UPDATE patients SET is_demo = TRUE
+      WHERE organization_id = 'chajinel-org-001'
+        AND first_name ILIKE 'TEST:%'
+        AND is_demo = FALSE
+    `).catch(() => {});
+
     // ── Prompt C0: field_definitions reference table ────────────────────────
     if (!(await seederLog('table', 'field_definitions'))) {
       await pool.query(`
@@ -3255,6 +3291,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       // Exclude snoozed alerts that are still within snooze window
       where += ` AND (tfa.snoozed_until IS NULL OR tfa.snoozed_until < NOW())`;
+      // Exclude archived claims
+      where += ` AND (c.archived_at IS NULL)`;
 
       if (filterStatus) { where += ` AND tfa.alert_status = $${params.length + 1}`; params.push(filterStatus); }
       if (payer_id) { where += ` AND p.id = $${params.length + 1}`; params.push(payer_id); }
@@ -3528,6 +3566,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       let idx = 1;
 
       if (orgId) { baseQuery += ` AND c.organization_id = $${idx}`; params.push(orgId); idx++; }
+      baseQuery += ` AND c.archived_at IS NULL`;
       if (status && status !== "all") { baseQuery += ` AND c.status = $${idx}`; params.push(status); idx++; }
       if (payer_id && payer_id !== "all") { baseQuery += ` AND (c.payer_id = $${idx} OR c.payer = (SELECT name FROM payers WHERE id = $${idx}))`; params.push(payer_id); idx++; }
       if (patient) { baseQuery += ` AND (LOWER(COALESCE(p.first_name || ' ' || p.last_name, l.name,'')) LIKE LOWER($${idx}))`; params.push(`%${patient}%`); idx++; }
@@ -4891,6 +4930,44 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [crypto.randomUUID(), req.params.id, claimRow.rows[0]?.patient_id || null, 'export_pdf', 'Claim PDF generated', (req.user as any)?.id || null]
       );
       res.json({ success: true, pdfUrl: `generated:${timestamp}` });
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  // ── Claim soft-delete (archive) ────────────────────────────────────────────
+  app.patch("/api/billing/claims/:id/archive", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { id } = req.params;
+      const user = req.user as any;
+
+      const { rows } = await db.query("SELECT * FROM claims WHERE id = $1", [id]);
+      if (!rows.length || !verifyOrg(rows[0], req)) return res.status(404).json({ error: "Claim not found" });
+      const claim = rows[0];
+      if (claim.archived_at) return res.status(400).json({ error: "Claim is already archived" });
+
+      const archivedBy = user?.email || user?.name || "system";
+      await db.query(
+        `UPDATE claims SET archived_at = NOW(), archived_by = $1, updated_at = NOW() WHERE id = $2`,
+        [archivedBy, id]
+      );
+
+      // Log to activity_logs
+      await db.query(
+        `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          crypto.randomUUID(), id, claim.patient_id,
+          claim.status === 'draft' ? 'claim_discarded' : 'claim_archived',
+          claim.status === 'draft'
+            ? `Draft claim discarded by ${archivedBy}`
+            : `Claim archived by ${archivedBy} (retained per HIPAA/state requirements)`,
+          user?.id || null
+        ]
+      );
+
+      res.json({ success: true });
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
@@ -6701,12 +6778,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/patients", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const search = (req.query.search as string || "").trim().toLowerCase();
+      const showArchived = req.query.archived === "true";
       const db = await import("./db").then(m => m.pool);
       const orgId = getOrgId(req);
       let query = `
         SELECT p.*, l.name as lead_name,
-          (SELECT MAX(COALESCE(c.service_date::text, c.created_at::text)) FROM claims c WHERE c.patient_id = p.id) as last_claim_date,
-          (SELECT c.status FROM claims c WHERE c.patient_id = p.id ORDER BY COALESCE(c.service_date, c.created_at::date) DESC LIMIT 1) as last_claim_status
+          (SELECT MAX(COALESCE(c.service_date::text, c.created_at::text)) FROM claims c WHERE c.patient_id = p.id AND c.archived_at IS NULL) as last_claim_date,
+          (SELECT c.status FROM claims c WHERE c.patient_id = p.id AND c.archived_at IS NULL ORDER BY COALESCE(c.service_date, c.created_at::date) DESC LIMIT 1) as last_claim_status
         FROM patients p
         LEFT JOIN leads l ON p.lead_id = l.id
         WHERE 1=1
@@ -6714,6 +6792,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const params: any[] = [];
       let idx = 1;
       if (orgId) { query += ` AND p.organization_id = $${idx}`; params.push(orgId); idx++; }
+      if (showArchived) {
+        query += ` AND p.archived_at IS NOT NULL`;
+      } else {
+        query += ` AND p.archived_at IS NULL`;
+      }
       if (search) {
         query += ` AND (
           LOWER(COALESCE(p.first_name, '')) LIKE $${idx}
@@ -6809,7 +6892,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           planProductCode || null, delegatedEntityId || null, pcpId || null, pcpReferralNumber || null
         ]
       );
-      res.json(rows[0]);
+      const newPatient = rows[0];
+      // Fire-and-forget: auto-archive demo patients if org now has ≥ 5 real patients
+      const orgIdForAuto = getOrgId(req);
+      if (orgIdForAuto) {
+        _autoArchiveDemoPatients(db, orgIdForAuto, "system").catch(() => {});
+      }
+      res.json(newPatient);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
@@ -6879,13 +6968,76 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // ── Patient soft-delete (archive / restore) ──────────────────────────────
+  app.patch("/api/billing/patients/:id/archive", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { id } = req.params;
+      const { reason } = req.body as { reason?: string };
+      const user = req.user as any;
+      const orgId = getOrgId(req);
+
+      const ownerCheck = await db.query("SELECT organization_id, archived_at FROM patients WHERE id = $1", [id]);
+      if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Patient not found" });
+      if (ownerCheck.rows[0].archived_at) return res.status(400).json({ error: "Patient is already archived" });
+
+      // Block if patient has active claims (anything not draft/void/paid/denied/rejected)
+      const { rows: activeClaims } = await db.query(
+        `SELECT id FROM claims
+         WHERE patient_id = $1
+           AND organization_id = $2
+           AND archived_at IS NULL
+           AND status NOT IN ('draft','void','paid','denied','rejected')
+         LIMIT 1`,
+        [id, orgId]
+      );
+      if (activeClaims.length > 0) {
+        return res.status(409).json({
+          error: "This patient has active claims. Resolve those first or contact admin.",
+          code: "ACTIVE_CLAIMS"
+        });
+      }
+
+      const archivedBy = user?.email || user?.name || "system";
+      await db.query(
+        `UPDATE patients SET archived_at = NOW(), archived_by = $1, archive_reason = $2, updated_at = NOW() WHERE id = $3`,
+        [archivedBy, reason || null, id]
+      );
+
+      // Check if org now has ≥ 5 real (non-demo, non-archived) patients → auto-archive demos
+      await _autoArchiveDemoPatients(db, orgId, archivedBy);
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  app.patch("/api/billing/patients/:id/restore", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { id } = req.params;
+      const ownerCheck = await db.query("SELECT organization_id, archived_at FROM patients WHERE id = $1", [id]);
+      if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Patient not found" });
+      if (!ownerCheck.rows[0].archived_at) return res.status(400).json({ error: "Patient is not archived" });
+
+      await db.query(
+        `UPDATE patients SET archived_at = NULL, archived_by = NULL, archive_reason = NULL, updated_at = NOW() WHERE id = $1`,
+        [id]
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
   app.get("/api/billing/patients/:id/claims", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
       const ownerCheck = await db.query("SELECT organization_id FROM patients WHERE id = $1", [req.params.id]);
       if (!ownerCheck.rows.length || !verifyOrg(ownerCheck.rows[0], req)) return res.status(404).json({ error: "Patient not found" });
       const { rows } = await db.query(
-        `SELECT * FROM claims WHERE patient_id = $1 ORDER BY created_at DESC`,
+        `SELECT * FROM claims WHERE patient_id = $1 AND archived_at IS NULL ORDER BY created_at DESC`,
         [req.params.id]
       );
       res.json(rows);
