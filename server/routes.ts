@@ -541,6 +541,126 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
     }
 
+    // ── Ensure agency-billing columns exist before Chajinel seeder ───────
+    await pool.query(`ALTER TABLE practice_settings ALTER COLUMN tax_id TYPE VARCHAR(20)`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS billing_model VARCHAR DEFAULT 'direct'`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS agency_npi VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS agency_tax_id VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS payer_category VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE providers ADD COLUMN IF NOT EXISTS provider_type VARCHAR DEFAULT 'rendering'`).catch(() => {});
+    await pool.query(`ALTER TABLE providers ALTER COLUMN npi DROP NOT NULL`).catch(() => {});
+
+    // ── Chajinel practice settings, payers, caregivers, test patients ─────
+    {
+      const CHAJINEL_ORG_ID = "chajinel-org-001";
+
+      // Practice settings — update with real NPI, tax ID, address, billing model
+      await pool.query(`
+        UPDATE practice_settings
+        SET
+          practice_name   = 'Chajinel',
+          primary_npi     = '1184288680',
+          tax_id          = '47-1075172',
+          billing_model   = 'agency_billed',
+          agency_npi      = '1184288680',
+          agency_tax_id   = '47-1075172',
+          address         = '{"street":"208 CYPRESS AVENUE","city":"SOUTH SAN FRANCISCO","state":"CA","zip":"94080"}'::jsonb,
+          default_pos     = '12',
+          updated_at      = NOW()
+        WHERE organization_id = $1
+      `, [CHAJINEL_ORG_ID]).catch(() => {});
+
+      // Payer 1 — TriWest Healthcare Alliance (VA Community Care)
+      const { rows: tw } = await pool.query(
+        `SELECT id FROM payers WHERE organization_id=$1 AND name='TriWest Healthcare Alliance' LIMIT 1`,
+        [CHAJINEL_ORG_ID]
+      );
+      if (tw.length === 0) {
+        await pool.query(`
+          INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, organization_id, created_at)
+          VALUES (gen_random_uuid()::text, 'TriWest Healthcare Alliance', 'VHPVI', 'va_community_care', 'va_community_care', 'CH', 365, true, 'professional', true, true, $1, NOW())
+        `, [CHAJINEL_ORG_ID]);
+      }
+
+      // Payer 2 — San Mateo County IHSS
+      const { rows: ihss } = await pool.query(
+        `SELECT id FROM payers WHERE organization_id=$1 AND name='San Mateo County IHSS' LIMIT 1`,
+        [CHAJINEL_ORG_ID]
+      );
+      if (ihss.length === 0) {
+        await pool.query(`
+          INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, organization_id, created_at)
+          VALUES (gen_random_uuid()::text, 'San Mateo County IHSS', NULL, 'county_ihss', 'medicaid', 'MC', 365, false, 'professional', true, true, $1, NOW())
+        `, [CHAJINEL_ORG_ID]);
+      }
+
+      // Payer 3 — LTC Insurance placeholder (inactive)
+      const { rows: ltc } = await pool.query(
+        `SELECT id FROM payers WHERE organization_id=$1 AND name='LTC Insurance (configure per claim)' LIMIT 1`,
+        [CHAJINEL_ORG_ID]
+      );
+      if (ltc.length === 0) {
+        await pool.query(`
+          INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, organization_id, created_at)
+          VALUES (gen_random_uuid()::text, 'LTC Insurance (configure per claim)', NULL, 'ltc_insurance', 'commercial', 'CI', 365, false, 'professional', false, true, $1, NOW())
+        `, [CHAJINEL_ORG_ID]);
+      }
+
+      // Caregivers — agency workers (no NPI required)
+      const caregivers = [
+        { first: 'Lucia', last: 'Hernandez', creds: 'RN' },
+        { first: 'Carlos', last: 'Mendoza', creds: 'CNA' },
+        { first: 'Ana', last: 'Reyes', creds: 'Home Health Aide' },
+      ];
+      for (const cg of caregivers) {
+        const { rows: cgCheck } = await pool.query(
+          `SELECT id FROM providers WHERE organization_id=$1 AND first_name=$2 AND last_name=$3 LIMIT 1`,
+          [CHAJINEL_ORG_ID, cg.first, cg.last]
+        );
+        if (cgCheck.length === 0) {
+          await pool.query(`
+            INSERT INTO providers (id, first_name, last_name, credentials, npi, entity_type, provider_type, is_active, is_default, organization_id, created_at, updated_at)
+            VALUES (gen_random_uuid()::text, $1, $2, $3, NULL, 'individual', 'agency_worker', true, false, $4, NOW(), NOW())
+          `, [cg.first, cg.last, cg.creds, CHAJINEL_ORG_ID]);
+        }
+      }
+
+      // Test patients
+      const { rows: twRow } = await pool.query(
+        `SELECT id FROM payers WHERE organization_id=$1 AND name='TriWest Healthcare Alliance' LIMIT 1`,
+        [CHAJINEL_ORG_ID]
+      );
+      const { rows: ihssRow } = await pool.query(
+        `SELECT id FROM payers WHERE organization_id=$1 AND name='San Mateo County IHSS' LIMIT 1`,
+        [CHAJINEL_ORG_ID]
+      );
+
+      const { rows: p1Check } = await pool.query(
+        `SELECT id FROM patients WHERE organization_id=$1 AND first_name='TEST: Maria' AND last_name='Garcia' LIMIT 1`,
+        [CHAJINEL_ORG_ID]
+      );
+      if (p1Check.length === 0 && twRow.length > 0) {
+        await pool.query(`
+          INSERT INTO patients (id, first_name, last_name, dob, payer_id, plan_type, organization_id, created_at, updated_at)
+          VALUES (gen_random_uuid()::text, 'TEST: Maria', 'Garcia', '1955-03-12', $1, 'unknown', $2, NOW(), NOW())
+        `, [twRow[0].id, CHAJINEL_ORG_ID]);
+      }
+
+      const { rows: p2Check } = await pool.query(
+        `SELECT id FROM patients WHERE organization_id=$1 AND first_name='TEST: Jose' AND last_name='Rodriguez' LIMIT 1`,
+        [CHAJINEL_ORG_ID]
+      );
+      if (p2Check.length === 0 && ihssRow.length > 0) {
+        await pool.query(`
+          INSERT INTO patients (id, first_name, last_name, dob, payer_id, plan_type, organization_id, created_at, updated_at)
+          VALUES (gen_random_uuid()::text, 'TEST: Jose', 'Rodriguez', '1948-07-22', $1, 'unknown', $2, NOW(), NOW())
+        `, [ihssRow[0].id, CHAJINEL_ORG_ID]);
+      }
+
+      console.log("[Seeder] Chajinel practice, payers, caregivers, and test patients configured");
+    }
+
     // ── QA Test Accounts ─────────────────────────────────────────────────
     {
       const { hashPassword } = await import("./auth");
@@ -1145,6 +1265,20 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // last_test_correlation_id on claims (may not exist in older prod databases)
     await seederLog('column', 'claims', 'last_test_correlation_id');
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS last_test_correlation_id VARCHAR`).catch(() => {});
+
+    // ── Chajinel / Agency billing schema ──────────────────────────────────
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS billing_model VARCHAR DEFAULT 'direct'`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS agency_npi VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS agency_tax_id VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS payer_category VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE providers ADD COLUMN IF NOT EXISTS provider_type VARCHAR DEFAULT 'rendering'`).catch(() => {});
+    // Make providers.npi nullable so agency workers (no NPI) can be stored
+    await pool.query(`ALTER TABLE providers ALTER COLUMN npi DROP NOT NULL`).catch(() => {});
+    await pool.query(`DROP INDEX IF EXISTS providers_npi_key`).catch(() => {});
+    await pool.query(`ALTER TABLE providers DROP CONSTRAINT IF EXISTS providers_npi_key`).catch(() => {});
+    // Partial unique: NPI must still be unique when present, but NULL is fine
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS providers_npi_unique_when_present ON providers(npi) WHERE npi IS NOT NULL`).catch(() => {});
 
     // Rules engine evaluation audit columns (Task 6 from Prompt 03)
     await seederLog('column', 'claims', 'last_risk_evaluation_at');
@@ -2657,19 +2791,27 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault, entityType, organizationName } = req.body;
+      const { firstName, lastName, credentials, npi, taxonomyCode, individualTaxId, licenseNumber, isDefault, entityType, organizationName, providerType } = req.body;
       const isOrg = entityType === 'organization';
+      const isAgencyWorker = providerType === 'agency_worker';
       const effectiveFirst = isOrg ? (organizationName || '').trim() : (firstName || '').trim();
       const effectiveLast = isOrg ? '' : (lastName || '').trim();
-      if (!effectiveFirst || !npi?.trim()) {
-        return res.status(400).json({ error: isOrg ? "organizationName and npi are required" : "firstName, lastName, and npi are required" });
+      const effectiveNpi = npi?.trim() || null;
+      if (!effectiveFirst) {
+        return res.status(400).json({ error: isOrg ? "Organization name is required" : "First name is required" });
       }
       if (!isOrg && !effectiveLast) {
-        return res.status(400).json({ error: "firstName, lastName, and npi are required" });
+        return res.status(400).json({ error: "Last name is required" });
       }
-      const { validateNPI } = await import("../shared/npi-validation");
-      if (!validateNPI(npi)) {
-        return res.status(400).json({ error: "Invalid NPI — must be 10 digits and pass the NPI checksum" });
+      // NPI required for rendering providers and organizations; optional for agency workers
+      if (!isAgencyWorker && !effectiveNpi) {
+        return res.status(400).json({ error: "NPI is required for rendering providers" });
+      }
+      if (effectiveNpi) {
+        const { validateNPI } = await import("../shared/npi-validation");
+        if (!validateNPI(effectiveNpi)) {
+          return res.status(400).json({ error: "Invalid NPI — must be 10 digits and pass the NPI checksum" });
+        }
       }
       const db = await import("./db").then(m => m.pool);
       const client = await db.connect();
@@ -2679,9 +2821,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           await client.query("UPDATE providers SET is_default = false WHERE organization_id = $1 AND is_default = true", [orgId]);
         }
         const { rows } = await client.query(
-          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, license_number, is_default, organization_id, entity_type)
-           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-          [effectiveFirst, effectiveLast, isOrg ? null : (credentials || null), npi, taxonomyCode || null, individualTaxId || null, isOrg ? null : (licenseNumber || null), isDefault || false, orgId, isOrg ? 'organization' : 'individual']
+          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, license_number, is_default, organization_id, entity_type, provider_type)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+          [effectiveFirst, effectiveLast, isOrg ? null : (credentials || null), effectiveNpi, taxonomyCode || null, individualTaxId || null, isOrg ? null : (licenseNumber || null), isDefault || false, orgId, isOrg ? 'organization' : 'individual', providerType || 'rendering']
         );
         await client.query("COMMIT");
         res.json(rows[0]);

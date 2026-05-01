@@ -533,6 +533,9 @@ export const practiceSettings = pgTable("practice_settings", {
   organizationId: varchar("organization_id"),
   frcpbEnrolled: boolean("frcpb_enrolled").default(false),
   frcpbEnrolledAt: timestamp("frcpb_enrolled_at"),
+  billingModel: varchar("billing_model").default("direct"),
+  agencyNpi: varchar("agency_npi"),
+  agencyTaxId: varchar("agency_tax_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -546,11 +549,12 @@ export const providers = pgTable("providers", {
   firstName: varchar("first_name").notNull(),
   lastName: varchar("last_name").notNull(),
   credentials: varchar("credentials"),
-  npi: varchar("npi").notNull().unique(),
+  npi: varchar("npi"),
   taxonomyCode: varchar("taxonomy_code"),
   individualTaxId: varchar("individual_tax_id"),
   licenseNumber: varchar("license_number"),
   entityType: varchar("entity_type").default("individual"),
+  providerType: varchar("provider_type").default("rendering"),
   isDefault: boolean("is_default").default(false),
   isActive: boolean("is_active").default(true),
   organizationId: varchar("organization_id"),
@@ -573,6 +577,8 @@ export const payers = pgTable("payers", {
   isCustom: boolean("is_custom").default(false),
   payerClassification: varchar("payer_classification", { length: 32 }),
   claimFilingIndicator: varchar("claim_filing_indicator", { length: 2 }),
+  payerCategory: varchar("payer_category", { length: 32 }),
+  organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
