@@ -1,0 +1,75 @@
+Two updates from the PGBA Companion Guide research:
+
+1. We have the 837I guide but NOT the 837P guide yet. Chajinel 
+   bills on 837P (Homemaker/HHA care = professional claims), so 
+   we still need the right document. Working on getting the 837P 
+   version this week.
+
+2. Several things ARE confirmed from the 837I guide that apply 
+   to both claim types. Update the EDI generator with these 
+   verified values:
+
+   RECEIVER:
+   - Loop 1000B NM103: "PGBA VACCN"
+   - Loop 1000B NM109: 841160004 (Region 4 — Chajinel's region)
+   - Loop 1000B NM108: 46
+
+   PAYER:  
+   - Loop 2010BB NM103: "PGBA VACCN"
+   - Loop 2010BB NM109: TWVACCN
+   - Loop 2010BB NM108: PI
+
+   AUTHORIZATION NUMBER (this is confirmed now):
+   - Loop 2300 REF*G1*[auth_number]
+   - Qualifier is definitely "G1" — confirmed via sample EDI in 
+     PGBA 837I CG page 20
+
+   PATIENT IDENTIFIER (Loop 2010CA NM109):
+   PGBA accepts three formats per error codes LFN/LFM/SSC/SSE:
+   - 9-byte SSN — qualifier "SY" in NM108
+   - 10-byte EDIPI — qualifier "MI" in NM108  
+   - 17-byte MVI ICN — qualifier "MI" in NM108
+   
+   System should prefer EDIPI > MVI ICN > SSN. Send only one.
+   Use the field captured at patient intake (per the SSN handling
+   prompt I sent earlier).
+
+   BILLING PROVIDER:
+   - Loop 2010AA NM109: agency NPI (Chajinel: 1184288680)
+   - NM108: XX (NPI qualifier)
+   - REF*EI: agency tax ID (Chajinel: 47-1075172)
+
+   ENVELOPE:
+   - ISA15: P for production, T for test
+   - ISA08: 841160004 (PGBA's federal tax ID)
+   - GS03: 841160004 (must match ISA08)
+
+   Encode the receiver/payer values as constants in the EDI 
+   service since they don't vary by claim — Region 4 is locked 
+   in for Chajinel's geography.
+
+3. Things still UNCERTAIN until 837P guide arrives:
+   - Required taxonomy code for home health agencies in 
+     2010AA PRV*BI*PXC*[code]
+   - Place of service code requirements (likely 12 for home but 
+     verify)
+   - Service line-level requirements (modifier order, units for 
+     time-based codes)
+   - 837P-specific reject codes
+
+   Don't generate live production EDI until the 837P guide is 
+   confirmed. Test mode submission to FRCPB is fine for 
+   validating envelope structure.
+
+4. Document the source of all hardcoded values in code comments, 
+   e.g.:
+   
+   // Per PGBA 837I CG v1.3 (July 2021), Table 6, page 18.
+   // Same values apply to 837P per X12 5010 standard.
+   // Source: TriWest Payer Space, Availity.
+   const PGBA_RECEIVER_TAX_ID = "841160004"; // Region 4
+   const PGBA_RECEIVER_NAME = "PGBA VACCN";
+
+   This audit trail matters when we need to defend EDI 
+   generation in the future or when Daniela's biller asks "where 
+   did this number come from?"

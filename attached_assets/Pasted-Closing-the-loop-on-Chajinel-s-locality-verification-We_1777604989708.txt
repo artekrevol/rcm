@@ -1,0 +1,130 @@
+Closing the loop on Chajinel's locality verification. We need 
+the CMS ZIP-to-Carrier-Locality crosswalk file ingested so 
+locality lookup is data-driven, not hardcoded.
+
+WHY THIS MATTERS:
+
+We currently have these Chajinel locality values in 
+practice_settings (or planned to add):
+- medicare_locality_code: '05'
+- medicare_locality_name: 'San Francisco-Oakland-Berkeley'  
+- medicare_mac_name: 'Noridian Healthcare Solutions'
+- medicare_mac_carrier: '01112'  ← UNVERIFIED, my best inference
+
+Locality 05 is verified directly from CMS's Locality 
+Configuration page (https://www.cms.gov/medicare/payment/fee-schedules/physician-fee-schedule/locality-configuration). 
+Locality 05 covers San Francisco, San Mateo, Alameda, and Contra 
+Costa counties (consolidated in 2024 from former localities 05/06/07).
+
+The MAC carrier code (01112) is my educated guess based on 
+Noridian's California assignment. NOT verified from CMS source 
+data. Replit must verify before any rate calculations rely on it.
+
+WHAT TO DO:
+
+Step 1 — Download the CMS ZIP-to-Carrier-Locality crosswalk file
+
+The file is published on CMS's Fee Schedule General Information 
+page:
+https://www.cms.gov/medicare/payment/fee-schedules/general-information
+
+Look for "Zip Code to Carrier Locality File" — published 
+quarterly. Get the most recent version (likely titled something 
+like "ZIP5_CY2026.txt" or "ZIPCODE_CARRIER_LOCALITY_Qx_2026.zip").
+
+If that page doesn't have the file directly, alternative source:
+https://www.cms.gov/Medicare/Medicare-Fee-for-Service-Payment/FeeScheduleGenInfo/index.html
+
+ResDAC (a CMS data repository) also documents this file:
+https://resdac.org/articles/medicare-zip-code-carrier-locality-file
+
+The file format is typically fixed-width or pipe-delimited text 
+with columns: ZIP, state, carrier, locality, rural indicator, 
+plus-4 indicator, year, etc.
+
+Step 2 — Ingest into the schema
+
+Use the cms_zip_locality table from the Reimbursement Reference 
+Data sprint:
+
+CREATE TABLE IF NOT EXISTS cms_zip_locality (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  zip_code TEXT NOT NULL,
+  zip_plus_4 TEXT,
+  state TEXT NOT NULL,
+  mac_carrier TEXT NOT NULL,
+  locality_code TEXT NOT NULL,
+  rural_indicator TEXT,
+  effective_date DATE NOT NULL,
+  termination_date DATE,
+  source_url TEXT,
+  ingested_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (zip_code, zip_plus_4, effective_date)
+);
+
+Should populate with ~40,000+ rows covering all U.S. ZIPs.
+
+Step 3 — Look up Chajinel's actual values
+
+SELECT zip_code, state, mac_carrier, locality_code, rural_indicator
+FROM cms_zip_locality
+WHERE zip_code = '94080'
+ORDER BY effective_date DESC
+LIMIT 5;
+
+Expected: state = CA, locality_code = 05. The mac_carrier value 
+is whatever CMS publishes — DO NOT match against my guess of 
+01112. Just use whatever the file says.
+
+Report back what you find. The actual MAC carrier value from 
+the CMS file is the source of truth.
+
+Step 4 — Update Chajinel's practice_settings with verified data
+
+UPDATE practice_settings
+SET 
+  medicare_locality_code = (
+    SELECT locality_code FROM cms_zip_locality 
+    WHERE zip_code = '94080' 
+    ORDER BY effective_date DESC LIMIT 1
+  ),
+  medicare_mac_carrier = (
+    SELECT mac_carrier FROM cms_zip_locality 
+    WHERE zip_code = '94080' 
+    ORDER BY effective_date DESC LIMIT 1
+  ),
+  locality_resolved_at = NOW(),
+  locality_resolution_method = 'cms_zip_crosswalk_lookup',
+  locality_source_url = 'https://www.cms.gov/medicare/payment/fee-schedules/general-information'
+WHERE organization_id = 'chajinel-org-001';
+
+Step 5 — Verify
+
+SELECT 
+  o.name AS practice_name,
+  ps.zip_code, 
+  ps.medicare_locality_code,
+  ps.medicare_mac_carrier,
+  ps.locality_resolution_method,
+  zl.state,
+  zl.rural_indicator
+FROM practice_settings ps
+JOIN organizations o ON o.id = ps.organization_id
+LEFT JOIN cms_zip_locality zl ON zl.zip_code = ps.zip_code
+WHERE ps.organization_id = 'chajinel-org-001';
+
+Expected result: locality_code 05, state CA, plus whatever the 
+real MAC carrier code is.
+
+CONSTRAINTS:
+
+- Do NOT hardcode the MAC carrier value. Pull from CMS data file.
+- If the CMS file is unavailable for any reason, do NOT proceed 
+  with a guess — tell me you couldn't find it and I'll help 
+  source it.
+- The file is large (~40K rows) so use bulk insert / COPY, not 
+  row-by-row.
+- Once ingested, the table is reusable for ALL future tenants 
+  not just Chajinel.
+
+Production verification format as before.

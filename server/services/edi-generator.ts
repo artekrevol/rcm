@@ -1,3 +1,35 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// PGBA VA Community Care — Region 4 EDI Constants
+// Source: PGBA 837I Companion Guide v1.3 (July 2021), Tables 5-6, pages 17-20.
+// Note: 837I values confirmed; 837P guide pending. Per X12 5010 standard, the
+//       ISA/GS envelope and Loop 1000B/2010BB values are identical between
+//       837I and 837P for the same clearinghouse. Using confirmed 837I values
+//       for these structural segments only.
+// Source: TriWest Payer Space on Availity; PGBA EDI companion guide PDF.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** PGBA Region 4 federal tax ID. Used in ISA08, GS03, and Loop 1000B NM109.
+ *  Per PGBA 837I CG v1.3, Table 5, page 17. Same across 837I and 837P. */
+const PGBA_RECEIVER_TAX_ID = "841160004"; // Region 4 (Southeast/Gulf Coast)
+
+/** PGBA receiver name in Loop 1000B NM103.
+ *  Per PGBA 837I CG v1.3, Table 5, page 17. */
+const PGBA_RECEIVER_NAME = "PGBA VACCN";
+
+/** PGBA Loop 1000B NM108 — "46" = Electronic Transmitter Identification Number.
+ *  Per PGBA 837I CG v1.3, Table 5, page 17. */
+const PGBA_RECEIVER_ID_QUALIFIER = "46";
+
+/** PGBA Loop 2010BB (payer) NM109. Different from the receiver ID.
+ *  Per PGBA 837I CG v1.3, Table 6, page 18. */
+const PGBA_PAYER_ID = "TWVACCN";
+
+/** PGBA Loop 2010BB NM108 — "PI" = Payer Identification.
+ *  Per PGBA 837I CG v1.3, Table 6, page 18. */
+const PGBA_PAYER_ID_QUALIFIER = "PI";
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface EDI837PInput {
   /**
    * ISA15 Interchange Usage Indicator.
@@ -41,6 +73,16 @@ export interface EDI837PInput {
     city?: string;
     state?: string;
     zip?: string;
+    /**
+     * Veteran identifier type — determines NM108 qualifier in Loop 2010CA/IL.
+     * Per PGBA 837I CG v1.3, page 20 (error codes LFN/LFM/SSC/SSE):
+     *   "ssn"     → 9-byte SSN  → NM108 qualifier "SY"
+     *   "edipi"   → 10-byte DoD EDIPI → NM108 qualifier "MI"
+     *   "mvi_icn" → 17-byte VA MVI ICN → NM108 qualifier "MI"
+     * Preference order: edipi > mvi_icn > ssn.
+     * Inferred from member_id length when not explicitly set.
+     */
+    veteran_id_type?: "ssn" | "edipi" | "mvi_icn" | null;
   };
   practice: {
     name: string;
@@ -97,6 +139,51 @@ function mapSex(sex?: string): string {
   return "U";
 }
 
+/**
+ * Detect PGBA VA Community Care payer.
+ * Covers: TriWest Healthcare Alliance, PGBA VACCN, OptumVA, VA Community Care.
+ * Per PGBA 837I CG v1.3: payer_id "TWVACCN" and receiver tax ID "841160004"
+ * are the canonical identifiers for Region 4 PGBA submissions.
+ */
+function isPGBAPayer(payer: { name: string; payer_id: string }): boolean {
+  const nameLc = (payer.name || "").toLowerCase();
+  const id = (payer.payer_id || "").toUpperCase();
+  return (
+    id === "TWVACCN" ||
+    id === PGBA_RECEIVER_TAX_ID ||
+    nameLc.includes("triwest") ||
+    nameLc.includes("pgba") ||
+    nameLc.includes("vaccn") ||
+    nameLc.includes("va community care") ||
+    nameLc.includes("community care")
+  );
+}
+
+/**
+ * Resolve patient NM108 qualifier and NM109 value for PGBA submissions.
+ * Per PGBA 837I CG v1.3, page 20 (error codes LFN/LFM/SSC/SSE):
+ *   EDIPI (10-byte DoD ID)  → qualifier "MI"
+ *   MVI ICN (17-byte VA ID) → qualifier "MI"
+ *   SSN (9-byte)            → qualifier "SY"
+ * Preference: EDIPI > MVI ICN > SSN.
+ * Falls back to length heuristic when veteran_id_type not explicitly set.
+ */
+function resolveVeteranId(patient: EDI837PInput["patient"]): { qualifier: string; id: string } {
+  const id = (patient.member_id || "").replace(/[-\s]/g, "");
+  const explicitType = patient.veteran_id_type;
+
+  if (explicitType === "ssn") return { qualifier: "SY", id };
+  if (explicitType === "edipi" || explicitType === "mvi_icn") return { qualifier: "MI", id };
+
+  // Heuristic fallback when type not set — length-based per PGBA format rules
+  if (id.length === 9 && /^\d{9}$/.test(id)) return { qualifier: "SY", id };  // SSN
+  if (id.length === 10) return { qualifier: "MI", id };  // EDIPI
+  if (id.length === 17) return { qualifier: "MI", id };  // MVI ICN
+
+  // Default: MI (most common for VA)
+  return { qualifier: "MI", id: patient.member_id };
+}
+
 export function generate837P(input: EDI837PInput): string {
   const { claim, patient, practice, provider, ordering_provider, payer } = input;
   const freqCode = claim.claim_frequency_code || "1";
@@ -115,33 +202,79 @@ export function generate837P(input: EDI837PInput): string {
   // Default is 'T' (safe) — callers explicitly opt into 'P' for production submissions.
   const isa15 = input.isa15 || "T";
 
+  // ── PGBA-specific receiver values ──────────────────────────────────────────
+  // Per PGBA 837I CG v1.3, Table 5 (page 17). Applied when the payer is
+  // identified as PGBA/TriWest VA Community Care Region 4.
+  // For non-PGBA payers, use the standard payer_id from practice/payer settings.
+  const pgba = isPGBAPayer(payer);
+
+  // ISA08: Receiver ID — PGBA federal tax ID (Region 4) for PGBA payers,
+  //        payer_id for all others. Must be 15 chars (padded).
+  // Per PGBA 837I CG v1.3, Table 5, page 17: ISA08 = "841160004"
+  const isaReceiverId = pgba ? PGBA_RECEIVER_TAX_ID : payer.payer_id;
+
+  // GS03: Receiver application ID — must match ISA08 for PGBA.
+  // Per PGBA 837I CG v1.3, Table 5, page 17: GS03 = "841160004"
+  const gsReceiverId = pgba ? PGBA_RECEIVER_TAX_ID : payer.payer_id;
+
+  // Loop 1000B NM1*40: Receiver identification in transaction set header.
+  // Per PGBA 837I CG v1.3, Table 5, page 17:
+  //   NM103 = "PGBA VACCN", NM108 = "46", NM109 = "841160004"
+  const loop1000bName = pgba ? PGBA_RECEIVER_NAME : payer.name;
+  const loop1000bQual = pgba ? PGBA_RECEIVER_ID_QUALIFIER : "46";
+  const loop1000bId   = pgba ? PGBA_RECEIVER_TAX_ID : payer.payer_id;
+
+  // Loop 2010BB NM1*PR: Payer identification at claim level.
+  // Per PGBA 837I CG v1.3, Table 6, page 18:
+  //   NM103 = "PGBA VACCN", NM108 = "PI", NM109 = "TWVACCN"
+  const loop2010bbName = pgba ? PGBA_RECEIVER_NAME : payer.name;
+  const loop2010bbQual = pgba ? PGBA_PAYER_ID_QUALIFIER : "PI";
+  const loop2010bbId   = pgba ? PGBA_PAYER_ID : payer.payer_id;
+
   const segments: string[] = [];
 
+  // ── ISA — Interchange Control Header ───────────────────────────────────────
   segments.push(
-    `ISA*00*          *00*          *ZZ*${practice.npi.padEnd(15)}*ZZ*${payer.payer_id.padEnd(15)}*${date.slice(2)}*${time}*^*00501*${controlNumber}*0*${isa15}*:`
+    `ISA*00*          *00*          *ZZ*${practice.npi.padEnd(15)}*ZZ*${isaReceiverId.padEnd(15)}*${date.slice(2)}*${time}*^*00501*${controlNumber}*0*${isa15}*:`
   );
 
+  // ── GS — Functional Group Header ───────────────────────────────────────────
+  // GS03 must match ISA08 per PGBA 837I CG v1.3, Table 5, page 17.
   segments.push(
-    `GS*HC*${practice.npi}*${payer.payer_id}*${date}*${time}*1*X*005010X222A1`
+    `GS*HC*${practice.npi}*${gsReceiverId}*${date}*${time}*1*X*005010X222A1`
   );
 
   segments.push(`ST*837*0001*005010X222A1`);
 
   segments.push(`BHT*0019*00*${claimControlNumber}*${date}*${time}*CH`);
 
-  // NM1*41: Submitter — qualifier 46 (Electronic Transmitter ID) per X12 5010 spec
+  // ── Loop 1000A: Submitter ─────────────────────────────────────────────────
+  // NM1*41: Submitter — qualifier 46 (Electronic Transmitter ID) per X12 5010 spec.
+  // NM109: billing provider NPI (used as submitter ID for direct EDI).
+  // Per PGBA 837I CG v1.3, page 18: NM108 = "46", NM109 = agency NPI.
   segments.push(
     `NM1*41*2*${practice.name}*****46*${practice.npi}`
   );
   const billingPhone = (practice.phone || "0000000000").replace(/\D/g, "");
   segments.push(`PER*IC*Billing Contact*TE*${billingPhone}`);
 
+  // ── Loop 1000B: Receiver ─────────────────────────────────────────────────
+  // PGBA: NM103 = "PGBA VACCN", NM108 = "46", NM109 = "841160004" (Region 4).
+  // Other payers: payer name and payer_id from practice settings.
+  // Per PGBA 837I CG v1.3, Table 5, page 17.
   segments.push(
-    `NM1*40*2*${payer.name}*****46*${payer.payer_id}`
+    `NM1*40*2*${loop1000bName}*****${loop1000bQual}*${loop1000bId}`
   );
 
+  // ── Loop 2000A: Billing Provider HL ─────────────────────────────────────
   segments.push(`HL*1**20*1`);
   segments.push(`PRV*BI*PXC*${practice.taxonomy_code}`);
+
+  // ── Loop 2010AA: Billing Provider ────────────────────────────────────────
+  // NM108 = "XX" (NPI qualifier); NM109 = agency NPI.
+  // Per PGBA 837I CG v1.3, page 18: use agency NPI 1184288680 for Chajinel.
+  // REF*EI: federal tax ID — Chajinel 47-1075172.
+  // Per X12 5010 Section 2.2.1 and PGBA companion guide.
   segments.push(
     `NM1*85*2*${practice.name}*****XX*${practice.npi}`
   );
@@ -149,18 +282,31 @@ export function generate837P(input: EDI837PInput): string {
   segments.push(`N4*${city}*${state}*${zip}`);
   segments.push(`REF*EI*${practice.tax_id.replace("-", "")}`);
 
+  // ── Loop 2000B: Subscriber HL ────────────────────────────────────────────
   segments.push(`HL*2*1*22*0`);
 
   // SBR09: X12 5010 claim filing indicator. "CI" (Commercial Insurance) is the
   // explicit X12 spec default when a payer has no specific indicator configured.
-  // Admins should set the correct code in payer settings to override this value.
+  // For VA Community Care, "VA" is often used. Admins should set this in payer settings.
   const filingIndicator = payer.claim_filing_indicator && payer.claim_filing_indicator.trim()
     ? payer.claim_filing_indicator.trim()
     : "CI";
   segments.push(`SBR*P*18*******${filingIndicator}`);
 
+  // ── Loop 2010BA: Subscriber (Insured/Patient) ─────────────────────────────
+  // NM108/NM109: Patient identifier qualifier and value.
+  // For PGBA: use veteran_id_type to select qualifier (SY = SSN, MI = EDIPI/MVI ICN).
+  // Per PGBA 837I CG v1.3, page 20 (error codes LFN/LFM/SSC/SSE):
+  //   - 9-byte SSN → qualifier "SY"
+  //   - 10-byte EDIPI → qualifier "MI"
+  //   - 17-byte MVI ICN → qualifier "MI"
+  //   System preference: EDIPI > MVI ICN > SSN.
+  const { qualifier: patientIdQual, id: patientIdVal } = pgba
+    ? resolveVeteranId(patient)
+    : { qualifier: "MI", id: patient.member_id };
+
   segments.push(
-    `NM1*IL*1*${patient.last_name}*${patient.first_name}****MI*${patient.member_id}`
+    `NM1*IL*1*${patient.last_name}*${patient.first_name}****${patientIdQual}*${patientIdVal}`
   );
   const patientAddr = patient.address || street;
   const patientCity = patient.city || city;
@@ -172,10 +318,15 @@ export function generate837P(input: EDI837PInput): string {
     `DMG*D8*${formatDate8(patient.dob)}*${mapSex(patient.sex)}`
   );
 
+  // ── Loop 2010BB: Payer ────────────────────────────────────────────────────
+  // PGBA: NM103 = "PGBA VACCN", NM108 = "PI", NM109 = "TWVACCN".
+  // Other payers: payer name/id from settings.
+  // Per PGBA 837I CG v1.3, Table 6, page 18.
   segments.push(
-    `NM1*PR*2*${payer.name}*****PI*${payer.payer_id}`
+    `NM1*PR*2*${loop2010bbName}*****${loop2010bbQual}*${loop2010bbId}`
   );
 
+  // ── Loop 2300: Claim ─────────────────────────────────────────────────────
   const totalCharge = claim.service_lines.reduce(
     (sum, line) => sum + line.charge,
     0
@@ -191,6 +342,9 @@ export function generate837P(input: EDI837PInput): string {
     segments.push(`REF*F8*${claim.orig_claim_number}`);
   }
 
+  // REF*G1: Prior Authorization number.
+  // Qualifier "G1" confirmed via PGBA 837I CG v1.3, page 20 (sample EDI).
+  // Per X12 5010, G1 = "Prior Authorization Number". Applies to both 837I and 837P.
   if (claim.auth_number) {
     segments.push(`REF*G1*${claim.auth_number}`);
   }
@@ -205,6 +359,7 @@ export function generate837P(input: EDI837PInput): string {
     segments.push(`NTE*ADD*PATIENT IS HOMEBOUND`);
   }
 
+  // ── HI: Diagnosis Codes ───────────────────────────────────────────────────
   // 837P allows max 12 ICD-10 codes in a single HI segment; cap to prevent rejection
   const diagCodes = claim.icd10_codes
     .slice(0, 12)
@@ -212,7 +367,7 @@ export function generate837P(input: EDI837PInput): string {
     .join("*");
   segments.push(`HI*${diagCodes}`);
 
-  // Loop 2310B: Rendering Provider — entity type 2 (org) vs 1 (individual)
+  // ── Loop 2310B: Rendering Provider ────────────────────────────────────────
   const isOrgProvider = provider.entity_type === "organization";
   if (isOrgProvider) {
     const orgName = [provider.first_name, provider.last_name].filter(Boolean).join(" ");
@@ -226,13 +381,15 @@ export function generate837P(input: EDI837PInput): string {
     segments.push(`REF*1C*${provider.license_number}`);
   }
 
-  // Loop 2310D: Ordering Provider (NM1*DK) — only if different from rendering
+  // ── Loop 2310D: Ordering Provider ────────────────────────────────────────
+  // NM1*DK: only emit if different from rendering provider
   if (ordering_provider && ordering_provider.npi !== provider.npi) {
     segments.push(
       `NM1*DK*1*${ordering_provider.last_name}*${ordering_provider.first_name}****XX*${ordering_provider.npi}`
     );
   }
 
+  // ── Loop 2400: Service Lines ──────────────────────────────────────────────
   claim.service_lines.forEach((line, index) => {
     const lineServiceDate = line.service_date || claim.service_date;
     segments.push(`LX*${index + 1}`);
