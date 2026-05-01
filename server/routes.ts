@@ -5803,15 +5803,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const pat = patientResult.rows[0] || {};
       const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
-      const serviceLines = rawLines.map((sl: any) => ({
-        hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
-        units: Number(sl.units) || 1,
-        charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
-        modifier: sl.modifier || null,
-        diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
-        service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
-        service_date_to: sl.service_date_to || null,
-      }));
+      const serviceLines = rawLines
+        .map((sl: any) => ({
+          hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
+          units: Number(sl.units) || 1,
+          charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
+          modifier: sl.modifier || null,
+          diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
+          service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
+          service_date_to: sl.service_date_to || null,
+        }))
+        .filter((sl) => sl.hcpcs_code);
+      if (serviceLines.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR: Claim has no service lines. Open the claim in the wizard, add at least one HCPCS/CPT service line, and save before submitting.",
+        });
+      }
       const icd10Codes: string[] = [];
       if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
       if (Array.isArray(c.icd10_secondary)) {
@@ -5982,15 +5990,24 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
 
       const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
-      const serviceLines = rawLines.map((sl: any) => ({
-        hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
-        units: Number(sl.units) || 1,
-        charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
-        modifier: sl.modifier || null,
-        diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
-        service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
-        service_date_to: sl.service_date_to || null,
-      }));
+      console.log(`[submit-stedi] claimId=${c.id} rawLines.length=${rawLines.length} sample=${JSON.stringify(rawLines[0] ?? null)}`);
+      const serviceLines = rawLines
+        .map((sl: any) => ({
+          hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
+          units: Number(sl.units) || 1,
+          charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
+          modifier: sl.modifier || null,
+          diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
+          service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
+          service_date_to: sl.service_date_to || null,
+        }))
+        .filter((sl) => sl.hcpcs_code);
+      if (serviceLines.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR: Claim has no service lines. Open the claim in the wizard, add at least one HCPCS/CPT service line, and save before submitting.",
+        });
+      }
       const icd10Codes: string[] = [];
       if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
       if (Array.isArray(c.icd10_secondary)) {
@@ -6229,15 +6246,24 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const pat = patientResult.rows[0] || {};
       const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
-      const serviceLines = rawLines.map((sl: any) => ({
-        hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
-        units: Number(sl.units) || 1,
-        charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
-        modifier: sl.modifier || null,
-        diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
-        service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
-        service_date_to: sl.service_date_to || null,
-      }));
+      console.log(`[test-stedi] claimId=${c.id} rawLines.length=${rawLines.length} sample=${JSON.stringify(rawLines[0] ?? null)}`);
+      const serviceLines = rawLines
+        .map((sl: any) => ({
+          hcpcs_code: sl.hcpcsCode || sl.hcpcs_code || sl.code || "",
+          units: Number(sl.units) || 1,
+          charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
+          modifier: sl.modifier || null,
+          diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
+          service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
+          service_date_to: sl.service_date_to || null,
+        }))
+        .filter((sl) => sl.hcpcs_code);
+      if (serviceLines.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "VALIDATION_ERROR: Claim has no service lines. Open the claim in the wizard, add at least one HCPCS/CPT service line, and save before submitting.",
+        });
+      }
       const icd10Codes: string[] = [];
       if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
       if (Array.isArray(c.icd10_secondary)) {
