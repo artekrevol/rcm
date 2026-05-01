@@ -1,0 +1,99 @@
+Update on Stedi access: Stedi doesn't offer scoped API keys, so there's 
+no clean dev/prod key separation. The test key you mentioned only has 
+eligibility checks, not claim submission. The production key has full 
+access.
+
+Rather than putting the production key in Replit dev (creates a blur 
+between environments), let's verify through the production server 
+itself. The mechanic:
+
+PHASE 1 — Confirm submission guards are intact
+
+Before doing the verification submission, please confirm the 
+Environment Submission Guards from the v3 work earlier this month 
+are still functional. Specifically:
+
+1. Run identity check first:
+   npx tsx server/utils/verify-db-identity.ts PRODUCTION_DATABASE_URL
+   Paste output.
+
+2. Show current state of the guard configuration:
+   - What's STEDI_ENV set to in Railway production env?
+   - What's STEDI_ENV set to in Replit dev env?
+   - Where in the code does the guard read STEDI_ENV to decide ISA15?
+   - Is the AutomatedSubmissionBlocked error class still wired into 
+     the submit-stedi handler?
+
+3. Test the guard works (dry run, no actual submission):
+   - Attempt to submit a test claim from the standalone tsx script 
+     in Replit dev WITHOUT the typed "SUBMIT TO PAYER" confirmation
+   - Expected: AutomatedSubmissionBlocked error thrown before the 
+     Stedi API is called
+   - Capture the error trace
+
+This confirms our wall against accidental production submission is 
+still standing.
+
+PHASE 2 — Verify the EDI fix through production server
+
+Once guards are confirmed intact:
+
+1. Use direct SQL via PRODUCTION_DATABASE_URL to create a test claim 
+   in production with these attributes:
+   - Patient: existing TriWest patient (Robert Hernandez or similar 
+     who already has a Stedi correlation history)
+   - Provider: Lucia Hernandez (NPI=null, agency_worker — exercises 
+     the A3 fix)
+   - Service line: simple HCPCS code (G0156 or similar)
+   - Mark with a clear test identifier in the patient_control_number 
+     so we can find it later
+
+2. Trigger submission through the production API:
+   curl -X POST https://www.claimshield.health/api/billing/claims/:id/submit-stedi \
+     -H "Cookie: [your authenticated session]" \
+     -d '{"testMode": true}'
+   
+   This goes through the production server, which uses its own 
+   STEDI_API_KEY and the v3 submission guards.
+
+3. The submission should:
+   - Use ISA15='T' (test mode)
+   - Route to FRCPB (test payer)
+   - Receive a 999 response
+
+4. Capture and report:
+   - Full request/response cycle with timing
+   - Generated EDI from the production logs (this is the fix-verifying 
+     evidence)
+   - Stedi correlation ID
+   - 999 response with AK9 code
+   - Any other Stedi response artifacts
+
+5. Verify in production DB:
+   SELECT * FROM submission_attempts 
+   WHERE claim_id = [test_claim_id]
+   ORDER BY created_at DESC;
+   
+   Confirm the row shows status='accepted' or similar, with 
+   stedi_correlation_id populated.
+
+If 999 = AK9*A, the agency-worker case is fully verified through real 
+infrastructure. We're done with Gap 2 and the EDI sprint closes.
+
+If 999 = AK9*R, paste every error segment so we know what's still off.
+
+PHASE 3 — Cleanup
+
+After verification, mark or archive the test claim so it doesn't show 
+up in Daniela's view as "real work" — set is_demo=true or add a 
+test_only flag, whatever pattern fits.
+
+Important constraints:
+
+- Do NOT put the Stedi production API key in Replit secrets
+- Do NOT change STEDI_ENV in Railway from "production" 
+- Do NOT submit anything with ISA15='P' to any non-FRCPB receiver
+- The test claim should be clearly marked so it can be archived 
+  after verification
+
+Time scope: 1-2 hours including the guard verification.
