@@ -1,0 +1,181 @@
+# ClaimShield — Pre-Demo Cleanup + Chajinel Tenant Setup
+
+## Context
+Pilot kickoff with Chajinel is tomorrow (Friday). The demo doubles as 
+their onboarding — they should see THEIR environment configured and 
+ready, not generic test data. This prompt covers two jobs:
+1. Remove dummy data that signals "we're not ready for you"
+2. Configure Chajinel's tenant so the platform is live for them 
+   by morning
+
+## Prerequisites
+- P0 fixes from prior prompt deployed: billing_model field on Practice 
+  table, agency_npi support, payer_category enum on Payer table
+- Existing pilot tenants verified to still generate claims correctly 
+  after schema migration
+
+---
+
+## Part 1: Cleanup — Remove Demo-Damaging Artifacts
+
+### 1.1 Old Test Tenants
+- Hide or delete tenants with names like "Demo Practice", "Test Clinic", 
+  "Test 1", "[WIP]", "Untitled Practice"
+- Verify any tenant selector/switcher in admin UI shows only real tenants
+- DO NOT delete the existing pilot tenant — only generic test/dev tenants
+
+### 1.2 Generic Placeholder Payer Records
+- Find and rename or remove payers with names like:
+  - "Healthcare Services Corporation"
+  - "Test Payer", "Sample Insurance", "ABC Insurance"
+- If a placeholder payer is referenced by existing claims, do not delete — 
+  rename to a realistic name and set payer_category appropriately
+
+### 1.3 Test Patients
+- Remove patients with obvious dummy names: "John Doe", "Test Patient", 
+  "Patient 1", "asdf", etc.
+- Remove patients with no associated claims AND no realistic profile 
+  (DOB = 1900-01-01, etc.)
+
+### 1.4 Test Claims
+- Remove claims with charge amounts of $0.01 or $1.00
+- Remove claims linked to deleted test patients
+
+### 1.5 Visible Dev Strings
+- Search the codebase for UI-rendered strings: TODO, FIXME, [WIP], XXX, 
+  "lorem ipsum", "Coming soon (TBD)"
+- Replace with appropriate user-facing copy or hide the affected element
+
+### 1.6 Console Errors
+- Open browser dev tools on each main flow (login, dashboard, patient 
+  create, claim wizard, payer config) and silence visible errors / 
+  excessive console.log output
+- Fix or remove network 404s on missing assets
+
+### 1.7 Empty States
+- Pages displaying "undefined", blank tables with no headers, or 
+  zero-state errors should show a clean empty-state message instead
+- Example: "No claims yet — create your first claim to get started"
+
+---
+
+## Part 2: Configure Chajinel Tenant
+
+### 2.1 Create Chajinel Practice
+Use these values (placeholders marked — Abeer to fill in before running):
+
+- name: "Chajinel"
+- billing_model: 'agency_billed'
+- agency_npi: <ABEER_TO_PROVIDE>
+- agency_tax_id: <ABEER_TO_PROVIDE>
+- address: <ABEER_TO_PROVIDE — Chajinel's California address>
+- primary_admin_email: <Daniela's email>
+
+### 2.2 Configure Payers for Chajinel
+
+Create these three payer records under Chajinel:
+
+**Payer 1 — TriWest:**
+- name: "TriWest Healthcare Alliance"
+- payer_category: 'va_community_care'
+- payer_id (clearinghouse): <look up from Stedi dashboard>
+- mailing_address: <look up from TriWest provider directory>
+
+**Payer 2 — San Mateo County IHSS:**
+- name: "San Mateo County IHSS"
+- payer_category: 'county_ihss'
+- payer_id: leave blank with note "manual submission — no clearinghouse"
+- mailing_address: <look up SMC IHSS billing address>
+
+**Payer 3 — LTC Insurance Placeholder:**
+- name: "LTC Insurance (configure per claim)"
+- payer_category: 'ltc_insurance'
+- mark as inactive/hidden by default — present so the category exists, 
+  not for active use
+
+### 2.3 Add Agency Caregivers
+
+Create 3 placeholder caregiver records under Chajinel with 
+provider_type = 'agency_worker', npi = NULL:
+
+- "Lucia Hernandez, RN"
+- "Carlos Mendoza, CNA"
+- "Ana Reyes, Home Health Aide"
+
+These are placeholders Daniela will replace with real staff — naming 
+them realistically so the UI doesn't look empty.
+
+### 2.4 Add Realistic Test Patients
+
+Create 2 test patients under Chajinel, prefixed "TEST:" so they're 
+distinguishable from real records:
+
+**Patient 1 — VA Community Care:**
+- name: "TEST: Maria Garcia"
+- DOB: 1955-03-12
+- assigned payer: TriWest
+- plan_type: 'unknown'
+- assigned caregiver: Lucia Hernandez
+
+**Patient 2 — County IHSS:**
+- name: "TEST: Jose Rodriguez"
+- DOB: 1948-07-22
+- assigned payer: San Mateo County IHSS
+- plan_type: 'unknown'
+- assigned caregiver: Carlos Mendoza
+
+### 2.5 End-to-End Smoke Test (CRITICAL — DO NOT SKIP)
+
+Before logging off tonight, run this verification:
+
+1. Log in as Chajinel admin (or impersonate from admin)
+2. Open TEST: Maria Garcia patient record
+3. Run the claim wizard end-to-end with realistic service dates and 
+   CPT codes (e.g., T1019 for personal care services, hourly home health)
+4. Confirm the 837P generates correctly with:
+   - Loop 2010AA (Billing Provider) = Chajinel agency NPI
+   - Loop 2310B (Rendering Provider) = Lucia Hernandez, no NPI required
+   - Payer routing follows va_community_care path
+5. Submit through Stedi sandbox and verify 999/277CA acknowledgment
+6. Repeat for TEST: Jose Rodriguez against San Mateo County IHSS
+
+If any step fails, message Abeer immediately. The demo cannot proceed 
+on a configuration that has not been verified end-to-end.
+
+---
+
+## Part 3: UI Polish (Time-Permitting Only)
+
+Nice-to-have, NOT blocking:
+
+- Empty analytics dashboards: replace "No data" with "Pilot just started 
+  — claims will appear here as you submit them"
+- Loading spinners: every async action shows one (no UI freezing without 
+  feedback)
+- Form validation: any "Required" / "Invalid" messages should be 
+  human-readable, not raw error strings
+
+---
+
+## What NOT to Touch
+
+- DO NOT modify rules engine logic
+- DO NOT change 837P output for existing tenants
+- DO NOT refactor code outside this cleanup scope
+- DO NOT add new features or "improvements" not listed
+- DO NOT delete existing real pilot tenants
+
+---
+
+## Acceptance Checklist (must be true by 8 AM Friday)
+
+- [ ] No "Healthcare Services Corporation" or similar generic names in UI
+- [ ] No obvious dummy patients/claims visible
+- [ ] Chajinel tenant exists with billing_model = 'agency_billed' and 
+      agency_npi populated
+- [ ] 3 caregivers, 3 payers, 2 test patients configured under Chajinel
+- [ ] End-to-end claim submitted (sandbox) for both VA and County test 
+      patients with valid acknowledgments returned
+- [ ] No visible console errors on main flows
+- [ ] No TODO/FIXME/WIP strings visible in UI
+- [ ] Existing pilot tenants verified unchanged
