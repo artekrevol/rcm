@@ -49,6 +49,8 @@ export default function PatientList() {
       if (!res.ok) throw new Error("Failed to fetch patients");
       return res.json();
     },
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   function displayName(p: any): string {
