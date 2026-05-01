@@ -143,6 +143,8 @@ interface ServiceLine {
   vaRate: string | null;
   locationName: string | null;
   isAverageRate: boolean;
+  serviceDateFrom: string;
+  serviceDateTo: string;
 }
 
 const CLAIM_FREQUENCY_CODES = [
@@ -191,13 +193,14 @@ function mapValidationError(err: any): { plain: string; fix: string; code: strin
   return { plain: rawMsg, fix: "Review the flagged field and correct before resubmitting", code };
 }
 
-function emptyLine(): ServiceLine {
+function emptyLine(defaultDate = ""): ServiceLine {
   return {
     code: "", description: "", modifier: "", diagnosisPointers: "A",
     unitType: "per_visit", unitIntervalMinutes: null, hours: "", units: "1",
     ratePerUnit: "", totalCharge: "", chargeOverridden: false,
     requiresModifier: false, manualEntry: false, vaRate: null,
     locationName: null, isAverageRate: false,
+    serviceDateFrom: defaultDate, serviceDateTo: "",
   };
 }
 
@@ -542,12 +545,14 @@ function isVACode(code: string) {
   return /^(G02|G01|T10|S91)/.test(upper);
 }
 
-function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billingLocation }: {
+function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billingLocation, periodStart, periodEnd }: {
   line: ServiceLine; index: number;
   onChange: (index: number, updates: Partial<ServiceLine>) => void;
   onRemove: (index: number) => void;
   patientPayer: string | null;
   billingLocation: string | null;
+  periodStart?: string;
+  periodEnd?: string;
 }) {
   const [showCodeSearch, setShowCodeSearch] = useState(false);
   const { data: vaLocations = [] } = useQuery<string[]>({
@@ -683,6 +688,36 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
           <Button variant="ghost" size="sm" onClick={() => onRemove(index)} data-testid={`button-remove-line-${index}`}>
             <Trash2 className="h-4 w-4 text-destructive" />
           </Button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-3 items-end">
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">Date From</Label>
+          <Input
+            type="date"
+            value={line.serviceDateFrom}
+            min={periodStart || undefined}
+            max={periodEnd || new Date().toISOString().split("T")[0]}
+            onChange={(e) => onChange(index, { serviceDateFrom: e.target.value })}
+            className="h-7 text-xs w-36"
+            data-testid={`input-line-date-from-${index}`}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">Date To <span className="text-muted-foreground/60">(optional)</span></Label>
+          <Input
+            type="date"
+            value={line.serviceDateTo}
+            min={line.serviceDateFrom || periodStart || undefined}
+            max={periodEnd || new Date().toISOString().split("T")[0]}
+            onChange={(e) => onChange(index, { serviceDateTo: e.target.value })}
+            className="h-7 text-xs w-36"
+            data-testid={`input-line-date-to-${index}`}
+          />
+        </div>
+        {line.serviceDateFrom && line.serviceDateTo && line.serviceDateFrom !== line.serviceDateTo && (
+          <span className="text-xs text-muted-foreground pb-1">RD8 range</span>
         )}
       </div>
 
@@ -988,6 +1023,7 @@ export default function ClaimWizard() {
 
   const [providerId, setProviderId] = useState("");
   const [serviceDate, setServiceDate] = useState(new Date().toISOString().split("T")[0]);
+  const [statementPeriodEnd, setStatementPeriodEnd] = useState("");
   const [placeOfService, setPlaceOfService] = useState("11");
   const [serviceLines, setServiceLines] = useState<ServiceLine[]>([emptyLine()]);
   const [icd10Primary, setIcd10Primary] = useState<{ code: string; desc: string }>({ code: "", desc: "" });
@@ -1147,20 +1183,22 @@ export default function ClaimWizard() {
       if (sec.length === 0) sec.push({ code: "", desc: "" });
       setIcd10Secondary(sec);
     }
+    if (claim.statementPeriodEnd) setStatementPeriodEnd(claim.statementPeriodEnd);
     if (claim.serviceLines && Array.isArray(claim.serviceLines) && claim.serviceLines.length > 0) {
       setServiceLines(claim.serviceLines.map((sl: any) => ({
-        id: crypto.randomUUID(),
-        code: sl.code || "",
+        ...emptyLine(),
+        code: sl.code || sl.hcpcs_code || "",
         description: sl.description || "",
         modifier: sl.modifier || "",
-        units: sl.units || "1",
-        ratePerUnit: sl.ratePerUnit ? String(sl.ratePerUnit) : "",
-        total: sl.total ? String(sl.total) : "",
-        unitType: sl.unitType || "per_visit",
-        unitIntervalMinutes: sl.unitIntervalMinutes || null,
+        units: sl.units != null ? String(sl.units) : "1",
+        ratePerUnit: sl.ratePerUnit != null ? String(sl.ratePerUnit) : (sl.rate_per_unit != null ? String(sl.rate_per_unit) : ""),
+        totalCharge: sl.totalCharge != null ? String(sl.totalCharge) : (sl.total_charge != null ? String(sl.total_charge) : ""),
+        unitType: sl.unitType || sl.unit_type || "per_visit",
+        unitIntervalMinutes: sl.unitIntervalMinutes || sl.unit_interval_minutes || null,
+        diagnosisPointers: sl.diagnosisPointers || sl.diagnosis_pointer || "A",
         manualEntry: true,
-        hours: "",
-        minutes: "",
+        serviceDateFrom: sl.service_date_from || sl.serviceDateFrom || "",
+        serviceDateTo: sl.service_date_to || sl.serviceDateTo || "",
       })));
     }
     setStep(1);
@@ -1377,8 +1415,8 @@ export default function ClaimWizard() {
   }
 
   function addServiceLine() {
-    if (serviceLines.length >= 6) { toast({ title: "Maximum 6 service lines", variant: "destructive" }); return; }
-    setServiceLines((prev) => [...prev, emptyLine()]);
+    if (serviceLines.length >= 30) { toast({ title: "Maximum 30 service lines", variant: "destructive" }); return; }
+    setServiceLines((prev) => [...prev, emptyLine(serviceDate || "")]);
   }
 
   function buildClaimPayload() {
@@ -1396,12 +1434,21 @@ export default function ClaimWizard() {
       total_charge: parseFloat(l.totalCharge) || 0,
       charge_overridden: l.chargeOverridden,
       manual_entry: l.manualEntry,
+      service_date_from: l.serviceDateFrom || serviceDate || null,
+      service_date_to: l.serviceDateTo || null,
     }));
+
+    const minLineDate = slData
+      .map((l) => l.service_date_from)
+      .filter(Boolean)
+      .sort()[0] || serviceDate || null;
 
     return {
       encounterId,
       providerId: providerId || null,
-      serviceDate: serviceDate || null,
+      serviceDate: minLineDate,
+      statementPeriodStart: serviceDate || null,
+      statementPeriodEnd: statementPeriodEnd || null,
       placeOfService,
       cptCodes,
       serviceLines: slData,
@@ -1427,7 +1474,7 @@ export default function ClaimWizard() {
   function validateStep2(): boolean {
     const errors: Record<string, string> = {};
     if (!providerId) errors.provider = "Rendering provider is required";
-    if (!serviceDate) errors.serviceDate = "Service date is required";
+    if (!serviceDate) errors.serviceDate = "Billing period start date is required";
     const filledLines = serviceLines.filter(l => l.code);
     if (filledLines.length === 0) errors.serviceLines = "At least one service line with a code is required";
     filledLines.forEach((l, i) => {
@@ -1803,9 +1850,9 @@ export default function ClaimWizard() {
           <Card>
             <CardHeader><CardTitle>Service Details</CardTitle></CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Service Date</Label>
+                  <Label>Billing Period Start <span className="text-xs text-muted-foreground">(statement from)</span></Label>
                   <Input
                     type="date"
                     value={serviceDate}
@@ -1813,12 +1860,28 @@ export default function ClaimWizard() {
                     max={new Date().toISOString().split("T")[0]}
                     data-testid="input-service-date"
                   />
-                  {serviceDateError && (
+                  {step2Errors.serviceDate && (
                     <p className="text-sm text-destructive flex items-center gap-1" data-testid="text-date-error">
+                      <AlertCircle className="h-3 w-3" /> {step2Errors.serviceDate}
+                    </p>
+                  )}
+                  {serviceDateError && (
+                    <p className="text-sm text-destructive flex items-center gap-1" data-testid="text-date-timely-error">
                       <AlertCircle className="h-3 w-3" /> {serviceDateError}
                     </p>
                   )}
                   <FieldViolationHint types={["date_sanity", "timely_filing"]} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Billing Period End <span className="text-xs text-muted-foreground">(statement to, optional)</span></Label>
+                  <Input
+                    type="date"
+                    value={statementPeriodEnd}
+                    min={serviceDate || undefined}
+                    max={new Date().toISOString().split("T")[0]}
+                    onChange={(e) => setStatementPeriodEnd(e.target.value)}
+                    data-testid="input-statement-period-end"
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Place of Service</Label>
@@ -1841,7 +1904,7 @@ export default function ClaimWizard() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 Service Lines
-                <Button variant="outline" size="sm" onClick={addServiceLine} disabled={serviceLines.length >= 6} data-testid="button-add-line">
+                <Button variant="outline" size="sm" onClick={addServiceLine} disabled={serviceLines.length >= 30} data-testid="button-add-line">
                   <Plus className="h-4 w-4 mr-1" /> Add Line
                 </Button>
               </CardTitle>
@@ -1857,6 +1920,8 @@ export default function ClaimWizard() {
                   onRemove={removeServiceLine}
                   patientPayer={patient?.insurance_carrier || null}
                   billingLocation={wizardData?.practiceSettings?.default_va_locality || wizardData?.practiceSettings?.billing_location || null}
+                  periodStart={serviceDate || undefined}
+                  periodEnd={statementPeriodEnd || undefined}
                 />
               ))}
               <Separator />
@@ -2362,7 +2427,10 @@ export default function ClaimWizard() {
             <CardContent className="space-y-3">
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <div><span className="text-muted-foreground">Provider:</span> {selectedProvider ? `${selectedProvider.first_name} ${selectedProvider.last_name}` : "—"}</div>
-                <div><span className="text-muted-foreground">Service Date:</span> {serviceDate || "—"}</div>
+                <div>
+                  <span className="text-muted-foreground">Billing Period:</span>{" "}
+                  {serviceDate || "—"}{statementPeriodEnd ? ` – ${statementPeriodEnd}` : ""}
+                </div>
                 {orderingProviderId && orderingProviderId !== "__none__" && (() => {
                   if (orderingProviderId === "__external__") {
                     const name = [externalOrderingFirstName, externalOrderingLastName].filter(Boolean).join(" ");

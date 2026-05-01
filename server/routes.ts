@@ -1430,6 +1430,51 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
     }
 
+    // ── Seed Chajinel multi-visit home care demo claim (Maria Garcia, 6 visits) ─
+    const { rows: chajClaimCheck } = await pool.query(`SELECT COUNT(*)::int as cnt FROM claims WHERE id = 'chajinel-claim-mv-001'`);
+    if (chajClaimCheck[0].cnt === 0) {
+      const { rows: [chajPt] } = await pool.query(`SELECT id FROM patients WHERE organization_id='chajinel-org-001' AND last_name='Garcia' AND first_name='TEST: Maria' LIMIT 1`);
+      const { rows: chajProvRows } = await pool.query(`SELECT id FROM providers WHERE organization_id='chajinel-org-001' ORDER BY created_at LIMIT 1`);
+      const { rows: [chajPayer] } = await pool.query(`SELECT id FROM payers WHERE name ILIKE '%medicare%' LIMIT 1`);
+
+      if (chajPt && chajProvRows.length > 0) {
+        const ptId = chajPt.id;
+        const provId = chajProvRows[0].id;
+        const payerId = chajPayer?.id || null;
+        const payerName = chajPayer ? 'Medicare' : 'Medicare';
+        // G0156: Home health aide, per 15 minutes. 16 units × $9.67 = $154.72 per visit.
+        const g0156Rate = 9.67;
+        const g0156Units = 16;
+        const g0156Charge = parseFloat((g0156Rate * g0156Units).toFixed(2));
+        const visitDates = ['2026-04-02', '2026-04-04', '2026-04-07', '2026-04-09', '2026-04-11', '2026-04-14'];
+        const sl = visitDates.map(d => ({
+          hcpcs_code: 'G0156', description: 'Home health aide or hospice aide services, per 15 minutes',
+          units: g0156Units, rate_per_unit: g0156Rate, total_charge: g0156Charge,
+          modifier: null, diagnosis_pointer: 'A', unit_type: 'per_15_min', manual_entry: false,
+          service_date_from: d, service_date_to: null,
+        }));
+        const totalAmount = parseFloat((g0156Charge * visitDates.length).toFixed(2));
+        const chajEncId = 'chajinel-enc-mv-001';
+        await pool.query(`
+          INSERT INTO encounters (id, patient_id, service_type, facility_type, admission_type, expected_start_date, organization_id, created_at)
+          VALUES ($1,$2,'home_health','home','routine','2026-04-02','chajinel-org-001',NOW())
+          ON CONFLICT (id) DO NOTHING
+        `, [chajEncId, ptId]);
+        await pool.query(`
+          INSERT INTO claims (id, encounter_id, patient_id, payer, payer_id, provider_id, service_date,
+            statement_period_start, statement_period_end,
+            place_of_service, icd10_primary, icd10_secondary, amount, status,
+            risk_score, readiness_status, homebound_indicator, claim_frequency_code,
+            service_lines, cpt_codes, organization_id, submission_method, created_at, updated_at)
+          VALUES ($1,$2,$3,$4,$5,$6,'2026-04-02','2026-04-02','2026-04-14','12','Z74.01','["M62.81"]'::jsonb,
+            $7,'draft',10,'GREEN',true,'1',$8::jsonb,'["G0156"]'::jsonb,'chajinel-org-001',
+            'stedi',NOW(),NOW())
+          ON CONFLICT (id) DO NOTHING
+        `, ['chajinel-claim-mv-001', chajEncId, ptId, payerName, payerId, provId, totalAmount, JSON.stringify(sl)]);
+        console.log("[Seeder] Chajinel multi-visit home care demo claim seeded (Maria Garcia, 6×G0156)");
+      }
+    }
+
     // ── Seed ERA demo batches (835 remittance data) ────────────────────────────
     const { rows: eraCheck } = await pool.query(`SELECT COUNT(*)::int as cnt FROM era_batches WHERE id LIKE 'demo-era-%'`);
     if (eraCheck[0].cnt === 0) {
@@ -2203,6 +2248,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP`).catch(() => {});
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS archived_by TEXT`).catch(() => {});
+    // ── Multi-visit home care billing statement period ──────────────────────
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS statement_period_start DATE`).catch(() => {});
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS statement_period_end DATE`).catch(() => {});
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_patients_archived ON patients (organization_id) WHERE archived_at IS NULL`).catch(() => {});
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_archived ON claims (organization_id) WHERE archived_at IS NULL`).catch(() => {});
     // Mark Chajinel demo patients as is_demo
@@ -4162,9 +4210,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
             SELECT DISTINCT ON (c.id) c.id
             FROM claims c
             LEFT JOIN payers p ON c.payer_id = p.id OR LOWER(p.name) = LOWER(c.payer)
-            WHERE c.service_date IS NOT NULL
+            WHERE (c.service_date IS NOT NULL OR c.statement_period_start IS NOT NULL)
               AND c.status NOT IN ('paid', 'denied', 'draft')
-              AND c.service_date < NOW() - ((COALESCE(p.timely_filing_days, 365) - 30) || ' days')::interval
+              AND COALESCE(c.statement_period_start, c.service_date) < NOW() - ((COALESCE(p.timely_filing_days, 365) - 30) || ' days')::interval
               ${orgClaimFilter}
           ) t
         `),
@@ -4826,6 +4874,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         orderingProviderOrg: "ordering_provider_org",
         delayReasonCode: "delay_reason_code", followUpDate: "follow_up_date", followUpStatus: "follow_up_status",
         planProduct: "plan_product",
+        statementPeriodStart: "statement_period_start",
+        statementPeriodEnd: "statement_period_end",
       };
       const fields: string[] = [];
       const values: any[] = [];
@@ -5543,7 +5593,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
         modifier: sl.modifier || null,
         diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
-        service_date: sl.service_date || sl.serviceDate || null,
+        service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
+        service_date_to: sl.service_date_to || null,
       }));
 
       const icd10Codes: string[] = [];
@@ -5589,6 +5640,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           orig_claim_number: c.orig_claim_number || null,
           homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
           delay_reason_code: c.delay_reason_code || null,
+          statement_period_start: c.statement_period_start ? new Date(c.statement_period_start).toISOString().slice(0, 10) : null,
+          statement_period_end: c.statement_period_end ? new Date(c.statement_period_end).toISOString().slice(0, 10) : null,
           service_lines: serviceLines,
           icd10_codes: icd10Codes.length ? icd10Codes : (() => { throw new Error("VALIDATION_ERROR: Claim has no ICD-10 diagnosis codes. Please add at least one diagnosis code before generating EDI."); })(),
         },
@@ -5721,7 +5774,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
         modifier: sl.modifier || null,
         diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
-        service_date: sl.service_date || sl.serviceDate || null,
+        service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
+        service_date_to: sl.service_date_to || null,
       }));
       const icd10Codes: string[] = [];
       if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
@@ -5899,7 +5953,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
         modifier: sl.modifier || null,
         diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
-        service_date: sl.service_date || sl.serviceDate || null,
+        service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
+        service_date_to: sl.service_date_to || null,
       }));
       const icd10Codes: string[] = [];
       if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
@@ -5981,6 +6036,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           delay_reason_code: c.delay_reason_code || null,
           claim_frequency_code: c.claim_frequency_code || "1",
           orig_claim_number: c.orig_claim_number || null,
+          statement_period_start: c.statement_period_start ? new Date(c.statement_period_start).toISOString().slice(0, 10) : null,
+          statement_period_end: c.statement_period_end ? new Date(c.statement_period_end).toISOString().slice(0, 10) : null,
           service_lines: serviceLines,
           icd10_codes: icd10Codes,
         },
@@ -6143,7 +6200,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         charge: Number(sl.charge) || Number(sl.amount) || Number(sl.total_charge) || 0,
         modifier: sl.modifier || null,
         diagnosis_pointer: diagPointerToNumeric(sl.diagnosisPointers || sl.diagnosisPointer || sl.diagnosis_pointer || "A"),
-        service_date: sl.service_date || sl.serviceDate || null,
+        service_date: sl.service_date_from || sl.service_date || sl.serviceDate || null,
+        service_date_to: sl.service_date_to || null,
       }));
       const icd10Codes: string[] = [];
       if (c.icd10_primary) icd10Codes.push(c.icd10_primary);
@@ -6174,6 +6232,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           delay_reason_code: c.delay_reason_code || null,
           claim_frequency_code: c.claim_frequency_code || "1",
           orig_claim_number: c.orig_claim_number || null,
+          statement_period_start: c.statement_period_start ? new Date(c.statement_period_start).toISOString().slice(0, 10) : null,
+          statement_period_end: c.statement_period_end ? new Date(c.statement_period_end).toISOString().slice(0, 10) : null,
           service_lines: serviceLines,
           icd10_codes: icd10Codes,
         },

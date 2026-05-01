@@ -52,6 +52,8 @@ export interface EDI837PInput {
     orig_claim_number?: string | null;
     homebound_indicator?: boolean | null;
     delay_reason_code?: string | null;
+    statement_period_start?: string | null;
+    statement_period_end?: string | null;
     service_lines: Array<{
       hcpcs_code: string;
       units: number;
@@ -59,6 +61,7 @@ export interface EDI837PInput {
       modifier: string | null;
       diagnosis_pointer: string;
       service_date?: string;
+      service_date_to?: string | null;
     }>;
     icd10_codes: string[];
   };
@@ -367,6 +370,18 @@ export function generate837P(input: EDI837PInput): string {
     .join("*");
   segments.push(`HI*${diagCodes}`);
 
+  // ── Loop 2300 DTP*434: Statement Dates (home health billing period) ────────
+  // Qualifier 434 = Statement Dates; format RD8 = date range CCYYMMDD-CCYYMMDD
+  // Only emit when a statement period is explicitly provided (home care multi-visit).
+  // Per X12 5010 TR3 2300/DTP rules for 837P home health claims.
+  if (claim.statement_period_start) {
+    const periodStart = formatDate8(claim.statement_period_start);
+    const periodEnd = claim.statement_period_end
+      ? formatDate8(claim.statement_period_end)
+      : periodStart;
+    segments.push(`DTP*434*RD8*${periodStart}-${periodEnd}`);
+  }
+
   // ── Loop 2310B: Rendering Provider ────────────────────────────────────────
   const isOrgProvider = provider.entity_type === "organization";
   if (isOrgProvider) {
@@ -411,9 +426,17 @@ export function generate837P(input: EDI837PInput): string {
     segments.push(
       `SV1*${composite}*${line.charge.toFixed(2)}*UN*${line.units}***${diagPtr}`
     );
-    segments.push(
-      `DTP*472*D8*${formatDate8(lineServiceDate)}`
-    );
+    // DTP*472: Date – Service. Use RD8 date range when service_date_to is present
+    // (multi-visit lines spanning a range), otherwise D8 for a single date.
+    if (line.service_date_to && line.service_date_to !== lineServiceDate) {
+      segments.push(
+        `DTP*472*RD8*${formatDate8(lineServiceDate)}-${formatDate8(line.service_date_to)}`
+      );
+    } else {
+      segments.push(
+        `DTP*472*D8*${formatDate8(lineServiceDate)}`
+      );
+    }
   });
 
   const segCount = segments.length - 2 + 1;
