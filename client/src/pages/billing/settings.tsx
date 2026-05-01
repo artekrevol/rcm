@@ -917,32 +917,22 @@ function PracticeInfoTab() {
       <div className="space-y-2">
         <Label className="flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-          VA CCN Submitter ID
-          <span className="ml-1 inline-flex items-center rounded-full border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-            Required for VA CCN claims
+          VA CCN Trading Partner ID
+          <span className="ml-1 inline-flex items-center rounded-full border border-zinc-300 bg-zinc-50 dark:bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-500">
+            For reference
           </span>
         </Label>
         <p className="text-xs text-muted-foreground">
-          Your PGBA EDIG-assigned Trading Partner Submitter ID. Goes into ISA06, GS02, and Loop 1000A
-          of every 837P sent to VA Community Care Network. This may be a Stedi Trading Partner ID,
-          an Availity submitter ID, or a direct PGBA EDIG enrollment ID — confirm with Daniela which
-          submission path applies before entering. Do not use the NPI here.
+          Your PGBA EDIG-assigned Trading Partner ID (may be a Stedi Trading Partner ID, Availity submitter ID,
+          or direct PGBA EDIG enrollment ID). Stored here for reference — Stedi handles PGBA VA CCN routing
+          internally using your NPI. Confirm the correct value with Daniela before the first production claim.
         </p>
         <Input
           value={form.pgbaTradingPartnerId}
           onChange={(e) => setForm({ ...form, pgbaTradingPartnerId: e.target.value })}
-          placeholder="e.g. 7GWNNNNAAN or your assigned EDIG submitter ID"
+          placeholder="e.g. your EDIG-assigned submitter ID"
           data-testid="input-pgba-trading-partner-id"
         />
-        {!form.pgbaTradingPartnerId && (
-          <div className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            <span>
-              VA CCN claim generation is blocked until this is set. Contact PGBA EDI at{" "}
-              <span className="font-mono">PGBA.EDI@pgba.com</span> or 1-800-259-0264 option 1 to obtain your ID.
-            </span>
-          </div>
-        )}
       </div>
       <div>
         <h4 className="text-sm font-medium mb-3">Address</h4>

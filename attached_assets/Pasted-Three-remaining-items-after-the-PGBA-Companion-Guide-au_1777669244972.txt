@@ -1,0 +1,130 @@
+Three remaining items after the PGBA Companion Guide audit ships. Keep 
+the existing Stedi integration as-is — submitter ID in ISA06/GS02 stays 
+as Chajinel's NPI per Stedi's enrollment routing convention. We've 
+already validated this path works end-to-end.
+
+1. NM103 — switch from "PGBA VA CCN" to "PGBA VACCN" (no space) in both 
+   Loop 1000B and Loop 2010BB. Appendix B's working sample EDI uses no 
+   space; Table 6 says space. When PGBA's own published sample 
+   contradicts their data dictionary, the sample wins because that's 
+   what their parser was tested against. Make it a single 
+   PGBA_RECEIVER_NAME constant with a comment explaining the conflict.
+
+2. Regenerate Maria Garcia's test EDI (or pick any Chajinel test claim) 
+   with all the new fixes applied — G1 qualifier, G2 discipline, NM103 
+   change, BHT06=CH, the validateForPGBA() pre-flight checks. Submit it 
+   via the existing test-stedi endpoint (ISA15='T'). Verify in the 
+   Stedi portal that:
+   - The 837P shows up under recent transactions
+   - Stedi's structural validation passes (no rejection at Stedi's edge)
+   - The 277CA acknowledgment comes back via webhook
+   - The webhook handler enriches any rejection codes through the new 
+     rejectionCodeLookup service
+   Screenshot the Stedi portal transaction view in your verification 
+   report.
+
+   Do NOT submit anything with ISA15='P' (production). The first real 
+   production claim will be sent live during the upcoming demo with a 
+   real patient and real authorization. The test-stedi pass is the 
+   final pre-demo validation we need.
+
+3. Backlog: surface ordering provider secondary_id in the claim wizard 
+   UI. Not a demo blocker.
+
+────────────────────────────────────────────────────────────────────────
+ADDITIONAL TASK — map the post-claim-filing flow before the demo
+────────────────────────────────────────────────────────────────────────
+
+Before the demo I need a clear written assessment of what currently 
+happens in ClaimShield AFTER a claim is submitted to Stedi. The 
+pre-submission flow is well understood (intake → patient → claim 
+wizard → risk score → 837P generation → Stedi submission). The 
+post-submission flow has been built up across multiple sessions and 
+I want a single source of truth on what's actually wired vs. stubbed 
+vs. UI-only.
+
+Trace the full post-submission lifecycle in the codebase and produce 
+a written report covering:
+
+a. SUBMISSION RESPONSE HANDLING
+   - When test-stedi or submit-stedi returns from Stedi's API, what 
+     happens to the response?
+   - Is the Stedi transaction_id captured and stored on the claim 
+     record? Which column?
+   - Is the synchronous 999 acknowledgment from Stedi parsed and 
+     surfaced anywhere in the UI?
+   - What claim status transitions happen at this point?
+
+b. 277CA ACKNOWLEDGMENT INGESTION
+   - Which handler receives 277CAs — the polling job, the webhook, 
+     or both? Which is primary?
+   - Where does the 277CA parser live and what does it extract?
+   - Is the rejectionCodeLookup service from the recent audit wired 
+     into this path? If yes, where exactly (file + line). If no, what 
+     would it take to wire it in.
+   - When a 277CA arrives, what claim status transitions happen? What 
+     events are written to the claim event timeline? What shows up in 
+     the UI?
+   - If the 277CA contains a rejection, is the user notified? How?
+
+c. 835 ERA INGESTION AND POSTING
+   - Which handler receives 835s — polling, webhook, or both?
+   - Where does the 835 parser live?
+   - Is payment auto-posting actually wired or is it stubbed? If wired, 
+     which claim fields get updated (paid_amount, patient_responsibility, 
+     adjustment_amount, etc.)?
+   - How are CARC codes captured and surfaced? Is the CARC lookup 
+     library present and current?
+   - Does the denial_patterns table get written to from real ERA data, 
+     or is it still seeded data only?
+   - Where does the user see the ERA in the UI — claim detail page, 
+     dedicated ERA Posting page, both?
+
+d. CLAIM STATUS LIFECYCLE
+   - List every status value a claim can have (draft, submitted, 
+     accepted, rejected, paid, denied, etc.) and the trigger for each 
+     transition.
+   - Are there any status values that exist in the schema but aren't 
+     actually reachable in the live code path?
+   - Identify any "stuck claim" detection logic — does it actually 
+     fire alerts to the user, or is it UI-only display?
+
+e. DENIAL INTELLIGENCE FEEDBACK LOOP
+   - When a denial is received via 835 or rejection via 277CA, does 
+     denial_patterns get updated automatically?
+   - Does the prevention rule engine generate new rules from real 
+     denial data, or only from manually entered rules?
+   - Is the "47 denials in the NPI category" style clustering from 
+     the audit prompt actually computing on live data?
+
+f. RESUBMISSION AND CORRECTED CLAIM FLOW
+   - If a claim is rejected, what's the path to fix and resubmit?
+   - Does the system enforce frequency code 7 (replacement) on 
+     resubmissions per the PGBA Companion Guide?
+   - Is the prior claim number correctly populated in the REF segment 
+     on resubmissions?
+
+g. UI VISIBILITY GAPS
+   - For each post-submission event (submission accepted, 277CA 
+     received, ERA posted, denial received), confirm whether the 
+     user sees it on (i) the claim detail page, (ii) the dashboard, 
+     (iii) any notification badge or toast.
+   - Identify any event that fires server-side but has no UI surface.
+
+h. STUBS AND TODOs
+   - List any function in the post-submission path that is stubbed, 
+     TODO'd, or returns mock data. I need to know what would break 
+     if a real demo claim went through end-to-end and got a real 
+     denial back.
+
+Output format: a single Markdown report at docs/post_claim_filing_audit.md 
+with one section per item above. For each item, cite the exact file path 
+and line numbers where the logic lives, or explicitly state "not 
+implemented" with what would be required to implement it. Do not write 
+new code as part of this task — this is a read-only audit. If you 
+identify a critical gap that would break the demo, flag it at the top 
+of the report under "DEMO BLOCKERS" with a one-line recommended fix.
+
+This audit needs to be complete before the demo so I can make an 
+informed decision about which post-submission flows to actively 
+demonstrate vs. which to keep behind the scenes.
