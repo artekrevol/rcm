@@ -1069,6 +1069,7 @@ export default function ClaimWizard() {
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
   const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [submittingOA, setSubmittingOA] = useState(false);
   const [pdfGenerated, setPdfGenerated] = useState(false);
   const [pdfGenerating, setPdfGenerating] = useState(false);
   const [cms1500Loading, setCms1500Loading] = useState(false);
@@ -1130,6 +1131,7 @@ export default function ClaimWizard() {
     },
   });
   const stediConfigured = stediStatus?.configured ?? false;
+  const oaConfigured = !!(wizardData?.practiceSettings?.oa_connected);
   // ediMode from server environment — 'T' in dev/staging, 'P' only in production
   const ediMode: "P" | "T" = stediStatus?.ediMode ?? "T";
   // FRCPB is the Stedi E2E test payer — always force test mode for it.
@@ -2844,11 +2846,31 @@ export default function ClaimWizard() {
                 </div>
               ) : (
                 <Button
-                  onClick={() => setShowSubmitModal(true)}
-                  disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || (riskResult?.cciFactors?.some((cf) => cf.modifier_indicator === "0") ?? false)}
+                  onClick={async () => {
+                    if (!oaConfigured) { setShowSubmitModal(true); return; }
+                    if (!claimId) return;
+                    setSubmittingOA(true);
+                    try {
+                      const res = await fetch(`/api/billing/claims/${claimId}/submit-oa`, {
+                        method: "POST",
+                        credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                      });
+                      const result = await res.json();
+                      if (!res.ok) throw new Error(result.error || "Submission failed");
+                      queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
+                      toast({ title: "Claim submitted via Office Ally", description: result.message || "EDI file transmitted successfully." });
+                      navigate(`/billing/claims/${claimId}`);
+                    } catch (err: any) {
+                      toast({ title: "Submission failed", description: err.message, variant: "destructive" });
+                    } finally {
+                      setSubmittingOA(false);
+                    }
+                  }}
+                  disabled={submittingOA || validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || (riskResult?.cciFactors?.some((cf) => cf.modifier_indicator === "0") ?? false)}
                   data-testid="button-submit-claim"
                 >
-                  Submit via Office Ally
+                  {submittingOA ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Submitting…</> : "Submit via Office Ally"}
                 </Button>
               )}
             </div>
@@ -2859,13 +2881,14 @@ export default function ClaimWizard() {
       <Dialog open={showSubmitModal} onOpenChange={setShowSubmitModal}>
         <DialogContent data-testid="dialog-submit">
           <DialogHeader>
-            <DialogTitle>Electronic Submission</DialogTitle>
+            <DialogTitle>No Clearinghouse Configured</DialogTitle>
             <DialogDescription>
-              Configure a clearinghouse in Settings → Clearinghouse to enable automated electronic submission. Stedi (recommended) or Office Ally SFTP are both supported.
+              To submit claims electronically, connect a clearinghouse in Settings. Stedi (recommended) or Office Ally SFTP are both supported.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowSubmitModal(false)} data-testid="button-close-submit-dialog">Close</Button>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowSubmitModal(false)} data-testid="button-close-submit-dialog">Cancel</Button>
+            <Button onClick={() => { setShowSubmitModal(false); navigate("/settings/clearinghouse"); }} data-testid="button-go-to-settings">Go to Settings</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

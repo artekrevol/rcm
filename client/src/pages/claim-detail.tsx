@@ -255,12 +255,6 @@ function DenialRecoveryPanel({ claimId, claimStatus, onNavigate }: { claimId: st
     queryFn: () => fetch(`/api/billing/claims/${claimId}/denial-recovery`, { credentials: "include" }).then(r => r.json()),
   });
 
-  const resubmitMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/billing/claims/${claimId}/oa-submit`, {}),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/billing/claims", claimId] });
-    },
-  });
 
   if (isLoading) return null;
 
@@ -326,13 +320,12 @@ function DenialRecoveryPanel({ claimId, claimStatus, onNavigate }: { claimId: st
           )}
           <Button
             size="sm"
-            onClick={() => resubmitMutation.mutate()}
-            disabled={resubmitMutation.isPending}
+            onClick={() => onNavigate(`/billing/claims/new?claimId=${claimId}`)}
             data-testid="button-validate-resubmit"
             className="flex-1"
           >
-            {resubmitMutation.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />}
-            Validate &amp; Resubmit
+            <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+            Review &amp; Resubmit
           </Button>
         </div>
       </CardContent>
@@ -577,29 +570,32 @@ export default function ClaimDetailPage() {
               >
                 Claim summary — readable format
               </DropdownMenuItem>
-              <DropdownMenuItem
-                data-testid="menu-edi-837p"
-                disabled={ediValidating}
-                onClick={async () => {
-                  if (!id) return;
-                  setEdiValidating(true);
-                  try {
-                    const res = await fetch(`/api/billing/claims/${id}/edi-validate`, { credentials: "include" });
-                    const data = await res.json();
-                    setEdiValidation({
-                      ready: data.ready ?? false,
-                      summary: data.summary || data.error || "Validation check failed",
-                      warnings: Array.isArray(data.warnings) ? data.warnings : [],
-                    });
-                  } catch {
-                    setEdiValidation({ ready: false, summary: "Validation check failed", warnings: [] });
-                  } finally {
-                    setEdiValidating(false);
-                  }
-                }}
-              >
-                {ediValidating ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Checking…</> : "Download 837P EDI — for electronic submission"}
-              </DropdownMenuItem>
+              {claim.status !== "draft" && (
+                <DropdownMenuItem
+                  data-testid="menu-edi-837p"
+                  disabled={ediValidating}
+                  onClick={async () => {
+                    if (!id) return;
+                    setEdiValidating(true);
+                    try {
+                      const res = await fetch(`/api/billing/claims/${id}/edi-validate`, { credentials: "include" });
+                      const data = await res.json();
+                      setEdiValidation({
+                        ready: data.ready ?? false,
+                        summary: data.summary || data.error || "Validation check failed",
+                        warnings: Array.isArray(data.warnings) ? data.warnings : [],
+                      });
+                    } catch {
+                      setEdiValidation({ ready: false, summary: "Validation check failed", warnings: [] });
+                    } finally {
+                      setEdiValidating(false);
+                    }
+                  }}
+                >
+                  {ediValidating ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Checking…</> : "Download 837P EDI — for electronic submission"}
+                </DropdownMenuItem>
+              )}
+              {["submitted", "denied", "paid", "rejected", "appealed", "void"].includes(claim.status) && (
               <DropdownMenuItem
                 data-testid="menu-timely-filing"
                 disabled={timelinessPdfLoading}
@@ -631,6 +627,8 @@ export default function ClaimDetailPage() {
               >
                 {timelinessPdfLoading ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Generating…</> : "Proof of timely filing letter"}
               </DropdownMenuItem>
+              )}
+              {["denied", "appealed"].includes(claim.status) && (
               <DropdownMenuItem
                 data-testid="menu-appeal-letter"
                 disabled={appealPdfLoading}
@@ -662,6 +660,7 @@ export default function ClaimDetailPage() {
               >
                 {appealPdfLoading ? <><Loader2 className="h-3 w-3 animate-spin mr-1" /> Generating…</> : "Appeal letter — dispute denied claim"}
               </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
           {stediConfigured && claim.status === "submitted" && (claim as any).submissionMethod === "stedi" && (
