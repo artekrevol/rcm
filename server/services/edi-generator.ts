@@ -551,6 +551,20 @@ export function generate837P(input: EDI837PInput): string {
   `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:${freqCode}*Y*A*Y*Y`
   );
 
+  // ── Loop 2300 DTP*434: Statement Dates (home health billing period) ────────
+  // X12 5010 TR3 Loop 2300 segment order: CLM → DTP → REF → NTE → HI.
+  // DTP MUST appear before REF, NTE, and HI — placing it after HI causes Stedi's
+  // strict X12 parser to lose Loop 2400 context (loop_repeat_less_than_required).
+  // Qualifier 434 = Statement Dates; format RD8 = date range CCYYMMDD-CCYYMMDD.
+  // Only emit when a statement period is explicitly provided (home care multi-visit).
+  if (claim.statement_period_start) {
+    const periodStart = formatDate8(claim.statement_period_start);
+    const periodEnd = claim.statement_period_end
+      ? formatDate8(claim.statement_period_end)
+      : periodStart;
+    segments.push(`DTP*434*RD8*${periodStart}-${periodEnd}`);
+  }
+
   // REF*F8: Original claim ICN/TCN for replacement/void claims
   if ((freqCode === "7" || freqCode === "8") && claim.orig_claim_number) {
     segments.push(`REF*F8*${claim.orig_claim_number}`);
@@ -580,18 +594,6 @@ export function generate837P(input: EDI837PInput): string {
     .map((code, i) => `${i === 0 ? "ABK" : "ABF"}:${code.replace(/\./g, "")}`)
     .join("*");
   segments.push(`HI*${diagCodes}`);
-
-  // ── Loop 2300 DTP*434: Statement Dates (home health billing period) ────────
-  // Qualifier 434 = Statement Dates; format RD8 = date range CCYYMMDD-CCYYMMDD
-  // Only emit when a statement period is explicitly provided (home care multi-visit).
-  // Per X12 5010 TR3 2300/DTP rules for 837P home health claims.
-  if (claim.statement_period_start) {
-    const periodStart = formatDate8(claim.statement_period_start);
-    const periodEnd = claim.statement_period_end
-      ? formatDate8(claim.statement_period_end)
-      : periodStart;
-    segments.push(`DTP*434*RD8*${periodStart}-${periodEnd}`);
-  }
 
   // ── Loop 2310B: Rendering Provider ────────────────────────────────────────
   // A3 FIX: Omit this loop entirely when the provider has no NPI (agency worker,
