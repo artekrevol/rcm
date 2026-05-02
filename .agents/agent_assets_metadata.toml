@@ -24,3 +24,9 @@ id = "fklmH2TwKeDCk47QaT4fz"
 uri = "file://docs/QA_DEMO_RUNBOOK.md"
 type = "text"
 title = "ClaimShield Health — Pre-Demo QA Runbook"
+
+[[outputs]]
+id = "_VASmmBppQgaifeoFMFQ0"
+uri = "file://docs/PRODUCT_SCOPE.md"
+type = "text"
+title = "ClaimShield Health — Full Product Scope"
