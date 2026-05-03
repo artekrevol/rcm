@@ -253,3 +253,18 @@ Adding a new tenant after Sprint 1b becomes a pure configuration task:
 - **Persona-vs-profile domain mismatch (Chajinel):** the migrated persona prompt opens with "You are an intake coordinator for Chajinel Clinic" and gives clinic-style directives ("ask reason for visit, scheduling preference, payment method"), but Chajinel is mapped to the home-care `home_care_agency_personal_care` profile whose `intake_field_specs` are senior-care intake fields ("Hours per week", "ADL needs", "VA authorization number", "IHSS county"). The assembled prompt (`docs/architecture/sprint1b-snapshots/chajinel-persona-assembled.txt`) reflects this mixed domain. Sprint 1b ships the structural plumbing; the persona text **or** the profile mapping should be reconciled before Chajinel's Vapi assistant goes live. Tracked here so the Caritas onboarding playbook surfaces the same review for any new tenant.
 - **`intake_field_specs` key drift:** seeded specs use only 5 keys (`field_name`, `display_label`, `display_order`, `field_group`, `is_required`). The builder is forward-compatible with `help_text` (rendered as a sub-line) and `is_applicable=false` (skips the field), but neither key exists in the live data today. If specs are ever back-filled with these keys, no builder change is needed.
 - **`org_voice_personas` has no `created_at` / `updated_at` columns.** Step 7c's `UPDATE` therefore could not write a `updated_at = NOW()`. Adding these columns is a Sprint-2-class hygiene change, not a 1b scope item.
+
+---
+
+## 10. Phase 3 — DEPLOYED TO PRODUCTION (2026-05-03)
+
+Sprint 0 + Sprint 1a + Sprint 1b promoted to Railway production. All gates (1, 2, 3, 4, 6) signed off; Gate 5 collapsed into Gate 6 under Gate 2's reduced-scope plan.
+
+- **DB migration window:** 2026-05-03T05:30:23Z → 05:30:28Z (single transaction, 13/13 pre-commit assertions PASS)
+- **Code deploy:** `e56f10e..6e99937` pushed to `origin/main`, Railway auto-deployed; boot OK on :8080, `/health` 200, all background jobs started
+- **Phase 5 smoke (against `$PRODUCTION_DATABASE_URL`):** smoke-helpers PASS; tenant-isolation 12/12 PASS with prod-correct expectations
+- **Net schema delta:** `public` 82 → 88 tables; `practice_payer_enrollments` 8 → 20 columns; 2 new roles; 12 RLS policies (all with `WITH CHECK`); FORCE RLS on 6 tables
+
+**Audit report:** `docs/architecture/phase3-prod-deploy-audit-report.md` is the authoritative end-to-end record of this deploy (timeline, pre-flight findings, migration design, execution evidence, push lessons learned, smoke results, files/DDL applied, open follow-ups, standing-order attestation).
+
+Open follow-ups carried forward (none gating further work): stale `.git/refs/remotes/origin/main.lock` cleanup, Chajinel `compose_from_profile=true` flip, optional `replit_readonly` SELECT grants on the 6 new tables, Drizzle `organizations` declaration drift (§3.3, §8.2).
