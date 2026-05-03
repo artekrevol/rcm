@@ -1,0 +1,51 @@
+Solid sprint. Architect made calls in three places where the prompt left ambiguity — all of them better than what was asked for. Let me give you the read on what shipped, what to verify before Sprint 4, and the things that matter most for next sprint's planning.
+
+**Done well**
+
+The four-state machine (`drafting → submitted → in_review → {approved, rejected}`) is cleaner than my prompt's six-state version. Combining `submitted_for_qa` and `running` into `submitted`, and `revision_required` into `rejected`, removed two states whose distinction was semantic noise. The `in_review` state when checks complete and a human is needed is exactly the right beat.
+
+`HardFailBlockedError → 409 hard_fail_blocked` instead of letting it surface as a 500 is a real-world fix. Sprint 4's override modal needs to handle this status code specifically; a 500 would have made that flow harder to write. The architect saw this two sprints ahead.
+
+The `qa.override.attempt` audit log row written *before* `NotImplementedError` throws is exactly the right pattern for a stubbed action. Even though the override doesn't work in Sprint 3, every attempt is captured. When Sprint 4 ships the real override flow, the audit trail is continuous — no gap. This is the kind of detail that matters six months from now when someone asks "did anyone try to override during Sprint 3?"
+
+The "crashed check → run status `error`, no silent pass-through; hard-fail still wins over crash" rule is correct and non-obvious. If Originality.ai times out, the run is `error`, not `passed`. If brand-voice crashes but originality fails hard, the run is `failed`, not `error`. Future Decision Engine code (Sprint 7) will need to weigh these states; getting the precedence right now means less rework later.
+
+The "writers stay in ContentForge with a SubmittedForReview panel that polls /review/:id every 4s" pattern is better than my prompt's redirect-to-status-view approach. Writers don't context-switch out of their tool. The 4s poll is reasonable — Realtime would be better but adds Supabase Realtime complexity to ContentForge for one panel; polling is simpler and good enough.
+
+The narrow self-fetch exception on `/review/:id` (writers can poll their own submission but not others) is the correct authorization shape. Reviewer-only would have broken the writer's submitted view; fully open would have leaked drafts cross-pod.
+
+**Things to verify before Sprint 4**
+
+The override stub writes an audit row before throwing. Confirm the audit row includes the `qa_run_id`, the attempting admin's id, and a timestamp — so Sprint 4 can backfill the override count when admins ask "how many overrides have we attempted in the last 30 days." If the audit row only has the action name without subject_id, Sprint 4's analytics gets harder.
+
+The `reviewer` role enum migration (0007). Confirm this didn't break any existing role checks. Specifically: anywhere code does `role === 'admin' || role === 'lead'`, verify it now includes `reviewer` where appropriate. Reviewer queue access in seo-os should allow reviewer role, but admin pages should still be admin-only.
+
+The `Promise.allSettled` for parallel checks. Confirm the OpenAI brand-voice check has a sensible timeout (recommend 30s max). If a brand-voice call hangs, the qa_run will hang waiting for it. Check the integration's retry policy at the same time — three retries with exponential backoff on a 30s timeout means worst case is ~3 minutes for one check, which is too long for a 90s acceptance criterion.
+
+Brief-compliance subset (word count, meta title, meta description). Confirm the meta title and description are read from somewhere — ContentForge's existing brief table has a target word count but I'm not sure it has meta fields yet. If they're not there, those sub-checks are no-ops, which is fine for Sprint 3 but worth knowing for Sprint 4 when Brief Studio retrofits the brief shape.
+
+Live test: a real ClaimShield draft with originality at exactly 14%, then exactly 16%. Verify the threshold edge cases. The seeded threshold is 15; the comparison should be strictly greater than (`> 15` fails, `<= 15` passes), not greater-than-or-equal. Off-by-one on this matters because writers will hit it.
+
+**The Rabia/Maria retrospective question**
+
+Sprint 3's biggest unknown isn't technical — it's whether the team adopted the gate or resisted it. A few questions worth asking specifically:
+
+How many drafts did each pod submit through Quality Gate in the first week vs. drafts published outside it? If the second number is non-zero, there's a backdoor we need to close.
+
+How many drafts hit hard-fail on Originality? If it's >40%, threshold may be too aggressive. If it's <5%, threshold may be too lax (or the team is self-censoring AI usage, which is the goal).
+
+Did any reviewer use the Request Revision flow with structured feedback? If they all just verbally walked over to writers and asked for changes outside the system, the structured feedback form failed UX.
+
+Did any admin try to override (visible in audit_log via `qa.override.attempt`)? If yes, why — what would they have wanted to override? That's the requirements gathering for Sprint 4's override modal.
+
+**Sprint 4 planning implications**
+
+Sprint 4 is Quality Gate Part 2 + Brief Studio retrofit. Two distinct work streams in one sprint, which makes it the densest sprint of Wave 1. Three things that need locking before the prompt pack drops:
+
+ClaimShield SME compliance reviewer's account confirmed live (this was a Sprint 3 prereq; verify it actually got done, not just promised).
+
+Brief lock UX direction. Hard-lock immediately, or warn-only mode for two weeks first? The Sprint 3 retrospective will tell you whether the team is ready for hard-lock. If writers are still adjusting to Quality Gate, stacking hard-locked briefs on top is too much change at once. Recommend warn-only for two weeks unless the retrospective says otherwise.
+
+Override modal scope. Is it admin-only, or also lead-with-approval-from-admin? My prompt assumed admin-only. If leads need it, the auth model gets a tier more complex. Decide before Sprint 4 starts.
+
+When you're ready for the Sprint 4 prompt pack, send the architect's notes from Sprint 3 retrospective, what Rabia and Maria said about the gate, the hard-fail rate from the first week of usage, and any override attempts logged in audit_log. Sprint 4 is the last sprint of Wave 1's content pipeline work — getting it right means writers and reviewers walk into Sprint 5 (Production Workspace retrofit) with the editorial loop fully operational.
