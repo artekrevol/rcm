@@ -259,16 +259,115 @@ less /tmp/prod-schema-pre-phase3-20260503T045620Z.sql
 
 ---
 
-## Gate 2 — Sign-off requested
+## Gate 2 — SIGNED OFF (reduced scope)
 
-Phases 1a, 1b, 1e complete. Phase 1c **blocked on user-provided Railway dashboard values** (§3 table). Phase 1d skipped per instruction.
+User authorized reduced-scope sign-off on 2026-05-03: prod has zero real users / zero clients (kickoff pushed), so pre-deploy app-health metrics baselines are not meaningful and **Phase 1c is skipped entirely**. Phase 5 smoke testing reduced to "boot-and-respond"; Phase 7 24h soft-monitor dropped.
 
-**Stopping here. Awaiting user input to fill §3, then sign-off to proceed to Phase 2.**
+### Three Gate-2 facts confirmed
 
-### Headline findings for the gate review
+1. **Local snapshot downloaded + verified** — user confirmed (per chunked download from `snapshots/`, rejoin sha256 matches `ec74627e…b4a441`).
+2. **`pg_restore -l` returns valid TOC** — exit 0, 490 entries, header confirms PG 17.9 source / pg_dump 17.6 / custom format / gzip-compressed; breakdown 164 TABLE / 105 INDEX / 105 CONSTRAINT / 47 ACL / 36 FK / 21 SEQUENCE / 7 DEFAULT.
+3. **Rollback target deploy SHA** — `e56f10e91c0f6d5534b2fc58e64e15d845a12be0` ("Fix user deletion and editing by correcting method name", razaabeer25, 2026-05-01 23:02:47 UTC).
 
-1. **Prod is at the expected pre-Sprint-0 state.** No Phase 3 tables, no RLS, no `claimshield_app_role`. Migration is required and additive in nature (no drops needed).
-2. **Two existing roles to preserve:** `postgres` (superuser, what we connect as) and `replit_readonly` (read-only consumer; will need post-migration grants on the 6 new tables).
-3. **5 rows of preserved data:** 3 organizations, 5 `practice_payer_enrollments` (3 Chajinel + 2 Demo), 2 `org_voice_personas`. Migration must be additive-only.
+### Headline findings carried into Phase 2
+
+1. **Prod is at the expected pre-Sprint-0 state.** No Phase 3 tables, no RLS, no `claimshield_app_role`. Migration is purely additive.
+2. **Two existing roles to preserve:** `postgres` (superuser; connection identity) and `replit_readonly` (read-only consumer). Whether to extend `replit_readonly` SELECT grants to the 6 new tables is deferred — see §6.4 below.
+3. **5 rows of preserved data:** 3 organizations, 5 `practice_payer_enrollments` (3 Chajinel + 2 Demo), 2 `org_voice_personas`. Migration must be additive-only — verified by §7 pre-commit assertions in the migration script.
 4. **PG version mismatch (17.9 prod vs 16.10 dev tooling) is benign** — confirmed Sprint 0 DDL features all supported on PG 17.
-5. **Snapshot is in `/tmp` only** — durable backup before Phase 2 is non-negotiable.
+
+---
+
+## 6. Phase 2 — Migration script authored (Build mode, NOT yet pushed/applied)
+
+### 6.1 Deliverables
+
+| Path | Size | Purpose |
+|---|---|---|
+| `scripts/phase3-prod-migration.sql` | 28,773 B | Consolidated DDL: Sprint 0 + Sprint 1a (collapsed into CREATE POLICY) + Sprint 1b column-add. Idempotent. Single transaction. Pre-commit verification block at §7. |
+| `scripts/verify-phase3-prod-migration.sql` | 4,245 B | Read-only post-deploy verification (Q1–Q9). Re-runnable. |
+| `scripts/apply-phase3-prod-migration.sh` | 2,894 B | Bash runner — picks v17 `psql` from `/nix/store`, runs migration with `-v ON_ERROR_STOP=1`, then runs verification. Requires interactive `APPLY` confirmation. |
+
+### 6.2 Migration structure (single `BEGIN`/`COMMIT` transaction)
+
+| § | Action |
+|---|---|
+| §0 | Preflight: emits connection identity + checks for pre-existing Phase 3 tables (warns, does not abort — script is idempotent). |
+| §1.1 | `CREATE TABLE IF NOT EXISTS practice_profiles` (global catalog, no RLS). 14 cols. |
+| §1.2 | Seed `home_care_agency_personal_care` profile via `INSERT … ON CONFLICT (profile_code) DO NOTHING`. |
+| §1.3 | `CREATE TABLE IF NOT EXISTS organization_practice_profiles` + `idx_one_primary_profile_per_org` partial unique index + Chajinel→home_care `is_primary=true` mapping (idempotent). |
+| §1.4 | 12 `ALTER TABLE practice_payer_enrollments ADD COLUMN IF NOT EXISTS …` — additive 8 → 20 cols. Existing 5 rows preserve their values; new cols populate from DEFAULT. |
+| §1.5–§1.8 | `CREATE TABLE IF NOT EXISTS` for `provider_practice_relationships`, `provider_payer_relationships`, `patient_insurance_enrollments`, `claim_provider_assignments` (incl. all FKs + indexes + UNIQUE constraints). |
+| §2 | `ENABLE ROW LEVEL SECURITY` on the 6 tenant-scoped tables (×6). |
+| §3 | `tenant_isolation` policies — Sprint 1a `WITH CHECK` collapsed into the original CREATE POLICY so no intermediate "no-WITH-CHECK" state ever exists in prod. (×6) |
+| §4 | `claimshield_service_role` (DO/IF NOT EXISTS) + table grants + `FORCE ROW LEVEL SECURITY` (×6) + `service_role_bypass` policies (×6). |
+| §5 | `claimshield_app_role` (DO/IF NOT EXISTS, NOLOGIN NOINHERIT) + `GRANT claimshield_app_role TO postgres` + DML grants on 6 tenant tables + SELECT grants on `practice_profiles` + parent tables (`organizations`, `payers`, `providers`, `patients`, `claims`). |
+| §6 | `ALTER TABLE org_voice_personas ADD COLUMN IF NOT EXISTS compose_from_profile BOOLEAN NOT NULL DEFAULT false`. Existing 2 rows take `false` — Caritas behavior unchanged; Chajinel persona-flip is a deliberate post-deploy data step (§6.4). |
+| §7 | `DO $$ … $$` block of 13 expected-state assertions. Any failure RAISES EXCEPTION → ROLLBACK → no state change. |
+
+### 6.3 Pre-commit verification (§7) — fails the txn if any of these are wrong
+
+| # | Assertion |
+|---|---|
+| 1 | 6 Phase 3 tables present in `public` |
+| 2 | 12 RLS policies (2 per table × 6 tenant tables) |
+| 3 | 0 `tenant_isolation` policies missing `WITH CHECK` |
+| 4 | `claimshield_app_role` exists |
+| 5 | `claimshield_service_role` exists |
+| 6 | `pg_has_role('postgres', 'claimshield_app_role', 'MEMBER')` is true |
+| 7 | `org_voice_personas.compose_from_profile` column exists |
+| 8 | `practice_payer_enrollments` has 20 columns |
+| 9 | `organizations` count = 3 (preserved) |
+| 10 | `practice_payer_enrollments` count for `chajinel-org-001` = 3 (preserved) |
+| 11 | `practice_payer_enrollments` total = 5 (preserved) |
+| 12 | `home_care_agency_personal_care` profile seeded (count = 1) |
+| 13 | Chajinel ↔ `home_care_agency_personal_care` mapping with `is_primary=true` (count = 1) |
+
+### 6.4 Deliberate exclusions from this migration
+
+| Item | Rationale |
+|---|---|
+| Chajinel `compose_from_profile=true` flip + `system_prompt` template update | Dev-side Sprint 1b applied this data change in addition to the column-add. Excluded from the prod migration to avoid clobbering prod's Chajinel persona row if its `system_prompt` has diverged from dev. Chajinel's `vapi_assistant_id` is still `PLACEHOLDER_AWAITING_VAPI_CONFIG` and `is_active=false`, so no live calls go through this persona regardless. To flip it post-deploy: run a manual `UPDATE org_voice_personas SET compose_from_profile=true, system_prompt=<inspected current text> ‖ E'\n\n{{INTAKE_FIELDS}}' WHERE organization_id='chajinel-org-001'`. |
+| `replit_readonly` SELECT grants on the 6 new tables | Out of scope — extending the read-only role's coverage is a separate decision not handled by Sprint 0/1a/1b. Phase 3 tables remain inaccessible to `replit_readonly` until an explicit `GRANT SELECT … TO replit_readonly` is run. Flag for follow-up if read-only dashboards need visibility into the new tables. |
+| Vapi-side dashboard config changes (Chajinel assistant ID) | Configuration external to the DB; not in scope for this script. |
+| Code deploy (Railway redeploy of git HEAD) | Phase 4 step, separate from this DB-only migration. |
+
+### 6.5 Apply command
+
+```bash
+# Preconditions:
+#   - PRODUCTION_DATABASE_URL set
+#   - durable copy of the snapshot retained off-Replit
+#   - Gate 3 sign-off received
+
+bash scripts/apply-phase3-prod-migration.sh
+# Will prompt for "APPLY" before connecting to prod.
+```
+
+### 6.6 What's NOT done in Phase 2
+
+- **Not pushed to git** — files are committed in the workspace via Replit checkpoint, but `git push` has been deliberately withheld pending Gate 3.
+- **Not applied to prod** — the script has not been run against `PRODUCTION_DATABASE_URL`. No prod DDL has been executed.
+- **Not dry-run on dev** — dev already has Sprint 0/1a/1b applied (per `migration-state.md`), so re-running on dev would be a no-op (idempotent IF NOT EXISTS / ON CONFLICT). A fresh dry-run env is not currently provisioned. Idempotency was verified by code review — every CREATE/ALTER uses `IF NOT EXISTS`, every INSERT uses `ON CONFLICT DO NOTHING`, every CREATE ROLE is wrapped in `DO $$ IF NOT EXISTS … $$`.
+
+### 6.7 Stale-plan cleanup
+
+Removed `.local/session_plan.md` left over from the earlier audit-refresh task (T001–T017). Phase 3 deploy state is tracked solely in this preflight document.
+
+---
+
+## Gate 3 — Sign-off requested
+
+**Stopping here per instruction. Awaiting Gate 3 review before proceeding to Phase 3 (apply migration to prod).**
+
+### What to review for Gate 3
+
+1. `scripts/phase3-prod-migration.sql` — confirm DDL matches Sprint 0+1a+1b intent.
+2. `scripts/verify-phase3-prod-migration.sql` — confirm post-deploy assertions cover the right surfaces.
+3. `scripts/apply-phase3-prod-migration.sh` — confirm runner safety (interactive `APPLY` prompt, v17 psql resolution, ON_ERROR_STOP=1).
+4. §6.4 deliberate exclusions — agree or push back on Chajinel data flip + `replit_readonly` extension being separately handled.
+5. Confirm: should the migration be applied directly from this Replit workspace (using `PRODUCTION_DATABASE_URL` already in env), or should it be staged on a separate operator workstation?
+
+### After Gate 3
+
+Phase 3 will run the migration against prod with the script above, capturing stdout to `/tmp/phase3-migration-applied-<timestamp>.log`. On success, that log gets summarized into a §7 of this doc, and we hand to Gate 4 (code redeploy).
