@@ -19,6 +19,14 @@ export interface OrgPersona {
   system_prompt: string | null;
   metadata: Record<string, unknown>;
   is_active: boolean;
+  /**
+   * Sprint 1b: when true, the voice-persona-builder service composes the
+   * assembled prompt at call time (substituting the {{INTAKE_FIELDS}} block
+   * from the active practice profile). When false (legacy default), the
+   * outbound payload sends no system-message override and Vapi's static
+   * dashboard prompt is used as-is.
+   */
+  compose_from_profile: boolean;
 }
 
 export interface OrgServiceType {
@@ -100,7 +108,7 @@ export async function getOrgContext(organizationId: string): Promise<OrgContext>
       [organizationId]
     ),
     pool.query(
-      `SELECT id, persona_key, vapi_assistant_id, persona_name, greeting, system_prompt, metadata, is_active
+      `SELECT id, persona_key, vapi_assistant_id, persona_name, greeting, system_prompt, metadata, is_active, compose_from_profile
        FROM org_voice_personas
        WHERE organization_id = $1 AND is_active = true`,
       [organizationId]

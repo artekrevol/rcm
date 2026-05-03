@@ -843,3 +843,24 @@ export const claimProviderAssignments = pgTable("claim_provider_assignments", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 export type ClaimProviderAssignment = typeof claimProviderAssignments.$inferSelect;
+
+// =========================================================================
+// Phase 3 Sprint 1b — Voice persona Drizzle declaration
+// Pre-existing table (created via raw SQL seeder at server/routes.ts:2199);
+// declared here in Sprint 1b so the voice-persona-builder service has typed
+// access. Schema mirrors the live DB exactly (9 base cols + composeFromProfile
+// added by Sprint 1b ALTER TABLE). No createdAt/updatedAt columns present.
+// =========================================================================
+export const orgVoicePersonas = pgTable("org_voice_personas", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: text("organization_id").notNull(),
+  personaKey: text("persona_key").notNull(),
+  vapiAssistantId: text("vapi_assistant_id"),
+  personaName: text("persona_name"),
+  greeting: text("greeting"),
+  systemPrompt: text("system_prompt"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  isActive: boolean("is_active").notNull().default(true),
+  composeFromProfile: boolean("compose_from_profile").notNull().default(false),
+});
+export type OrgVoicePersona = typeof orgVoicePersonas.$inferSelect;

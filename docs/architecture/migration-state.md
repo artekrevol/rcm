@@ -194,3 +194,62 @@ Integration test `server/services/rules-engine.test.ts` (4/4 PASS): empty servic
 | Workflow startup | observed in `Start application` post-change | clean (no errors) |
 
 Full Sprint 1a audit report: `docs/architecture/sprint1a-audit-report.md`.
+
+---
+
+## 9. Sprint 1b — voice persona profile-driven composition (2026-05-03)
+
+Sprint 1b refactored the voice persona system-prompt builder so the "fields to capture" section is composed at runtime from the active practice profile instead of being baked into the static template stored in `org_voice_personas.system_prompt`. Existing §1–§8 above remain authoritative; this section records the deltas.
+
+### 9.1 What landed
+
+- **DDL (additive):** `ALTER TABLE org_voice_personas ADD COLUMN compose_from_profile boolean NOT NULL DEFAULT false;`. Both seeded rows started at `false`; only Chajinel was migrated to `true`.
+- **Drizzle:** `orgVoicePersonas` declaration NEW in `shared/schema.ts:857-869` (the table predates Phase 3 and previously had no Drizzle decl — Sprint 1b adds it covering all 9 base columns + `composeFromProfile`). Type `OrgVoicePersona` exported.
+- **`OrgPersona` interface + `getOrgContext` query:** extended with `compose_from_profile` field at `server/services/org-context.ts:32` and SELECT line 114, so the cached persona record in `orgCtx.personas[key]` carries the flag.
+- **NEW service `server/services/voice-persona-builder.ts`** (137 lines): `buildAssistantSystemPrompt(orgId)` with opt-out / opt-in-with-placeholder / opt-in-without-placeholder paths and the §5c fail-safe rules. `renderIntakeFieldsForPrompt(specs)` exported for test use.
+- **Outbound wire-in:** `server/services/flow-step-executor.ts:657-672` resolves the assembled prompt only when `persona.compose_from_profile === true`; line 708-710 conditionally injects `messages: [{ role: "system", content }]` into the existing `assistantOverrides.model` block. For opt-out personas (including Caritas) the spread evaluates to `{}` — the model block is byte-identical to before Sprint 1b. Verified empirically: `buildAssistantSystemPrompt('caritas-org-001')` returns the stored `system_prompt` unchanged (md5-stable; see audit §6 + §7).
+- **Chajinel migration applied** (transaction): `compose_from_profile=true`, prompt template now ends with `\n\n{{INTAKE_FIELDS}}`. Pre/post snapshots at `docs/architecture/sprint1b-snapshots/{chajinel-persona-pre.txt, chajinel-persona-post.txt, chajinel-persona-assembled.txt}`.
+- **Tests:** `server/services/voice-persona-builder.test.ts` — 23/23 PASS (10 renderer + 6 builder against seeded data + 4 synthetic-org + 3 fail-safe / placeholder-leak guards).
+
+### 9.2 RLS NOT extended to `org_voice_personas` in Sprint 1b
+
+The persona table predates Phase 3. As of 1b ship: `relrowsecurity = false`, `relforcerowsecurity = false`. The builder reads the persona row via the global `pool` (postgres superuser) since no RLS is in effect — verified safe because the query is explicitly filtered by `organization_id = $1`. Adding RLS would require the same role-grant + middleware-routing dance Sprint 0 did for the new tables; this is tracked as a Sprint 2 prerequisite if the persona table needs cross-tenant protection. No INSERT/UPDATE helpers are introduced for this table in 1b, so the missing-WITH-CHECK gate from §3.1 does not apply here.
+
+Other pre-Phase-3 `org_*` tables (`org_message_templates`, `org_service_types`, `org_payer_mappings`, `org_lead_sources`, `org_providers`) are in the same RLS-disabled state and the same Sprint 2 gate covers them as a class.
+
+### 9.3 Vapi authoritative prompt source — documentation correction
+
+> ⚠️ **Important architectural clarification.** The Sprint 0 audit at `docs/architecture/system-audit/02-data-flows.md` Flow B and `docs/architecture/system-audit/09-integrations.md` (Vapi section) implied that `org_voice_personas.system_prompt` flows directly to Vapi. **It does not.** Sprint 1b discovery (audit §2b) traced the full outbound `voice_call` handler at `server/services/flow-step-executor.ts:564-751` and confirmed the only persona fields read are `vapi_assistant_id` (line 571) and `persona_name` (line 676). The pre-Sprint-1b `assistantOverrides` payload contained no `model.messages` override — the actual system prompt used on outbound calls came entirely from the **Vapi-side dashboard configuration** for each assistant ID.
+>
+> Post Sprint 1b the truth is split:
+> - For personas with `compose_from_profile = false` (Caritas today, every persona row at sprint 1b ship): the **Vapi dashboard prompt** for that assistant ID is authoritative. ClaimShield does not override the system message. The `org_voice_personas.system_prompt` column is a stored reference copy, not what reaches Vapi.
+> - For personas with `compose_from_profile = true` (Chajinel post-migration): the **assembled prompt from the builder** is sent as `assistantOverrides.model.messages = [{ role: "system", content: assembled }]`, overriding the dashboard's system message for that one call. The dashboard's other config (model name unless overridden, voice, tools, knowledge base, etc.) is unaffected by adding `messages` to the model block.
+>
+> Future engineers updating `02-data-flows.md` Flow B or `09-integrations.md` Vapi section should reflect this split, not the original simplifying assumption.
+
+### 9.4 Vapi `model.messages` cascade-scope assumption
+
+The Sprint 1b wire-in adds `messages` *inside the existing `model` override block* (`flow-step-executor.ts:704-711`), which already overrides `provider/model/temperature` for every outbound call (opt-in or opt-out). Whatever cascade-replace behavior Vapi applies to `assistantOverrides.model` was already in effect for both personas pre-1b — Sprint 1b only extends that block by one key for opt-in personas.
+
+**Untested at sprint 1b ship.** No dev Vapi assistant exists to validate end-to-end (Chajinel's `vapi_assistant_id` is still `PLACEHOLDER_AWAITING_VAPI_CONFIG`; Caritas is production-active and out of scope). The assumption — that adding `messages` to the model override block does not cascade-clear other dashboard fields like `tools`, `knowledgeBase`, or `functions` — must be validated when Chajinel's real Vapi assistant ID is configured (or via a dedicated dev assistant before that). If the override turns out to cascade-replace the entire `model` config, the wire-in must be expanded to include all currently-dashboard-configured `model.*` keys for opt-in personas.
+
+### 9.5 Inbound Vapi prompt reconciliation deferred
+
+The inbound webhook at `server/routes.ts:9275-9429` (`POST /api/vapi/webhook`) is one-way only — it consumes `end-of-call-report` events, persists transcript/recording/summary, releases the comm lock, and advances the flow state machine. It never pushes `assistantOverrides` back to Vapi. Inbound assistants therefore continue to use their static dashboard-configured prompts regardless of `compose_from_profile`. Sprint 1c+ owns inbound-side reconciliation if/when it becomes necessary.
+
+### 9.6 Caritas onboarding — now structurally unblocked
+
+Adding a new tenant after Sprint 1b becomes a pure configuration task:
+
+1. Define a profile (e.g. `referral_intake_only`) or reuse an existing one in `practice_profiles`.
+2. Seed the profile with appropriate `intake_field_specs`.
+3. Create the org's `org_voice_personas` row with a static template containing `{{INTAKE_FIELDS}}` and `compose_from_profile = true`.
+4. Map the org via `organization_practice_profiles` (`is_primary = true`).
+5. Configure the org's Vapi assistant ID (replacing any placeholder).
+6. **Validate the Vapi `model.messages` cascade-scope assumption from §9.4 against that assistant before going live.**
+
+### 9.7 Tier-2 / Tier-3 known concerns (Sprint 1b discovery)
+
+- **Persona-vs-profile domain mismatch (Chajinel):** the migrated persona prompt opens with "You are an intake coordinator for Chajinel Clinic" and gives clinic-style directives ("ask reason for visit, scheduling preference, payment method"), but Chajinel is mapped to the home-care `home_care_agency_personal_care` profile whose `intake_field_specs` are senior-care intake fields ("Hours per week", "ADL needs", "VA authorization number", "IHSS county"). The assembled prompt (`docs/architecture/sprint1b-snapshots/chajinel-persona-assembled.txt`) reflects this mixed domain. Sprint 1b ships the structural plumbing; the persona text **or** the profile mapping should be reconciled before Chajinel's Vapi assistant goes live. Tracked here so the Caritas onboarding playbook surfaces the same review for any new tenant.
+- **`intake_field_specs` key drift:** seeded specs use only 5 keys (`field_name`, `display_label`, `display_order`, `field_group`, `is_required`). The builder is forward-compatible with `help_text` (rendered as a sub-line) and `is_applicable=false` (skips the field), but neither key exists in the live data today. If specs are ever back-filled with these keys, no builder change is needed.
+- **`org_voice_personas` has no `created_at` / `updated_at` columns.** Step 7c's `UPDATE` therefore could not write a `updated_at = NOW()`. Adding these columns is a Sprint-2-class hygiene change, not a 1b scope item.

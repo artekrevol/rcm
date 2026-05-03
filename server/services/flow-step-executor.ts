@@ -651,6 +651,23 @@ export async function executeStep(
       const lFirstName = lead.first_name || (lead.name as string)?.split(" ")[0] || "Unknown";
       const lLastName = lead.last_name || (lead.name as string)?.split(" ").slice(1).join(" ") || "";
 
+      // Sprint 1b: compose the assistant system prompt at runtime when this
+      // persona has opted in via `compose_from_profile=true`. The override is
+      // injected into the existing assistantOverrides.model block (which
+      // already replaces the dashboard's model config with provider/model/
+      // temperature). For opt-out personas (every row at 1b ship) this
+      // remains undefined and the model block is byte-identical to before.
+      let composedSystemPrompt: string | null = null;
+      if (persona?.compose_from_profile === true && organizationId) {
+        try {
+          const { buildAssistantSystemPrompt } = await import("./voice-persona-builder");
+          composedSystemPrompt = await buildAssistantSystemPrompt(organizationId);
+        } catch (err) {
+          console.error("[flow-step-executor] voice-persona-builder failed; proceeding without override:", err);
+          composedSystemPrompt = null;
+        }
+      }
+
       const vapiPayload = {
         assistantId,
         phoneNumberId,
@@ -685,6 +702,9 @@ export async function executeStep(
             provider: "openai",
             model: "gpt-4o-mini",
             temperature: 0.2,
+            ...(composedSystemPrompt
+              ? { messages: [{ role: "system", content: composedSystemPrompt }] }
+              : {}),
           },
           voice: {
             provider: "11labs",
