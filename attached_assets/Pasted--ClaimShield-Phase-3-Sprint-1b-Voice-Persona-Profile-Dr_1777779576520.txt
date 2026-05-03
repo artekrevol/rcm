@@ -1,0 +1,516 @@
+# ClaimShield — Phase 3 Sprint 1b: Voice Persona Profile-Driven Composition
+
+This sprint follows Sprint 1a (completed 2026-05-03 — `docs/architecture/sprint1a-audit-report.md` and `docs/architecture/migration-state.md §8`). It refactors the voice persona system-prompt builder so that the "fields to capture" section is composed at runtime from the active practice profile instead of being baked into the static template stored in `org_voice_personas.system_prompt`.
+
+This is the work that unblocks Caritas onboarding. After Sprint 1b lands, adding a new tenant becomes: define a profile (or reuse one) → create the org row → map to profile → create the persona row with greeting/tone/conversation structure (no field list). The field list is rendered at call time from the profile's `intake_field_specs`.
+
+This sprint is intentionally additive and opt-in. Existing personas are not disturbed. Chajinel's persona (currently inactive — `vapi_assistant_id = 'PLACEHOLDER_AWAITING_VAPI_CONFIG'`) is migrated to the new pattern as the proof point. Daniela's Tuesday demo is unaffected (the EDI/billing path doesn't touch voice personas).
+
+## Anchors from prior sprints
+
+These facts are confirmed in `docs/architecture/sprint0-audit-report.md`, `docs/architecture/sprint1a-audit-report.md`, `docs/architecture/migration-state.md`, and `docs/architecture/system-audit/`:
+
+- `org_voice_personas` table exists with 2 rows. CASCADE FK to `organizations`. (`audit:01-database-schema.md`)
+- One row is for `chajinel-org-001` with `vapi_assistant_id = 'PLACEHOLDER_AWAITING_VAPI_CONFIG'`. (`audit:12-known-issues-and-tech-debt.md §8`)
+- The second row's org is **UNVERIFIED** in this prompt. Step 2 confirms before any change.
+- Vapi outbound construction is at `server/services/flow-step-executor.ts:566-571`. (`audit:11-configuration.md`, `audit:02-data-flows.md` Flow B)
+- Helper function `getActivePracticeProfile(orgIdOverride?)` exists at `server/services/practice-profile-helpers.ts`. (`sprint0-audit-report.md §2.6`)
+- `home_care_agency_personal_care` profile has `intake_field_specs` populated with 13 entries. (`sprint0-audit-report.md §2.3`)
+- Chajinel is mapped to `home_care_agency_personal_care` via `organization_practice_profiles`, `is_primary=true`. (`sprint0-audit-report.md §2.4a`)
+- All 6 tenant-scoped tables have RLS + WITH CHECK enforced (`sprint1a-audit-report.md §2`).
+- App-role pattern: any tenant-scoped query goes through `withTenantTx` to set `SET LOCAL ROLE claimshield_app_role`. The helper layer already does this. (`sprint0-audit-report.md §2.5f`)
+- Drizzle declaration of `organizations` is now correct (7 columns matching live DB). (`sprint1a-audit-report.md §3`)
+- Tier 1 wired into `evaluateClaim` (`sprint1a-audit-report.md §4`). EDI route gap documented for sprint 1c (`migration-state.md §8.4`). Neither affects this sprint.
+
+## What this sprint is
+
+1. Pre-flight: snapshot, baseline verification.
+2. Discovery (read-only): map every code path that loads, customizes, or sends a voice persona system prompt to Vapi.
+3. Schema: add `compose_from_profile boolean NOT NULL DEFAULT false` to `org_voice_personas` (additive; default false preserves existing behavior).
+4. Drizzle: update `org_voice_personas` definition in `shared/schema.ts` to include the new column.
+5. New service: `server/services/voice-persona-builder.ts` exporting `buildAssistantSystemPrompt(orgId)`.
+6. Wire the builder into the outbound Vapi call path at `flow-step-executor.ts:566-571`.
+7. Migrate Chajinel's persona to the new pattern (set `compose_from_profile=true`, update `system_prompt` to use the placeholder convention).
+8. Tests for the builder.
+9. Verification, smoke test, audit report, migration-state update.
+
+## What this sprint is NOT
+
+- No changes to the Vapi-side static assistant configuration (the dashboard / Vapi API). The `VAPI_ASSISTANT_ID`-configured prompt is out of scope; sprint 1c handles inbound-side reconciliation.
+- No changes to the inbound call flow (the Vapi webhook signature path at `routes.ts:9279`). If discovery in Step 2 surfaces that inbound prompts come from Vapi's static config, document and defer.
+- No changes to any persona other than Chajinel's. The second `org_voice_personas` row stays at `compose_from_profile=false` and is byte-identical post-sprint.
+- No activation of Chajinel's Vapi assistant (`vapi_assistant_id` stays at the placeholder string).
+- No changes to `practice_profiles.intake_field_specs` content.
+- No changes to the EDI generator, claim wizard, payer dropdown, billing module, or any frontend component.
+- No production deploy.
+- No Caritas onboarding (sprint 2+).
+
+If a step seems to require touching Vapi's dashboard, activating an assistant, or modifying the inbound webhook, stop and flag.
+
+---
+
+## Hard rules
+
+1. Take a database snapshot before any DDL or row update. Save the path in the audit report.
+2. The schema change is additive only — one new column with a NOT NULL default. No drops, no renames, no type changes.
+3. Existing personas with `compose_from_profile=false` (every row at sprint start) must produce byte-identical assembled system prompts after sprint 1b as before. The builder's no-op path is the contract.
+4. The builder must use `withTenantTx` indirectly through the existing helper layer. Do NOT bypass to the global `db` for any tenant-scoped read.
+5. If `getActivePracticeProfile(orgId)` returns null (org not mapped to a profile), the builder must fall back to returning `system_prompt` verbatim — even when `compose_from_profile=true`. This fail-safe prevents an unmapped org from sending an empty prompt to Vapi.
+6. Standing order: dev only. No production deploy.
+
+---
+
+## Step 1 — Pre-flight
+
+### 1a. Snapshot
+
+```bash
+pg_dump --no-owner --no-privileges $DATABASE_URL > docs/architecture/sprint1b-snapshots/dev-pre-sprint1b-$(date -u +%Y%m%d-%H%M%SZ).sql
+```
+
+Add `docs/architecture/sprint1b-snapshots/` to `.gitignore` if not already covered.
+
+### 1b. Baselines must be green
+
+```bash
+npx tsx scripts/verify-tenant-isolation.ts                              # 12/12
+npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts # 16/16
+npx tsx server/services/rules-engine.test.ts                            # 4/4 (sprint 1a)
+npx tsx scripts/smoke-helpers.ts                                        # green
+npx tsc --noEmit                                                        # clean
+```
+
+If any baseline fails, **stop and flag**. Sprint 1b does not start until baseline is clean.
+
+Record results in `docs/architecture/sprint1b-audit-report.md §1`.
+
+---
+
+## Step 2 — Discovery (read-only)
+
+This sprint touches the most user-impactful subsystem of ClaimShield (live AI-driven phone calls). Discovery is mandatory before any change.
+
+### 2a. Identify both `org_voice_personas` rows
+
+```sql
+SELECT id, organization_id, persona_key, vapi_assistant_id,
+       LEFT(system_prompt, 200) AS prompt_preview,
+       length(system_prompt) AS prompt_length,
+       created_at, updated_at
+FROM org_voice_personas
+ORDER BY organization_id;
+```
+
+Document the second row's organization and current state in the audit report §2. If it belongs to an org with a real (non-placeholder) `vapi_assistant_id`, it is **production-active** and must NOT be modified. Only Chajinel's persona is migrated in Sprint 1b.
+
+### 2b. Trace the outbound prompt construction path
+
+Read `server/services/flow-step-executor.ts:560-620` (extending past line 571 to capture the full `voice_call` step type handler). Document:
+
+- Where the persona record is loaded from the DB.
+- Where `system_prompt` is read from the persona.
+- Whether any other modifications happen to the prompt before it's passed to Vapi.
+- The exact field name in Vapi's `assistantOverrides` payload that carries the system prompt.
+- How the Vapi outbound call is constructed (which env vars, which API endpoint, which payload keys).
+
+Save the trace as a numbered call chain in the audit report §2.
+
+### 2c. Check the inbound path
+
+Search for the Vapi webhook handler:
+
+```bash
+grep -n "VAPI_WEBHOOK_SECRET\|vapi.*webhook\|/api/webhooks/vapi" server/routes.ts | head -20
+```
+
+Per audit, the signature check is at `routes.ts:9279`. Read 50 lines before and 100 lines after to understand:
+
+- What events trigger the webhook (call.start, call.end, transcript, etc.).
+- Whether any inbound event modifies the assistant's system prompt mid-call.
+- Whether ClaimShield ever issues `assistantOverrides` for inbound calls, or whether inbound assistants are statically configured on the Vapi side.
+
+Document findings in the audit report §2c. **Whichever the answer, do NOT modify the inbound path in Sprint 1b.** Inbound reconciliation is sprint 1c+.
+
+### 2d. Confirm helper composition
+
+Verify `getActivePracticeProfile` returns the expected shape for Chajinel:
+
+```bash
+npx tsx scripts/smoke-helpers.ts
+```
+
+Expected (per sprint 0 smoke):
+```
+Chajinel active profile code: home_care_agency_personal_care
+  display: Home Care Agency — Personal Care
+  is_primary: true
+  rule_subs count: 6
+```
+
+Inspect the helper's return type in `server/services/practice-profile-helpers.ts` to confirm `intake_field_specs` is parsed into structured form (not raw JSONB string). The builder needs typed access.
+
+If `intake_field_specs` is exposed as raw JSONB or not parsed, write an additional helper or extend `getActivePracticeProfile` minimally — but flag any signature change before making it.
+
+### 2e. Sign-off gate
+
+After discovery, **stop and produce the §2 deliverable** in the audit report. Wait for reviewer sign-off before continuing to Step 3.
+
+The reviewer needs to see:
+- The second persona row's org and active state.
+- The outbound prompt construction call chain.
+- The inbound path summary (and confirmation it's deferred).
+- Any helper-shape issues.
+
+---
+
+## Step 3 — Schema change: `org_voice_personas.compose_from_profile`
+
+```sql
+ALTER TABLE org_voice_personas
+  ADD COLUMN IF NOT EXISTS compose_from_profile boolean NOT NULL DEFAULT false;
+```
+
+Single ALTER. Default `false` means every existing row keeps its current behavior — the builder returns `system_prompt` verbatim until a row opts in.
+
+Verify:
+
+```sql
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_name = 'org_voice_personas' AND column_name = 'compose_from_profile';
+```
+
+Expected: 1 row, `boolean`, `NO`, `false`.
+
+```sql
+SELECT organization_id, compose_from_profile FROM org_voice_personas;
+```
+
+Expected: 2 rows, both `compose_from_profile = false`.
+
+## Step 4 — Drizzle definition update
+
+Locate the `orgVoicePersonas` declaration in `shared/schema.ts` (search for the table name). Add the new column:
+
+```typescript
+composeFromProfile: boolean("compose_from_profile").notNull().default(false),
+```
+
+Match the column-name string and field naming convention to the surrounding declarations.
+
+Run:
+
+```bash
+npx tsc --noEmit
+```
+
+Must pass with zero new errors.
+
+---
+
+## Step 5 — Build `voice-persona-builder.ts`
+
+Create `server/services/voice-persona-builder.ts`. The single export is `buildAssistantSystemPrompt(orgId: string): Promise<string>`.
+
+### 5a. Function contract
+
+```typescript
+import { withTenantTx } from '../middleware/tenant-context';
+import { db } from '../db';
+import { orgVoicePersonas } from '@shared/schema';
+import { eq } from 'drizzle-orm';
+import { getActivePracticeProfile } from './practice-profile-helpers';
+
+export async function buildAssistantSystemPrompt(orgId: string): Promise<string> {
+  // 1. Load the persona row for this org.
+  //    Persona is loaded outside withTenantTx because org_voice_personas does NOT
+  //    have RLS in sprint 1b — the table predates Phase 3. Keep using global `db`
+  //    until persona-table RLS migration in a later sprint (track in migration-state).
+  const persona = await db
+    .select()
+    .from(orgVoicePersonas)
+    .where(eq(orgVoicePersonas.organizationId, orgId))
+    .limit(1)
+    .then(rows => rows[0]);
+
+  if (!persona) {
+    throw new Error(`No voice persona configured for organization ${orgId}`);
+  }
+
+  // 2. If not opted in, return the static prompt unchanged.
+  if (!persona.composeFromProfile) {
+    return persona.systemPrompt;
+  }
+
+  // 3. Opted in. Load profile via the helper (uses withTenantTx + RLS).
+  const profile = await getActivePracticeProfile(orgId);
+
+  // 4. Fail-safe: if the org has no active profile, return the static prompt.
+  //    Never send a prompt with the unsubstituted placeholder to Vapi.
+  if (!profile || !profile.intake_field_specs) {
+    return persona.systemPrompt;
+  }
+
+  // 5. Render the field list and substitute or append.
+  const fieldsBlock = renderIntakeFieldsForPrompt(profile.intake_field_specs);
+
+  if (persona.systemPrompt.includes('{{INTAKE_FIELDS}}')) {
+    return persona.systemPrompt.replaceAll('{{INTAKE_FIELDS}}', fieldsBlock);
+  }
+
+  // No placeholder present — append at the end.
+  return `${persona.systemPrompt}\n\n${fieldsBlock}`;
+}
+```
+
+### 5b. `renderIntakeFieldsForPrompt`
+
+Internal helper, not exported. Takes the `intake_field_specs` array (13 entries for Chajinel's profile) and produces a formatted block suitable for inclusion in a Vapi system prompt.
+
+Format reference — match the tone of existing `system_prompt` content. Look at the current Chajinel persona's `system_prompt` to understand the existing style (clinical, conversational, instructional?) before designing the rendering. The rendering should feel like a continuation of the existing prompt, not a sudden style shift.
+
+Suggested format (adjust to match observed style):
+
+```
+DATA TO CAPTURE DURING THE CALL:
+
+Required fields:
+- Caller first name
+- Caller last name
+- Phone
+- Who needs care (the care recipient's name)
+- Home address
+- Hours of care needed per week
+- How will care be paid for (insurance, VA, IHSS, private pay, LTC)
+
+Optional fields (capture if naturally offered):
+- Relationship to the care recipient
+- ADL needs (bathing, dressing, mobility, etc.)
+- Home environment notes
+- Whether the caller is also considering assisted living
+- VA authorization number
+- IHSS county
+```
+
+Group by required vs optional. Render `display_label` (not `field_name`). Skip fields where `is_applicable === false` if that flag is set in the spec.
+
+If an entry has a `help_text` field present, include it as a sub-bullet or italicized hint — match the surrounding prompt style.
+
+### 5c. Edge cases
+
+- Empty `intake_field_specs` array: return `system_prompt` unchanged with no appended block.
+- Profile exists but has no `intake_field_specs` key (corrupt or partial): treat as empty, no append, no error.
+- Persona row missing entirely for the org: throw — this is a configuration error caller must surface.
+
+---
+
+## Step 6 — Wire the builder into the outbound Vapi call
+
+Open `server/services/flow-step-executor.ts`. Locate the `voice_call` step handler (around line 566 per audit, but verify exact line range during Step 2 discovery).
+
+Identify the line where `system_prompt` is read from the persona record and passed into the Vapi `assistantOverrides` payload. Replace it with a call to the new builder:
+
+```typescript
+// Before:
+// const systemPrompt = persona.systemPrompt;
+
+// After:
+import { buildAssistantSystemPrompt } from './voice-persona-builder';
+// ...
+const systemPrompt = await buildAssistantSystemPrompt(orgId);
+```
+
+Where `orgId` is whatever variable holds the current organization ID at that point in the step handler. Use the existing variable; do not introduce a new lookup.
+
+The rest of the Vapi call construction (assistant ID, phone number, customer info, etc.) is unchanged.
+
+If the existing code reads `persona.systemPrompt` in multiple places within the step handler, replace each call site that goes to Vapi. If the persona is also used for non-prompt purposes (logging, audit trail, cache key), leave those references alone.
+
+---
+
+## Step 7 — Migrate Chajinel's persona
+
+Chajinel's persona currently has `compose_from_profile = false` and a static `system_prompt`. Migrate it to the new pattern. Since Chajinel's Vapi assistant is still placeholder (`vapi_assistant_id = 'PLACEHOLDER_AWAITING_VAPI_CONFIG'`), no live calls are affected — this is a safe test bed.
+
+### 7a. Read the current prompt
+
+```sql
+SELECT system_prompt FROM org_voice_personas WHERE organization_id = 'chajinel-org-001';
+```
+
+Save the full text to `docs/architecture/sprint1b-snapshots/chajinel-persona-pre.txt`.
+
+### 7b. Construct the new prompt
+
+The new `system_prompt` should:
+- Preserve the existing greeting, tone, and conversation structure verbatim.
+- Replace any hardcoded "fields to capture" section with the placeholder `{{INTAKE_FIELDS}}` at the same position.
+- If the existing prompt has no fields-to-capture section, simply append `{{INTAKE_FIELDS}}` at the end.
+
+Write the new prompt to `docs/architecture/sprint1b-snapshots/chajinel-persona-post.txt`.
+
+**Stop and flag** if the existing prompt contains hardcoded fields that don't match the current `home_care_agency_personal_care.intake_field_specs`. The mismatch would silently change call behavior.
+
+### 7c. Apply the update
+
+Wrap in a transaction:
+
+```sql
+BEGIN;
+
+UPDATE org_voice_personas
+SET system_prompt = $1,
+    compose_from_profile = true,
+    updated_at = NOW()
+WHERE organization_id = 'chajinel-org-001';
+
+COMMIT;
+```
+
+Use a parameterized statement; do not interpolate the prompt text.
+
+### 7d. Verify
+
+```sql
+SELECT compose_from_profile, length(system_prompt) AS prompt_len
+FROM org_voice_personas WHERE organization_id = 'chajinel-org-001';
+
+SELECT compose_from_profile FROM org_voice_personas WHERE organization_id != 'chajinel-org-001';
+```
+
+Expected: Chajinel `compose_from_profile = true`. The other persona unchanged at `false`.
+
+Then call the builder with Chajinel's orgId and write the assembled prompt to `docs/architecture/sprint1b-snapshots/chajinel-persona-assembled.txt`. Compare it to `chajinel-persona-pre.txt` semantically — same greeting, same conversation flow, same field coverage — but now with the field list rendered from the profile.
+
+---
+
+## Step 8 — Tests
+
+Create `server/services/voice-persona-builder.test.ts` (tsx-runnable assertion pattern matching sprint 0/1a tests).
+
+Test cases:
+
+1. **Opt-out path**: persona with `compose_from_profile=false` → builder returns `system_prompt` byte-identical.
+2. **Opt-in with placeholder**: persona with `compose_from_profile=true` and `{{INTAKE_FIELDS}}` in prompt → builder substitutes the placeholder with the rendered field list.
+3. **Opt-in without placeholder**: persona with `compose_from_profile=true` and no placeholder → builder appends the field list at the end.
+4. **Opt-in but no profile**: persona with `compose_from_profile=true` but org not mapped to any profile → builder returns `system_prompt` unchanged (fail-safe).
+5. **Opt-in with empty `intake_field_specs`**: builder returns `system_prompt` unchanged (no empty block appended).
+6. **Missing persona**: builder throws.
+7. **Field rendering**: required fields appear in a "Required" section; optional fields in an "Optional" section.
+8. **Display labels**: rendered output contains `Caller first name` (display label), not `first_name` (internal field name).
+
+Run:
+
+```bash
+npx tsx server/services/voice-persona-builder.test.ts
+```
+
+All tests must pass. If any test requires DB seeding, set up and tear down within the test using a dedicated test org or use mocking — do not pollute the existing `org_voice_personas` rows.
+
+---
+
+## Step 9 — Verification
+
+```bash
+# Sprint 0 + 1a baselines (must still pass)
+npx tsx scripts/verify-tenant-isolation.ts                                # 12/12
+npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts   # 16/16
+npx tsx server/services/rules-engine.test.ts                              # 4/4
+npx tsx scripts/smoke-helpers.ts                                          # green
+
+# Sprint 1b additions
+npx tsx server/services/voice-persona-builder.test.ts                     # 8/8
+npx tsc --noEmit                                                          # clean
+
+# Schema verification
+psql $DATABASE_URL -c "SELECT organization_id, compose_from_profile FROM org_voice_personas ORDER BY organization_id;"
+```
+
+Expected outputs documented in audit report §6.
+
+### Smoke
+
+1. Workflow restarts cleanly after the code changes (boot log clean).
+2. Run a tsx script that calls `buildAssistantSystemPrompt('chajinel-org-001')` and prints the result. Compare to `chajinel-persona-assembled.txt` from Step 7d.
+3. Run the same builder for the second persona's org. Output must equal that persona's `system_prompt` byte-for-byte (no change for opt-out personas).
+4. Daniela demo path: log in, view a patient, view a claim, view billing dashboards. None of this exercises the voice persona path; the smoke check is just confirming nothing in 1b broke billing-side surfaces.
+
+---
+
+## Step 10 — Audit report
+
+Create `docs/architecture/sprint1b-audit-report.md` with:
+
+- §1 Executive summary + baseline verification
+- §2 Discovery (both persona rows, outbound trace, inbound trace, helper shape)
+- §3 Schema change: ALTER TABLE applied, before/after column inspection
+- §4 Drizzle update: file:line of change, TS clean
+- §5 Builder implementation: file path, function contract, edge cases handled
+- §6 Outbound wire-in: file:line of change in flow-step-executor
+- §7 Chajinel persona migration: pre/post prompt diff, builder output sample
+- §8 Verification matrix
+- §9 Files created / modified / DDL applied
+- §10 Risks carried forward (e.g., inbound path reconciliation, RLS on `org_voice_personas` — see Step 11)
+- §11 Standing-order attestation
+
+## Step 11 — Update migration-state
+
+Append a new section §9 to `docs/architecture/migration-state.md`:
+
+- §9.1 What landed: `compose_from_profile` column, builder service, Chajinel migration.
+- §9.2 RLS not extended to `org_voice_personas` in 1b — the table predates Phase 3 and adding RLS requires the same role-grant + middleware-routing dance Sprint 0 did. Tracked as sprint 2 prerequisite if the persona table needs cross-tenant protection (currently it's read by app code with explicit org-id filter, similar to other pre-Phase-3 tables).
+- §9.3 Inbound Vapi prompt reconciliation deferred to sprint 1c.
+- §9.4 Caritas onboarding: now structurally unblocked. Outstanding requirements before Caritas can go live:
+  1. Define `referral_intake_only` profile (or whatever profile shape Caritas needs).
+  2. Seed the profile with appropriate `intake_field_specs` for referral routing.
+  3. Create Caritas's `org_voice_personas` row with `compose_from_profile=true` and a `{{INTAKE_FIELDS}}` placeholder in the prompt template.
+  4. Map Caritas via `organization_practice_profiles` to the new profile.
+  5. Configure Caritas's Vapi assistant ID (replacing placeholder).
+
+## Step 12 — Verification of standing order
+
+Final attestation in audit report §11:
+- Snapshot taken before any DDL.
+- No production deploy; all work on dev `heliumdb`.
+- Read-only on tables other than `org_voice_personas` (1 ALTER, 1 UPDATE on Chajinel's row).
+- The second persona row was inspected but not modified.
+- Vapi-side static configuration not touched.
+- Inbound webhook path not modified.
+- No frontend changes.
+
+---
+
+## Out of scope — confirm none touched
+
+- Vapi dashboard / Vapi API configuration.
+- Inbound Vapi webhook handler at `routes.ts:9279`.
+- Any persona other than Chajinel's.
+- Activating Chajinel's Vapi assistant (the placeholder string stays).
+- `practice_profiles.intake_field_specs` content.
+- EDI generator (`server/services/edi-generator.ts`).
+- Claim wizard, payer dropdown, billing module.
+- Caritas onboarding (still requires profile design).
+- Background cron jobs.
+- `replit.md`.
+
+If any modified, revert and flag.
+
+---
+
+## End-of-sprint state
+
+- Snapshot taken, path recorded.
+- `org_voice_personas.compose_from_profile` column live, default false, both rows initially false.
+- Drizzle declaration matches.
+- `voice-persona-builder.ts` implemented and tested (8/8).
+- Outbound Vapi call path uses the builder.
+- Chajinel's persona migrated to the new pattern (`compose_from_profile=true`, `{{INTAKE_FIELDS}}` placeholder); the assembled prompt covers the same fields as before.
+- The second persona row is byte-identical to start-of-sprint.
+- All sprint 0 + 1a verifications still green.
+- TypeScript compiles clean.
+- Daniela demo path unchanged.
+- Caritas onboarding is now a configuration task, not an engineering task.
+- Audit report committed.
+- Migration-state document updated.
+
+The next architectural sprint is 1c, which closes the EDI route → `evaluateClaim` gap (`migration-state.md §8.4`) and migrates the first user-facing read path onto the helper layer (most likely the payer dropdown). 1c only ships after Daniela has been stable on the platform for several days.
