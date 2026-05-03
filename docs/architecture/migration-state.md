@@ -315,3 +315,50 @@ Path A's Sprint 1c success criterion (no new tsc errors) should become the Sprin
 - The pre-existing 85 tsc errors remain (63 in `routes.ts`, 5 in `storage.ts`, 4 each in `rate-ingest.ts` / `claim-wizard.tsx`, etc.). Hygiene-only; not Sprint-1c-relevant per Path A. A future hygiene sprint could drain them; the current report makes the count explicit and trackable.
 - The pre-existing in-route VALIDATION_ERROR checks at 6428/6441/6685/6698 are now functionally dead code (the Tier 1 gate validates the same conditions and more), but were intentionally kept for rollback safety. A future cleanup sprint can remove them once the gate has soaked.
 - Sprint 1c only covers the two Stedi EDI submission routes. Office Ally submission (`routes.ts:6298–6345`) and the resubmit-stedi route (~line 4167 vicinity) are NOT gated by Tier 1 yet. If the gate is desired there, it's a copy-paste of the same 4-line block — out of Sprint 1c scope.
+
+---
+
+## §12 Sprint 1c — DEPLOYED TO PRODUCTION (2026-05-03)
+
+Code-only deploy. No DDL, no DML, no migration scripts. Sits on top of Phase 3 prod deploy.
+
+### Push
+
+- **Transition:** `6e99937..eecedc6  main -> main`
+- **Pre-flight:** Gate 1 stopped at Step 1d on a stale-local-fetch-ref anomaly (initial reading: 176 unpushed commits, origin at `9d89d2f`). Diagnostic queries authorized by Abeer proved the GitHub `origin/main` was at `6e99937` (Phase 3 SHA); local cache was frozen by the unresolved `.git/refs/remotes/origin/main.lock` (Apr 27 mtime). True unpushed delta was 9 commits. Gate 1 PASSED after evidence-based reconciliation.
+- **Gate 2:** Abeer's explicit "push" issued; `git push origin main` succeeded (LFS upload 133 MB, 69 objects). The `update_ref failed for ref 'refs/remotes/origin/main'` warning at end is the same stale-lock side-effect — actual remote advanced (`ls-remote` returns `eecedc6`).
+
+### Post-deploy verification (autonomous portions)
+
+| Check | Result |
+|---|---|
+| `git ls-remote origin main` post-push | `eecedc6...` ✅ |
+| `smoke-helpers` against `$PRODUCTION_DATABASE_URL` | green — chajinel→home_care, ppe=3; demo ppe=2; no-ctx=0 (identical to Phase 3 baseline) |
+| Phase 3 schema regression read | 6/6 tables present, role exists, FORCE RLS=6, ppe cols=20 — **unchanged** by push |
+
+### Post-deploy verification (Abeer's outstanding tasks)
+
+| Check | Status |
+|---|---|
+| Railway dashboard shows latest deploy at SHA `eecedc6` (or descendant) + clean boot | ⏳ DEFERRED — Replit's `fetch_deployment_logs` doesn't see Railway logs |
+| UI smoke test: well-formed claim through `submit-stedi` + `test-stedi` → same behavior as pre-Sprint-1c | ⏳ DEFERRED — requires real-claim submission via UI |
+
+### Files in delta — code-only attestation
+
+`edi-preflight.ts` (new), `edi-preflight.test.ts` (new), `routes.ts` (+49 lines, gates at 6502–6527 and 6735–6755), `verify-tenant-isolation-prod.ts` (new helper script), plus docs (`sprint1c-audit-report.md`, `sprint1c-deploy-preflight.md`, `sprint1c-prod-deploy-audit-report.md`, `migration-state.md` §11/§12, `replit.md` updates), plus `sprint1c-snapshots/dev-pre-sprint1c-*.sql` (text snapshot, not executed). **Zero schema/migration code in delta. Zero DDL/DML against prod DB during deploy.**
+
+### Open follow-ups (carried forward)
+
+1. `.git/refs/remotes/origin/main.lock` cleanup — Phase 3 §10 follow-up #1, sandbox blocked `rm` as destructive git op. Needs Project Task. Not blocking — push uses live GitHub ref; only the local cache view stays frozen.
+2. Persona flip (Caritas Sprint 1b post-merge) — still open.
+3. `replit_readonly` permission grants — still open.
+4. Drizzle declaration drift on `organizations` — still open (`is_active` vs `status='active'`).
+5. Pre-existing 85 tsc errors — Path A baseline hold, drain in a future hygiene sprint.
+
+### Authoritative records
+
+- `docs/architecture/sprint1c-deploy-preflight.md` — pre-flight findings (with anomaly + reconciliation)
+- `docs/architecture/sprint1c-prod-deploy-audit-report.md` — full Sprint 1c prod-deploy audit
+- `docs/architecture/sprint1c-audit-report.md` — Sprint 1c implementation audit (predates deploy)
+
+**Status:** Push complete. Awaiting Abeer's Gate 3 sign-off on Railway boot logs + UI smoke test before marking Sprint 1c officially DEPLOYED in this section's headline.
