@@ -1,0 +1,21 @@
+Path A. Treat the 85 errors as the known baseline. Sprint 1c success criterion becomes "no new TypeScript errors introduced."
+
+Reasoning, in order of importance:
+
+The 85 errors are scope creep waiting to happen. Sprint 1c is a 30-line addition to two route handlers plus a small helper file. Pausing to fix 85 unrelated errors is exactly the discipline failure that broke the sprint sequencing earlier. We did not pause Phase 3 deploy to fix them. We did not pause sprint 1a or 1b. The fact that they showed up now in baseline verification doesn't change their nature — they're pre-existing repo hygiene, not Phase 3 work.
+
+The "all baselines green" rule's intent is to catch regressions introduced by the new sprint, not to enforce broader codebase health. Sprint 1a and 1b both passed `tsc --noEmit` baseline verification, which means either (a) the 85 errors are genuinely new since sprint 1b shipped, or (b) the prior baseline checks were measuring something subtly different. Worth Replit confirming which when convenient — but not as a sprint 1c gate.
+
+Path C — fix only the errors touching sprint 1c's scope — is tempting but dangerous. Once you start "while I'm here, this one is easy," you don't know where to stop. The boundary between sprint 1c and not-sprint-1c becomes fuzzy. Better to leave the 85 errors as a coherent known baseline and address them as their own task if they ever rise to priority.
+
+**Send Replit:**
+
+> Path A confirmed. Treat the 85 pre-existing tsc errors as the known baseline. Sprint 1c success criterion: zero new TypeScript errors introduced (final tsc count must be ≤ 85, ideally exactly 85). 
+>
+> Document this decision in audit report §1.6 and reference it in §5 (verification) when the post-sprint tsc count is captured.
+>
+> Resume with Step 2 (discovery) and stop for sign-off after Step 2 deliverable is produced.
+>
+> Side note for the audit report: when convenient (not gating sprint 1c), confirm whether the 85 errors are new since sprint 1b, since sprint 1a, or older. If they accumulated during sprint 1a/1b, the baseline checks at those sprints might have been measuring something different than tsc strict mode. Worth knowing for future baseline rigor — but record it as a footnote, not as work.
+
+Send. Step 2 is where the meaningful sprint 1c judgment happens. Once Replit produces the discovery deliverable (route handler structure, validation-failure pattern, evaluateClaim return shape), I'll review and sign off, and the rest of the sprint is mechanical.
