@@ -382,18 +382,126 @@ Removed `.local/session_plan.md` left over from the earlier audit-refresh task (
 
 ---
 
-## Gate 3 — Sign-off requested
+## Gate 3 — SIGNED OFF (2026-05-03)
 
-**Stopping here per instruction. Awaiting Gate 3 review before proceeding to Phase 3 (apply migration to prod).**
+User authorized Phase 3 execution after confirming the three review-pass items (assertion list at top of migration SQL, Q1–Q9 inventory at top of verify SQL, env-var safety guards in runner). Authorized apply target: this Replit workspace, using `PRODUCTION_DATABASE_URL` from env.
 
-### What to review for Gate 3
+---
 
-1. `scripts/phase3-prod-migration.sql` — confirm DDL matches Sprint 0+1a+1b intent.
-2. `scripts/verify-phase3-prod-migration.sql` — confirm post-deploy assertions cover the right surfaces.
-3. `scripts/apply-phase3-prod-migration.sh` — confirm runner safety (interactive `APPLY` prompt, v17 psql resolution, ON_ERROR_STOP=1).
-4. §6.4 deliberate exclusions — agree or push back on Chajinel data flip + `replit_readonly` extension being separately handled.
-5. Confirm: should the migration be applied directly from this Replit workspace (using `PRODUCTION_DATABASE_URL` already in env), or should it be staged on a separate operator workstation?
+## 7. Phase 3 — Migration applied to prod (SUCCESS)
 
-### After Gate 3
+### 7.1 Run metadata
 
-Phase 3 will run the migration against prod with the script above, capturing stdout to `/tmp/phase3-migration-applied-<timestamp>.log`. On success, that log gets summarized into a §7 of this doc, and we hand to Gate 4 (code redeploy).
+| Field | Value |
+|---|---|
+| Apply log | `docs/architecture/phase3-migration-applied-20260503T053010Z.md` (committed via Replit checkpoint; 301 lines). Renamed from `.log` to `.md` because system-level `/etc/.gitignore` excludes `*.log`. |
+| Verify log | `docs/architecture/phase3-migration-verify-20260503T053010Z.md` (committed via Replit checkpoint; 105 lines). Same rename rationale. |
+| Migration start | 2026-05-03T05:30:23Z |
+| Migration COMMIT | 2026-05-03T05:30:28Z (≈ 5 s wall-clock; ~25 statements ×40 ms each) |
+| Tool | `psql` v17.6 from `/nix/store/*postgresql-17*/bin/psql`, server PG 17.9 |
+| Connection identity | `connected_as=postgres db=railway superuser=true pg_version=17.9` (preflight §0 of migration) |
+| Runner exit code | 0 |
+| `psql -v ON_ERROR_STOP=1` | Set; no error encountered, COMMIT reached normally |
+| APPLY prompt | Confirmed by piping `"APPLY"` to stdin |
+
+### 7.2 Pre-commit assertions (all 13 emitted PASS NOTICEs before COMMIT)
+
+Verbatim from apply log lines containing `=== migration verification PASS ===` (`grep -E "NOTICE.*verification|NOTICE.*[a-z]:"`):
+
+```
+NOTICE:  === migration verification PASS ===
+NOTICE:    phase3 tables: 6 / 6                                      -- A1 ✅
+NOTICE:    RLS policies: 12 / 12                                     -- A2 ✅
+NOTICE:    policies with WITH CHECK: 0 / 6 missing (must be 0)       -- A3 ✅
+NOTICE:    claimshield_app_role: t                                   -- A4 ✅
+NOTICE:    claimshield_service_role: t                               -- A5 ✅
+NOTICE:    postgres MEMBER claimshield_app_role: t                   -- A6 ✅
+NOTICE:    org_voice_personas.compose_from_profile: t                -- A7 ✅
+NOTICE:    practice_payer_enrollments cols: 20 / 20                  -- A8 ✅
+NOTICE:    organizations preserved: 3 / 3                            -- A9 ✅
+NOTICE:    chajinel enrollments preserved: 3 / 3                     -- A10 ✅
+NOTICE:    total enrollments preserved: 5 / 5                        -- A11 ✅
+NOTICE:    home_care profile seeded: 1                               -- A12 ✅
+NOTICE:    chajinel primary mapping: 1                               -- A13 ✅
+COMMIT
+```
+
+Zero `EXCEPTION` / `ERROR` / `ROLLBACK` lines anywhere in the apply log.
+
+### 7.3 Standalone post-deploy verification (Q1–Q9)
+
+Re-run of `scripts/verify-phase3-prod-migration.sql` against prod immediately after the apply script exited. Full output in the verify log; key results:
+
+| Q | Check | Result |
+|---|---|---|
+| Q1 | 6 Phase 3 tables present in `public` | **6 / 6** — `claim_provider_assignments, organization_practice_profiles, patient_insurance_enrollments, practice_profiles, provider_payer_relationships, provider_practice_relationships` |
+| Q2 | 12 RLS policies, all with USING + WITH CHECK | **12 / 12** rows; every row shows `has_using=t, has_with_check=t` (Sprint 1a guarantee held) |
+| Q3 | RLS enabled + FORCE on 6 tenant tables | **6 / 6** with `rls_enabled=t, rls_forced=t` |
+| Q4 | Roles inventory | `postgres` super=t; `replit_readonly` super=f login=t bypassrls=f; `claimshield_app_role` super=f login=f inherit=f bypassrls=f; `claimshield_service_role` super=f login=f inherit=f bypassrls=f |
+| Q4b | `pg_has_role('postgres','claimshield_app_role','MEMBER')` | **t** — `withTenantTx`'s `SET LOCAL ROLE` will succeed at runtime |
+| Q5 | `org_voice_personas.compose_from_profile` | Column present, `boolean NOT NULL DEFAULT false`; both existing rows = `f` (Caritas behavior unchanged) |
+| Q6 | `practice_payer_enrollments` column count | **20** (was 8 pre-migration) |
+| Q7 | Data preservation | `organizations=3`, `org_voice_personas=2`, `practice_payer_enrollments total=5 (chajinel=3, demo=2)`, `patients=65`, `claims=96`, `leads=28` — **all unchanged from §2.8 baseline** |
+| Q8 | Seed presence | `home_care_agency_personal_care` profile exists (1 row, `is_active=t, version_label='v1'`); chajinel-org-001 → home_care primary mapping exists (1 row, `is_primary=t, effective_from=2026-05-03`) |
+| Q9 | Total public table count | **88** (was 82 pre-migration; +6 = 6 new Phase 3 tables) |
+
+### 7.4 Operations executed (high-level summary from apply log timing breakdown)
+
+- `BEGIN` ✅
+- 1× `DO` preflight ("No Phase 3 tables present yet. Fresh migration.")
+- 6× `CREATE TABLE` (the 6 new Phase 3 tables)
+- 6× `CREATE INDEX` (FK + partial unique indexes)
+- 12× `ALTER TABLE … ADD COLUMN` for `practice_payer_enrollments` (8 → 20 cols)
+- 6× `ALTER TABLE … ENABLE ROW LEVEL SECURITY`
+- 6× `DROP POLICY IF EXISTS tenant_isolation` (all NOTICE: skipping — clean slate) + 6× `CREATE POLICY tenant_isolation` (with `WITH CHECK` baked in)
+- 1× `DO` block to create `claimshield_service_role`
+- 6× table grants for service_role + 6× `FORCE ROW LEVEL SECURITY` + 6× `service_role_bypass` policies (DROP+CREATE)
+- 1× `DO` block to create `claimshield_app_role`
+- 1× `GRANT ROLE claimshield_app_role TO postgres`
+- 3× `GRANT` (DML on tenant tables, SELECT on `practice_profiles`, SELECT on parent tables)
+- 1× `ALTER TABLE org_voice_personas ADD COLUMN compose_from_profile`
+- 1× `INSERT … ON CONFLICT DO NOTHING` for `home_care_agency_personal_care` profile
+- 1× `INSERT … ON CONFLICT DO NOTHING` for chajinel→home_care primary mapping
+- 1× `DO` block running 13 assertions → all PASS NOTICEs emitted
+- `COMMIT` ✅
+
+### 7.5 Deltas vs preflight expectations
+
+| Expectation | Outcome |
+|---|---|
+| Migration is purely additive | ✅ No drops, no data changes to existing rows |
+| All 5 preserved rows survive | ✅ Q7 confirms unchanged |
+| 13/13 assertions pass | ✅ All emitted PASS NOTICEs in apply log |
+| Q1–Q9 all match expected | ✅ Verified in §7.3 |
+| Wall-clock < 5 minutes | ✅ ~5 seconds total |
+| No `EXCEPTION` / `ROLLBACK` | ✅ Zero in apply log |
+| Idempotency safety net | ✅ `IF NOT EXISTS` / `ON CONFLICT DO NOTHING` / `DROP POLICY IF EXISTS` patterns held — re-running the script now would be a no-op |
+
+No deviations from preflight expectations. Prod schema state now matches dev for Sprint 0 + 1a + 1b.
+
+### 7.6 What's still pending after Phase 3
+
+Carried forward to subsequent phases per Gate 2 & 3 sign-off:
+
+1. **Chajinel persona flip** (`compose_from_profile=true` + `system_prompt` template update) — separate post-deploy data step. Chajinel is `is_active=false` with placeholder Vapi ID, so no live calls in flight regardless.
+2. **`replit_readonly` SELECT grants** on the 6 new tables — separate decision, not in Sprint 0/1a/1b scope.
+3. **Code deploy (Phase 4)** — Railway redeploy of git HEAD so application code reflects the new schema. **Not started.**
+4. **Phase 5 smoke test** — reduced to "boot-and-respond" per Gate 2.
+5. **Git push** — `git push` deliberately withheld per session standing rule. 18+ unpushed commits accumulated; user-controlled action.
+
+---
+
+## Gate 4 — Sign-off requested
+
+**Stopping here per instruction. Migration applied successfully; awaiting Gate 4 review before Phase 4 (code redeploy).**
+
+### What to review for Gate 4
+
+1. **Apply log:** `docs/architecture/phase3-migration-applied-20260503T053010Z.md` — full stdout/stderr from runner. Look for the `=== migration verification PASS ===` block and the `COMMIT` line, confirm zero `EXCEPTION` / `ERROR`.
+2. **Verify log:** `docs/architecture/phase3-migration-verify-20260503T053010Z.md` — standalone re-run of Q1–Q9. Compare against §7.3.
+3. **§7.3 result table** — confirm Q1–Q9 all match expected baseline.
+4. **§7.6 pending items** — agree on the order in which they're addressed in Phase 4.
+
+### After Gate 4
+
+Phase 4 will trigger the Railway code redeploy of the latest committed dev SHA so the application code matches the new prod schema. `withTenantTx` and the helper service layer will then start being exercised against prod data.
