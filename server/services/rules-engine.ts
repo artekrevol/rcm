@@ -1,4 +1,5 @@
 import { pool } from "../db";
+import { runTier1AsViolations } from "./rules-engine/tier1-adapter";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Interfaces
@@ -56,6 +57,9 @@ export interface RuleViolation {
   payerSpecific: boolean;
   reviewedBy?: string | null;
   lastVerifiedAt?: string | null;
+  // Sprint 1a: optional origin marker so callers can distinguish Tier 1
+  // structural findings (source="tier1-structural") from legacy rule output.
+  source?: string;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -337,6 +341,18 @@ export async function evaluateClaim(
 ): Promise<RuleViolation[]> {
   const { includeDemoSeed = false } = options;
   const violations: RuleViolation[] = [];
+
+  // ── Tier 1 structural integrity (Sprint 1a wire-in) ──────────────────────
+  // Runs FIRST. If any Tier 1 finding is `block`-severity, short-circuit:
+  // legacy rules cannot produce meaningful output on a structurally broken
+  // claim (missing org_id, no service lines, malformed ICD-10, etc.). The
+  // 8 Tier 1 rules (T1-001…T1-008) are pure-function validations with no
+  // DB dependency, tested 16/16 in `tier1-structural-integrity.test.ts`.
+  const tier1Violations = runTier1AsViolations(ctx);
+  if (tier1Violations.some((v) => v.severity === "block")) {
+    return tier1Violations;
+  }
+  violations.push(...tier1Violations);
 
   // Sanity rules first (no DB)
   violations.push(...runSanityRules(ctx));
