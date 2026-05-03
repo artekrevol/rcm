@@ -1,0 +1,247 @@
+# ClaimShield — Sprint 1c Production Deploy
+
+This deploy ships Sprint 1c (EDI route gate) to production. Sprint 1c is **code-only** — no schema migration, no DDL, no data changes. The deploy structure is correspondingly simpler than Phase 3.
+
+What's being shipped:
+- `server/services/rules-engine/edi-preflight.ts` (new file, gate helper)
+- `server/services/rules-engine/edi-preflight.test.ts` (new file, 7 tests)
+- `server/routes.ts` (modified at lines 6502–6527 and 6735–6755 to add gate calls)
+- `docs/architecture/sprint1c-audit-report.md` (new file)
+- `docs/architecture/migration-state.md` §11 update
+- `replit.md` updates
+
+After deploy, the two stedi submission routes (`POST /api/billing/claims/:id/submit-stedi` and `POST /api/billing/claims/:id/test-stedi`) will gate every claim through Tier 1 structural validation before EDI generation. Structurally broken claims return HTTP 400 with finding details; well-formed claims proceed unchanged.
+
+Same hard rules as Phase 3 deploy, adapted for the code-only scope.
+
+## Hard rules
+
+1. **No `git push` until the explicit push gate.** Local commits stay local. Push happens only at gate 3, after verification.
+2. **Three sign-off gates.** No batched approvals.
+3. **No schema changes, no data changes.** If anything in the deploy bundle would touch the prod database, stop and surface — sprint 1c is supposed to be code-only.
+4. **Production database is not touched by this deploy.** No psql, no DDL, no INSERT/UPDATE/DELETE.
+5. **No PHI in logs or audit reports.** Same standing rule as Phase 3.
+6. **Stop on anomaly at any gate.**
+
+---
+
+## What this deploy is
+
+1. Pre-flight: confirm sprint 1c work is committed locally, baselines green, prod app currently healthy.
+2. Push to origin/main → Railway auto-deploys.
+3. Post-deploy verification: app boots clean, smoke test the gate behavior against prod.
+
+## What this deploy is NOT
+
+- No schema migration. Sprint 1c is code-only.
+- No new feature work during deploy.
+- No sprint 1d work (payer dropdown).
+- No Vapi cascade-scope validation (separate operational checklist).
+- No Caritas onboarding.
+- No `replit_readonly` permission grants.
+- No cleanup of pre-existing tsc errors (the 85-error baseline stays).
+
+If any of these look attractive during deploy, stop. Add to follow-up list.
+
+---
+
+## Phase 1 — Pre-flight
+
+### 1a. Confirm sprint 1c work is committed locally
+
+```bash
+git status                                # working tree clean
+git log origin/main..HEAD --oneline       # shows unpushed commits
+```
+
+The unpushed list should include the sprint 1c implementation commits — `edi-preflight.ts`, the route changes, the audit report, the migration-state update, the replit.md update. Plus any post-Phase-3-deploy commits that haven't been pushed (the Phase 3 audit report itself, possibly).
+
+If working tree is dirty, stop. Resolve uncommitted changes.
+
+If `origin/main..HEAD` is empty, sprint 1c is somehow already pushed. Stop and surface.
+
+Document the unpushed commit list in `docs/architecture/sprint1c-deploy-preflight.md §1`.
+
+### 1b. Confirm baselines still green in dev
+
+```bash
+npx tsx scripts/verify-tenant-isolation.ts                                # 12/12
+npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts   # 16/16
+npx tsx server/services/rules-engine.test.ts                              # 4/4
+npx tsx server/services/voice-persona-builder.test.ts                     # 23/23
+npx tsx server/services/rules-engine/edi-preflight.test.ts                # 7/7
+npx tsx scripts/smoke-helpers.ts                                          # green
+npx tsc --noEmit 2>&1 | grep -c "error TS"                                # = 85 (Path A baseline)
+```
+
+If anything regressed since sprint 1c was completed, stop and flag.
+
+Document in §2 of preflight doc.
+
+### 1c. Confirm prod is currently healthy
+
+The Phase 3 prod deploy completed earlier today. Confirm the production app is still serving requests cleanly. Check Railway dashboard:
+- Most recent deploy is Phase 3 (`6e99937` from earlier today)
+- App is currently up, no recent errors in logs
+- No pending deploys or rollbacks
+
+Document in §3 of preflight doc.
+
+### 1d. Confirm sprint 1c is dev-only — production currently unchanged from Phase 3
+
+Verify the gate is NOT yet active in prod by checking the deployed code on Railway matches `origin/main` (which is at the Phase 3 deploy SHA, not sprint 1c's SHA):
+
+```bash
+git rev-parse origin/main          # should be the Phase 3 deploy commit (6e99937 or similar)
+```
+
+If `origin/main` already has sprint 1c commits, the deploy may have partially happened — stop and reconcile.
+
+**Sign-off gate 1: pre-flight complete.** Abeer reviews preflight doc, confirms unpushed commits are exactly sprint 1c (plus any Phase 3 post-deploy docs), confirms baselines green, confirms prod healthy. Continue to Phase 2 only after approval.
+
+---
+
+## Phase 2 — Push to origin (the deploy trigger)
+
+### 2a. Final commit hygiene
+
+```bash
+git status                                # clean
+git log origin/main..HEAD --oneline       # final list
+```
+
+Confirm the list matches what's expected.
+
+### 2b. Push (the trigger)
+
+This is gate 2.
+
+When Abeer says push, run:
+
+```bash
+git push origin main
+```
+
+Sprint 1c shipped earlier today via direct `git push` after three Project Tasks were aborted on a misread of the sandbox guard scope. The lesson from that experience: try the push directly first. If `git push origin main` is rejected by the sandbox, then escalate to Project Task. Do not preemptively assume Project Task is required.
+
+If the push succeeds, Railway auto-deploys.
+
+If the push is rejected (sandbox guard or otherwise), surface the exact error and we'll determine next step.
+
+**Sign-off gate 2: explicit Abeer "push" before this command runs.** No interpretation. Abeer says "push."
+
+### 2c. Watch Railway
+
+Monitor the Railway deploy in real-time. Watch for:
+- Build success
+- App boot logs
+- No errors during boot
+- Health check passing (if configured)
+
+If the app fails to boot, capture the error and surface to Abeer immediately. Do not auto-rollback — Abeer decides.
+
+If boot succeeds, proceed to Phase 3.
+
+---
+
+## Phase 3 — Post-deploy verification
+
+### 3a. Confirm Railway shows the new deploy
+
+The most recent deploy on Railway should reference the sprint 1c push commit SHA. Capture the deploy ID and timestamp.
+
+### 3b. Confirm app boot logs are clean
+
+Same pattern as Phase 3 prod deploy verification — read first 50–100 lines of post-deploy logs. Look for:
+- `serving on port 8080`
+- All cron jobs started (orchestrator, CCI, TF Guardian, scraper)
+- `GET /api/health 200`
+- No EXCEPTION, FATAL, or unhandled error lines
+
+### 3c. Smoke test the gate against production
+
+Two tests, one per route. Use a real production claim that's known to be well-formed (passes Tier 1).
+
+**Test 1: well-formed claim, submit-stedi path.** 
+Pick a claim from prod that has service lines, HCPCS codes, patient, diagnosis. Submit via the route. Expected: same behavior as before — EDI generates, Stedi submission proceeds, response is whatever the route returned today.
+
+**Test 2: well-formed claim, test-stedi path.** Same claim. Expected: same behavior as before.
+
+If either fails (returns 400 with a Tier 1 finding when it should pass), the gate is misfiring. Surface and triage before considering deploy complete.
+
+For a structurally broken claim test, this requires either (a) finding an existing broken claim in prod, or (b) constructing one. Option (b) is risky in prod. Option (a) depends on whether there's an obviously-broken test claim available. **Skip the broken-claim smoke test in prod** — the dev tests covered that path with 7/7 green. Just confirm the gate doesn't break the well-formed path.
+
+### 3d. Confirm helpers still work
+
+```bash
+DATABASE_URL="$PRODUCTION_DATABASE_URL" npx tsx scripts/smoke-helpers.ts
+```
+
+Expected: same output as Phase 3 deploy's smoke (Chajinel profile resolves, 3 enrollments, no-context returns 0). Sprint 1c shouldn't have touched the helper layer, but confirm regression-free.
+
+### 3e. Document and close out
+
+Update audit report at `docs/architecture/sprint1c-prod-deploy-audit-report.md`:
+- §1 Executive summary + timeline
+- §2 Pre-flight findings
+- §3 Push + Railway deploy result
+- §4 Post-deploy verification results
+- §5 Files deployed / no schema changes attestation
+- §6 Standing-order attestation
+
+Append to `docs/architecture/migration-state.md`:
+- Mark sprint 1c as **DEPLOYED TO PROD**, with reference to this audit report.
+
+**Sign-off gate 3: deploy verified.** Abeer reviews verification results. Sprint 1c is officially live in production.
+
+---
+
+## Rollback (documented; only if needed)
+
+Code-only rollback is fast:
+
+```bash
+git revert <sprint-1c-deploy-commit-sha>
+git push origin main
+```
+
+Railway picks up the revert. App reverts to Phase-3-only state. Gate is removed. EDI submission paths return to pre-sprint-1c behavior (no Tier 1 gate).
+
+No schema rollback needed because no schema changes were made.
+
+---
+
+## Sign-off gate summary (3 gates)
+
+| # | Gate | Phase | Replit pauses for |
+|---|---|---|---|
+| 1 | Pre-flight clean | 1d | Abeer reviews preflight doc |
+| 2 | **Push to origin** | 2b | **Explicit "push" instruction from Abeer** |
+| 3 | Post-deploy verified | 3e | Abeer confirms verification clean |
+
+---
+
+## Out of scope — confirm none touched
+
+- Database schema (sprint 1c is code-only).
+- Production database state (no DDL, no INSERT/UPDATE/DELETE).
+- Any sprint 1d work.
+- Any Caritas work.
+- Any Vapi work.
+- The pre-existing tsc baseline (85 errors stays at 85).
+- The 4 small cleanups (lock file, persona flip, replit_readonly grants, Drizzle drift).
+
+If any modified, revert and flag.
+
+---
+
+## End-of-deploy state
+
+- Production runs sprint 1c code: Tier 1 gate fires before EDI generation on both submit-stedi and test-stedi.
+- Structurally broken claims now stop at the gate (HTTP 400 with finding details) instead of being passed to Stedi for rejection.
+- Well-formed claims continue to flow through unchanged.
+- All Phase 3 architecture remains live (middleware, RLS, helpers, Tier 1 wired into evaluateClaim).
+- No schema changes, no data changes.
+- Daniela's claim submission path unchanged for well-formed claims.
+
+The architectural sequence Phase 3 → sprint 1c is now fully in production. Sprint 1d (payer dropdown migration) is the next architectural sprint. Caritas onboarding is configuration work, not engineering. PGBA EDI fixes are a separate workstream.
