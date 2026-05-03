@@ -336,12 +336,22 @@ Code-only deploy. No DDL, no DML, no migration scripts. Sits on top of Phase 3 p
 | `smoke-helpers` against `$PRODUCTION_DATABASE_URL` | green — chajinel→home_care, ppe=3; demo ppe=2; no-ctx=0 (identical to Phase 3 baseline) |
 | Phase 3 schema regression read | 6/6 tables present, role exists, FORCE RLS=6, ppe cols=20 — **unchanged** by push |
 
-### Post-deploy verification (Abeer's outstanding tasks)
+### Post-deploy verification — Railway boot ✅ (Abeer attached log CSV)
+
+Container start 2026-05-03T07:56:30.543Z → healthy at 07:56:35.858Z (5.3s cold-boot). All boot signals green:
+
+- `serving on port 8080` ✅
+- All 4 crons started: orchestrator (30s), CCI quarterly, TF-Guardian (daily 6:00 UTC), scraper (daily 3:00 UTC + Sunday 3:30 UTC synthetic) ✅
+- `GET /api/health 200 in 14ms` ✅
+- 277 Poll + 835 Poll running ✅
+- All seeder rows report **"already present"** — independent corroboration of code-only deploy (zero schema delta required by push)
+- Zero ERROR / FATAL / EXCEPTION / unhandled lines across 80 reviewed lines
+
+### Post-deploy verification — UI smoke test (Abeer's remaining task)
 
 | Check | Status |
 |---|---|
-| Railway dashboard shows latest deploy at SHA `eecedc6` (or descendant) + clean boot | ⏳ DEFERRED — Replit's `fetch_deployment_logs` doesn't see Railway logs |
-| UI smoke test: well-formed claim through `submit-stedi` + `test-stedi` → same behavior as pre-Sprint-1c | ⏳ DEFERRED — requires real-claim submission via UI |
+| UI smoke test: well-formed claim through `submit-stedi` + `test-stedi` → same behavior as pre-Sprint-1c (gate stays out of the way for good claims) | ⏳ DEFERRED — requires real-claim submission via UI |
 
 ### Files in delta — code-only attestation
 

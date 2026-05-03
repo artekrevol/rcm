@@ -113,14 +113,29 @@ git ls-remote origin main
 → eecedc6e12012db539bd6e39db851dc0aaca012b   refs/heads/main
 ```
 
-### 4b — Railway boot logs (DEFERRED to Abeer)
+### 4b — Railway boot logs ✅ (Abeer attached `logs.1777795292724_1777795303597.csv`)
 
-Replit cannot read Railway logs. **Abeer to verify on Railway dashboard:**
-- Most recent deploy SHA = `eecedc6` (or descendant if auto-checkpoint commits happen post-this-report)
-- `serving on port 8080`
-- All cron jobs started: orchestrator, CCI, TF Guardian, scraper
-- `GET /api/health 200`
-- No EXCEPTION / FATAL / unhandled error lines in first 50–100 lines of post-deploy log
+Container started 2026-05-03T07:56:30.543888414Z, healthy by 07:56:35.858Z (5.3s cold-boot). 80 log lines reviewed end-to-end, **zero ERROR / FATAL / EXCEPTION / unhandled lines.**
+
+| Boot signal | Timestamp (UTC) | Status |
+|---|---|---|
+| Container start | 07:56:30.543 | ✅ |
+| `> NODE_ENV=production node dist/index.cjs` | 07:56:31.426 | ✅ |
+| Startup schema seeder — all entries report "already present" | 07:56:31.426 → 07:56:32.717 | ✅ no schema delta confirms code-only deploy |
+| `[SEEDER] Startup schema seeder complete.` | 07:56:32.849 | ✅ |
+| `[express] serving on port 8080` | 07:56:32.877 | ✅ |
+| `[orchestrator] Flow orchestrator started (interval: 30s)` | 07:56:32.877 | ✅ |
+| `[cci-cron] CCI quarterly ingest cron started` | 07:56:32.877 | ✅ |
+| `[TF-Guardian] Cron started — will run daily at 6:00 UTC` | 07:56:32.877 | ✅ |
+| `[scraper-cron] Scheduled scraper cron started` | 07:56:32.877 | ✅ |
+| `[seed] Caritas flow already exists` | 07:56:32.881 | ✅ |
+| `[express] GET /api/health 200 in 14ms` | 07:56:33.780 | ✅ |
+| `[277 Poll] No new 277CA reports found` | 07:56:35.856 | ✅ |
+| `[835 Poll] No new 835 ERA reports found` | 07:56:35.858 | ✅ |
+
+**Boot is clean. Sprint 1c gate code is now live in prod's `dist/index.cjs` and will fire on the next inbound `submit-stedi` / `test-stedi` request.**
+
+The all-"already present" seeder output is independent corroboration of Hard Rule 3: zero new tables, zero new columns, zero new constraints required by the Sprint 1c push.
 
 ### 4c — Smoke test the gate against production (DEFERRED to Abeer)
 
