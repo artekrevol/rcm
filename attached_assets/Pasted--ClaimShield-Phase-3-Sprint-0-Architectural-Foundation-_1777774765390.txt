@@ -1,0 +1,732 @@
+# ClaimShield — Phase 3 Sprint 0: Architectural Foundation (v3)
+
+This is sprint 0 of the architectural restructure described in `ClaimShield_Architecture_Restructure_Scope.docx`. v3 supersedes v1 and v2, anchored to the audit at `docs/architecture/system-audit/`.
+
+By the end of this sprint, the new schema and tenant-isolation infrastructure exist alongside the current code. Existing functionality (Daniela demo path, current intake flows, EDI submissions, claim wizard) must continue to work unchanged.
+
+## Anchors from the audit
+
+These facts are now confirmed (`docs/architecture/system-audit/`):
+
+- `organizations.id` is `varchar` (`shared/schema.ts:31`). All new FK columns use TEXT/VARCHAR, not UUID.
+- `payers` exists with 238 rows and FKs in place (`01-database-schema.md`, `_queries/04_foreign_keys.tsv`).
+- `practice_payer_enrollments` **already exists** with 2 rows and `organization_id` FK (`01-database-schema.md`). Sprint 0 must reconcile, not recreate.
+- `practice_profiles`, `organization_practice_profiles`, `provider_practice_relationships`, `provider_payer_relationships`, `patient_insurance_enrollments`, `claim_provider_assignments` do **not** exist — all greenfield.
+- `org_types` and `org_type_field_specs` were proposed in earlier multi-tenancy work but **never built** (`01-database-schema.md` Drift section). No deprecation needed.
+- `practice_settings.billing_model` does **not** exist; the related column is `frcpb_enrolled` (`01-database-schema.md` Drift section, `routes.ts:3520`). Don't reference billing_model anywhere.
+- No RLS, no triggers, no views, no functions, no stored procedures (`01-database-schema.md`). Greenfield for RLS.
+- `org_voice_personas` exists with 2 rows (`01-database-schema.md`). Sprint 0 doesn't touch it; sprint 1 refactors persona builder to read from profile.
+- Org context resolver is `getOrgId(req)` at `server/routes.ts:153-160`. Handles super_admin impersonation via `req.session.impersonatingOrgId`. The new middleware mirrors this logic — does not reinvent.
+- Auth helpers are at `server/auth.ts:231-260`: `requireAuth`, `requireRole(...allowed)`, `requireSuperAdmin`.
+- App bootstrap is `server/index.ts` (122 lines). `setupAuth(app)` is at line 78. Tenant-context middleware slots in between auth setup and `registerRoutes(app)`.
+- Pool + Drizzle init is `server/db.ts:7,13`, using `DATABASE_URL` against PostgreSQL 16.10.
+
+## What this sprint is
+
+1. New schema, additive — five relationship tables (one already exists, four new), the `practice_profiles` catalog, an `organization_practice_profiles` join table.
+2. **Tenant isolation infrastructure**: PostgreSQL Row-Level Security on the new tables, plus an Express middleware + AsyncLocalStorage pattern that establishes per-request tenant context for the new helper layer.
+3. One fully-seeded profile: `home_care_agency_personal_care`, used by Chajinel.
+4. Helper service layer for profile resolution and relationship querying — these are the only consumers of the tenant-context middleware in sprint 0.
+5. Tier 1 (Structural Integrity) of the rules engine, as a standalone validator.
+6. A feature flag, default OFF.
+7. Migration-state documentation.
+
+## What this sprint is NOT
+
+- No data migration. Existing rows in payers, providers, patients, claims stay where they are.
+- No refactor of existing API routes, EDI generator, claim wizard, voice persona builder, or any frontend component.
+- No deletion or renaming of existing tables or columns.
+- No backfill of FK constraints on `leads`, `calls`, `chat_sessions`, `appointments`, `flows`, `flow_runs`, `denials`, `era_batches`, `activity_logs`, `email_logs` — those are sprint 2.
+- No fix to the duplicate FK on `practice_settings` — sprint 2.
+- No implementation of Tiers 2–5 of the rules engine.
+- No customer-facing UI changes.
+- No Caritas onboarding. That's a follow-up sprint.
+- No edits to `replit.md` or any documentation file other than the new ones in `docs/architecture/`.
+
+If a step seems to require touching existing code paths to make the demo work, stop and flag it.
+
+---
+
+## Hard rules
+
+1. Existing tables are not modified. The single exception: ALTER on `practice_payer_enrollments` only if its existing schema is missing columns required by the new architecture, and only as additive ALTER (no drops, no renames).
+2. New code paths coexist with old. Don't rip out current `organization_id` patterns or the `verifyOrg`/`requireOrgCtx` pattern.
+3. The feature flag `USE_PROFILE_AWARE_QUERIES` is OFF in `.env` after this sprint.
+4. RLS policies are enabled on the new tenant-scoped tables from the moment of creation. They are never readable without tenant context set.
+5. Connection-pool sticky-context bugs are the highest-risk failure mode. Use the transaction-scoped approach specified in Step 5.
+6. If anything in this prompt conflicts with the audit, the audit wins — flag and propose a fix.
+7. Take a database snapshot/dump before running any DDL. Save the dump path in the audit report.
+
+---
+
+## Step 1 — Inspect existing `practice_payer_enrollments`
+
+Before any DDL runs, dump the actual schema of the existing table:
+
+```sql
+SELECT column_name, data_type, character_maximum_length, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_name = 'practice_payer_enrollments'
+ORDER BY ordinal_position;
+
+SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'practice_payer_enrollments'::regclass;
+```
+
+Save the output to `docs/architecture/sprint0-existing-schemas.md`.
+
+Compare actual columns against this expected schema:
+
+| Column | Type | Nullable | Default |
+|---|---|---|---|
+| `id` | UUID | not null | `gen_random_uuid()` |
+| `organization_id` | varchar | not null | — |
+| `payer_id` | varchar | not null | — |
+| `enrollment_status` | text | not null | `'pending'` |
+| `effective_from` | date | nullable | — |
+| `effective_to` | date | nullable | — |
+| `billing_npi` | text | nullable | — |
+| `taxonomy_code` | text | nullable | — |
+| `submission_method` | text | nullable | — |
+| `clearinghouse` | text | nullable | — |
+| `timely_filing_days` | integer | nullable | — |
+| `prior_auth_required` | boolean | not null | `false` |
+| `contracted_rate_table_id` | UUID | nullable | — |
+| `notes` | text | nullable | — |
+| `created_at` | timestamptz | not null | `NOW()` |
+| `updated_at` | timestamptz | not null | `NOW()` |
+
+For each missing column, propose a single ADDITIVE ALTER statement in `sprint0-existing-schemas.md`. Do not run the ALTER yet; apply it as part of Step 4 below after reviewer sign-off.
+
+For each existing column whose type does not match (e.g. integer vs text), **stop and flag** — type changes need explicit reviewer approval, not auto-resolution.
+
+The 2 existing rows must be preserved. Any ALTER that would invalidate them (e.g. NOT NULL on a nullable column with NULL data) requires a DEFAULT or backfill plan, documented before running.
+
+## Step 2 — Create the practice_profiles catalog
+
+```sql
+CREATE TABLE IF NOT EXISTS practice_profiles (
+  profile_code TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  description TEXT,
+  version_label TEXT NOT NULL DEFAULT 'v1',
+  service_code_catalog JSONB NOT NULL DEFAULT '[]'::jsonb,
+  intake_field_specs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  claim_field_specs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  payer_relationship_templates JSONB NOT NULL DEFAULT '[]'::jsonb,
+  provider_role_definitions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  authorization_templates JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rule_subscriptions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ui_surface_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  edi_structural_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+`practice_profiles` is a global catalog — not tenant-scoped, no RLS. Every tenant reads every profile definition.
+
+## Step 3 — Seed home_care_agency_personal_care profile
+
+```sql
+INSERT INTO practice_profiles (
+  profile_code, display_name, description, version_label,
+  service_code_catalog, intake_field_specs, claim_field_specs,
+  payer_relationship_templates, provider_role_definitions,
+  authorization_templates, rule_subscriptions, ui_surface_config, edi_structural_rules
+) VALUES (
+  'home_care_agency_personal_care',
+  'Home Care Agency — Personal Care',
+  'Non-medical personal care agency profile. Caregivers are not individually credentialed (no individual NPI). Agency NPI is used as billing provider. Default place of service is Home (12). Typical payers include VA Community Care via TriWest, county IHSS programs, long-term care insurance, and private pay.',
+  'v1',
+  '[
+    {"code":"T1019","description":"Personal care services per 15 min","modifiers_allowed":["U1","U2","U3","TT"]},
+    {"code":"S5125","description":"Attendant care services per 15 min","modifiers_allowed":[]},
+    {"code":"S5130","description":"Homemaker services per 15 min","modifiers_allowed":[]},
+    {"code":"S5135","description":"Companion care per 15 min","modifiers_allowed":[]},
+    {"code":"99509","description":"Home visit for assistance with ADLs","modifiers_allowed":[]}
+  ]'::jsonb,
+  '[
+    {"field_name":"first_name","display_label":"Caller first name","field_group":"identity","display_order":10,"is_required":true},
+    {"field_name":"last_name","display_label":"Caller last name","field_group":"identity","display_order":20,"is_required":true},
+    {"field_name":"phone","display_label":"Phone","field_group":"identity","display_order":30,"is_required":true},
+    {"field_name":"care_recipient_name","display_label":"Who needs care","field_group":"identity","display_order":40,"is_required":true},
+    {"field_name":"care_recipient_relationship","display_label":"Relationship to caller","field_group":"identity","display_order":50,"is_required":false},
+    {"field_name":"address","display_label":"Home address","field_group":"logistics","display_order":60,"is_required":true},
+    {"field_name":"hours_needed_per_week","display_label":"Hours per week","field_group":"clinical","display_order":70,"is_required":true},
+    {"field_name":"adl_assessment","display_label":"ADL needs (bathing, dressing, mobility, etc.)","field_group":"clinical","display_order":80,"is_required":false},
+    {"field_name":"home_environment_notes","display_label":"Home environment notes","field_group":"clinical","display_order":90,"is_required":false},
+    {"field_name":"considering_alf","display_label":"Considering assisted living","field_group":"routing","display_order":100,"is_required":false},
+    {"field_name":"payer_intent","display_label":"How will care be paid for","field_group":"financial","display_order":110,"is_required":true},
+    {"field_name":"va_authorization_number","display_label":"VA authorization number","field_group":"financial","display_order":120,"is_required":false},
+    {"field_name":"ihss_county","display_label":"IHSS county (if applicable)","field_group":"financial","display_order":130,"is_required":false}
+  ]'::jsonb,
+  '[
+    {"field_name":"caregiver_assignment","display_label":"Assigned caregiver","is_required":true,"applies_to":"service_line"},
+    {"field_name":"authorization_number","display_label":"Authorization number","is_required":true,"applies_to":"claim","payer_scope":["TWVACCN"]},
+    {"field_name":"place_of_service","display_label":"Place of service","is_required":true,"applies_to":"service_line","default":"12"},
+    {"field_name":"hours_billed","display_label":"Hours billed","is_required":true,"applies_to":"service_line"}
+  ]'::jsonb,
+  '[
+    {"payer_code":"TWVACCN","display_name":"TriWest VA Community Care","typical":true,"submission_method":"EDI","clearinghouse":"PGBA"},
+    {"payer_code":"IHSS_SAN_MATEO","display_name":"San Mateo County IHSS","typical":true,"submission_method":"PORTAL"},
+    {"payer_code":"LTC_PLACEHOLDER","display_name":"Long-Term Care Insurance","typical":true,"submission_method":"PAPER"},
+    {"payer_code":"PRIVATE_PAY","display_name":"Private Pay","typical":true,"submission_method":"INVOICE"}
+  ]'::jsonb,
+  '[
+    {"role_code":"caregiver","display_name":"Caregiver","requires_npi":false,"can_be_rendering_provider":false},
+    {"role_code":"agency_billing","display_name":"Agency Billing Entity","requires_npi":true,"can_be_billing_provider":true},
+    {"role_code":"scheduling_coordinator","display_name":"Scheduling Coordinator","requires_npi":false},
+    {"role_code":"rn_supervisor","display_name":"RN Supervisor","requires_npi":true}
+  ]'::jsonb,
+  '[
+    {"template_code":"hours_per_week","display_name":"Hours per week","unit":"hours","period":"week"},
+    {"template_code":"hours_per_month","display_name":"Hours per month","unit":"hours","period":"month"},
+    {"template_code":"visits_per_month","display_name":"Visits per month","unit":"visits","period":"month"}
+  ]'::jsonb,
+  '[
+    {"tier":1,"rule_code":"structural_integrity_all","subscribed":true},
+    {"tier":2,"rule_code":"hcpcs_validity","subscribed":true},
+    {"tier":2,"rule_code":"icd10_validity","subscribed":true},
+    {"tier":3,"rule_code":"twvaccn_auth_required","subscribed":true,"payer_scope":["TWVACCN"]},
+    {"tier":4,"rule_code":"home_care_pos_12","subscribed":true},
+    {"tier":4,"rule_code":"agency_billed_no_rendering_loop","subscribed":true}
+  ]'::jsonb,
+  '{
+    "dashboards":["home_care_overview","authorization_burn_down","caregiver_utilization"],
+    "reports":["weekly_hours_by_caregiver","payer_aging","authorization_status"],
+    "hide":["surgical_bundling_dashboard","oasis_status","pdgm_episode_view"]
+  }'::jsonb,
+  '{
+    "default_place_of_service":"12",
+    "billing_provider_loop_2010AA":"agency_npi",
+    "rendering_provider_loop_2310B":{"omit_when":"agency_billed","reason":"Caregivers are not individually credentialed"},
+    "service_line_default_unit":"UN",
+    "claim_frequency_codes_allowed":["1","7"]
+  }'::jsonb
+);
+```
+
+This profile fits Chajinel directly. Caritas — operating only as a referrer, not a clinic, with no billing surface — needs a separate `referral_intake_only` profile, seeded in a follow-up sprint when Caritas onboarding begins.
+
+## Step 4 — Organization↔profile join table + relationship tables
+
+### 4a. organization_practice_profiles
+
+```sql
+CREATE TABLE IF NOT EXISTS organization_practice_profiles (
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  profile_code TEXT NOT NULL REFERENCES practice_profiles(profile_code) ON DELETE RESTRICT,
+  is_primary BOOLEAN NOT NULL DEFAULT false,
+  effective_from DATE NOT NULL DEFAULT CURRENT_DATE,
+  effective_to DATE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (organization_id, profile_code)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_primary_profile_per_org
+  ON organization_practice_profiles(organization_id)
+  WHERE is_primary = true;
+```
+
+Then assign Chajinel:
+
+```sql
+INSERT INTO organization_practice_profiles (organization_id, profile_code, is_primary)
+VALUES ('chajinel-org-001', 'home_care_agency_personal_care', true)
+ON CONFLICT DO NOTHING;
+```
+
+**Confirmation gate:** Verify the existing `organizations` row has `id = 'chajinel-org-001'` exactly. The audit shows 3 organizations in the dev DB — confirm the row exists before INSERT runs.
+
+### 4b. practice_payer_enrollments — reconciliation only
+
+If Step 1 found the existing schema matches, do nothing.
+If Step 1 found missing columns, run the additive ALTER statements drafted in `sprint0-existing-schemas.md`.
+
+### 4c. provider_practice_relationships (new)
+
+```sql
+CREATE TABLE IF NOT EXISTS provider_practice_relationships (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider_id VARCHAR NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  role_code TEXT NOT NULL,
+  npi_used_at_practice TEXT,
+  effective_from DATE,
+  effective_to DATE,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(provider_id, organization_id, role_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_practice_org
+  ON provider_practice_relationships(organization_id, is_active);
+```
+
+### 4d. provider_payer_relationships (new)
+
+```sql
+CREATE TABLE IF NOT EXISTS provider_payer_relationships (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider_id VARCHAR NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  payer_id VARCHAR NOT NULL REFERENCES payers(id) ON DELETE RESTRICT,
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  participates BOOLEAN NOT NULL DEFAULT false,
+  taxonomy_submitted TEXT,
+  credentialing_status TEXT,
+  effective_from DATE,
+  effective_to DATE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(provider_id, payer_id, organization_id)
+);
+```
+
+### 4e. patient_insurance_enrollments (new)
+
+```sql
+CREATE TABLE IF NOT EXISTS patient_insurance_enrollments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id VARCHAR NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  payer_id VARCHAR NOT NULL REFERENCES payers(id) ON DELETE RESTRICT,
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL,
+  group_number TEXT,
+  coverage_priority TEXT NOT NULL DEFAULT 'primary',
+  effective_from DATE,
+  effective_to DATE,
+  subscriber_relationship TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(patient_id, payer_id, coverage_priority)
+);
+
+CREATE INDEX IF NOT EXISTS idx_patient_insurance_patient
+  ON patient_insurance_enrollments(patient_id, is_active);
+
+CREATE INDEX IF NOT EXISTS idx_patient_insurance_org
+  ON patient_insurance_enrollments(organization_id);
+```
+
+### 4f. claim_provider_assignments (new)
+
+The audit notes claims do not have an FK to `patients`; verify whether `claims.id` is varchar (likely) before declaring this FK.
+
+```sql
+CREATE TABLE IF NOT EXISTS claim_provider_assignments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  claim_id VARCHAR NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+  provider_id VARCHAR NOT NULL REFERENCES providers(id) ON DELETE RESTRICT,
+  organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  role_code TEXT NOT NULL,
+  npi_used TEXT,
+  taxonomy_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(claim_id, role_code, provider_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_claim_provider_claim
+  ON claim_provider_assignments(claim_id);
+
+CREATE INDEX IF NOT EXISTS idx_claim_provider_org
+  ON claim_provider_assignments(organization_id);
+```
+
+If `claims.id` turns out not to be varchar, stop and flag. Adjust the type to match.
+
+Every relationship table denormalizes `organization_id` even when it's reachable through the parent (claim_provider_assignments could reach org via claim, patient_insurance_enrollments could reach org via patient). The denormalization is required so the RLS policy can filter directly by org without joining.
+
+## Step 5 — Tenant isolation infrastructure
+
+### 5a. Enable RLS on every new tenant-scoped table
+
+```sql
+ALTER TABLE organization_practice_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE practice_payer_enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE provider_practice_relationships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE provider_payer_relationships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE patient_insurance_enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE claim_provider_assignments ENABLE ROW LEVEL SECURITY;
+```
+
+`practice_profiles` is global — no RLS.
+
+**Note on the existing 2 rows in `practice_payer_enrollments`:** after RLS is enabled, those rows become invisible until the proper tenant context is set. Verify both rows have valid `organization_id` values matching real organizations before enabling RLS, otherwise they're permanently invisible. Document the org context of each existing row in `sprint0-existing-schemas.md`.
+
+### 5b. Tenant-isolation policies
+
+```sql
+CREATE POLICY tenant_isolation ON organization_practice_profiles
+  USING (organization_id = current_setting('app.current_organization_id', true));
+
+CREATE POLICY tenant_isolation ON practice_payer_enrollments
+  USING (organization_id = current_setting('app.current_organization_id', true));
+
+CREATE POLICY tenant_isolation ON provider_practice_relationships
+  USING (organization_id = current_setting('app.current_organization_id', true));
+
+CREATE POLICY tenant_isolation ON provider_payer_relationships
+  USING (organization_id = current_setting('app.current_organization_id', true));
+
+CREATE POLICY tenant_isolation ON patient_insurance_enrollments
+  USING (organization_id = current_setting('app.current_organization_id', true));
+
+CREATE POLICY tenant_isolation ON claim_provider_assignments
+  USING (organization_id = current_setting('app.current_organization_id', true));
+```
+
+`current_setting('app.current_organization_id', true)` returns NULL when unset. The comparison `organization_id = NULL` evaluates to NULL, which fails the policy — so unset context = no rows visible. Locked by default.
+
+### 5c. Service-role bypass
+
+For background jobs (flow orchestrator, timely-filing cron, scrape cron, CCI cron — all enumerated in `10-background-jobs.md`) that legitimately need cross-tenant access:
+
+```sql
+-- Create the role
+CREATE ROLE claimshield_service_role NOINHERIT;
+
+-- Grant table privileges
+GRANT SELECT, INSERT, UPDATE, DELETE ON organization_practice_profiles TO claimshield_service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON practice_payer_enrollments TO claimshield_service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON provider_practice_relationships TO claimshield_service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON provider_payer_relationships TO claimshield_service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON patient_insurance_enrollments TO claimshield_service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON claim_provider_assignments TO claimshield_service_role;
+
+-- FORCE RLS on the table owner too (otherwise owner bypasses RLS by default)
+ALTER TABLE organization_practice_profiles FORCE ROW LEVEL SECURITY;
+ALTER TABLE practice_payer_enrollments FORCE ROW LEVEL SECURITY;
+ALTER TABLE provider_practice_relationships FORCE ROW LEVEL SECURITY;
+ALTER TABLE provider_payer_relationships FORCE ROW LEVEL SECURITY;
+ALTER TABLE patient_insurance_enrollments FORCE ROW LEVEL SECURITY;
+ALTER TABLE claim_provider_assignments FORCE ROW LEVEL SECURITY;
+
+-- Bypass policy for service role
+CREATE POLICY service_role_bypass ON organization_practice_profiles
+  AS PERMISSIVE FOR ALL TO claimshield_service_role
+  USING (true) WITH CHECK (true);
+-- (Repeat for the five other tables.)
+```
+
+In sprint 0, no background job actually connects as `claimshield_service_role` because no job touches the new tables yet. The role exists for future use.
+
+### 5d. Tenant-context middleware (`server/middleware/tenant-context.ts`)
+
+The middleware uses AsyncLocalStorage to hold the per-request tenant context plus a transaction-scoped Drizzle instance. Helpers in Step 6 read from this store. Existing routes do not — they continue to use the global `db` from `server/db.ts`.
+
+```typescript
+// server/middleware/tenant-context.ts
+import { Request, Response, NextFunction } from 'express';
+import { AsyncLocalStorage } from 'async_hooks';
+import { sql } from 'drizzle-orm';
+import { db } from '../db';
+
+type TenantContext = {
+  organizationId: string;
+  // Transaction-scoped Drizzle instance — pass to helpers in Step 6
+  tx: typeof db;
+};
+
+const tenantContextStorage = new AsyncLocalStorage<TenantContext>();
+
+/**
+ * Mirrors getOrgId(req) at server/routes.ts:153-160.
+ * Super-admin uses req.session.impersonatingOrgId; regular users use req.user.organization_id.
+ * Returns null if no org context can be determined.
+ */
+function resolveOrgIdFromRequest(req: Request): string | null {
+  const user = req.user as any;
+  if (!user) return null;
+  if (user.role === 'super_admin') {
+    return (req.session as any)?.impersonatingOrgId ?? null;
+  }
+  return user.organization_id ?? null;
+}
+
+/**
+ * Express middleware. For authenticated requests with a resolvable org id:
+ *   1. Open a Drizzle transaction
+ *   2. SET LOCAL app.current_organization_id = <orgId>
+ *   3. Run the rest of the request inside an AsyncLocalStorage scope so helpers see tenant context
+ *   4. Commit when the response finishes; rollback on error
+ *
+ * For requests with no auth (login page, static, public webhooks): no-op.
+ * For super-admin without an active impersonation: no-op (helpers return empty results).
+ */
+export function tenantContextMiddleware(req: Request, res: Response, next: NextFunction) {
+  const orgId = resolveOrgIdFromRequest(req);
+
+  if (!orgId) {
+    return next();
+  }
+
+  // Open a transaction and run the request inside it.
+  // SET LOCAL is auto-scoped to the transaction — no manual cleanup needed.
+  db.transaction(async (tx) => {
+    // Parameterized SET — orgId is from the auth session, but defense-in-depth.
+    await tx.execute(sql`SET LOCAL app.current_organization_id = ${orgId}`);
+
+    return new Promise<void>((resolve, reject) => {
+      // Establish the AsyncLocalStorage scope, then call next() inside it.
+      tenantContextStorage.run({ organizationId: orgId, tx }, () => {
+        const onFinish = () => {
+          res.removeListener('close', onError);
+          resolve();
+        };
+        const onError = (err?: Error) => {
+          res.removeListener('finish', onFinish);
+          reject(err ?? new Error('Request closed before finish'));
+        };
+        res.once('finish', onFinish);
+        res.once('close', onError);
+        next();
+      });
+    });
+  }).catch((err) => {
+    // The transaction rolled back. If the response hasn't been sent, send a 500.
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Tenant context error', detail: err.message });
+    }
+  });
+}
+
+/**
+ * Helpers (Step 6) call this to get the request-scoped Drizzle instance.
+ * Returns the global `db` if called outside a request scope (e.g. background jobs).
+ */
+export function getTenantDb(): typeof db {
+  return tenantContextStorage.getStore()?.tx ?? db;
+}
+
+export function getCurrentTenantId(): string | null {
+  return tenantContextStorage.getStore()?.organizationId ?? null;
+}
+```
+
+**Wire-up in `server/index.ts`:** insert immediately after `setupAuth(app)` (around line 78) and before `registerRoutes(app)`. Open the file, locate the line `setupAuth(app);`, and add directly below:
+
+```typescript
+import { tenantContextMiddleware } from './middleware/tenant-context';
+// ...
+app.use(tenantContextMiddleware);
+```
+
+The middleware sits AFTER Passport so `req.user` is populated, and BEFORE routes so handlers run inside the tenant context.
+
+### 5e. Connection-pool concern
+
+The transaction approach means each authenticated request holds a connection from the `db` pool for its full duration. Current ClaimShield load (3 orgs, dev DB, low concurrent traffic) is well within pool capacity. If concurrent request load grows, the pool size in `server/db.ts` may need to increase. Document the current pool size in `sprint0-existing-schemas.md`.
+
+If `server/db.ts` reveals an unusual pool config (e.g. a pgbouncer in transaction mode), stop and flag — the transaction-scoped `SET LOCAL` approach assumes a per-connection lifecycle. With pgbouncer transaction mode it still works because LOCAL is transaction-scoped; with pgbouncer statement mode it does NOT work and the whole approach must change.
+
+### 5f. Verification script (`scripts/verify-tenant-isolation.ts`)
+
+Standalone script that:
+
+1. Connects without setting `app.current_organization_id`. Tries `SELECT COUNT(*) FROM organization_practice_profiles`. Expects 0.
+2. Begins a transaction, runs `SET LOCAL app.current_organization_id = 'chajinel-org-001'`, then `SELECT COUNT(*) FROM organization_practice_profiles`. Expects 1. Rolls back.
+3. Begins a transaction, runs `SET LOCAL app.current_organization_id = 'fake-org-999'`, then `SELECT COUNT(*) FROM organization_practice_profiles`. Expects 0. Rolls back.
+
+Print PASS/FAIL for each. Run as part of sprint verification.
+
+## Step 6 — Helper service layer
+
+### 6a. server/services/profile-resolution.ts
+
+Pure read functions. Use `getTenantDb()` from the tenant-context middleware. RLS handles the filter; the explicit `organizationId` parameter is for clarity and works even when called outside a request scope (background jobs that have an explicit org).
+
+```typescript
+import { getTenantDb } from '../middleware/tenant-context';
+import { eq, and } from 'drizzle-orm';
+// import the Drizzle table schemas for practice_profiles and organization_practice_profiles
+
+export async function getActiveProfile(organizationId: string) { /* ... */ }
+export async function getAllProfiles(organizationId: string) { /* ... */ }
+export async function getProfileFieldSpec(organizationId: string, surface: 'intake' | 'claim') { /* ... */ }
+export async function getProfileEdiRules(organizationId: string) { /* ... */ }
+export async function getSubscribedRules(organizationId: string, tier: 1 | 2 | 3 | 4 | 5) { /* ... */ }
+```
+
+All functions return safe empty/null defaults if no profile assigned. Never throw on missing data.
+
+### 6b. server/services/relationship-queries.ts
+
+```typescript
+export async function getEnrolledPayers(organizationId: string, opts?: { activeOnly?: boolean }) { /* ... */ }
+export async function getActiveProviders(organizationId: string, role?: string) { /* ... */ }
+export async function getPatientCoverages(patientId: string) { /* ... */ }
+export async function getClaimProviderAssignments(claimId: string) { /* ... */ }
+```
+
+In sprint 0, all but `getEnrolledPayers` return empty arrays because the corresponding tables are unseeded. `getEnrolledPayers` returns whatever's in the existing 2 rows of `practice_payer_enrollments` if those rows match the requesting org.
+
+## Step 7 — Tier 1 structural integrity validator
+
+`server/services/rules-engine/tier1-structural-integrity.ts`:
+
+```typescript
+export type StructuralFailure = {
+  code: string;
+  severity: 'block';
+  message: string;
+  field_path: string;
+  suggested_fix: string;
+};
+
+export function validateStructuralIntegrity(claim: Claim): StructuralFailure[] {
+  // Implements:
+  // 1. MISSING_SERVICE_LINES — claim has at least one service line
+  // 2. MISSING_HCPCS — every service line has a non-empty HCPCS code
+  // 3. INVALID_UNITS — every service line has units > 0
+  // 4. INVALID_CHARGE — every service line has charge > 0 and < 100000
+  // 5. MISSING_PATIENT — claim has a patient_id
+  // 6. MISSING_PAYER — claim has a payer_id (or non-empty payer text)
+  // 7. MISSING_DIAGNOSIS — claim has at least one diagnosis code
+  // 8. INVALID_SERVICE_DATE — service date parseable, not >1 day future, not >18 months past
+}
+```
+
+Standalone — not wired into the EDI generator (`server/services/edi-generator.ts`). Sprint 1 wires it in. Add unit tests at `tier1-structural-integrity.test.ts` covering pass/fail for every rule.
+
+The audit notes the prior "Loop 2400 has fewer than 1" Stedi error came from missing service lines not being caught. Sprint 0 ships the validator that catches this; sprint 1 wires it into preflight. Until sprint 1, the bug is technically still possible.
+
+## Step 8 — Feature flag
+
+```
+USE_PROFILE_AWARE_QUERIES=false
+```
+
+In `server/config/feature-flags.ts` (create if missing):
+
+```typescript
+export const featureFlags = {
+  useProfileAwareQueries: process.env.USE_PROFILE_AWARE_QUERIES === 'true',
+};
+```
+
+Read but not yet referenced by any production code path. Flipping to true should change no behavior in sprint 0.
+
+## Step 9 — Migration state documentation
+
+Create `docs/architecture/migration-state.md`:
+
+**Current state.** As of sprint 0: new schema and tenant-isolation infrastructure exist alongside the old. No production code reads from the new schema. RLS policies enforce isolation on new tables. Tenant-context middleware is wired but only the new helper service layer reads from it.
+
+**Tenant-isolation summary.** RLS on new tables, AsyncLocalStorage-backed Express middleware that opens a transaction and runs `SET LOCAL app.current_organization_id` per authenticated request, service role for cross-tenant ops. Existing tables (`leads`, `claims`, `patients`, etc.) continue to use app-only enforcement via `verifyOrg`/`requireOrgCtx` (`routes.ts:171-186`); migration to RLS is sprint 2+.
+
+**Entity migration status:**
+
+| Entity | Old location | New location | Status | Sprint |
+|---|---|---|---|---|
+| Org profile | nothing equivalent in current schema | `organization_practice_profiles` | NEW | Sprint 1 reads |
+| Payer enrollments | `practice_payer_enrollments` (already exists, 2 rows) | same | RECONCILED | Sprint 1 reads via helpers |
+| Provider→practice | `providers.organization_id` (FK exists) | `provider_practice_relationships` | UNMIGRATED | Sprint 2 |
+| Provider→payer | does not exist in current schema | `provider_payer_relationships` | NEW | Sprint 3 |
+| Patient coverage | `patients.insurance_carrier`, `patients.member_id` | `patient_insurance_enrollments` | UNMIGRATED | Sprint 2 |
+| Claim provider roles | `claims.rendering_provider_id` etc. (verify) | `claim_provider_assignments` | UNMIGRATED | Sprint 3 |
+| Rules engine | flat library at `server/services/rules-engine.ts` | profile-driven via `practice_profiles.rule_subscriptions` + tier-specific validators | TIER 1 ONLY | Tiers 2–5 sprints 3–6 |
+| Voice persona | `org_voice_personas` (2 rows) | stays as table; reads `intake_field_specs` from profile via helpers | RECONCILE | Sprint 1 |
+| Lead → patient bridge | `patients.lead_id` + `syncPatientToLead()` at `routes.ts:106` | same bridge, plus creates `patient_insurance_enrollments` rows | UNCHANGED FOR NOW | Sprint 2 |
+
+**Open questions deferred:**
+
+- Caritas profile design (`referral_intake_only`) — to be defined when Caritas onboarding begins.
+- Profile-version migration policy when home_care_agency_personal_care is updated to v2.
+- Profile overrides table for tenants that deviate from template.
+- Lead → patient_insurance_enrollments creation logic when a lead converts.
+- Backfilling missing FK constraints on `leads`, `calls`, `chat_sessions`, `appointments`, `flows`, `flow_runs`, `denials`, `era_batches`, `activity_logs`, `email_logs` (audit `12-known-issues-and-tech-debt.md` item 3).
+- Removing duplicate FK on `practice_settings` (audit item 4).
+- Migrating cron jobs to use `claimshield_service_role` for cross-tenant operations.
+
+---
+
+## Verification
+
+### Schema
+
+1. `SELECT profile_code, display_name, version_label FROM practice_profiles;` → 1 row.
+2. `SELECT jsonb_array_length(intake_field_specs), jsonb_array_length(rule_subscriptions) FROM practice_profiles WHERE profile_code = 'home_care_agency_personal_care';` → non-zero counts.
+3. `SELECT * FROM organization_practice_profiles WHERE organization_id = 'chajinel-org-001';` → 1 row, `is_primary = true`.
+
+### Tenant isolation (most important)
+
+4. Run `scripts/verify-tenant-isolation.ts` — all PASS.
+5. With Chajinel tenant context set, COUNT on `organization_practice_profiles` → 1.
+6. With no tenant context, COUNT on `organization_practice_profiles` → 0.
+7. With Chajinel tenant context set, COUNT on `practice_payer_enrollments` → matches the count of existing rows that belong to Chajinel.
+
+### Helper layer
+
+8. With tenant context set to chajinel-org-001 (e.g. via a small test script wrapped in the middleware): `getActiveProfile('chajinel-org-001')` returns a populated profile object.
+9. `getProfileFieldSpec('chajinel-org-001', 'intake')` returns 13 fields including `care_recipient_name`, `hours_needed_per_week`.
+10. `getEnrolledPayers('chajinel-org-001')` returns whatever Chajinel's existing rows in `practice_payer_enrollments` represent.
+
+### Tier 1
+
+11. `tier1-structural-integrity.test.ts` test suite all green.
+
+### Non-regression
+
+12. `.env` shows `USE_PROFILE_AWARE_QUERIES=false`.
+13. App boots cleanly. Boot log shows `setupAuth` then `tenantContextMiddleware` registered then `registerRoutes`. No new boot warnings beyond pre-existing ones.
+14. Smoke test the existing demo path — log in as Daniela, view a patient, view a claim, generate an EDI envelope. Behavior identical to before sprint.
+15. The 2 existing rows in `practice_payer_enrollments` still exist and are still accessible via the helper layer when correct tenant context is set.
+
+## Audit report deliverable
+
+Written report covering:
+
+- Existing schema findings from Step 1, including the actual `practice_payer_enrollments` columns and any ALTERs applied.
+- Database snapshot/dump file path taken before the sprint.
+- Every file created (full path).
+- Every existing file modified (full path, what changed, why).
+- Confirmation no existing tables modified except documented Step 4b ALTERs to `practice_payer_enrollments`.
+- Confirmation no existing API routes modified.
+- Confirmation no UI components modified.
+- Tenant-context middleware wire-up location confirmed (line in `server/index.ts`).
+- Connection pool config from `server/db.ts` (size, type — to confirm transaction-scoped LOCAL approach is valid).
+- Verification script results.
+- Any deviation from this prompt and the reason.
+- Any conflict with the audit and how resolved.
+
+## Out of scope — confirm none touched
+
+- EDI generator (`server/services/edi-generator.ts`).
+- Stedi integration (`server/services/stedi-claims.ts`, `stedi-eligibility.ts`, `stedi-webhooks.ts`).
+- Claim wizard frontend.
+- Authentication, sessions, Passport.js (other than the middleware reading `req.user` and `req.session`).
+- Practice settings UI.
+- Existing rules engine (`server/services/rules-engine.ts`).
+- Voice persona builder, `org_voice_personas` table.
+- Caritas onboarding.
+- Lead form, intake form refactor.
+- Background cron jobs (`server/jobs/*-cron.ts`).
+- `replit.md` or any other doc file outside `docs/architecture/`.
+
+If any modified, revert and flag.
+
+---
+
+## End-of-sprint state
+
+- Existing schema audit captured for `practice_payer_enrollments`.
+- Database snapshot/dump path recorded.
+- `practice_profiles` exists with one fully-seeded profile.
+- The five relationship tables exist (one reconciled, four new), correct ID types, correct FK constraints.
+- `organization_practice_profiles` has Chajinel mapped to `home_care_agency_personal_care`.
+- RLS policies enabled on all six new tenant-scoped tables.
+- Service role created.
+- Express middleware wired in `server/index.ts` between `setupAuth(app)` and `registerRoutes(app)`.
+- Helper service layer callable, reading from tenant-scoped Drizzle.
+- Tier 1 validator implemented + unit-tested but not wired in.
+- Feature flag exists, OFF.
+- Migration state documented.
+- Daniela demo path unchanged.
+- Verification script proves isolation.
+
+Sprint 1 starts wiring the helper layer into production read paths (payer dropdown, voice persona system-prompt builder) and connecting Tier 1 to the EDI generator's preflight check.
