@@ -1,0 +1,292 @@
+# ClaimShield — Phase 3 Sprint 1d: Payer Enrollment Surface Migration
+
+This sprint migrates two production read paths from raw SQL to the helper service layer (`practice-profile-helpers.ts`), making them the first user-facing surfaces protected by RLS through `withTenantTx`. Discovery was completed in the planning conversation — the prompt below skips re-discovery and proceeds directly to implementation.
+
+## Context (already established — do not re-investigate)
+
+**The two surfaces being migrated:**
+
+1. **Clinic settings page enrollment list** — `GET /api/practice/payer-enrollments` route handler at `server/routes.ts:3551–3571`. Returns the practice's payer enrollments to the frontend for display in clinic settings.
+2. **Patient signup payer dropdown** — uses the same `GET /api/practice/payer-enrollments` endpoint (per Abeer's design choice a few days ago: "I asked Replit to use the same path to show the payers in the patient sign up flow"). Migrating the route handler migrates both surfaces simultaneously.
+
+**Current behavior (verified against prod):** Both surfaces show Chajinel's 3 enrollments — Stedi Test Payer (FRCPB), TriWest Healthcare Alliance, VA Community Care. All three have `disabled_at = NULL`, all carry `organization_id = 'chajinel-org-001'`, all have `plan_product_code = NULL`.
+
+**Source-of-truth alignment:** The current route handler's query and `getEnrolledPayers()` from `practice-profile-helpers.ts` resolve to the same row set for chajinel — no filter divergence. Migration is a refactor with one additive change to the helper.
+
+**The one delta:** The current route returns two joined fields the helper doesn't currently expose:
+- `payer_name` — already in helper (returned as `payerName`)
+- `enrolled_by_name` — NOT in helper. Comes from `LEFT JOIN users u ON u.id = ppe.enrolled_by`. Needed to keep the settings page byte-identical.
+
+## What this sprint is
+
+1. Pre-flight: snapshot, baselines, confirm prod state matches discovery.
+2. Extend `getEnrolledPayers()` to optionally include `enrolledByName: string | null` via a `LEFT JOIN users` in the helper query.
+3. Migrate the `GET /api/practice/payer-enrollments` route handler to call the helper instead of raw `pool.query`.
+4. Tests:
+   - Helper test for `enrolledByName` resolution (3 cases: enrolled_by present + user exists, enrolled_by present + user deleted, enrolled_by null)
+   - Regression test confirming the helper-backed route returns identical row sets to the pre-migration query (snapshot of expected rows for chajinel + demo, asserted against helper output)
+5. Verification: existing baselines green, new tests green, tsc count ≤ 85.
+6. Smoke: log into dev, open clinic settings page, confirm enrollments render. Open patient signup, confirm payer dropdown renders.
+7. Audit report.
+8. Migration-state update.
+
+## What this sprint is NOT
+
+- No changes to write-path handlers (`POST /api/practice/payer-enrollments` at `routes.ts:3573`, `DELETE` at `:3602`). Those stay on raw SQL until a separate sprint.
+- No migration of `patient-detail.tsx`, `patient-create.tsx`, or other components that fetch from the same endpoint. They auto-migrate when the route handler flips because they consume the same response shape — but their broader UI test surface (form behavior, validation, etc.) is out of scope for sprint 1d.
+- No changes to the helper's existing call sites (smoke-helpers.ts, sprint 0 verification). The helper extension is additive.
+- No production deploy. Sprint 1d lands in dev. Production deploy is a separate task.
+- No `replit_readonly` permission grants. (Still on the follow-up list.)
+- No Drizzle organizations drift cleanup. (Still on the follow-up list.)
+- No tsc baseline cleanup. (85-error baseline stays.)
+- No Vapi work, no Caritas onboarding work, no PGBA work.
+
+If a step seems to require touching a write handler, a non-settings-page component, or any unrelated code, stop and flag.
+
+---
+
+## Hard rules
+
+1. Snapshot before any code change.
+2. The migration touches exactly two files for behavior changes: `server/services/practice-profile-helpers.ts` (helper extension) and `server/routes.ts` (route handler migration). Plus one test file additions.
+3. The route handler's response shape MUST match the pre-migration shape exactly. Same field names, same types, same null handling. Frontend code is not modified — it must continue to work without any change.
+4. The helper extension is additive. Existing callers of `getEnrolledPayers()` (smoke-helpers, isolation tests) continue to work without modification.
+5. The route handler must use `withTenantTx` so the query runs under RLS protection. The current raw-SQL route does not — that's part of what this sprint fixes.
+6. Standing order: dev only. No production deploy in this sprint.
+7. Stop on anomaly at any step.
+
+---
+
+## Step 1 — Pre-flight
+
+### 1a. Snapshot
+
+```bash
+mkdir -p docs/architecture/sprint1d-snapshots
+pg_dump --no-owner --no-privileges $DATABASE_URL > docs/architecture/sprint1d-snapshots/dev-pre-sprint1d-$(date -u +%Y%m%d-%H%M%SZ).sql
+```
+
+Confirm `docs/architecture/sprint1d-snapshots/` is in `.gitignore` (or covered by an existing pattern).
+
+### 1b. Baselines must be green
+
+```bash
+npx tsx scripts/verify-tenant-isolation.ts                                # 12/12
+npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts   # 16/16
+npx tsx server/services/rules-engine.test.ts                              # 4/4
+npx tsx server/services/voice-persona-builder.test.ts                     # 23/23
+npx tsx server/services/rules-engine/edi-preflight.test.ts                # 7/7
+npx tsx scripts/smoke-helpers.ts                                          # green
+npx tsc --noEmit 2>&1 | grep -c "error TS"                                # 85 (Path A baseline)
+```
+
+If any regressed, stop.
+
+### 1c. Confirm dev state matches discovery
+
+```sql
+-- Run against $DATABASE_URL
+SELECT id, organization_id, payer_id, disabled_at, plan_product_code, enrolled_by
+FROM practice_payer_enrollments
+WHERE organization_id IN ('chajinel-org-001', 'demo-org-001')
+ORDER BY organization_id, payer_id;
+```
+
+Document row count and shape in `docs/architecture/sprint1d-audit-report.md §1`.
+
+Note: Dev's `practice_payer_enrollments` may have different rows than prod (per Phase 3 deploy verification, dev had 0 chajinel rows when prod had 3). The dev row set is what matters for sprint 1d's testing — sprint 1d's prod deploy is a separate task that verifies against prod.
+
+If dev has zero chajinel enrollments, that's fine for the migration code itself (the helper handles empty results), but the dev smoke test at Step 6 won't show enrollments for chajinel. The smoke can use demo-org-001's enrollments (which dev has 2 of) instead.
+
+---
+
+## Step 2 — Extend the helper
+
+### 2a. Read the current helper
+
+Read `server/services/practice-profile-helpers.ts`. Find `getEnrolledPayers()`. Document:
+- Current function signature
+- Current return type
+- Current query (so the extension is additive, not replacement)
+
+### 2b. Add `enrolledByName` to the query and return type
+
+Modify `getEnrolledPayers()`:
+
+```typescript
+// Add to the existing query:
+//   LEFT JOIN users u ON u.id = ppe.enrolled_by
+// Select u.full_name (or whatever the actual column is per the route handler at routes.ts:3551–3571)
+
+// Update the return type to include:
+//   enrolledByName: string | null
+```
+
+The exact field name on `users` to select depends on what the existing route handler joins to. Check `routes.ts:3551–3571` for the exact column name used in the SELECT. Match it.
+
+If the helper currently uses Drizzle ORM rather than raw SQL, extend the query in Drizzle's syntax. If it uses raw SQL through `withTenantTx`, extend the raw SQL.
+
+### 2c. Add a 3-case test for the new field
+
+Create or extend `server/services/practice-profile-helpers.test.ts` (whichever file holds existing helper tests) with three cases:
+
+1. Enrollment row has `enrolled_by` pointing to an existing user → `enrolledByName` returns the user's name.
+2. Enrollment row has `enrolled_by` pointing to a deleted/missing user → `enrolledByName` returns `null` (LEFT JOIN behavior).
+3. Enrollment row has `enrolled_by = NULL` → `enrolledByName` returns `null`.
+
+Run:
+
+```bash
+npx tsx server/services/practice-profile-helpers.test.ts
+```
+
+If the test file doesn't exist yet, create it following the pattern from sprint 0's verify scripts.
+
+---
+
+## Step 3 — Migrate the route handler
+
+### 3a. Read the current route handler
+
+Read `server/routes.ts:3551–3600` (50 lines around the route). Document:
+- The current handler's auth/middleware chain
+- The exact SQL being run via `pool.query`
+- The response shape (field names, types)
+- Any error handling
+
+### 3b. Replace the raw query with a helper call
+
+The new handler calls `getEnrolledPayers()` from the helper. Because the helper goes through `withTenantTx`, the query runs under RLS — the org context comes from the tenant-context middleware that's already on every authenticated request post-Phase-3.
+
+```typescript
+// Pseudo-shape of the new handler:
+app.get('/api/practice/payer-enrollments', requireAuth, async (req, res) => {
+  try {
+    const enrollments = await getEnrolledPayers();  // org context auto-resolved via withTenantTx
+    res.json(enrollments);
+  } catch (err) {
+    // match existing error shape
+  }
+});
+```
+
+The exact shape depends on what's already there — match the existing handler's response envelope ({success: true, data: ...}, plain array, etc.).
+
+### 3c. Verify response-shape parity
+
+Before and after the migration, the response from the route should be byte-identical for the same input. The frontend doesn't change; the wire format must not change.
+
+Run a quick comparison:
+
+```bash
+# Before changes (current commit):
+curl -H "Authorization: Bearer <test-token>" http://localhost:5000/api/practice/payer-enrollments > /tmp/before.json
+
+# Apply the migration
+
+# After changes:
+curl -H "Authorization: Bearer <test-token>" http://localhost:5000/api/practice/payer-enrollments > /tmp/after.json
+
+diff <(jq -S . /tmp/before.json) <(jq -S . /tmp/after.json)
+# Expected: zero diff
+```
+
+If they diverge, the migration changed wire behavior. Stop and reconcile.
+
+### 3d. Add a regression test
+
+In whichever file Replit chooses (probably `server/routes.test.ts` if it exists, or a new file), add a test asserting the route returns the expected row set for a known org context. This is the future-proofing for sprint 2+ — if anything in `getEnrolledPayers()` changes, this test catches the wire-format impact on the settings page.
+
+---
+
+## Step 4 — Verification
+
+```bash
+# All baselines (must still pass)
+npx tsx scripts/verify-tenant-isolation.ts                                # 12/12
+npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts   # 16/16
+npx tsx server/services/rules-engine.test.ts                              # 4/4
+npx tsx server/services/voice-persona-builder.test.ts                     # 23/23
+npx tsx server/services/rules-engine/edi-preflight.test.ts                # 7/7
+npx tsx scripts/smoke-helpers.ts                                          # green
+
+# Sprint 1d additions
+npx tsx server/services/practice-profile-helpers.test.ts                  # 3+ tests, all green
+# (regression test from 3d if added separately)
+
+# tsc baseline preserved
+npx tsc --noEmit 2>&1 | grep -c "error TS"                                # ≤ 85
+```
+
+Document outputs in audit report §4.
+
+---
+
+## Step 5 — Smoke test
+
+Manual smoke in dev:
+
+1. **Restart the workflow** so the new route handler is loaded.
+2. **Log into ClaimShield in dev.** Use a Chajinel user (daniela@chajinel.com or similar) or a demo user — whichever has enrollment rows in dev.
+3. **Navigate to clinic settings.** Confirm the payer enrollments list renders. Capture how many rows are visible.
+4. **Navigate to patient signup (or wherever the dropdown lives).** Confirm the payer dropdown shows the same payers as the settings page. Capture the dropdown contents.
+5. **Switch to a different tenant context if possible** (e.g., log in as demo, repeat 3-4). Confirm tenant isolation works through the helper — demo sees demo's enrollments, not chajinel's.
+
+Document each smoke step's outcome in audit report §5.
+
+If anything renders wrong (empty list when rows are expected, wrong rows, error toast, 500 in dev tools), stop and triage.
+
+---
+
+## Step 6 — Audit report
+
+Create `docs/architecture/sprint1d-audit-report.md` with:
+
+- §1 Executive summary + baseline verification + dev state inventory
+- §2 Helper extension (file:line of changes, test results)
+- §3 Route handler migration (file:line of changes, response-shape parity diff, regression test)
+- §4 Verification results
+- §5 Smoke test results (with screenshots or transcript of what rendered)
+- §6 Files created / modified
+- §7 Open follow-ups (write-path migration, other component test surfaces, prod deploy)
+- §8 Standing-order attestation
+
+## Step 7 — Update migration-state
+
+Append to `docs/architecture/migration-state.md`:
+
+- New section: Sprint 1d completed in dev, with reference to audit report.
+- Mark the payer enrollment read paths (settings + dropdown) as **migrated to helper layer with RLS protection**.
+- Note that prod deploy of sprint 1d is pending (separate task).
+- Add a note for future psql debugging: "If a tenant-scoped table appears empty in psql, check `SELECT current_setting('app.current_organization_id', true)` — RLS-subject roles return zero rows when the org GUC is unset. This is the architecture working correctly, not a data state issue."
+
+---
+
+## Out of scope — confirm none touched
+
+- Write-path handlers (POST/DELETE for payer enrollments).
+- Frontend components (patient-detail.tsx, patient-create.tsx, settings page UI).
+- Any non-payer-enrollment surface.
+- Schema or DDL.
+- Production database or production app.
+- Any other helper layer function.
+- The 85 tsc errors hygiene drain.
+- replit_readonly grants.
+- Drizzle organizations drift.
+
+If any modified, revert and flag.
+
+---
+
+## End-of-sprint state
+
+- Snapshot taken, path recorded.
+- `getEnrolledPayers()` returns enrollments with `enrolledByName` field.
+- `GET /api/practice/payer-enrollments` route handler calls the helper through `withTenantTx`.
+- Both clinic settings page and patient signup dropdown read from the helper layer.
+- RLS protects both surfaces — query results are tenant-scoped at the database level, not just by application-level WHERE clauses.
+- Response wire format unchanged — frontend continues to work without modification.
+- All baselines green, new tests green, tsc count ≤ 85.
+- Audit report committed locally.
+
+A small follow-up task ships sprint 1d to production via the same code-only deploy pattern as sprint 1c (push to origin/main, Railway redeploys, smoke verification).

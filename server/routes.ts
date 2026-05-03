@@ -26,6 +26,7 @@ import { advanceToNextStep } from "./services/flow-step-executor";
 import { releaseLock, acquireLock } from "./services/comm-locks";
 import { extractInsuranceFromTranscript } from "./services/transcript-extractor";
 import { getActivatedFieldsForContext, invalidateResolverCache } from "./services/field-resolver";
+import { getEnrolledPayers } from "./services/practice-profile-helpers";
 import { serializeDiagnosisPointer } from "./services/edi-generator";
 
 // Initialize Twilio client
@@ -3552,17 +3553,32 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     try {
       const orgId = getOrgId(req);
       if (!orgId) return res.status(400).json({ error: "No organization context" });
-      const db = await import("./db").then(m => m.pool);
-      const { rows } = await db.query(
-        `SELECT ppe.id, ppe.payer_id, ppe.plan_product_code, ppe.enrolled_at, ppe.disabled_at,
-                ppe.notes, p.name AS payer_name, u.name AS enrolled_by_name
-           FROM practice_payer_enrollments ppe
-           JOIN payers p ON p.id = ppe.payer_id
-           LEFT JOIN users u ON u.id = ppe.enrolled_by
-          WHERE ppe.organization_id = $1
-          ORDER BY ppe.enrolled_at DESC`,
-        [orgId]
-      );
+      // Sprint 1d: migrated from raw `pool.query` to the helper service layer.
+      // `getEnrolledPayers()` runs through `withTenantTx`, which sets
+      // `app.current_organization_id` and drops to `claimshield_app_role` so
+      // RLS enforces tenant isolation at the database level (in addition to
+      // the explicit org check above). Wire format is preserved exactly: the
+      // helper returns camelCase keys; we map them back to the snake_case
+      // shape the frontend (settings page, patient signup) expects, and
+      // re-sort by enrolled_at DESC to match the prior `ORDER BY` clause.
+      const enrollments = await getEnrolledPayers();
+      const rows = enrollments
+        .slice()
+        .sort((a, b) => {
+          const at = a.enrolledAt ? new Date(a.enrolledAt as any).getTime() : 0;
+          const bt = b.enrolledAt ? new Date(b.enrolledAt as any).getTime() : 0;
+          return bt - at;
+        })
+        .map((e) => ({
+          id: e.id,
+          payer_id: e.payerId,
+          plan_product_code: e.planProductCode,
+          enrolled_at: e.enrolledAt,
+          disabled_at: e.disabledAt,
+          notes: e.notes,
+          payer_name: e.payerName,
+          enrolled_by_name: e.enrolledByName,
+        }));
       res.json(rows);
     } catch (err: any) {
       console.error("[C0] GET payer-enrollments:", err.message);

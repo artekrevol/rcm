@@ -95,16 +95,31 @@ export async function getActivePracticeProfile(
 
 /**
  * Returns active payer enrollments for the calling tenant, joined with the
- * payer name. Excludes soft-deleted (disabled_at IS NOT NULL) rows.
+ * payer name and the name of the user who created the enrollment. Excludes
+ * soft-deleted (disabled_at IS NOT NULL) rows.
+ *
+ * Sprint 1d: `enrolledByName` was added so the helper-backed
+ * `GET /api/practice/payer-enrollments` route can render the
+ * "enrolled by" column on the clinic-settings surface without a second
+ * round-trip. The field is `null` when the enrollment row's `enrolled_by`
+ * is NULL (legacy rows pre-dating user attribution, or rows whose creating
+ * user has been deleted — `users` FK on `practice_payer_enrollments`
+ * `enrolled_by` is `ON DELETE SET NULL`).
  */
 export async function getEnrolledPayers(): Promise<
-  Array<PracticePayerEnrollment & { payerName: string | null }>
+  Array<
+    PracticePayerEnrollment & {
+      payerName: string | null;
+      enrolledByName: string | null;
+    }
+  >
 > {
   return withTenantTx(async (client) => {
     const r = await client.query(
-      `SELECT ppe.*, p.name AS payer_name
+      `SELECT ppe.*, p.name AS payer_name, u.name AS enrolled_by_name
        FROM practice_payer_enrollments ppe
        LEFT JOIN payers p ON p.id = ppe.payer_id
+       LEFT JOIN users u ON u.id = ppe.enrolled_by
        WHERE ppe.disabled_at IS NULL
        ORDER BY p.name`,
     );
@@ -130,6 +145,7 @@ export async function getEnrolledPayers(): Promise<
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       payerName: row.payer_name,
+      enrolledByName: row.enrolled_by_name,
     }));
   });
 }

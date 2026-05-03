@@ -9,6 +9,8 @@ vite.config.ts.*
 docs/architecture/sprint0-snapshots/
 docs/architecture/sprint1a-snapshots/
 sprint1b-snapshots/
+docs/architecture/sprint1c-snapshots/
+docs/architecture/sprint1d-snapshots/
 
 # Phase 3 deploy preflight snapshots — local only, do not commit
 # Contains full prod data dump (123 MB binary + 121 KB schema)

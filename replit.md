@@ -16,7 +16,7 @@ The backend is developed using Express.js and Node.js, also in TypeScript. Postg
 -   **AI-powered Intake**: Integration with Vapi API for outbound patient intake calls and transcript extraction.
 -   **Payer Document Scraping**: Utilizes Playwright for automated scraping of payer policy documents, managed by an orchestrator that handles circuit breaking and rate limiting.
 -   **Rules Engine**: Evaluates claims against comprehensive rulesets, including CMS NCCI PTP edits and payer-specific rules, to calculate risk scores and readiness.
--   **Multi-tenancy**: Achieved through an `organization_id` column in all database tables and enforced API-level isolation.
+-   **Multi-tenancy**: Achieved through an `organization_id` column in all database tables, enforced both at the API level and (for Phase 3 helper-routed reads) at the database level via Postgres RLS. RLS-protected reads run as `claimshield_app_role` with the tenant's org id pinned in `app.current_organization_id` by the `withTenantTx` wrapper. As of Sprint 1d, `GET /api/practice/payer-enrollments` is the latest read endpoint migrated onto this path.
 -   **Cron Jobs**: Manages scheduled tasks such as intake flow orchestration, timely filing alerts, payer document scraping, and CCI quarterly data ingestion.
 -   **Conditional Field Management**: Dynamically resolves patient form fields based on payer and plan contexts.
 -   **Client-side PDF Generation**: Generates CMS-1500 forms and appeal letters directly in the browser.

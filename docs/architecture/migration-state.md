@@ -372,3 +372,51 @@ Container start 2026-05-03T07:56:30.543Z → healthy at 07:56:35.858Z (5.3s cold
 - `docs/architecture/sprint1c-audit-report.md` — Sprint 1c implementation audit (predates deploy)
 
 **Status:** Push complete. Awaiting Abeer's Gate 3 sign-off on Railway boot logs + UI smoke test before marking Sprint 1c officially DEPLOYED in this section's headline.
+
+---
+
+## §13 — Sprint 1d: Payer Enrollment Surface Migration (DEV)
+
+**Status:** ✅ Complete in dev. Prod deploy pending (separate task).
+**Authoritative record:** `docs/architecture/sprint1d-audit-report.md`.
+
+### Scope
+
+Migrated `GET /api/practice/payer-enrollments` from raw `pool.query` (postgres superuser, RLS-bypassing) to the `getEnrolledPayers()` helper in `server/services/practice-profile-helpers.ts`, which routes through `withTenantTx` → `claimshield_app_role` with `app.current_organization_id` GUC pinned. **Both** user-facing surfaces flip together: clinic settings page (`client/src/pages/billing/settings.tsx`) and patient signup payer dropdown (same endpoint per Abeer's earlier design choice). Other callers of the same endpoint (`patient-detail.tsx`, `patient-create.tsx`) auto-migrate via the route flip.
+
+### Files in delta
+
+- `server/services/practice-profile-helpers.ts` — `getEnrolledPayers()` extended with `LEFT JOIN users` + `enrolledByName: string | null` (additive — existing callers unchanged).
+- `server/routes.ts` — handler at lines 3555–3590 calls helper instead of raw SQL; new import at line 32. Snake_case wire format preserved exactly via explicit camelCase→snake_case mapping.
+- `server/services/practice-profile-helpers.test.ts` *(new)* — 4-case test suite for `enrolledByName` resolution.
+- `scripts/phase3-prod-migration.sql:443` — Sprint 1d prerequisite: added `users` to `claimshield_app_role` SELECT-grant list (the role already had grants on the other parent tables but not `users`). Applied to dev directly; prod replay on next deploy.
+- `.gitignore` — added `docs/architecture/sprint1d-snapshots/` and `docs/architecture/sprint1c-snapshots/`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` error count | 85 (Path A baseline preserved) |
+| `verify-tenant-isolation.ts` | 12/12 pass |
+| `smoke-helpers.ts` | demo=2, chajinel=0, no-ctx=0 |
+| `practice-profile-helpers.test.ts` | 4/4 pass (T1 + T2 + T3a + T3b) |
+| `tier1-structural-integrity.test.ts` | 16/16 pass |
+| `rules-engine.test.ts` | 4/4 pass |
+| `voice-persona-builder.test.ts` | 23/23 pass |
+| `edi-preflight.test.ts` | 7/7 pass |
+| Wire-format parity (raw SQL vs migrated handler, demo-org-001) | **byte-identical** — same 8 keys, same values, same 2 rows in same order |
+| Workflow boot post-edits | clean — port 5000, all crons started, all seeders "already present", zero ERROR/FATAL |
+
+### Snapshot
+
+`docs/architecture/sprint1d-snapshots/dev-pre-sprint1d-20260503-081958Z.sql` — 127 MB pre-migration dev pg_dump. Excluded from git.
+
+### Open follow-ups
+
+1. **Sprint 1d prod deploy** — separate task. Push to `origin/main` triggers Railway redeploy; the `users` SELECT grant in the migration SQL must apply (idempotent re-run) or already exist before the migrated route is hit, or it will throw `permission denied for table users`. Sequence: push → Railway boot → seeder runs the GRANT → route is safe.
+2. Write-path migration (POST/DELETE for payer enrollments) — out of 1d scope; requires `WITH CHECK` on RLS policies first (Sprint 0 §3.1 carry-over).
+3. Other endpoint consumers' UI test surfaces (`patient-detail.tsx`, `patient-create.tsx` form behavior) — auto-migrate via route flip; broader UI-test surface deferred.
+
+### Future-debugging note (psql vs RLS)
+
+If a tenant-scoped table appears empty when queried via `psql` against `$DATABASE_URL` or `$PRODUCTION_DATABASE_URL` despite known data being present, **check `SELECT current_setting('app.current_organization_id', true)` and `SELECT current_user`**. RLS-subject roles return zero rows when the org GUC is unset, and on tables with `FORCE ROW LEVEL SECURITY` even the postgres superuser is filtered. This is the architecture working correctly — not a data-state issue. Reproduce the data view through `withTenantTx` (e.g., the `smoke-helpers.ts` pattern) instead of raw psql.

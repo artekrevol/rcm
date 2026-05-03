@@ -435,7 +435,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
 GRANT SELECT ON practice_profiles TO claimshield_app_role;
 
 -- Parent tables that helper joins read from. SELECT only.
-GRANT SELECT ON organizations, payers, providers, patients, claims
+-- Sprint 1d added `users` so the payer-enrollment helper can resolve
+-- `enrolled_by` → user name via LEFT JOIN for the clinic-settings surface.
+GRANT SELECT ON organizations, payers, providers, patients, claims, users
   TO claimshield_app_role;
 
 -- =============================================================================
