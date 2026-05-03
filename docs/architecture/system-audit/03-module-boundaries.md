@@ -26,7 +26,9 @@ Each provides a sidebar specific to its module. **UNVERIFIED:** sidebar source f
 | Folder | Purpose |
 |---|---|
 | `server/routes.ts` | Mega-router, 13,867 lines — **monolithic**, all 261 routes registered here. |
-| `server/services/` | Business logic units: `edi-generator.ts`, `rules-engine.ts`, `flow-step-executor.ts`, `flow-trigger.ts`, `flow-events.ts`, `stedi-claims.ts`, `stedi-eligibility.ts`, `stedi-webhooks.ts`, `edi-parser.ts`, `manual-extractor.ts`, `claude-extractor.ts`, `transcript-extractor.ts`, `timely-filing-guardian.ts`, `scraper-monitor.ts`, `comm-locks.ts`, `field-resolver.ts`, `org-context.ts`, `cci-ingest.ts`, `office-ally.ts`, `rejectionCodeLookup.ts`. |
+| `server/services/` | Business logic units: `edi-generator.ts`, `rules-engine.ts`, `flow-step-executor.ts`, `flow-trigger.ts`, `flow-events.ts`, `stedi-claims.ts`, `stedi-eligibility.ts`, `stedi-webhooks.ts`, `edi-parser.ts`, `manual-extractor.ts`, `claude-extractor.ts`, `transcript-extractor.ts`, `timely-filing-guardian.ts`, `scraper-monitor.ts`, `comm-locks.ts`, `field-resolver.ts`, `org-context.ts`, `cci-ingest.ts`, `office-ally.ts`, `rejectionCodeLookup.ts`, `practice-profile-helpers.ts` (Sprint 0), `voice-persona-builder.ts` (Sprint 1b). |
+| `server/services/rules-engine/` | Sprint 0 + 1b: `tier1-structural-integrity.ts` (8-rule pure-function validator), `tier1-adapter.ts` (Tier 1 → `RuleViolation` shim wired into `evaluateClaim` at `rules-engine.ts:351`). |
+| `server/middleware/` | `tenant-context.ts` (Sprint 0): AsyncLocalStorage + `withTenantTx` (`SET LOCAL ROLE claimshield_app_role` + `set_config('app.current_org_id', ...)`). Wired at `server/index.ts:86`. |
 | `server/jobs/` | `flow-orchestrator.ts`, `cci-cron.ts`, `scraper-cron.ts`, `timely-filing-cron.ts`, `scrape-payer-documents.ts`. |
 | `server/scrapers/` | `runtime`, `uhc`, `uhc-fallback-cache`. |
 | `server/lib/` | `environment.ts` (ISA15/automated-context), `rate-lookup.ts`, `test-data-detector.ts`. |

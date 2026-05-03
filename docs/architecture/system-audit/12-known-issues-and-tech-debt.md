@@ -2,11 +2,18 @@
 
 This section consolidates UNVERIFIED items, observable drift, and structural tech debt surfaced during the audit. Nothing here is automatically remediated — Abeer review required before any change.
 
+## Resolved since original audit (Sprint 1a + 1b)
+
+- ✅ **Tier 1 structural validator wired into `evaluateClaim`** (Sprint 1b commit `d797b89`). Short-circuits on any `block` finding; otherwise findings merge into the legacy violation pipeline as `data_quality` with `source: 'tier1-structural'`. See 07.
+- ✅ **Voice persona prompt composition at runtime** (Sprint 1b, `voice-persona-builder.ts`). Opt-in via `org_voice_personas.compose_from_profile`. Caritas remains opt-out and byte-identical; Chajinel migrated to opt-in. See 09.
+- ✅ **`WITH CHECK` clauses on the 6 Phase 3 RLS policies** (Sprint 1a). Cross-tenant INSERTs are now DB-blocked. (Cross-reference `migration-state.md`.)
+- ⚠ **Stale docstring**: `server/services/rules-engine/tier1-structural-integrity.ts:14-15` still says "NOT wired into the legacy `evaluateClaim` pipeline" — outdated since `d797b89`. Cleanup candidate.
+
 ## Verified gaps (high signal)
 
 1. **Monolithic `server/routes.ts`** — 13,867 lines, 261 routes, all in one `registerRoutes()` (`routes.ts:207`). Splitting per-module (`routes/billing.ts`, `routes/intake.ts`, `routes/admin.ts`, `routes/webhooks.ts`) would cut review time and reduce merge conflicts.
 2. **RLS partial — only on 6 of 88 tables (Phase 3 only).** Sprint 0 (2026-05-03) added RLS + `FORCE ROW LEVEL SECURITY` to the 6 Phase 3 tables, with `claimshield_app_role` and `withTenantTx` middleware. The legacy 82 tables (incl. `claims`, `patients`, `leads`, `calls`) still depend exclusively on app-level `verifyOrg`/`requireOrgCtx` (`routes.ts:168-186`). **Recommend** extending RLS to legacy tenant-scoped tables once `WITH CHECK` clauses are validated on the Phase 3 set. See `docs/architecture/migration-state.md` and `sprint0-audit-report.md`.
-2b. **`WITH CHECK` clauses missing** on the 6 Phase 3 RLS policies — cross-tenant INSERTs are not blocked by the DB. Must land before any Sprint-1 INSERT helper ships (`migration-state.md` §3.1).
+2b. ~~**`WITH CHECK` clauses missing** on the 6 Phase 3 RLS policies~~ — **resolved in Sprint 1a** (see Resolved section above). All 12 Phase 3 policies now have both `USING` and `WITH CHECK`; cross-tenant INSERTs are DB-blocked.
 3. **Missing FK on tenant-scoped tables** — `leads`, `calls`, `chat_sessions`, `appointments`, `flows`, `flow_runs`, `denials`, `era_batches`, `activity_logs`, `email_logs` carry `organization_id` per the Drizzle schema but the FK constraint is absent in `_queries/04_foreign_keys.tsv`. Adding the FK would prevent orphan rows and make tenancy auditing trivial.
 4. **Duplicate FK on `practice_settings`** — both `practice_settings_org_fk` (RESTRICT) and `practice_settings_organization_id_fkey` (NO ACTION) exist (`_queries/04_foreign_keys.tsv:36-37`). Drop one.
 5. **No DB triggers / no views / no stored procedures / no sequences for ID generation on most tables.** All business logic lives in Node. This is fine, but it means any DB-level safety net is absent — every safeguard must be a code path.

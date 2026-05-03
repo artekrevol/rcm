@@ -38,7 +38,7 @@ Full list with row counts: `_queries/01_tables_with_rowcounts.tsv`. Key tables g
 | `org_payer_mappings` | 17 | CASCADE → organizations |
 | `org_providers` | 1 | CASCADE → organizations |
 | `org_service_types` | 15 | CASCADE → organizations |
-| `org_voice_personas` | 2 | CASCADE → organizations |
+| `org_voice_personas` | 2 | CASCADE → organizations. **Sprint 1b** added `compose_from_profile boolean NOT NULL DEFAULT false`; 1 of the 2 rows (Chajinel) is now `true` and uses the runtime persona builder (see 09). |
 
 ### Phase 3 / Sprint 0 — Profile-aware multi-tenancy (added 2026-05-03)
 | Table | Rows | RLS | Notes |

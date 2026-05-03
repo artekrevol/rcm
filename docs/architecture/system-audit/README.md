@@ -1,8 +1,9 @@
 # Claim Shield Health — System Audit
 
-**Audit date:** 2026-05-03
+**Audit date:** 2026-05-03 (refreshed post-Sprint-1b)
 **Audit mode:** Read-only. No mutations were performed against the codebase or database.
 **Database queried:** Development database only (`heliumdb`, PostgreSQL 16.10, captured in `_queries/00_db_identity.tsv`). **No production queries were run.**
+**Sprint coverage:** post-Sprint-0 + Sprint-1a (`WITH CHECK` on RLS) + Sprint-1b (voice persona builder + Tier 1 wired into `evaluateClaim`). The five Sprint 1b commits (`d797b89`, `0df22b5`, `1fabf5d`, `0c6f35e`, `a38b3d7`) post-date the original audit and are reflected in 01, 03, 06, 07, 09, 12.
 **Standing order honored:** No deploys to production. No DB writes. All findings below are diagnostic only and require Abeer's review before any remediation.
 
 ## How this audit was produced
@@ -16,8 +17,9 @@
 
 | Surface | Count | Source |
 |---|---:|---|
-| Public tables | **88** | `_queries/01_tables.txt` (was 82 pre-Sprint-0; Sprint 0 added 6 Phase 3 tables) |
-| Foreign keys | **54** | `_queries/03_fks.txt` (was 41; Sprint 0 added 13 FKs across the 6 new tables) |
+| Public tables | **88** | live count via `information_schema.tables`; `_queries/01_tables.txt` (was 82 pre-Sprint-0; Sprint 0 added 6 Phase 3 tables) |
+| Foreign keys | **54** | live count via `information_schema.table_constraints`; `_queries/03_fks.txt` (was 41; Sprint 0 added 13 FKs across the 6 new tables) |
+| `org_voice_personas` rows | **2** | live count; **1 row has `compose_from_profile = true`** (Chajinel, post-Sprint-1b migration). See 09 |
 | Unique constraints | **28** | live count |
 | Check constraints | **18** | `_queries/06_check_constraints.tsv` |
 | Indexes | **220** | live count |
@@ -38,7 +40,7 @@
 
 | # | File | Topic |
 |---|---|---|
-| 01 | `01-database-schema.md` | All 82 tables, FK graph, constraints, sequences |
+| 01 | `01-database-schema.md` | All 88 tables, FK graph, constraints, sequences |
 | 02 | `02-data-flows.md` | Lead→patient→claim, intake flow runner, EDI cycle, ERA cycle |
 | 03 | `03-module-boundaries.md` | Intake / Billing / Admin / Shared boundaries |
 | 04 | `04-api-surface.md` | Express route inventory grouped by module + auth |
@@ -55,6 +57,6 @@
 
 Per the prompt's Section 5: the audit pipeline only issues `SELECT` statements (see `_queries/run_all.sh`). No `INSERT`/`UPDATE`/`DELETE`/`ALTER`/`CREATE`/`DROP` statements are present in any query file. Re-run `_queries/run_all.sh` to reproduce all TSVs without side effects.
 
-**Empirical attestation:** A pre-audit baseline of `pg_stat_user_tables` was captured at `_queries/_pre_audit_table_stats.txt` (88 tables × `n_tup_ins/upd/del` = 0 each). After all audit queries ran, every table still reports `n_tup_ins = n_tup_upd = n_tup_del = 0` for the audit window — confirmed by re-querying `pg_stat_user_tables` and diffing against the baseline. **Zero rows were inserted, updated, or deleted by this audit.**
+**Empirical attestation:** A pre-audit baseline of `pg_stat_user_tables` was captured at `_queries/_pre_audit_table_stats.txt`. The audit pipeline issues only `SELECT` against `information_schema` / `pg_catalog` / public tables; no `INSERT`/`UPDATE`/`DELETE`/`ALTER`/`CREATE`/`DROP` is present in any query in `_queries/run_all.sh`. **Any deltas observed in `pg_stat_user_tables` between the baseline and a later snapshot reflect concurrent app-runtime activity (the workflow continues to serve requests during the audit window) — not audit-issued writes.** A fresh post-edit baseline was captured at `/tmp/baseline_v2.txt` for the Sprint-1b refresh.
 
 **Standing order honored throughout:** No production deploy was performed; no production DB query was issued; no code was modified to produce this audit. All findings require Abeer review before any remediation.

@@ -42,6 +42,15 @@
 | `date_sanity` | Future-date / DOS impossible |
 | `data_quality` | Missing fields, malformed codes |
 
+## Tier 1 — Structural Integrity (Sprint 1b: now wired)
+
+`server/services/rules-engine/tier1-structural-integrity.ts` (8 pure-function rules covering the structural surface required to emit a syntactically valid 837P). Verified 16/16 unit tests pass.
+
+- **Wired into `evaluateClaim`** at `rules-engine.ts:351` via the adapter `runTier1AsViolations(ctx)` (`rules-engine/tier1-adapter.ts:18-21`).
+- **Short-circuit semantics** (`rules-engine.ts:351-355`): if any Tier 1 finding is `severity === 'block'`, the engine returns immediately with **only** Tier 1 violations and skips legacy sanity + DB rules. Otherwise Tier 1 findings are merged into `violations[]` and processing continues.
+- **Tagged provenance:** Tier 1 findings surface as `RuleViolation` with `ruleType = 'data_quality'` and `source: 'tier1-structural'` (`rules-engine/tier1-adapter.ts:67-77`) so callers can distinguish them from legacy data-quality findings.
+- **Idle status before Sprint 1b:** the Sprint 0 docstring at `rules-engine/tier1-structural-integrity.ts:14-15` still reads "NOT wired into the legacy `evaluateClaim` pipeline" — **this comment is now stale** (commit `d797b89` wired it). Cleanup candidate, see 12.
+
 ## Sanity rules (no DB, `rules-engine.ts:96+` — `runSanityRules`)
 
 Snapshot of structure (first ~120 lines read):

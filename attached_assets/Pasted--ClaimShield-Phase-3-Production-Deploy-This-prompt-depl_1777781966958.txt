@@ -1,0 +1,659 @@
+# ClaimShield — Phase 3 Production Deploy
+
+This prompt deploys the combined output of Phase 3 Sprint 0, Sprint 1a, and Sprint 1b to production. Everything has been validated in dev (`heliumdb`); production (`PRODUCTION_DATABASE_URL`, Railway-managed) has none of it yet.
+
+**This is the riskiest single change to ClaimShield to date.** It introduces:
+- 6 new database tables (5 tenant-scoped, 1 global catalog)
+- 12 RLS policies + FORCE RLS
+- 2 new database roles
+- 11 additive ALTER COLUMN statements on a live table (`practice_payer_enrollments` has 3 production rows)
+- 1 additive ALTER COLUMN on another live table (`org_voice_personas`)
+- 2 seed rows
+- A new Express middleware on the production boot path that wraps every authenticated request in a transaction
+- Application code from sprints 0, 1a, 1b: helpers, Tier 1 validator wired into `evaluateClaim`, voice persona builder, Drizzle schema corrections
+
+After deploy, every authenticated request in production runs through `tenantContextMiddleware` → `withTenantTx` → `SET LOCAL ROLE claimshield_app_role`. The architecture stops being conceptual and becomes the production runtime.
+
+## Hard rules
+
+1. **Schema migration runs before code deploy, not after.** Prod's app code currently uses old Drizzle definitions; sprint 0/1a/1b code expects the new schema. If code deploys first, the app fails to boot. Strict ordering: snapshot → schema → verify → code → verify.
+2. **Every irreversible step has an Abeer sign-off gate.** Eight gates total. Replit pauses, surfaces the diff, waits for explicit approval before continuing. No batched approvals.
+3. **All commits before code deploy go to a `phase3-prod-deploy` branch, not `main`.** Railway only deploys from `main`. Staging on a separate branch keeps code out of production until the gates pass.
+4. **Snapshot before any DDL.** `pg_dump` of production saved to `/tmp/` (NOT committed to repo, NOT in `docs/architecture/`). Path recorded in audit report. This is the rollback artifact.
+5. **All schema changes are additive.** No drops, no renames, no type changes. Existing queries continue to work during and after migration.
+6. **Tenant-scoped data is preserved exactly.** The 3 production rows in `practice_payer_enrollments` (Chajinel's TriWest, VA Community Care, Stedi Test Payer enrollments) are not modified. Any modification is a critical bug.
+7. **No PHI or production data is logged, screen-printed, or written to any file outside the snapshot.** Patient names, member IDs, claim contents — none of it appears in audit reports, console logs, or migration scripts.
+8. **If anything looks wrong at any gate, stop and surface.** Do not "fix and continue." This is production.
+
+---
+
+## What this deploy is
+
+1. Pre-flight: production state inspection, baseline metrics, snapshot, connection role identity check.
+2. Stage code on `phase3-prod-deploy` branch (not deployed yet).
+3. Apply schema migration to production via controlled DDL script.
+4. Verify schema migration.
+5. Merge code to `main`, trigger Railway deploy.
+6. Verify code deploy.
+7. Smoke test against production.
+8. Audit report.
+
+## What this deploy is NOT
+
+- No new feature work. Code being deployed is exactly what's already merged in dev across sprints 0, 1a, 1b — no additions, no fixes, no improvements during the deploy.
+- No EDI route gate (sprint 1c work).
+- No payer dropdown migration to use `getEnrolledPayers()` (sprint 1c work — for now, the production dropdown continues using whatever query Abeer configured a few days ago).
+- No Caritas onboarding (post-deploy task).
+- No Vapi assistant activation.
+- No `replit_readonly` permission grants on `practice_payer_enrollments` or `org_voice_personas` (separate small task; can be bundled at the end if Abeer chooses).
+- No connection pool size changes (monitor post-deploy; adjust only if exhaustion observed).
+
+If any of the above look attractive during deploy because the prod connection is open, **stop**. Add to a follow-up task list. Do not expand scope mid-deploy.
+
+---
+
+## Phase 1 — Pre-flight (read-only against production)
+
+### 1a. Connection role identity — the most important pre-flight check
+
+The sprint 0 RLS + role pattern assumes the application's database connection is a superuser (in dev, it's `postgres`). Production may differ — Railway-managed Postgres sometimes provisions a non-superuser application connection.
+
+```sql
+-- Run against PRODUCTION_DATABASE_URL
+SELECT current_user, session_user, current_database(), version();
+SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolbypassrls
+FROM pg_roles WHERE rolname = current_user;
+```
+
+Three possible outcomes:
+
+**Outcome A — current_user is superuser (`rolsuper = true`):** Same pattern as dev. `claimshield_app_role` is created, granted to the connecting role, `SET LOCAL ROLE` works as designed.
+
+**Outcome B — current_user is not superuser but has CREATE ROLE privilege:** The migration can still create `claimshield_app_role`, but the grant pattern needs adjustment. Document the exact role and its privileges, propose a revised role design, **stop and surface to Abeer**.
+
+**Outcome C — current_user is not superuser and lacks CREATE ROLE:** The schema migration cannot run as-is. Need a separate Railway-admin connection (or Railway support intervention) to create the role. **Stop and surface to Abeer.** Do not proceed with the deploy until role creation path is determined.
+
+Whatever the outcome, document in `docs/architecture/phase3-deploy-preflight.md` §1.
+
+**Sign-off gate 1: connection role identity confirmed.** Abeer reviews outcome, approves the role-creation path. Continue to 1b only after approval.
+
+### 1b. Production state inventory
+
+```sql
+-- Confirm the 3 organizations exist and are active
+SELECT id, name, status FROM organizations ORDER BY id;
+
+-- Confirm Chajinel's enrollments (should be 3 rows)
+SELECT ppe.id, ppe.organization_id, p.name AS payer_name, ppe.payer_id
+FROM practice_payer_enrollments ppe
+LEFT JOIN payers p ON p.id = ppe.payer_id
+WHERE ppe.organization_id = 'chajinel-org-001'
+ORDER BY p.name;
+
+-- Confirm org_voice_personas state
+SELECT organization_id, persona_key, vapi_assistant_id,
+       length(system_prompt) AS prompt_len
+FROM org_voice_personas ORDER BY organization_id;
+
+-- Confirm Phase 3 tables do NOT exist yet (deploy assumes greenfield)
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+  AND table_name IN ('practice_profiles', 'organization_practice_profiles',
+                     'provider_practice_relationships', 'provider_payer_relationships',
+                     'patient_insurance_enrollments', 'claim_provider_assignments');
+-- Expected: zero rows
+
+-- Confirm RLS state of existing tables
+SELECT tablename FROM pg_tables WHERE schemaname='public'
+  AND tablename IN (SELECT tablename FROM pg_policies WHERE schemaname='public');
+-- Expected: zero rows (no RLS in prod yet)
+
+-- Inspect practice_payer_enrollments columns (must be 8-column legacy shape)
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema='public' AND table_name='practice_payer_enrollments'
+ORDER BY ordinal_position;
+
+-- Inspect org_voice_personas columns (must NOT have compose_from_profile yet)
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema='public' AND table_name='org_voice_personas'
+ORDER BY ordinal_position;
+```
+
+Save all output to `docs/architecture/phase3-deploy-preflight.md` §2.
+
+If any expected condition is not met (e.g., one of the Phase 3 tables already exists, RLS already enabled, `compose_from_profile` already present), **stop and surface**. The deploy assumes greenfield.
+
+### 1c. Production app health baseline
+
+Capture metrics from Railway dashboard or production logs:
+
+- Current request volume (last 24 hours)
+- Current error rate (last 24 hours)
+- Connection pool utilization (peak and average)
+- Recent deploy history (when was the last deploy, what changed)
+
+Save to preflight doc §3. This is the baseline against which post-deploy health is compared.
+
+### 1d. Production database snapshot
+
+```bash
+# Run from a machine with PRODUCTION_DATABASE_URL access
+SNAPSHOT_PATH="/tmp/claimshield-prod-pre-phase3-$(date -u +%Y%m%d-%H%M%SZ).sql"
+pg_dump --no-owner --no-privileges "$PRODUCTION_DATABASE_URL" > "$SNAPSHOT_PATH"
+ls -lh "$SNAPSHOT_PATH"  # confirm file exists, non-zero size
+```
+
+**Do not commit this file.** Do not move it into the repo. Do not write the path into any committed file. Record the path only in the audit report (which itself stays out of the repo).
+
+If snapshot fails (connection error, permission, disk space), stop. Resolve before any DDL.
+
+### 1e. Verify dev state matches deploy expectations
+
+Before staging code, confirm dev is in the state we think it's in:
+
+```bash
+# Run against dev DATABASE_URL
+psql $DATABASE_URL -c "SELECT count(*) FROM practice_profiles;"  # expect 1
+psql $DATABASE_URL -c "SELECT count(*) FROM organization_practice_profiles;"  # expect 1
+psql $DATABASE_URL -c "SELECT count(*) FROM pg_policies WHERE schemaname='public' AND policyname IN ('tenant_isolation','service_role_bypass');"  # expect 12
+```
+
+If dev is not in the expected state, the deploy might be missing something. Stop and surface.
+
+**Sign-off gate 2: pre-flight complete, snapshot taken, dev verified.** Abeer reviews `phase3-deploy-preflight.md`, approves to proceed to staging.
+
+---
+
+## Phase 2 — Stage code on `phase3-prod-deploy` branch
+
+### 2a. Branch creation
+
+```bash
+git checkout main
+git pull
+git checkout -b phase3-prod-deploy
+```
+
+The branch starts from production's current `main`. We will build the deploy commit set on this branch and merge to `main` only after schema migration is verified.
+
+### 2b. Cherry-pick or merge the Phase 3 work
+
+The work currently in dev's `main` (or wherever Replit's been committing) needs to come onto `phase3-prod-deploy`. The exact mechanism depends on the repo's branching strategy:
+
+- If dev and prod share a `main` branch and Replit's Phase 3 commits are already on `main`, then `phase3-prod-deploy` already contains them — but **only if `main` hasn't been auto-deployed to Railway**. Verify Railway's deploy trigger before assuming.
+- If dev has its own branch, cherry-pick or merge the Phase 3 commits onto `phase3-prod-deploy`.
+
+Before continuing, run these checks against `phase3-prod-deploy`:
+
+```bash
+# Confirm Phase 3 files exist on the branch
+ls server/middleware/tenant-context.ts \
+   server/services/practice-profile-helpers.ts \
+   server/services/voice-persona-builder.ts \
+   server/services/rules-engine/tier1-structural-integrity.ts \
+   shared/schema.ts
+
+# Confirm Phase 3 schema definitions exist in shared/schema.ts
+grep -c "practiceProfiles\|organizationPracticeProfiles\|composeFromProfile" shared/schema.ts
+# Expected: 3+ matches
+
+# Confirm middleware is wired in server/index.ts
+grep "tenantContextMiddleware" server/index.ts
+# Expected: import line + app.use line
+```
+
+If anything is missing, stop and reconcile.
+
+### 2c. Build the deploy migration script
+
+Create `scripts/phase3-deploy-prod.sql` on the branch. This is the single source of truth for the schema migration. It contains every DDL statement needed, in order, idempotent where possible (`IF NOT EXISTS`, `IF EXISTS`).
+
+The script structure:
+
+```sql
+-- scripts/phase3-deploy-prod.sql
+-- Phase 3 production migration. Run via:
+--   psql $PRODUCTION_DATABASE_URL -f scripts/phase3-deploy-prod.sql
+-- Or:
+--   railway run psql -f scripts/phase3-deploy-prod.sql
+--
+-- This script is idempotent up to the seed rows (which use ON CONFLICT DO NOTHING).
+-- All schema changes are additive — no drops, no renames, no type changes.
+
+BEGIN;
+
+-- ========== 1. Roles ==========
+-- Adjust the GRANT TO statement based on Phase 1 connection role outcome.
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'claimshield_service_role') THEN
+    CREATE ROLE claimshield_service_role NOINHERIT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'claimshield_app_role') THEN
+    CREATE ROLE claimshield_app_role NOLOGIN NOINHERIT;
+  END IF;
+END $$;
+
+-- Grant the app role to the connecting user so SET LOCAL ROLE works
+-- The role name in the GRANT below must match Phase 1 outcome:
+--   Outcome A (superuser): GRANT claimshield_app_role TO postgres;
+--   Outcome B/C: GRANT claimshield_app_role TO <whatever_role>;
+-- This line is filled in based on the preflight check.
+GRANT claimshield_app_role TO <CONNECTING_ROLE>;  -- placeholder
+
+-- ========== 2. New tables (CREATE IF NOT EXISTS for idempotency) ==========
+-- (paste exact DDL from sprint 0 audit's docs/architecture/sprint0-snapshots/sprint0-ddl.sql,
+--  unchanged from dev. The DDL is already audited and verified.)
+
+-- practice_profiles
+CREATE TABLE IF NOT EXISTS practice_profiles (
+  -- ... per shared/schema.ts and sprint0-ddl.sql
+);
+
+-- organization_practice_profiles
+CREATE TABLE IF NOT EXISTS organization_practice_profiles (
+  -- ...
+);
+
+-- (and so on for the other 4 relationship tables)
+
+-- ========== 3. Additive ALTERs to practice_payer_enrollments ==========
+-- 11 additive columns, all NOT NULL with safe defaults or NULL-able.
+
+ALTER TABLE practice_payer_enrollments
+  ADD COLUMN IF NOT EXISTS enrollment_status text NOT NULL DEFAULT 'pending',
+  ADD COLUMN IF NOT EXISTS effective_from date,
+  ADD COLUMN IF NOT EXISTS effective_to date,
+  ADD COLUMN IF NOT EXISTS billing_npi text,
+  ADD COLUMN IF NOT EXISTS taxonomy_code text,
+  ADD COLUMN IF NOT EXISTS submission_method text,
+  ADD COLUMN IF NOT EXISTS clearinghouse text,
+  ADD COLUMN IF NOT EXISTS timely_filing_days integer,
+  ADD COLUMN IF NOT EXISTS prior_auth_required boolean NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS contracted_rate_table_id uuid,
+  ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT NOW();
+
+-- ========== 4. Additive ALTER on org_voice_personas ==========
+ALTER TABLE org_voice_personas
+  ADD COLUMN IF NOT EXISTS compose_from_profile boolean NOT NULL DEFAULT false;
+
+-- ========== 5. Enable RLS + FORCE RLS on the 6 tenant-scoped tables ==========
+ALTER TABLE organization_practice_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE organization_practice_profiles FORCE ROW LEVEL SECURITY;
+-- (repeat for the 5 others)
+
+-- ========== 6. Policies ==========
+-- 12 policies: tenant_isolation + service_role_bypass on each of the 6 tenant tables.
+-- Use the EXACT GUC name verified from dev (likely `app.current_organization_id` —
+-- confirm via dev pg_policy before pasting here).
+-- Both USING and WITH CHECK on tenant_isolation (sprint 1a closed this).
+
+CREATE POLICY tenant_isolation ON organization_practice_profiles
+  USING (organization_id = current_setting('app.current_organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.current_organization_id', true));
+-- (repeat for the 5 other tenant tables)
+
+CREATE POLICY service_role_bypass ON organization_practice_profiles
+  AS PERMISSIVE FOR ALL TO claimshield_service_role
+  USING (true) WITH CHECK (true);
+-- (repeat for the 5 others)
+
+-- ========== 7. Grants ==========
+-- claimshield_app_role
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  organization_practice_profiles, practice_payer_enrollments,
+  provider_practice_relationships, provider_payer_relationships,
+  patient_insurance_enrollments, claim_provider_assignments
+TO claimshield_app_role;
+
+GRANT SELECT ON practice_profiles TO claimshield_app_role;
+
+-- Parent-table SELECT grants (sprint 0 mid-sprint addition; required for helper joins)
+GRANT SELECT ON organizations, payers, providers, patients, claims TO claimshield_app_role;
+
+-- claimshield_service_role
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  organization_practice_profiles, practice_payer_enrollments,
+  provider_practice_relationships, provider_payer_relationships,
+  patient_insurance_enrollments, claim_provider_assignments
+TO claimshield_service_role;
+
+-- ========== 8. Seed: practice_profiles + Chajinel mapping ==========
+-- (paste the exact INSERT for home_care_agency_personal_care from sprint 0 §2.3,
+--  unchanged from dev. Use ON CONFLICT (profile_code) DO NOTHING.)
+
+INSERT INTO practice_profiles (profile_code, ...) VALUES (
+  'home_care_agency_personal_care', ...
+) ON CONFLICT (profile_code) DO NOTHING;
+
+INSERT INTO organization_practice_profiles (organization_id, profile_code, is_primary)
+VALUES ('chajinel-org-001', 'home_care_agency_personal_care', true)
+ON CONFLICT DO NOTHING;
+
+COMMIT;
+```
+
+Replit fills in the placeholder DDL by copying verbatim from dev's `docs/architecture/sprint0-snapshots/sprint0-ddl.sql` and `sprint0-app-role.sql`. Do not modify the DDL during this step — it's been verified. The only contextual edit is the connecting role name in the `GRANT claimshield_app_role TO ...` line, based on Phase 1 outcome.
+
+### 2d. Commit and push to `phase3-prod-deploy`
+
+```bash
+git add scripts/phase3-deploy-prod.sql
+git add -u  # any other Phase 3 work that wasn't already on main
+git commit -m "Phase 3 production deploy: schema migration script + code"
+git push -u origin phase3-prod-deploy
+```
+
+**Do NOT merge to `main` yet.** Railway should not pick this up.
+
+### 2e. Verify Railway has not auto-deployed
+
+Check Railway dashboard. The most recent deploy timestamp should be unchanged from before this push. If a new deploy started, Railway's trigger is configured to watch all branches — **stop immediately** and figure out how to halt the deploy.
+
+**Sign-off gate 3: code staged on branch, Railway not triggered.** Abeer confirms branch contents and Railway state. Continue to Phase 3 only after approval.
+
+---
+
+## Phase 3 — Schema migration against production
+
+### 3a. Final dry-run check
+
+Read `scripts/phase3-deploy-prod.sql` end-to-end one more time. Look for:
+- Any `DROP` statement (should be zero)
+- Any `RENAME` (zero)
+- Any `ALTER COLUMN ... TYPE` (zero)
+- Any `DELETE` or `UPDATE` against existing data (zero)
+- The connecting-role placeholder is filled in correctly
+
+If anything is wrong, fix and commit on the branch before continuing.
+
+### 3b. Run the migration
+
+Replit invokes the migration. The mechanism depends on Railway's CLI access:
+
+```bash
+# Option A: Railway CLI
+railway run --service <service-name> psql -f scripts/phase3-deploy-prod.sql
+
+# Option B: Direct psql with PRODUCTION_DATABASE_URL
+psql "$PRODUCTION_DATABASE_URL" -f scripts/phase3-deploy-prod.sql
+```
+
+Either way, the script runs in a single transaction. If any statement fails, the entire migration rolls back. There is no partial state.
+
+Capture stdout + stderr to `docs/architecture/phase3-deploy-migration.log` (do NOT commit this file — it may contain row counts or error messages that touch production data identifiers).
+
+### 3c. Verify migration outcome
+
+```sql
+-- 6 new tables exist
+SELECT table_name FROM information_schema.tables
+WHERE table_schema='public'
+  AND table_name IN ('practice_profiles', 'organization_practice_profiles',
+                     'provider_practice_relationships', 'provider_payer_relationships',
+                     'patient_insurance_enrollments', 'claim_provider_assignments')
+ORDER BY table_name;
+-- Expected: 6 rows
+
+-- 12 policies exist with both USING and WITH CHECK on tenant_isolation
+SELECT polname, polrelid::regclass AS table_name,
+       pg_get_expr(polqual, polrelid) IS NOT NULL AS has_using,
+       pg_get_expr(polwithcheck, polrelid) IS NOT NULL AS has_with_check
+FROM pg_policy
+WHERE polname IN ('tenant_isolation', 'service_role_bypass')
+ORDER BY polrelid::regclass::text, polname;
+-- Expected: 12 rows. Every tenant_isolation row has has_with_check = true.
+
+-- practice_payer_enrollments now has 20 columns
+SELECT count(*) FROM information_schema.columns
+WHERE table_schema='public' AND table_name='practice_payer_enrollments';
+-- Expected: 20
+
+-- The 3 existing Chajinel rows are unchanged
+SELECT id, organization_id, payer_id, enrollment_status FROM practice_payer_enrollments
+WHERE organization_id = 'chajinel-org-001'
+ORDER BY id;
+-- Expected: 3 rows, all with enrollment_status = 'pending' (the new column's default)
+
+-- compose_from_profile column added with default false
+SELECT compose_from_profile, count(*) FROM org_voice_personas GROUP BY compose_from_profile;
+-- Expected: all rows at compose_from_profile = false
+
+-- Seed rows present
+SELECT count(*) FROM practice_profiles WHERE profile_code = 'home_care_agency_personal_care';
+-- Expected: 1
+SELECT count(*) FROM organization_practice_profiles WHERE organization_id = 'chajinel-org-001';
+-- Expected: 1
+
+-- Roles exist
+SELECT rolname FROM pg_roles
+WHERE rolname IN ('claimshield_app_role', 'claimshield_service_role')
+ORDER BY rolname;
+-- Expected: 2 rows
+```
+
+Document all results in `docs/architecture/phase3-deploy-migration-verify.md` (this file CAN be committed — it contains row counts and shape, no row contents).
+
+### 3d. Test RLS isolation against production
+
+Run the verification script (or equivalent) against PRODUCTION_DATABASE_URL:
+
+```bash
+# Use the same script that passed 12/12 in dev, but pointed at prod
+DATABASE_URL="$PRODUCTION_DATABASE_URL" npx tsx scripts/verify-tenant-isolation.ts
+```
+
+Expected: 12/12 PASS. The same matrix as dev, but against prod data:
+- No context → 0 rows from all tenant tables
+- chajinel-org-001 context → 1 row from organization_practice_profiles, 3 rows from practice_payer_enrollments
+- Wrong context → 0 rows
+
+If any case fails, **stop and surface**. The schema migration succeeded but RLS isn't working — possibly a role-grant issue (revisit Phase 1 outcome).
+
+**Sign-off gate 4: schema migration applied, verified, RLS working.** Abeer reviews verify doc and isolation results. Continue to Phase 4 only after approval.
+
+---
+
+## Phase 4 — Code deploy via Railway
+
+### 4a. Merge `phase3-prod-deploy` to `main`
+
+```bash
+git checkout main
+git pull
+git merge phase3-prod-deploy --no-ff -m "Phase 3 production deploy: code"
+git push origin main
+```
+
+The push to `main` triggers Railway. Replit watches the Railway deploy logs.
+
+### 4b. Watch the deploy
+
+Monitor Railway logs in real-time. Watch for:
+- Build success
+- Deploy start
+- App boot logs ("serving on port 5000" or equivalent)
+- No errors during boot
+- Health check passing (if configured)
+
+If the app fails to boot:
+- Capture the boot error
+- Initiate rollback (Phase 6)
+- Surface to Abeer
+
+If boot succeeds, proceed to verification.
+
+**Sign-off gate 5: app booted in production with new code.** Abeer confirms Railway dashboard shows deploy success. Continue to Phase 5.
+
+---
+
+## Phase 5 — Post-deploy verification
+
+### 5a. Smoke test the existing flows (the most important check)
+
+These flows must work identically to before the deploy:
+
+1. **Login.** Daniela logs in. Session creates. Redirect to dashboard. No 500s.
+2. **View patient list.** Loads. Shows existing patients. No 500s.
+3. **View patient detail.** Click a patient. Detail page loads with all sections.
+4. **View claim list.** Loads. Shows existing claims. No 500s.
+5. **View claim detail.** Click a claim. Detail page loads.
+6. **Generate EDI envelope.** For a known-good claim, click whatever generates EDI. Envelope produces. Identical bytes to a pre-deploy baseline (capture one before Phase 4).
+
+If any flow fails, **stop and initiate rollback**. The middleware insertion is the most likely cause; surface the error to Abeer.
+
+### 5b. Smoke test webhooks (no auth, must not be affected by middleware)
+
+The middleware should no-op for unauthenticated requests. Verify:
+
+- Vapi webhook endpoint receives a test payload (or check recent webhook logs from before/after deploy — same response codes).
+- Stedi webhook endpoint same.
+
+If webhooks now 500 or behave differently, the middleware is mishandling the no-`req.user` case. Stop and rollback.
+
+### 5c. Verify helper layer works against prod
+
+```bash
+# Run a smoke script equivalent to dev's scripts/smoke-helpers.ts but pointed at prod
+DATABASE_URL="$PRODUCTION_DATABASE_URL" npx tsx scripts/smoke-helpers.ts
+```
+
+Expected output (against prod):
+```
+Chajinel active profile code: home_care_agency_personal_care
+chajinel-org-001 enrollments: 3   ← was 0 in dev; prod has 3 real enrollments
+no-ctx enrollments (must be 0): 0
+```
+
+If the helper layer can't reach prod data, RLS or role-grant is misconfigured.
+
+### 5d. Capture post-deploy metrics
+
+15 minutes after deploy:
+- Request volume (compare to baseline from 1c)
+- Error rate (must be ≤ baseline)
+- Connection pool utilization (compare; flag if significantly higher)
+
+Document in `phase3-deploy-postverify.md`.
+
+### 5e. Watch for 24 hours
+
+Phase 3 production is in soft-monitor for 24 hours. No new sprints, no Caritas onboarding, no changes. Just watch.
+
+If any anomaly surfaces (error rate spike, pool exhaustion, slow queries, customer-reported issues), the rollback path is intact for at least 24 hours via Git revert + Railway redeploy + reverse-DDL from snapshot.
+
+**Sign-off gate 6: deploy verified, smoke clean, no regressions.** Abeer reviews postverify doc. Phase 3 production is officially live.
+
+---
+
+## Phase 6 — Rollback (documented, not executed unless needed)
+
+### 6a. Code rollback (fast, < 5 minutes)
+
+```bash
+git checkout main
+git revert -m 1 <merge-commit-sha>  # the Phase 4 merge commit
+git push origin main
+```
+
+Railway picks up the revert and redeploys the prior version. The middleware is removed from the production boot path. The app reverts to pre-Phase-3 behavior.
+
+### 6b. Schema rollback (slower, manual)
+
+If the schema also needs to revert (because the new columns or tables are causing issues even with the old code):
+
+The new tables can be dropped:
+```sql
+DROP TABLE IF EXISTS claim_provider_assignments;
+DROP TABLE IF EXISTS patient_insurance_enrollments;
+DROP TABLE IF EXISTS provider_payer_relationships;
+DROP TABLE IF EXISTS provider_practice_relationships;
+DROP TABLE IF EXISTS organization_practice_profiles;
+DROP TABLE IF EXISTS practice_profiles;
+```
+
+The new columns on `practice_payer_enrollments` and `org_voice_personas` can stay (additive, not breaking). Or drop them if needed:
+```sql
+ALTER TABLE practice_payer_enrollments
+  DROP COLUMN enrollment_status,
+  DROP COLUMN effective_from,
+  -- (etc.)
+;
+```
+
+The roles can stay or be dropped:
+```sql
+DROP ROLE IF EXISTS claimshield_app_role;
+DROP ROLE IF EXISTS claimshield_service_role;
+```
+
+If any rollback step fails, the snapshot at `/tmp/claimshield-prod-pre-phase3-*.sql` is the last resort — full database restore. This is a major operation with downtime; only use if all other rollback paths fail.
+
+### 6c. Communication
+
+If rollback executes, immediately:
+- Document the trigger and timeline
+- Surface to Abeer with recommended next steps
+- Update `migration-state.md` with the rollback as a tracked event
+
+---
+
+## Phase 7 — Audit report
+
+Create `docs/architecture/phase3-prod-deploy-audit-report.md`:
+
+- §1 Executive summary + timeline (when each phase started/ended)
+- §2 Pre-flight findings (connection role identity, baseline metrics, snapshot path)
+- §3 Code staging summary
+- §4 Schema migration: every DDL statement applied, verification results
+- §5 Code deploy: Railway deploy ID, boot logs reference
+- §6 Post-deploy verification: smoke test results, helper layer test, metric comparison
+- §7 Files created or modified during deploy
+- §8 Sign-off gate timestamps
+- §9 Risks carried forward (Vapi cascade-scope still unverified, sprint 1c work still pending, `replit_readonly` grants still missing)
+- §10 Standing-order attestation
+
+---
+
+## Sign-off gate summary (8 gates total)
+
+| # | Gate | Phase | What Abeer reviews |
+|---|---|---|---|
+| 1 | Connection role identity | 1a | Outcome A/B/C; role-creation path |
+| 2 | Pre-flight + snapshot | 1e | preflight doc, snapshot path |
+| 3 | Code staged on branch | 2e | Branch contents, Railway not triggered |
+| 4 | Schema migration verified | 3d | verify doc, RLS results |
+| 5 | App booted in prod | 4b | Railway deploy success, boot logs clean |
+| 6 | Smoke + helpers + metrics clean | 5e | postverify doc, 24-hour watch begins |
+| 7 | 24-hour soft-monitor clean | post-5e | No anomalies |
+| 8 | Audit report committed | 7 | Final report |
+
+---
+
+## Out of scope — confirm none touched
+
+- EDI generator (`server/services/edi-generator.ts`).
+- Frontend components.
+- Any sprint 1c work (EDI route gate, payer dropdown migration, Vapi cascade-scope validation).
+- Caritas onboarding.
+- `replit_readonly` permission grants on legacy tables (separate task; can be bundled at end if Abeer chooses).
+- Connection pool size (monitor only).
+- Any feature flag changes (`USE_PROFILE_AWARE_QUERIES` stays at whatever value is in prod's env).
+
+---
+
+## End-of-deploy state
+
+- Production database has all 6 Phase 3 tables, 12 RLS policies, 2 roles, additive columns on `practice_payer_enrollments` and `org_voice_personas`, and the seed rows.
+- Production application has the middleware on the boot path, the helper service layer, the Tier 1 validator wired into `evaluateClaim`, the voice persona builder.
+- Chajinel is mapped to the `home_care_agency_personal_care` profile in production.
+- The 3 production rows in `practice_payer_enrollments` are intact, with new columns at safe defaults.
+- Daniela's existing flows behave identically to before the deploy.
+- The architecture is no longer dev-only.
+
+The next sprint (1c) can now ship against actual production data. Caritas onboarding becomes a configuration task that runs against real production.

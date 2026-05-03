@@ -19,6 +19,8 @@ Each integration below is documented with: env vars, endpoint(s), call sites, an
   - `flow-step-executor.ts:566-571` — voice_call step (per-org assistant id resolved via `org_voice_personas`).
   - `routes.ts:10843-10844` — public widget config exposed to client.
 - **Per-org assistants:** `org_voice_personas.vapi_assistant_id` is read by `flow-step-executor.ts` per call. The `chajinel-org-001` org has placeholder `PLACEHOLDER_AWAITING_VAPI_CONFIG` and is therefore `is_active=false` (per `replit.md`).
+- **Sprint 1b — runtime prompt composition:** `flow-step-executor.ts:663` dynamic-imports `buildAssistantSystemPrompt` from `server/services/voice-persona-builder.ts` and uses it to override the assistant prompt at call time **only when `org_voice_personas.compose_from_profile = true`**. For opt-out personas (the legacy default; Caritas) the builder returns `system_prompt` byte-identical (verified: Caritas md5 stable at `87ecbe996f1c1e5fb42df9b1939f5409`). For opt-in personas, the active practice profile's `intake_field_specs` are rendered into a "DATA TO CAPTURE DURING THE CALL" block and substituted into `{{INTAKE_FIELDS}}` (or appended). Failure to compose is logged and the call proceeds with the stored prompt (`flow-step-executor.ts:666`). Test coverage: 23/23 in `voice-persona-builder.test.ts`.
+- **Authoritative prompt source for Vapi.** The composed prompt is sent on every call request, so the Vapi-dashboard system prompt is **not** the source of truth for opt-in personas — `org_voice_personas.system_prompt` + the active profile are. Documented in `migration-state.md` §9.
 
 ## Twilio (SMS)
 
