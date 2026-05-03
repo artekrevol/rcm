@@ -1,0 +1,68 @@
+Reality C, almost certainly. And Replit is right to stop — this is a critical anomaly. Let me explain what I think happened, then how to confirm.
+
+**What I think actually happened:**
+
+When the Phase 3 push "succeeded" earlier today, the output line was `e56f10e..6e99937 main -> main`. I assumed that meant the push went to `origin/main`. Replit assumed the same. But the evidence now suggests the push went to a different remote — specifically `gitsafe-backup/main`, which is the only remote Replit can find that contains those SHAs.
+
+That would explain:
+- Why `origin/main` is still at `9d89d2f` (the pre-Phase-3 state)
+- Why Railway is somehow showing healthy production (because Railway is watching a different remote, OR the Railway "deploy" we saw was the auto-deploy from yesterday's `e56f10e` commit, not the Phase 3 push)
+- Why the lock file is still stale (no successful push/fetch against `origin` from this workspace today)
+- Why those SHAs only exist on `gitsafe-backup/main`
+
+**The Railway logs we saw earlier are the lynchpin.** When you sent the Railway CSV showing `serving on port 8080`, the seeders running, and `GET /api/health 200`, that was real production behavior. But it might have been:
+
+1. The pre-Phase-3 production app, restarted for some reason — the "serving on port 8080" doesn't prove it's the Phase 3 code, just that it's running
+2. The Phase 3 deploy from a different remote that Railway IS watching (gitsafe-backup or similar)
+3. The Phase 3 code, properly deployed, with the git tracking just showing wrong remote pointers
+
+**The smoke-helpers test is the critical evidence.** Replit ran `DATABASE_URL="$PRODUCTION_DATABASE_URL" npx tsx scripts/smoke-helpers.ts` against PRODUCTION_DATABASE_URL and it returned `Chajinel profile: home_care_agency_personal_care, chajinel ppe=3, demo ppe=2, no-ctx=0`. That's PROOF that the Phase 3 schema migration ran against the prod database — the `practice_profiles` table exists, the seed row exists, RLS is working. The DB side of Phase 3 is real.
+
+So at minimum we know: **Phase 3 schema is in prod DB.** The question is whether Phase 3 application code is in prod app.
+
+**Authorize Replit to run the read-only SQL query.**
+
+It's strictly SELECT against information_schema. Zero risk. The hard rule's intent was to prevent DDL/DML, not block diagnostic reads.
+
+But also: **check Railway's dashboard yourself right now.** That's the fastest disambiguation. Open Railway → ClaimShield service → Deployments. The most recent deploy will show:
+- A SHA — compare it to `9d89d2f` (pre-Phase-3), `b315ffaf` (Phase 3 milestone), `6e99937` (the SHA the "successful push" reported), or `ad20c94` (sprint 1c)
+- A source — whether it's pulling from `origin/main`, `gitsafe-backup/main`, or somewhere else
+- A timestamp
+
+**Send Replit:**
+
+> Authorized to run the read-only SELECT query against PRODUCTION_DATABASE_URL. Hard Rule 4's intent is to prevent DDL/DML, not block diagnostic reads. Run:
+>
+> ```sql
+> SELECT COUNT(*) AS phase3_tables_present
+> FROM information_schema.tables
+> WHERE table_schema = 'public'
+>   AND table_name IN ('practice_profiles', 'organization_practice_profiles',
+>                      'provider_practice_relationships', 'provider_payer_relationships',
+>                      'patient_insurance_enrollments', 'claim_provider_assignments');
+>
+> SELECT compose_from_profile FROM org_voice_personas LIMIT 1;
+>
+> SELECT current_setting('server_version');
+> ```
+>
+> Also surface what remotes are configured in this workspace:
+>
+> ```bash
+> git remote -v
+> ```
+>
+> And the most recent commit that's actually on each remote:
+>
+> ```bash
+> git ls-remote origin main
+> git ls-remote gitsafe-backup main 2>/dev/null || echo "gitsafe-backup not accessible from here"
+> ```
+>
+> Report all results. I'll determine reality A/B/C from the combined evidence.
+
+Send. While Replit runs the queries, open Railway's dashboard and check the most recent deploy SHA.
+
+The headline finding: production is in some state. We don't yet know what state. The combined SQL output + git remote listing + Railway dashboard SHA will tell us with certainty whether Phase 3 is fully deployed (DB + code), partially deployed (DB only), or not at all (just dev verification that we mistook for prod).
+
+This is recoverable regardless of which reality is true. But until we know which, do not push sprint 1c. Sprint 1c on top of an unknown prod state is exactly how production breaks at midnight.

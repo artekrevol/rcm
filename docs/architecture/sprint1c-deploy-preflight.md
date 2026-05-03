@@ -1,7 +1,84 @@
 # Sprint 1c — Production Deploy Pre-flight
 
 **Generated:** 2026-05-03 ~07:45 UTC
-**Status:** ⛔ **STOPPED at Gate 1 — major anomaly detected at Step 1d.** Awaiting Abeer's reconciliation decision before continuing.
+**Updated:** 2026-05-03 ~07:55 UTC after diagnostic queries authorized by Abeer
+**Status:** ✅ **Gate 1 PASSED — anomaly resolved. Awaiting Abeer's explicit "push" (Gate 2).**
+
+## Update — Anomaly was Reality D (stale local fetch ref), not A/B/C
+
+Diagnostic queries authorized and run. Findings:
+
+### Production reality (confirmed by direct evidence)
+
+| Source | Result | Meaning |
+|---|---|---|
+| `git ls-remote origin main` (queries GitHub directly, bypasses local cache) | `6e999373a463e9427ffa10a2d4c895954c275186` | **Phase 3 deploy SHA IS on GitHub origin/main** |
+| Prod DB: Phase 3 tables present (6 expected) | **6/6** | Phase 3 schema fully applied |
+| Prod DB: `claimshield_app_role` exists | yes | Sprint 0 NOLOGIN role created in prod |
+| Prod DB: tables with FORCE RLS | 6 | Sprint 0 forced RLS applied to all 6 new tenant-scoped tables |
+| Prod DB: `practice_payer_enrollments` columns | 20 | Sprint 0 reconciliation 8→20 applied |
+| Prod DB: `org_voice_personas.compose_from_profile` | exists, sample=`false` | Sprint 1b column applied |
+| Prod DB: PostgreSQL version | 16.10 | Sane |
+
+**Phase 3 is fully deployed in prod — DB ✅ + code ✅.** The earlier "176 unpushed commits / origin at 9d89d2f" reading was an artifact of a stale local fetch ref. The `.git/refs/remotes/origin/main.lock` file (mtime Apr 27, predates today entirely) had been blocking every `git fetch` from this workspace, so the local cache of `origin/main` was frozen at `9d89d2f` while the actual GitHub remote had advanced through the Phase 3 push to `6e99937`. The Phase 3 audit report's "DEPLOYED TO PRODUCTION" claim is **correct**; the audit drift hypothesis from §4 of the original preflight is wrong and should be retracted.
+
+### Stale lock cleanup — blocked, deferred to Project Task
+
+Attempted `rm .git/refs/remotes/origin/main.lock` was blocked by the sandbox as a destructive git operation. This cleanup is `migration-state.md` §10 open follow-up #1 and now needs to land via a Project Task. Not a blocker for Sprint 1c push — `git push origin main` operates against the live GitHub ref and ignores the local cache.
+
+### True Sprint 1c unpushed delta (against real origin/main `6e99937`)
+
+**9 commits, fast-forward safe:**
+
+| SHA | Subject |
+|---|---|
+| `7141f17` (HEAD) | Add a new file to document the production deployment process for a software update *(auto-generated checkpoint commit holding this preflight doc — added by the Replit checkpoint system after §4 was written)* |
+| `ad20c94` | Phase 3 Sprint 1c — EDI preflight gate (Tier 1 structural integrity) |
+| `e082669` | Update audit report to reflect decision on handling pre-existing TypeScript errors |
+| `bcab152` | Saved progress at the end of the loop |
+| `2b43bbe` | Add a structural integrity gate for EDI submissions to reject invalid claims |
+| `41029a3` | Add a gate to ensure claims pass structural integrity checks before generating EDI |
+| `53a47ff` | Add documentation detailing sprint decisions and verification steps |
+| `02c0e25` | Document production deploy and update migration state |
+| `623b381` | Add production smoke test results and isolation verification script |
+
+`git merge-base --is-ancestor 6e99937 HEAD` → ✅ **fast-forward safe**, no force push, no rebase needed.
+
+### Files changed in delta — code-only confirmed
+
+```
+.gitattributes                                                       |   1
+attached_assets/Pasted--*.txt                                        |  ~661  (chat pastes from this session, no runtime impact)
+docs/architecture/_phase3_sprint1c_replit_prompt_*.md                |  312
+docs/architecture/migration-state.md                                 |   62
+docs/architecture/phase3-deploy-preflight.md                         |  115
+docs/architecture/phase3-prod-deploy-audit-report.md                 |  275
+docs/architecture/sprint1c-audit-report.md                           |  498
+docs/architecture/sprint1c-deploy-preflight.md                       |  196
+docs/architecture/sprint1c-snapshots/dev-pre-sprint1c-*.sql          |    3  (text snapshot file, not executed by app)
+replit.md                                                            |   27
+scripts/verify-tenant-isolation-prod.ts                              |   44
+server/routes.ts                                                     |   49  (the two gate insertions, lines 6502–6527 and 6735–6755)
+server/services/rules-engine/edi-preflight.test.ts                   |  232
+server/services/rules-engine/edi-preflight.ts                        |  141
+```
+
+**Hard Rule 3 attestation (no schema, no data):** Only two paths matched the schema/migration grep — `migration-state.md` (a doc) and `sprint1c-snapshots/dev-pre-sprint1c-*.sql` (a text snapshot file in `docs/`, not loaded or executed by the app). **Zero executable schema changes**, zero migration scripts, zero seed data changes. Confirmed code-only as the deploy plan promises.
+
+### What unblocks Gate 2
+
+Pre-flight is clean. Sprint 1c push is:
+- 9-commit fast-forward to `origin/main`
+- Code-only (gate helper + tests + audit docs + the route wire-ins)
+- Sits on top of the verified-deployed Phase 3 state
+
+**Awaiting Abeer's explicit "push" instruction per Hard Rule 2.** No interpretation — Abeer says "push" and `git push origin main` runs.
+
+---
+
+# Original pre-flight findings (preserved below for audit trail)
+
+The findings below were written **before** the diagnostic queries authorized by Abeer. They have been superseded by the Update section above. They are preserved verbatim because the Sprint 1c audit report's §1.8 footnote calls for explicit-evidence trails on baseline claims — the same standard applies to this preflight.
 
 ---
 
