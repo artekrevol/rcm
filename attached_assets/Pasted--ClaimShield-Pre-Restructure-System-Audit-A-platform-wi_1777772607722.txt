@@ -1,0 +1,341 @@
+# ClaimShield — Pre-Restructure System Audit
+
+A platform-wide architectural restructure is being planned (per `ClaimShield_Architecture_Restructure_Scope.docx`). Before any restructure work begins, we need a comprehensive, accurate, current map of what the system actually is today — schema, data flows, module boundaries, integrations, and intricacies.
+
+This prompt is **read-only**. No code changes. No schema changes. No migrations. No refactors. The deliverable is documentation.
+
+The goal is for the human reviewer to be able to read these docs and have complete ground-truth knowledge of the system before architectural decisions are made.
+
+---
+
+## Hard rules
+
+1. **No mutations of any kind.** No DDL, no UPDATE, no INSERT, no DELETE, no migrations, no refactors, no "small fixes," no dependency upgrades. If you notice a bug, document it — do not fix it.
+2. **No new feature work.** The only output is documentation files in `docs/architecture/system-audit/`.
+3. **Document what exists, not what should exist.** If something is broken, stubbed, or incomplete, say so plainly. Do not present aspirational state as current state.
+4. **Cite line numbers and file paths** for any claim about how the system works. A reviewer must be able to verify any statement by opening the referenced file.
+5. **Note "I don't know" where applicable.** If a behavior cannot be confirmed by reading code or running a read-only query, mark it as `UNVERIFIED` or `UNKNOWN`. Do not guess.
+
+---
+
+## Output location and structure
+
+Create the following directory and files:
+
+```
+docs/architecture/system-audit/
+  README.md                    — Index and high-level summary
+  01-database-schema.md
+  02-data-flows.md
+  03-module-boundaries.md
+  04-api-surface.md
+  05-frontend-routes.md
+  06-auth-and-tenancy.md
+  07-rules-engine.md
+  08-edi-pipeline.md
+  09-integrations.md
+  10-background-jobs.md
+  11-configuration.md
+  12-known-issues-and-tech-debt.md
+```
+
+Each file follows the structure described in its corresponding section below. The README links to all files and contains the executive summary.
+
+---
+
+## Section 1 — Database schema inventory (`01-database-schema.md`)
+
+Produce a complete schema inventory by querying `information_schema` and `pg_catalog`. Do not rely on memory or ORM definitions — query the live database.
+
+For each table:
+
+- Table name and schema
+- Approximate row count (`SELECT COUNT(*) FROM <table>`)
+- All columns with: name, data type, character_maximum_length where applicable, is_nullable, column_default
+- Primary key columns
+- All foreign key relationships (source column → target table.column, on-delete behavior)
+- All unique constraints
+- All check constraints
+- All indexes (name, columns, unique, partial)
+- Any triggers attached
+- Any RLS policies (likely none yet)
+
+For each view: definition.
+
+For each function/stored procedure: name, signature, body length, brief purpose if discernible.
+
+For each sequence: name, current value, owner column.
+
+**Group tables by apparent functional area** — e.g., "Intake (leads, calls, messaging)", "Billing (claims, patients, providers)", "Reference data (HCPCS, ICD-10, CPT/RVU, CCI edits)", "Auth (users, sessions)", "Multi-tenancy (organizations, …)". Note any tables whose function is unclear from name alone.
+
+**Specifically confirm or refute** the following claims from the architecture doc and the in-flight multi-tenancy work — these are the load-bearing assumptions for upcoming restructure work:
+
+- Does a `payers` table exist? If yes, does it have an `organization_id` column?
+- Does `practice_settings` exist? Does it have a `billing_model` column?
+- Does `patients` have a `leadId` column?
+- Does `claims` have `rendering_provider_id`, `billing_provider_id`, etc., or are providers attached differently?
+- Do `org_types` and `org_type_field_specs` tables exist (from the earlier multi-tenancy work)? If yes, what's their content?
+- Does `org_voice_personas` exist? What columns?
+- What is the data type of `organizations.id`?
+- What is the data type of `claims.id`, `patients.id`, `providers.id`, `payers.id` (if exists), `leads.id`?
+
+End the file with a "**deprecation candidates**" subsection listing any tables that look like dead code, prior migration leftovers, or experiments that didn't ship. For each, note: who likely created it, whether it has rows, whether anything in `server/` references it.
+
+## Section 2 — Data flows (`02-data-flows.md`)
+
+For each of the major data flows below, produce:
+
+1. A textual narrative of the flow, step by step
+2. The list of files/functions/routes involved with line-number citations
+3. A Mermaid diagram showing the entities and transitions
+4. Any branching logic (per role, per practice type, per feature flag)
+5. Known gaps or stubbed steps
+
+Flows to document:
+
+**Flow A — Lead capture to lead record.**
+How does a lead enter the system? Vapi voice call inbound, web form, manual creation, CSV import, other? Trace from entry point to the row landing in `leads` (or whatever the table is called).
+
+**Flow B — Vapi voice call lifecycle.**
+Full lifecycle: inbound call → assistant override construction → call connection → end-of-call webhook → transcript capture → field extraction → lead creation/update → status transitions. Include the role of `org_voice_personas` (if it exists) and how the system prompt is built.
+
+**Flow C — Lead to patient conversion.**
+How does a lead become a patient? Manual button click, automatic on qualification, both? Trace `syncPatientToLead` (if it exists) or whatever the equivalent is. What fields move, which are lost, which are duplicated.
+
+**Flow D — Claim creation.**
+All entry points: claim wizard UI, demo/seed endpoint that randomly generates claims (mentioned in earlier review), bulk import if any. For each, document what user input is collected, what is auto-filled, what defaults apply.
+
+**Flow E — Claim scrubbing / pre-submission validation.**
+What rules fire before EDI generation? Where do they live? What do they check? What blocks submission vs warns vs is silently ignored?
+
+**Flow F — EDI generation.**
+From claim record to 837P EDI envelope. Which segments are produced. Which fields source from which entities. Where the "agency_billed" branching happens (architecture doc claims this is on `practice_settings.billing_model`).
+
+**Flow G — Stedi submission.**
+How the EDI is sent to Stedi. Auth credentials. Endpoints. Response handling. Where the interchange control number is stored.
+
+**Flow H — 277CA / response ingestion.**
+How responses come back from Stedi/PGBA. Where they're parsed. How rejection codes map to claim status. Whether 277CA codes are decoded into human-readable form anywhere.
+
+**Flow I — ERA / 835 ingestion.**
+If implemented: how ERAs are retrieved, parsed, matched to claims, posted as payments.
+
+**Flow J — Tenant context propagation.**
+How does the application know which organization a request belongs to? Trace from Passport.js login through session through `req.user` through any middleware that uses `organizationId`. Which tables are filtered by `organization_id` in queries today, and which are not.
+
+For each flow, mark every step as one of: `IMPLEMENTED`, `STUBBED` (returns hardcoded/random data), `PARTIALLY_IMPLEMENTED`, `NOT_IMPLEMENTED`, `UNVERIFIED`.
+
+## Section 3 — Module boundaries (`03-module-boundaries.md`)
+
+ClaimShield was structured as two modules in one codebase: Billing and Intake. Document the actual current state of this separation.
+
+- Path-based routing: confirm `/billing/*` and `/intake/*` route prefixes (or note actual structure if different)
+- Sidebar / navigation components: which file(s), what they show per role
+- Role-based access control: what's actually enforced vs what's defined in the schema. Run a search across `server/` for `req.user.role`, role checks, role middleware. Document every check found.
+- Module selector / landing page: does it exist?
+- The "Intake Referrals" view in the Billing module: is it implemented? What does it show?
+- Cross-module data dependencies: which billing features read from intake tables, which intake features read from billing tables
+
+Produce a table of every page/feature mapped to: which module it belongs to, which roles can access it, whether RBAC is actually enforced for it.
+
+## Section 4 — API surface (`04-api-surface.md`)
+
+Enumerate every Express route in the codebase. For each:
+
+- HTTP method and path
+- File and line number where defined
+- Auth requirement (none, session, role X, role Y, custom check)
+- Brief description of what it does
+- What it reads from / writes to in the database
+- Whether it's referenced by any frontend code (search `client/src/` for fetch/axios/queryFn calls)
+
+Group routes by functional area. Flag any route that:
+
+- Has no auth check on a sensitive operation
+- Is a demo/seed endpoint that should not exist in production
+- Is referenced nowhere on the frontend (dead code candidate)
+- Returns data without filtering by `organization_id`
+
+Also document:
+
+- The Express middleware stack in order
+- Any custom middleware files in `server/middleware/` (or wherever they live)
+- Webhook endpoints (incoming) and outbound webhook calls
+- Any GraphQL or tRPC if used (likely not, but verify)
+
+## Section 5 — Frontend routes and components (`05-frontend-routes.md`)
+
+The router is Wouter (per earlier review — verify this is still true).
+
+- Every Wouter `<Route>` in `App.tsx` (or wherever routes are defined): path, component, layout wrapper
+- Top-level page components: file location, primary purpose, which API endpoints they call
+- Shared components (sidebar, header, modals): file location, where they're used
+- State management: React Query? Zustand? Redux? Context? Document what's used and where
+- Form handling: react-hook-form? Formik? Native?
+- The design system: shadcn/ui confirmed, but document any custom components in `client/src/components/ui/` that override or extend it
+- Theme / dark mode handling
+
+## Section 6 — Authentication and tenancy (`06-auth-and-tenancy.md`)
+
+Auth is Passport.js per earlier review. Verify and document:
+
+- Passport strategies in use (local, OAuth, etc.)
+- Session storage (connect-pg-simple? Redis? In-memory?)
+- Where `req.user` is populated, what shape it has
+- How `organizationId` is attached to the user
+- Login/logout endpoints and their guarantees
+- Password storage (bcrypt? salts? rounds?)
+- Any password reset, signup, invitation flows
+- Session expiry behavior
+
+For multi-tenancy specifically:
+
+- How a user is associated with an organization (FK on users, junction table, claim, other?)
+- Whether a user can belong to multiple organizations
+- Whether organizations can have multiple users
+- How tenant filtering works in queries today: list every place in `server/` where a query includes `WHERE organization_id = ?` (or equivalent ORM call)
+- Any places where queries DO NOT filter by org but should — flag as a tenant-leakage risk
+
+## Section 7 — Rules engine current state (`07-rules-engine.md`)
+
+The rules engine is one of the central architectural concerns. Document:
+
+- File location of the rules engine
+- How rules are stored (in code? database? both?)
+- How rules are evaluated (when, how, against what)
+- Categories of rules currently implemented (CCI edits, MUE, payer-specific, structural, other)
+- The CCI edits dataset: how it's stored, how queried, how updated
+- The HCPCS / ICD-10 / CPT/RVU datasets: same
+- The VA fee schedule: how it's stored, how queried
+- Payer-specific rules: where TWVACCN rules live, how they were ingested
+- Whether rules have versions / snapshots attached to claims for audit
+- Performance characteristics: roughly how long does rule evaluation take per claim, are there obvious N+1 query issues
+
+## Section 8 — EDI pipeline (`08-edi-pipeline.md`)
+
+Document the EDI generation and submission pipeline in detail since the next sprint touches this area.
+
+- The EDI generator: file location, structure (per-segment functions? template?)
+- How it's called (from a route, from a service, from a button click)
+- The 837P generation path specifically:
+  - Loop 2010BB payer mapping
+  - Loop 2300 claim segment construction
+  - REF segment qualifier logic (G1 for VA auth, G2 for secondary IDs, etc.)
+  - Loop 2310B rendering provider logic and where the "agency_billed" branch lives
+  - SV1 service line construction
+  - Diagnosis HI segments
+- Stedi integration: SDK or HTTP? Auth? Endpoints? Test vs production routing?
+- The 277CA / acknowledgment ingestion path
+- The 835 ERA ingestion path (if implemented)
+- The CMS-1500 PDF generation path (separate from EDI)
+- Sample EDI artifacts: are there test claims saved anywhere as fixtures? Where?
+
+## Section 9 — Integrations (`09-integrations.md`)
+
+For each external integration:
+
+- Name and purpose
+- Auth method (API key, OAuth, etc.)
+- Where credentials are stored (env vars, encrypted DB column, vault)
+- File(s) where the integration client lives
+- Endpoints called
+- Webhooks received (if any)
+- Whether it's used in production or only in dev/test
+- Known limitations or pain points
+
+Integrations expected: Vapi (voice calls), Stedi (EDI), Twilio (SMS — if used), SendGrid or Resend or similar (email — if used), VerifyTX (eligibility — if still wired in), Availity (if any), HubSpot or other CRM (if any), Replit Postgres / Railway Postgres (DB host).
+
+## Section 10 — Background jobs and webhooks (`10-background-jobs.md`)
+
+- Any cron jobs or scheduled tasks: where they're defined, schedule, what they do
+- Background workers / queues: BullMQ? Direct? Cron? Are there any?
+- Webhook receivers: paths, auth, idempotency handling
+- Outbound webhooks: where to, when triggered
+- Any polling loops (architecture doc references claim status polling every 4 hours then daily)
+
+For each, mark `IMPLEMENTED`, `STUBBED`, `PARTIALLY_IMPLEMENTED`, `NOT_IMPLEMENTED`, `UNVERIFIED`.
+
+## Section 11 — Configuration (`11-configuration.md`)
+
+- Every environment variable referenced in the code (search for `process.env.`)
+- For each: what it's used for, whether it's required, default value if not set
+- `.env.example` content
+- Feature flags currently defined (and where)
+- Tenant-specific configuration: what can be configured per organization, where it's stored
+- Build / deployment configuration: Replit deployment config, Railway deployment config, any Dockerfile, any CI/CD workflows
+
+## Section 12 — Known issues and tech debt (`12-known-issues-and-tech-debt.md`)
+
+A candid list of:
+
+- Bugs Replit is aware of but hasn't fixed
+- Stubs and mocks that should be replaced
+- TODOs in the code (search for `TODO`, `FIXME`, `HACK`, `XXX`)
+- Any feature explicitly disabled or commented out
+- Performance concerns
+- Security concerns (auth gaps, unvalidated input, secrets in client bundles, etc.)
+- Tech debt items the team has discussed but not addressed
+- Tables/columns that exist but are unused
+- API endpoints that are referenced but broken
+- Frontend pages that load but show errors
+
+This file should be honest, not curated. The point is to surface everything before architectural decisions.
+
+## README.md — Executive summary and index
+
+The README at `docs/architecture/system-audit/README.md` should contain:
+
+- A 1-page executive summary of the system as it stands today
+- Module count, table count, route count, integration count (raw numbers)
+- The single most important architectural finding from the audit
+- The top 5 risks or gaps the audit surfaced
+- A links table to all 12 detail files
+
+---
+
+## Method
+
+You may need to run read-only SQL queries to produce the schema inventory. Use a read-only database role if available, or be careful to use only SELECT statements. Save any non-trivial SQL queries used into `docs/architecture/system-audit/_queries/` for reproducibility.
+
+Do not write any data. Do not run any migration. If a tool or operation tries to mutate state, abort.
+
+Use grep, ripgrep, or your preferred search to enumerate routes, env vars, role checks, and TODO markers. Cite file paths and line numbers.
+
+For data flow narratives, do not invent intermediate steps. If you cannot trace a path through the code, say so and stop tracing — partial accurate documentation is more valuable than complete invented documentation.
+
+Mermaid diagrams should use the `flowchart` or `sequenceDiagram` syntax for clarity. Keep diagrams to a screen-sized scope; if a flow is longer, break into sub-diagrams.
+
+---
+
+## Verification
+
+After producing all 12 files plus the README:
+
+1. Confirm every file in the list above exists at the specified path.
+2. Run a word count per file. None should be empty. If a section has no content (e.g., no background jobs exist), the file should explicitly say "No background jobs are currently implemented" rather than being empty.
+3. Spot-check three random claims in the docs by opening the cited file/line and confirming the claim is accurate.
+4. Confirm no schema changes were made: `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public'` should match the count from the start of the audit.
+5. Confirm no rows were modified in any table that has an `updated_at` column: spot-check three tables and verify no `updated_at` is more recent than the start of the audit.
+
+## Audit report deliverable
+
+A short summary at the top of the README covering:
+
+- Time taken to complete the audit
+- Tables documented, routes documented, integrations documented (counts)
+- Any places where investigation was blocked (couldn't read certain files, couldn't run certain queries) and why
+- Any architectural surprises encountered — things that were not where you expected them, or that work differently than the architecture doc described
+
+---
+
+## What this audit unblocks
+
+Once these 12 files exist, the architectural restructure (Phase 3 sprint 0) can proceed against ground truth:
+
+- ID type assumptions in the new schema can be type-correct
+- Foreign key targets can be confirmed to exist
+- The tenant-isolation middleware can hook into the actual auth mechanism
+- The helper service layer can match the existing query patterns
+- The migration-state document can list real entities, not assumed ones
+
+This audit is intentionally scoped to discovery only. Restructure decisions will be made by the human reviewer after reading these docs, and a separate prompt will follow.

@@ -1,0 +1,111 @@
+=== requireAuth/requireRole/middleware definitions ===
+server/routes.ts:9:import { requireAuth, requireRole, requireSuperAdmin } from "./auth";
+server/routes.ts:153:function getOrgId(req: any): string | null {
+server/routes.ts:170:  const orgId = getOrgId(req);
+server/routes.ts:179:function requireOrgCtx(req: any, res: any): string | null {
+server/routes.ts:180:  const orgId = getOrgId(req);
+server/routes.ts:3203:  app.get("/api/npi-lookup", requireAuth, async (req, res) => {
+server/routes.ts:3239:  app.get("/api/taxonomy-codes", requireAuth, async (_req, res) => {
+server/routes.ts:3249:  app.get("/api/carc-codes", requireAuth, async (req, res) => {
+server/routes.ts:3266:  app.get("/api/rarc-codes", requireAuth, async (req, res) => {
+server/routes.ts:3283:  app.get("/api/pos-codes", requireAuth, async (_req, res) => {
+server/routes.ts:3293:  app.get("/api/payers", requireAuth, async (req, res) => {
+server/routes.ts:3297:  app.get("/api/billing/payers", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3299:      const orgId = getOrgId(req);
+server/routes.ts:3316:  app.get("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3318:      const orgId = getOrgId(req);
+server/routes.ts:3334:  app.post("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3336:      const orgId = getOrgId(req);
+server/routes.ts:3384:  app.patch("/api/billing/providers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3439:  app.get("/api/billing/org-readiness", requireRole("admin", "rcm_manager", "biller", "coder", "front_desk"), async (req, res) => {
+server/routes.ts:3441:      const orgId = getOrgId(req);
+server/routes.ts:3472:  app.get("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3474:      const orgId = getOrgId(req);
+server/routes.ts:3484:  app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3487:      const orgId = getOrgId(req);
+server/routes.ts:3520:  app.patch("/api/billing/practice-settings/frcpb-enrollment", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3524:      const orgId = getOrgId(req);
+server/routes.ts:3551:  app.get("/api/practice/payer-enrollments", requireAuth, async (req, res) => {
+server/routes.ts:3553:      const orgId = getOrgId(req);
+server/routes.ts:3573:  app.post("/api/practice/payer-enrollments", requireAuth, async (req, res) => {
+server/routes.ts:3575:      const orgId = getOrgId(req);
+server/routes.ts:3602:  app.delete("/api/practice/payer-enrollments/:id", requireAuth, async (req, res) => {
+server/routes.ts:3604:      const orgId = getOrgId(req);
+server/routes.ts:3623:  app.get("/api/practice/activated-fields", requireAuth, async (req, res) => {
+server/routes.ts:3625:      const orgId = getOrgId(req);
+server/routes.ts:3642:  app.get("/api/admin/field-definitions", requireAuth, async (req, res) => {
+server/routes.ts:3658:  app.get("/api/billing/va-locations", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3668:  app.get("/api/billing/va-rate", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3679:      const orgId = getOrgId(req);
+server/routes.ts:3729:  app.get("/api/billing/va-rates-age", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3742:  app.get("/api/billing/filing-alerts", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3745:      const orgId = getOrgId(req);
+server/routes.ts:3815:  app.post("/api/billing/filing-alerts/:id/acknowledge", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3832:  app.post("/api/billing/filing-alerts/:id/snooze", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3850:  app.post("/api/billing/claims/:id/timely-filing-evaluate", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3853:      const orgId = getOrgId(req);
+server/routes.ts:3879:  app.get("/api/billing/patients/:id/referrals", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3882:      const orgId = getOrgId(req);
+server/routes.ts:3898:  app.post("/api/billing/patients/:id/referrals", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3901:      const orgId = getOrgId(req);
+server/routes.ts:3934:  app.patch("/api/billing/referrals/:id", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3937:      const orgId = getOrgId(req);
+server/routes.ts:3960:  app.post("/api/billing/claims/:id/link-referral", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3963:      const orgId = getOrgId(req);
+server/routes.ts:4007:  app.get("/api/billing/claim-tracker", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4010:      const orgId = requireOrgCtx(req, res);
+server/routes.ts:4071:  app.post("/api/billing/claims/:id/mark-fixed", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4108:      const stOrgId = getOrgId(req);
+server/routes.ts:4271:  app.get("/api/billing/eras", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4274:      const orgId = requireOrgCtx(req, res);
+server/routes.ts:4286:  app.post("/api/billing/eras", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4289:      const orgId = getOrgId(req);
+server/routes.ts:4308:  app.get("/api/billing/eras/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4311:      const orgId = getOrgId(req);
+server/routes.ts:4324:  app.patch("/api/billing/eras/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4327:      const orgId = getOrgId(req);
+server/routes.ts:4457:  app.get("/api/billing/follow-up", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4460:      const orgId = getOrgId(req);
+server/routes.ts:4488:  app.post("/api/billing/follow-up-notes", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4491:      const orgId = getOrgId(req);
+server/routes.ts:4505:  app.get("/api/billing/follow-up-notes/:claimId", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4518:  app.post("/api/billing/follow-up-notes/copy-to-patient", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4521:      const orgId = getOrgId(req);
+server/routes.ts:4547:  app.get("/api/billing/claims/:id/letter-data", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4550:      const orgId = getOrgId(req);
+server/routes.ts:4588:  app.get("/api/intake/dashboard/stats", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:4591:      const orgId = requireOrgCtx(req, res);
+server/routes.ts:4628:  app.get("/api/billing/dashboard/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4631:      const orgId = requireOrgCtx(req, res);
+server/routes.ts:4743:  app.get("/api/billing/onboarding-checklist", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4746:      const orgId = getOrgId(req);
+
+=== Passport setup ===
+server/auth.ts:2:import { Strategy as LocalStrategy } from "passport-local";
+server/auth.ts:3:import session from "express-session";
+server/auth.ts:7:import { Store } from "express-session";
+server/auth.ts:117:    session({
+server/auth.ts:131:  app.use(passport.initialize());
+server/auth.ts:132:  app.use(passport.session());
+server/auth.ts:134:  passport.use(
+server/auth.ts:135:    new LocalStrategy(
+server/auth.ts:157:  passport.serializeUser((user: any, done) => {
+server/auth.ts:161:  passport.deserializeUser(async (id: string, done) => {
+server/auth.ts:192:    passport.authenticate("local", (err: any, user: any, info: any) => {
+
+=== bcrypt usage ===
+server/auth.ts:4:import bcrypt from "bcryptjs";
+server/auth.ts:89:export async function hashPassword(password: string): Promise<string> {
+server/auth.ts:90:  return bcrypt.hash(password, 10);
+server/auth.ts:97:  return bcrypt.compare(password, hash);
+server/services/user-service.ts:2:import { hashPassword, verifyPassword, needsRehash } from "../auth";
+server/services/user-service.ts:74:  const hashed = await hashPassword(data.password);
+server/services/user-service.ts:86:  const hashed = await hashPassword(newPassword);
+server/services/user-service.ts:175:    const newHash = await hashPassword(password);
+server/routes.ts:497:      const { hashPassword } = await import("./auth");
+server/routes.ts:502:        const hashed = await hashPassword(superPwd);
+server/routes.ts:510:        const hashed = await hashPassword(process.env.SUPER_ADMIN_PASSWORD);
+server/routes.ts:539:        const { hashPassword } = await import("./auth");
+server/routes.ts:544:        const hashed = await hashPassword(chajinelPwd);
+server/routes.ts:730:      const { hashPassword } = await import("./auth");
+server/routes.ts:732:      const qaHash = await hashPassword(qaPwd);

@@ -1,0 +1,41 @@
+=== Layouts and sidebar ===
+admin-layout.tsx
+app-sidebar.tsx
+auth-guard.tsx
+billing-layout.tsx
+billing-sidebar.tsx
+call-modal.tsx
+claim-pdf.tsx
+claim-timeline.tsx
+data-table.tsx
+explainability-drawer.tsx
+flow-inspector.tsx
+guided-chat-widget.tsx
+intake-layout.tsx
+intake-sidebar.tsx
+lead-form-dialog.tsx
+metric-card.tsx
+page-error-boundary.tsx
+prior-auth-section.tsx
+risk-score.tsx
+schedule-appointment-dialog.tsx
+status-badge.tsx
+theme-provider.tsx
+theme-toggle.tsx
+ui
+vapi-chat-widget.tsx
+vob-verification-card.tsx
+
+=== Auth client hooks ===
+client/src/hooks/use-auth.ts
+
+=== Module structure ===
+client/src
+client/src/hooks
+client/src/components
+client/src/components/ui
+client/src/lib
+client/src/pages
+client/src/pages/billing
+client/src/pages/intake
+client/src/pages/admin

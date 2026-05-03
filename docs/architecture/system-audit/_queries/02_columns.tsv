@@ -1,0 +1,1000 @@
+activity_logs	1	id	character varying		NO	gen_random_uuid()
+activity_logs	2	lead_id	character varying		YES	
+activity_logs	3	activity_type	text		NO	
+activity_logs	4	field	text		YES	
+activity_logs	5	old_value	text		YES	
+activity_logs	6	new_value	text		YES	
+activity_logs	7	description	text		YES	
+activity_logs	8	metadata	jsonb		YES	'{}'::jsonb
+activity_logs	9	performed_by	text		YES	
+activity_logs	10	created_at	timestamp without time zone		NO	now()
+activity_logs	11	claim_id	character varying		YES	
+activity_logs	12	patient_id	character varying		YES	
+activity_logs	13	organization_id	character varying		YES	
+appointments	1	id	character varying		NO	gen_random_uuid()
+appointments	2	lead_id	character varying		NO	
+appointments	3	title	text		NO	
+appointments	4	description	text		YES	
+appointments	5	scheduled_at	timestamp without time zone		NO	
+appointments	6	duration	integer		NO	30
+appointments	7	timezone	text		NO	'America/Chicago'::text
+appointments	8	status	text		NO	'scheduled'::text
+appointments	9	reminder_sent	boolean		NO	false
+appointments	10	confirmed_at	timestamp without time zone		YES	
+appointments	11	cancelled_at	timestamp without time zone		YES	
+appointments	12	cancel_reason	text		YES	
+appointments	13	notes	text		YES	
+appointments	14	created_at	timestamp without time zone		NO	now()
+appointments	15	organization_id	character varying		YES	
+availability_slots	1	id	character varying		NO	gen_random_uuid()
+availability_slots	2	day_of_week	integer		NO	
+availability_slots	3	start_time	text		NO	
+availability_slots	4	end_time	text		NO	
+availability_slots	5	timezone	text		NO	'America/Chicago'::text
+availability_slots	6	enabled	boolean		NO	true
+availability_slots	7	organization_id	character varying		YES	
+calls	1	id	character varying		NO	gen_random_uuid()
+calls	2	lead_id	character varying		NO	
+calls	3	vapi_call_id	text		YES	
+calls	4	transcript	text		NO	
+calls	5	summary	text		NO	
+calls	6	disposition	text		NO	
+calls	7	extracted_data	jsonb		YES	
+calls	8	created_at	timestamp without time zone		NO	now()
+calls	9	notes	text		YES	
+calls	10	duration	integer		YES	
+calls	11	vob_data	jsonb		YES	
+calls	12	recording_url	text		YES	
+calls	13	organization_id	character varying		YES	
+carc_codes	1	id	integer		NO	nextval('carc_codes_id_seq'::regclass)
+carc_codes	2	code	character varying	10	NO	
+carc_codes	3	description	text		NO	
+carc_codes	4	group_codes	character varying	50	NO	'CO'::character varying
+carc_posting_rules	1	id	integer		NO	nextval('carc_posting_rules_id_seq'::regclass)
+carc_posting_rules	2	carc_code	character varying		NO	
+carc_posting_rules	3	description	text		YES	
+carc_posting_rules	4	default_action	character varying		NO	
+carc_posting_rules	5	group_code	character varying		YES	
+carc_posting_rules	6	is_active	boolean		YES	true
+carc_posting_rules	7	created_at	timestamp without time zone		YES	now()
+cci_edits	1	id	uuid		NO	gen_random_uuid()
+cci_edits	2	column_1_code	text		NO	
+cci_edits	3	column_2_code	text		NO	
+cci_edits	4	modifier_indicator	text		NO	
+cci_edits	5	effective_date	date		NO	
+cci_edits	6	deletion_date	date		YES	
+cci_edits	7	ptp_edit_rationale	text		YES	
+cci_edits	8	ncci_version	text		NO	
+cci_edits	9	source_file	text		NO	
+cci_edits	10	ingested_at	timestamp without time zone		YES	now()
+chat_analytics	1	id	character varying		NO	gen_random_uuid()
+chat_analytics	2	date	text		NO	
+chat_analytics	3	total_sessions	integer		NO	0
+chat_analytics	4	completed_sessions	integer		NO	0
+chat_analytics	5	abandoned_sessions	integer		NO	0
+chat_analytics	6	leads_generated	integer		NO	0
+chat_analytics	7	appointments_booked	integer		NO	0
+chat_analytics	8	avg_session_duration	integer		YES	
+chat_analytics	9	dropoff_by_step	jsonb		YES	'{}'::jsonb
+chat_analytics	10	conversion_rate	real		YES	
+chat_analytics	11	created_at	timestamp without time zone		NO	now()
+chat_analytics	12	organization_id	character varying		YES	
+chat_messages	1	id	character varying		NO	gen_random_uuid()
+chat_messages	2	session_id	character varying		NO	
+chat_messages	3	type	text		NO	'bot'::text
+chat_messages	4	step_id	text		YES	
+chat_messages	5	content	text		NO	
+chat_messages	6	metadata	jsonb		YES	
+chat_messages	7	created_at	timestamp without time zone		NO	now()
+chat_messages	8	organization_id	character varying		YES	
+chat_sessions	1	id	character varying		NO	gen_random_uuid()
+chat_sessions	2	visitor_token	text		NO	
+chat_sessions	3	lead_id	character varying		YES	
+chat_sessions	4	status	text		NO	'active'::text
+chat_sessions	5	current_step_id	text		NO	'welcome'::text
+chat_sessions	6	collected_data	jsonb		YES	'{}'::jsonb
+chat_sessions	7	qualification_score	integer		YES	
+chat_sessions	8	source	text		NO	'chat_widget'::text
+chat_sessions	9	referrer_url	text		YES	
+chat_sessions	10	user_agent	text		YES	
+chat_sessions	11	ip_address	text		YES	
+chat_sessions	12	started_at	timestamp without time zone		NO	now()
+chat_sessions	13	completed_at	timestamp without time zone		YES	
+chat_sessions	14	abandoned_at	timestamp without time zone		YES	
+chat_sessions	15	last_activity_at	timestamp without time zone		NO	now()
+chat_sessions	16	organization_id	character varying		YES	
+claim_events	1	id	character varying		NO	gen_random_uuid()
+claim_events	2	claim_id	character varying		NO	
+claim_events	3	type	text		NO	
+claim_events	4	timestamp	timestamp without time zone		NO	now()
+claim_events	5	notes	text		YES	
+claim_events	6	organization_id	character varying		YES	
+claim_follow_up_notes	1	id	character varying		NO	(gen_random_uuid())::text
+claim_follow_up_notes	2	claim_id	character varying		NO	
+claim_follow_up_notes	3	org_id	character varying		YES	
+claim_follow_up_notes	4	user_id	character varying		YES	
+claim_follow_up_notes	5	user_name	character varying		YES	
+claim_follow_up_notes	6	note_text	text		NO	
+claim_follow_up_notes	7	created_at	timestamp without time zone		NO	now()
+claim_templates	1	id	character varying		NO	(gen_random_uuid())::text
+claim_templates	2	name	character varying		NO	
+claim_templates	3	provider_id	character varying		YES	
+claim_templates	4	payer_id	character varying		YES	
+claim_templates	5	place_of_service	character varying		YES	'12'::character varying
+claim_templates	6	service_lines	jsonb		YES	
+claim_templates	7	created_by	character varying		YES	
+claim_templates	8	created_at	timestamp without time zone		YES	now()
+claim_templates	9	organization_id	character varying		YES	
+claims	1	id	character varying		NO	gen_random_uuid()
+claims	2	patient_id	character varying		NO	
+claims	3	encounter_id	character varying		NO	
+claims	4	payer	text		NO	
+claims	5	cpt_codes	jsonb		NO	
+claims	6	amount	real		NO	
+claims	7	status	text		NO	'created'::text
+claims	8	risk_score	integer		NO	0
+claims	9	readiness_status	text		NO	'GREEN'::text
+claims	10	created_at	timestamp without time zone		NO	now()
+claims	11	reason	text		YES	
+claims	12	next_step	text		YES	
+claims	13	provider_id	character varying		YES	
+claims	14	payer_id	character varying		YES	
+claims	15	service_date	date		YES	
+claims	16	place_of_service	character varying		YES	'12'::character varying
+claims	17	icd10_primary	character varying	10	YES	
+claims	18	icd10_secondary	jsonb		YES	
+claims	19	authorization_number	character varying		YES	
+claims	20	service_lines	jsonb		YES	
+claims	21	pdf_url	character varying		YES	
+claims	22	submission_method	character varying		YES	'manual'::character varying
+claims	23	availity_icn	character varying		YES	
+claims	24	charge_overridden	boolean		YES	false
+claims	25	created_by	character varying		YES	
+claims	26	updated_at	timestamp without time zone		YES	
+claims	27	organization_id	character varying		YES	
+claims	28	claim_frequency_code	character varying		YES	'1'::character varying
+claims	29	orig_claim_number	character varying		YES	
+claims	30	homebound_indicator	character varying		YES	'Y'::character varying
+claims	31	ordering_provider_id	character varying		YES	
+claims	32	delay_reason_code	character varying		YES	
+claims	33	follow_up_date	date		YES	
+claims	34	follow_up_status	character varying		YES	
+claims	35	stedi_transaction_id	character varying		YES	
+claims	36	external_ordering_provider_name	character varying		YES	
+claims	37	external_ordering_provider_npi	character varying		YES	
+claims	38	last_test_status	character varying		YES	
+claims	39	last_test_at	timestamp without time zone		YES	
+claims	40	last_test_errors	jsonb		YES	
+claims	41	secondary_payer_id	character varying		YES	
+claims	42	secondary_member_id	character varying		YES	
+claims	43	secondary_group_number	character varying		YES	
+claims	44	cob_order	character varying		YES	
+claims	45	ordering_provider_first_name	character varying		YES	
+claims	46	ordering_provider_last_name	character varying		YES	
+claims	47	ordering_provider_npi	character varying		YES	
+claims	48	ordering_provider_org	character varying		YES	
+claims	49	last_test_correlation_id	character varying		YES	
+claims	50	plan_product	text		YES	
+claims	51	last_risk_evaluation_at	timestamp without time zone		YES	
+claims	52	last_risk_factors	jsonb		YES	
+claims	53	timely_filing_deadline	date		YES	
+claims	54	timely_filing_days_remaining	integer		YES	
+claims	55	timely_filing_status	text		YES	
+claims	56	timely_filing_last_evaluated_at	timestamp without time zone		YES	
+claims	57	pcp_referral_id	character varying		YES	
+claims	58	pcp_referral_required	boolean		YES	
+claims	59	pcp_referral_check_status	text		YES	
+claims	60	rules_snapshot	jsonb		YES	
+claims	61	rules_engine_version	text		YES	
+claims	62	ncci_version_at_creation	text		YES	
+claims	63	archived_at	timestamp without time zone		YES	
+claims	64	archived_by	text		YES	
+claims	65	statement_period_start	date		YES	
+claims	66	statement_period_end	date		YES	
+claims	67	payer_claim_number	character varying		YES	
+cms_gpci	1	id	uuid		NO	gen_random_uuid()
+cms_gpci	2	mac_carrier	text		NO	
+cms_gpci	3	locality_code	text		NO	
+cms_gpci	4	locality_name	text		NO	
+cms_gpci	5	state	text		NO	
+cms_gpci	6	state_fips	text		YES	
+cms_gpci	7	counties	ARRAY		YES	
+cms_gpci	8	work_gpci	numeric		YES	
+cms_gpci	9	practice_expense_gpci	numeric		YES	
+cms_gpci	10	malpractice_gpci	numeric		YES	
+cms_gpci	11	effective_date	date		NO	
+cms_gpci	12	termination_date	date		YES	
+cms_gpci	13	pfs_year	integer		NO	
+cms_gpci	14	source_url	text		YES	
+cms_gpci	15	ingested_at	timestamp without time zone		YES	now()
+cms_locality_county	1	id	uuid		NO	gen_random_uuid()
+cms_locality_county	2	mac_carrier	text		NO	
+cms_locality_county	3	locality_code	text		NO	
+cms_locality_county	4	state	text		NO	
+cms_locality_county	5	locality_name	text		NO	
+cms_locality_county	6	counties	ARRAY		YES	
+cms_locality_county	7	pfs_year	integer		NO	
+cms_locality_county	8	source_url	text		YES	
+cms_locality_county	9	ingested_at	timestamp without time zone		YES	now()
+cms_pfs_rvu	1	id	uuid		NO	gen_random_uuid()
+cms_pfs_rvu	2	hcpcs_code	text		NO	
+cms_pfs_rvu	3	modifier	text		YES	
+cms_pfs_rvu	4	work_rvu	numeric		YES	
+cms_pfs_rvu	5	practice_expense_rvu_facility	numeric		YES	
+cms_pfs_rvu	6	practice_expense_rvu_non_facility	numeric		YES	
+cms_pfs_rvu	7	malpractice_rvu	numeric		YES	
+cms_pfs_rvu	8	status_indicator	text		YES	
+cms_pfs_rvu	9	global_period	text		YES	
+cms_pfs_rvu	10	professional_component_indicator	text		YES	
+cms_pfs_rvu	11	multiple_procedure_indicator	text		YES	
+cms_pfs_rvu	12	bilateral_surgery_indicator	text		YES	
+cms_pfs_rvu	13	assistant_surgery_indicator	text		YES	
+cms_pfs_rvu	14	co_surgeon_indicator	text		YES	
+cms_pfs_rvu	15	team_surgery_indicator	text		YES	
+cms_pfs_rvu	16	effective_date	date		NO	
+cms_pfs_rvu	17	termination_date	date		YES	
+cms_pfs_rvu	18	pfs_year	integer		NO	
+cms_pfs_rvu	19	conversion_factor	numeric		YES	
+cms_pfs_rvu	20	source_url	text		YES	
+cms_pfs_rvu	21	ingested_at	timestamp without time zone		YES	now()
+cms_zip_locality	1	id	uuid		NO	gen_random_uuid()
+cms_zip_locality	2	zip_code	text		NO	
+cms_zip_locality	3	zip_plus_4	text		YES	
+cms_zip_locality	4	state	text		NO	
+cms_zip_locality	5	mac_carrier	text		NO	
+cms_zip_locality	6	locality_code	text		NO	
+cms_zip_locality	7	rural_indicator	text		YES	
+cms_zip_locality	8	effective_date	date		NO	
+cms_zip_locality	9	termination_date	date		YES	
+cms_zip_locality	10	source_url	text		YES	
+cms_zip_locality	11	ingested_at	timestamp without time zone		YES	now()
+comm_locks	1	id	character varying		NO	(gen_random_uuid())::text
+comm_locks	2	lead_id	text		NO	
+comm_locks	3	acquired_by_type	character varying		NO	
+comm_locks	4	acquired_by_id	character varying		NO	
+comm_locks	5	channel	character varying		NO	
+comm_locks	6	reason	text		YES	
+comm_locks	7	expires_at	timestamp without time zone		NO	
+comm_locks	8	released_at	timestamp without time zone		YES	
+comm_locks	9	created_at	timestamp without time zone		YES	now()
+comm_locks	10	released_reason	text		YES	
+cpt_codes	1	id	character varying		NO	(gen_random_uuid())::text
+cpt_codes	2	code	character varying	6	NO	
+cpt_codes	3	description	text		NO	
+cpt_codes	4	work_rvu	numeric		YES	
+cpt_codes	5	unit_type	character varying		YES	'quantity'::character varying
+cpt_codes	6	is_active	boolean		YES	true
+delegated_entities	1	id	uuid		NO	gen_random_uuid()
+delegated_entities	2	name	character varying		NO	
+delegated_entities	3	entity_type	character varying		NO	
+delegated_entities	4	tax_id	character varying		YES	
+delegated_entities	5	state	character varying	2	YES	
+delegated_entities	6	claims_address	text		YES	
+delegated_entities	7	claims_payer_id_override	character varying		YES	
+delegated_entities	8	active	boolean		NO	true
+delegated_entities	9	notes	text		YES	
+denial_patterns	1	id	character varying		NO	(gen_random_uuid())::text
+denial_patterns	2	claim_id	character varying		YES	
+denial_patterns	3	carc_code	character varying	10	NO	
+denial_patterns	4	carc_description	text		YES	
+denial_patterns	5	rarc_code	character varying	10	YES	
+denial_patterns	6	amount	numeric		YES	
+denial_patterns	7	service_date	date		YES	
+denial_patterns	8	hcpcs_code	character varying	10	YES	
+denial_patterns	9	payer	character varying		YES	
+denial_patterns	10	created_at	timestamp without time zone		YES	now()
+denials	1	id	character varying		NO	gen_random_uuid()
+denials	2	claim_id	character varying		NO	
+denials	3	denial_category	text		NO	
+denials	4	denial_reason_text	text		NO	
+denials	5	payer	text		NO	
+denials	6	cpt_code	text		NO	
+denials	7	root_cause_tag	text		NO	
+denials	8	resolved	boolean		NO	false
+denials	9	created_at	timestamp without time zone		NO	now()
+denials	10	organization_id	character varying		YES	
+document_types	1	code	character varying		NO	
+document_types	2	label	character varying		NO	
+document_types	3	typical_update_cadence	character varying		YES	
+document_types	4	active_for_extraction	boolean		NO	false
+document_types	5	created_at	timestamp without time zone		YES	now()
+email_logs	1	id	character varying		NO	gen_random_uuid()
+email_logs	2	lead_id	character varying		NO	
+email_logs	3	template_id	character varying		YES	
+email_logs	4	sequence_id	character varying		YES	
+email_logs	5	subject	text		NO	
+email_logs	6	body	text		NO	
+email_logs	7	to_email	text		NO	
+email_logs	8	status	text		NO	'pending'::text
+email_logs	9	sent_at	timestamp without time zone		YES	
+email_logs	10	opened_at	timestamp without time zone		YES	
+email_logs	11	clicked_at	timestamp without time zone		YES	
+email_logs	12	error_message	text		YES	
+email_logs	13	created_at	timestamp without time zone		NO	now()
+email_logs	14	organization_id	character varying		YES	
+email_templates	1	id	character varying		NO	gen_random_uuid()
+email_templates	2	name	text		NO	
+email_templates	3	subject	text		NO	
+email_templates	4	body	text		NO	
+email_templates	5	category	text		NO	'general'::text
+email_templates	6	variables	jsonb		YES	'[]'::jsonb
+email_templates	7	created_at	timestamp without time zone		NO	now()
+email_templates	8	organization_id	character varying		YES	
+encounters	1	id	character varying		NO	gen_random_uuid()
+encounters	2	patient_id	character varying		NO	
+encounters	3	service_type	text		NO	
+encounters	4	facility_type	text		NO	
+encounters	5	admission_type	text		NO	
+encounters	6	expected_start_date	text		NO	
+encounters	7	provider_id	character varying		YES	
+encounters	8	place_of_service	character varying		YES	'12'::character varying
+encounters	9	service_date	date		YES	
+encounters	10	authorization_number	character varying		YES	
+encounters	11	created_by	character varying		YES	
+encounters	12	created_at	timestamp without time zone		YES	now()
+encounters	13	organization_id	character varying		YES	
+era_batches	1	id	character varying		NO	(gen_random_uuid())::text
+era_batches	2	org_id	character varying		YES	
+era_batches	3	payer_name	character varying		NO	
+era_batches	4	check_number	character varying		YES	
+era_batches	5	payment_date	date		YES	
+era_batches	6	total_amount	real		YES	0
+era_batches	7	status	character varying		YES	'unposted'::character varying
+era_batches	8	raw_edi	text		YES	
+era_batches	9	created_at	timestamp without time zone		NO	now()
+era_batches	10	stedi_era_id	character varying		YES	
+era_batches	11	raw_data	jsonb		YES	
+era_batches	12	source	character varying		YES	'stedi'::character varying
+era_claim_lines	1	id	character varying		NO	
+era_claim_lines	2	era_batch_id	character varying		NO	
+era_claim_lines	3	claim_control_number	character varying		YES	
+era_claim_lines	4	patient_name	character varying		YES	
+era_claim_lines	5	billed_amount	numeric		YES	
+era_claim_lines	6	allowed_amount	numeric		YES	
+era_claim_lines	7	paid_amount	numeric		YES	
+era_claim_lines	8	adjustment_codes	jsonb		YES	'[]'::jsonb
+era_claim_lines	9	created_at	timestamp without time zone		YES	now()
+era_lines	1	id	character varying		NO	(gen_random_uuid())::text
+era_lines	2	era_id	character varying		NO	
+era_lines	3	claim_id	character varying		YES	
+era_lines	4	org_id	character varying		YES	
+era_lines	5	patient_name	character varying		YES	
+era_lines	6	dos	date		YES	
+era_lines	7	billed_amount	real		YES	0
+era_lines	8	allowed_amount	real		YES	0
+era_lines	9	paid_amount	real		YES	0
+era_lines	10	service_lines	jsonb		YES	'[]'::jsonb
+era_lines	11	status	character varying		YES	'unposted'::character varying
+era_lines	12	created_at	timestamp without time zone		NO	now()
+field_definitions	1	code	character varying		NO	
+field_definitions	2	label	character varying		NO	
+field_definitions	3	applies_to	character varying		NO	
+field_definitions	4	data_type	character varying		NO	
+field_definitions	5	always_required	boolean		NO	false
+field_definitions	6	activated_by_rule_kinds	jsonb		NO	'[]'::jsonb
+flow_run_events	1	id	character varying		NO	(gen_random_uuid())::text
+flow_run_events	2	flow_run_id	character varying		NO	
+flow_run_events	3	event_type	character varying		NO	
+flow_run_events	4	step_id	character varying		YES	
+flow_run_events	5	payload	jsonb		YES	'{}'::jsonb
+flow_run_events	6	created_at	timestamp without time zone		YES	now()
+flow_runs	1	id	character varying		NO	(gen_random_uuid())::text
+flow_runs	2	flow_id	character varying		NO	
+flow_runs	3	lead_id	text		NO	
+flow_runs	4	status	character varying		NO	'running'::character varying
+flow_runs	5	current_step_index	integer		YES	0
+flow_runs	6	next_action_at	timestamp without time zone		YES	
+flow_runs	7	started_at	timestamp without time zone		YES	now()
+flow_runs	8	completed_at	timestamp without time zone		YES	
+flow_runs	9	organization_id	character varying		YES	
+flow_runs	10	created_at	timestamp without time zone		YES	now()
+flow_runs	11	updated_at	timestamp without time zone		YES	now()
+flow_runs	12	attempt_count	integer		YES	0
+flow_runs	13	failure_reason	text		YES	
+flow_runs	14	halted_at	timestamp with time zone		YES	
+flow_runs	15	failed_at	timestamp with time zone		YES	
+flow_steps	1	id	character varying		NO	(gen_random_uuid())::text
+flow_steps	2	flow_id	character varying		NO	
+flow_steps	3	step_order	integer		NO	
+flow_steps	4	step_type	character varying		NO	
+flow_steps	5	channel	character varying		YES	
+flow_steps	6	delay_minutes	integer		YES	0
+flow_steps	7	template_inline	text		YES	
+flow_steps	8	config	jsonb		YES	'{}'::jsonb
+flow_steps	9	created_at	timestamp without time zone		YES	now()
+flow_steps	10	max_attempts	integer		YES	3
+flow_steps	11	condition	jsonb		YES	
+flow_steps	12	success_criteria	jsonb		YES	
+flow_steps	13	template_key	text		YES	
+flows	1	id	character varying		NO	(gen_random_uuid())::text
+flows	2	name	character varying		NO	
+flows	3	description	text		YES	
+flows	4	trigger_event	character varying		NO	
+flows	5	trigger_conditions	jsonb		YES	'{}'::jsonb
+flows	6	is_active	boolean		YES	true
+flows	7	organization_id	character varying		YES	
+flows	8	created_at	timestamp without time zone		YES	now()
+flows	9	updated_at	timestamp without time zone		YES	now()
+flows	10	version	integer		NO	1
+hcpcs_codes	1	id	character varying		NO	(gen_random_uuid())::text
+hcpcs_codes	2	code	character varying	6	NO	
+hcpcs_codes	3	description_official	text		NO	
+hcpcs_codes	4	description_plain	text		YES	
+hcpcs_codes	5	unit_type	character varying		NO	
+hcpcs_codes	6	unit_interval_minutes	integer		YES	
+hcpcs_codes	7	default_pos	character varying	2	YES	'12'::character varying
+hcpcs_codes	8	requires_modifier	boolean		YES	false
+hcpcs_codes	9	notes	text		YES	
+hcpcs_codes	10	is_active	boolean		YES	true
+hcpcs_codes	11	created_at	timestamp without time zone		YES	now()
+hcpcs_rates	1	id	character varying		NO	(gen_random_uuid())::text
+hcpcs_rates	2	hcpcs_code	character varying	6	YES	
+hcpcs_rates	3	payer_id	character varying		YES	
+hcpcs_rates	4	payer_name	character varying		NO	
+hcpcs_rates	5	rate_per_unit	numeric		NO	
+hcpcs_rates	6	unit_interval_minutes	integer		YES	
+hcpcs_rates	7	effective_date	date		NO	
+hcpcs_rates	8	end_date	date		YES	
+hcpcs_rates	9	is_override	boolean		YES	false
+hcpcs_rates	10	created_by	character varying		YES	
+hcpcs_rates	11	created_at	timestamp without time zone		YES	now()
+hcpcs_rates	12	is_legacy	boolean		YES	false
+icd10_codes	1	id	character varying		NO	(gen_random_uuid())::text
+icd10_codes	2	code	character varying	10	NO	
+icd10_codes	3	description	text		NO	
+icd10_codes	4	is_header	boolean		YES	false
+icd10_codes	5	is_active	boolean		YES	true
+leads	1	id	character varying		NO	gen_random_uuid()
+leads	2	name	text		NO	
+leads	3	phone	text		NO	
+leads	4	email	text		YES	
+leads	5	source	text		NO	'website'::text
+leads	6	status	text		NO	'new'::text
+leads	7	created_at	timestamp without time zone		NO	now()
+leads	8	service_needed	text		YES	
+leads	9	insurance_carrier	text		YES	
+leads	10	member_id	text		YES	
+leads	11	priority	text		NO	'P2'::text
+leads	12	next_action	text		YES	
+leads	13	next_action_at	timestamp without time zone		YES	
+leads	14	last_outcome	text		YES	
+leads	15	attempt_count	integer		NO	0
+leads	16	last_contacted_at	timestamp without time zone		YES	
+leads	17	vob_status	text		NO	'not_started'::text
+leads	18	vob_score	integer		NO	0
+leads	19	plan_type	text		YES	
+leads	20	owner_user_id	character varying		YES	
+leads	21	handoff_status	text		NO	'not_sent'::text
+leads	22	next_action_type	text		NO	'call'::text
+leads	23	sla_deadline_at	timestamp without time zone		YES	
+leads	24	outcome_code	text		YES	
+leads	25	vob_missing_fields	jsonb		YES	'[]'::jsonb
+leads	26	first_name	text		YES	
+leads	27	last_name	text		YES	
+leads	28	preferred_name	text		YES	
+leads	29	state	text		YES	
+leads	30	timezone	text		YES	
+leads	31	best_time_to_call	text		YES	
+leads	32	notes	text		YES	
+leads	33	consent_to_call	boolean		NO	true
+leads	34	referral_partner_name	character varying		YES	
+leads	35	organization_id	character varying		YES	
+leads	36	dob	text		YES	
+leads	37	engagement_halted	boolean		NO	false
+login_attempts	1	id	character varying		NO	(gen_random_uuid())::text
+login_attempts	2	ip	character varying		NO	
+login_attempts	3	attempted_at	timestamp without time zone		NO	now()
+manual_extraction_items	1	id	character varying		NO	(gen_random_uuid())::text
+manual_extraction_items	3	section_type	character varying		NO	
+manual_extraction_items	4	raw_snippet	text		YES	
+manual_extraction_items	5	extracted_json	jsonb		YES	
+manual_extraction_items	6	confidence	real		YES	
+manual_extraction_items	7	review_status	character varying		NO	'pending'::character varying
+manual_extraction_items	8	reviewed_by	character varying		YES	
+manual_extraction_items	9	reviewed_at	timestamp without time zone		YES	
+manual_extraction_items	10	applied_rule_id	character varying		YES	
+manual_extraction_items	11	notes	text		YES	
+manual_extraction_items	12	created_at	timestamp without time zone		YES	now()
+manual_extraction_items	13	applies_to_plan_products	jsonb		YES	'["all"]'::jsonb
+manual_extraction_items	14	last_verified_at	timestamp without time zone		YES	
+manual_extraction_items	15	needs_reverification	boolean		YES	false
+manual_extraction_items	16	source_document_id	character varying		YES	
+manual_extraction_items	17	is_demo_seed	boolean		NO	false
+nurture_sequences	1	id	character varying		NO	gen_random_uuid()
+nurture_sequences	2	name	text		NO	
+nurture_sequences	3	description	text		YES	
+nurture_sequences	4	trigger_event	text		NO	
+nurture_sequences	5	steps	jsonb		YES	'[]'::jsonb
+nurture_sequences	6	enabled	boolean		NO	true
+nurture_sequences	7	created_at	timestamp without time zone		NO	now()
+nurture_sequences	8	organization_id	character varying		YES	
+org_lead_sources	1	id	uuid		NO	gen_random_uuid()
+org_lead_sources	2	organization_id	text		NO	
+org_lead_sources	3	slug	text		NO	
+org_lead_sources	4	label	text		NO	
+org_lead_sources	5	source_type	text		NO	
+org_lead_sources	6	is_active	boolean		NO	true
+org_message_templates	1	id	uuid		NO	gen_random_uuid()
+org_message_templates	2	organization_id	text		NO	
+org_message_templates	3	template_key	text		NO	
+org_message_templates	4	channel	text		NO	
+org_message_templates	5	subject	text		YES	
+org_message_templates	6	body	text		NO	
+org_message_templates	7	variables	jsonb		NO	'[]'::jsonb
+org_message_templates	8	is_active	boolean		NO	true
+org_message_templates	9	created_at	timestamp with time zone		NO	now()
+org_message_templates	10	updated_at	timestamp with time zone		NO	now()
+org_payer_mappings	1	id	uuid		NO	gen_random_uuid()
+org_payer_mappings	2	organization_id	text		NO	
+org_payer_mappings	3	payer_name	text		NO	
+org_payer_mappings	4	payer_id	text		NO	
+org_payer_mappings	5	payer_type	text		YES	
+org_payer_mappings	6	is_primary	boolean		NO	false
+org_payer_mappings	7	is_active	boolean		NO	true
+org_payer_mappings	8	metadata	jsonb		NO	'{}'::jsonb
+org_providers	1	id	uuid		NO	gen_random_uuid()
+org_providers	2	organization_id	text		NO	
+org_providers	3	first_name	text		NO	
+org_providers	4	last_name	text		NO	
+org_providers	5	npi	text		YES	
+org_providers	6	email	text		YES	
+org_providers	7	phone	text		YES	
+org_providers	8	specialties	jsonb		NO	'[]'::jsonb
+org_providers	9	service_types	jsonb		NO	'[]'::jsonb
+org_providers	10	languages	jsonb		NO	'["en"]'::jsonb
+org_providers	11	availability	jsonb		NO	'{}'::jsonb
+org_providers	12	metadata	jsonb		NO	'{}'::jsonb
+org_providers	13	is_active	boolean		NO	true
+org_service_types	1	id	uuid		NO	gen_random_uuid()
+org_service_types	2	organization_id	text		NO	
+org_service_types	3	service_code	text		NO	
+org_service_types	4	service_name	text		NO	
+org_service_types	5	description	text		YES	
+org_service_types	6	metadata	jsonb		NO	'{}'::jsonb
+org_service_types	7	is_active	boolean		NO	true
+org_voice_personas	1	id	uuid		NO	gen_random_uuid()
+org_voice_personas	2	organization_id	text		NO	
+org_voice_personas	3	persona_key	text		NO	
+org_voice_personas	4	vapi_assistant_id	text		NO	
+org_voice_personas	5	persona_name	text		NO	
+org_voice_personas	6	greeting	text		YES	
+org_voice_personas	7	system_prompt	text		YES	
+org_voice_personas	8	metadata	jsonb		NO	'{}'::jsonb
+org_voice_personas	9	is_active	boolean		NO	true
+organizations	1	id	character varying		NO	(gen_random_uuid())::text
+organizations	2	name	character varying		NO	
+organizations	3	created_at	timestamp without time zone		YES	now()
+organizations	4	onboarding_dismissed_at	timestamp without time zone		YES	
+organizations	5	contact_email	text		YES	
+organizations	6	status	text		NO	'active'::text
+organizations	7	updated_at	timestamp with time zone		NO	now()
+patients	1	id	character varying		NO	gen_random_uuid()
+patients	2	lead_id	character varying		YES	
+patients	3	dob	text		NO	
+patients	4	state	text		YES	
+patients	5	insurance_carrier	text		YES	
+patients	6	member_id	text		YES	
+patients	7	plan_type	text		YES	
+patients	8	first_name	character varying		YES	
+patients	9	last_name	character varying		YES	
+patients	10	preferred_name	character varying		YES	
+patients	11	phone	character varying		YES	
+patients	12	email	character varying		YES	
+patients	13	sex	character varying	10	YES	
+patients	14	address	jsonb		YES	
+patients	15	group_number	character varying		YES	
+patients	16	insured_name	character varying		YES	
+patients	17	relationship_to_insured	character varying		YES	
+patients	18	authorization_number	character varying		YES	
+patients	19	payer_id	character varying		YES	
+patients	20	referring_provider_name	character varying		YES	
+patients	21	referring_provider_npi	character varying		YES	
+patients	22	default_provider_id	character varying		YES	
+patients	23	referral_source	character varying		YES	
+patients	24	referral_partner_name	character varying		YES	
+patients	25	service_needed	character varying		YES	
+patients	26	intake_completed	boolean		YES	false
+patients	27	vob_verified	boolean		YES	false
+patients	28	notes	text		YES	
+patients	29	created_at	timestamp without time zone		YES	now()
+patients	30	updated_at	timestamp without time zone		YES	
+patients	31	organization_id	character varying		YES	
+patients	32	secondary_payer_id	character varying		YES	
+patients	33	secondary_member_id	character varying		YES	
+patients	34	secondary_group_number	character varying		YES	
+patients	35	secondary_plan_name	character varying		YES	
+patients	36	secondary_relationship	character varying		YES	'self'::character varying
+patients	37	street_address	character varying		YES	
+patients	38	city	character varying		YES	
+patients	39	zip_code	character varying		YES	
+patients	40	plan_product	text		YES	
+patients	41	plan_product_code	character varying		YES	
+patients	42	delegated_entity_id	uuid		YES	
+patients	43	pcp_id	text		YES	
+patients	44	pcp_referral_number	text		YES	
+patients	45	archived_at	timestamp without time zone		YES	
+patients	46	archived_by	text		YES	
+patients	47	archive_reason	text		YES	
+patients	48	is_demo	boolean		NO	false
+payer_auth_requirements	1	id	character varying		NO	(gen_random_uuid())::text
+payer_auth_requirements	2	payer_id	character varying		NO	
+payer_auth_requirements	3	payer_name	character varying		NO	
+payer_auth_requirements	4	code	character varying		NO	
+payer_auth_requirements	5	code_type	character varying		NO	'HCPCS'::character varying
+payer_auth_requirements	6	auth_required	boolean		NO	true
+payer_auth_requirements	7	auth_conditions	text		YES	
+payer_auth_requirements	8	auth_validity_days	integer		YES	
+payer_auth_requirements	9	auth_number_format	character varying		YES	
+payer_auth_requirements	10	auth_number_format_hint	character varying		YES	
+payer_auth_requirements	11	typical_turnaround_days	integer		YES	
+payer_auth_requirements	12	submission_method	character varying		YES	
+payer_auth_requirements	13	portal_url	text		YES	
+payer_auth_requirements	14	notes	text		YES	
+payer_auth_requirements	15	is_active	boolean		NO	true
+payer_auth_requirements	16	created_at	timestamp without time zone		YES	now()
+payer_auth_requirements	17	updated_at	timestamp without time zone		YES	now()
+payer_delegated_entities	1	id	uuid		NO	gen_random_uuid()
+payer_delegated_entities	2	payer_id	character varying		NO	
+payer_delegated_entities	3	delegated_entity_id	uuid		NO	
+payer_delegated_entities	4	plan_product_code	character varying		YES	
+payer_delegated_entities	5	state	character varying	2	YES	
+payer_manual_extraction_history	1	id	uuid		NO	gen_random_uuid()
+payer_manual_extraction_history	2	extraction_id	character varying		NO	
+payer_manual_extraction_history	3	changed_at	timestamp without time zone		YES	now()
+payer_manual_extraction_history	4	changed_by	text		NO	
+payer_manual_extraction_history	5	change_type	text		NO	
+payer_manual_extraction_history	6	state_snapshot	jsonb		NO	
+payer_manual_extraction_history	7	change_notes	text		YES	
+payer_manual_extraction_history	8	payer_name	text		YES	
+payer_manual_extraction_history	9	section_type	text		YES	
+payer_manual_sources	1	id	character varying		NO	(gen_random_uuid())::text
+payer_manual_sources	2	payer_name	character varying		NO	
+payer_manual_sources	3	canonical_url	text		YES	
+payer_manual_sources	4	last_verified_date	date		YES	
+payer_manual_sources	5	notes	text		YES	
+payer_manual_sources	6	priority	integer		NO	99
+payer_manual_sources	8	created_at	timestamp without time zone		YES	now()
+payer_manual_sources	9	updated_at	timestamp without time zone		YES	now()
+payer_manual_sources	10	linked_source_document_id	character varying		YES	
+payer_source_documents	1	id	character varying		NO	(gen_random_uuid())::text
+payer_source_documents	2	payer_id	character varying		YES	
+payer_source_documents	3	document_type	character varying		NO	'admin_guide'::character varying
+payer_source_documents	4	parent_document_id	character varying		YES	
+payer_source_documents	5	document_name	character varying		NO	
+payer_source_documents	6	source_url	text		YES	
+payer_source_documents	7	file_content	bytea		YES	
+payer_source_documents	8	file_name	character varying		YES	
+payer_source_documents	9	document_version	character varying		YES	
+payer_source_documents	10	effective_start	date		YES	
+payer_source_documents	11	effective_end	date		YES	
+payer_source_documents	12	status	character varying		NO	'pending'::character varying
+payer_source_documents	13	last_verified_date	date		YES	
+payer_source_documents	14	error_message	text		YES	
+payer_source_documents	15	uploaded_by	character varying		YES	
+payer_source_documents	16	organization_id	character varying		YES	
+payer_source_documents	17	notes	text		YES	
+payer_source_documents	18	created_at	timestamp with time zone		NO	now()
+payer_source_documents	19	updated_at	timestamp with time zone		NO	now()
+payer_source_documents	20	source_acquisition_method	character varying		NO	'manual_upload'::character varying
+payer_source_documents	21	source_url_canonical	character varying		YES	
+payer_source_documents	22	content_hash	character varying	64	YES	
+payer_source_documents	23	last_scraped_at	timestamp with time zone		YES	
+payer_source_documents	24	scrape_status	character varying		YES	
+payer_supported_plan_products	1	payer_id	character varying		NO	
+payer_supported_plan_products	2	plan_product_code	character varying		NO	
+payers	1	id	character varying		NO	(gen_random_uuid())::text
+payers	2	name	character varying		NO	
+payers	3	payer_id	character varying		YES	
+payers	4	timely_filing_days	integer		YES	365
+payers	5	auth_required	boolean		YES	false
+payers	6	billing_type	character varying		YES	'professional'::character varying
+payers	7	is_active	boolean		YES	true
+payers	8	is_custom	boolean		YES	false
+payers	9	created_at	timestamp without time zone		YES	now()
+payers	10	auto_followup_days	integer		YES	30
+payers	11	era_auto_post_clean	boolean		YES	false
+payers	12	era_auto_post_contractual	boolean		YES	false
+payers	13	era_auto_post_secondary	boolean		YES	true
+payers	14	era_auto_post_refunds	boolean		YES	true
+payers	15	era_hold_if_mismatch	boolean		YES	true
+payers	16	stedi_payer_id	character varying		YES	
+payers	17	supported_transactions	jsonb		YES	'[]'::jsonb
+payers	18	updated_at	timestamp without time zone		YES	
+payers	21	stedi_synced_at	timestamp without time zone		YES	
+payers	22	enrollment_status_835	character varying		YES	'not_enrolled'::character varying
+payers	23	enrollment_status_837	character varying		YES	'not_enrolled'::character varying
+payers	24	enrollment_activated_at	timestamp without time zone		YES	
+payers	25	payer_classification	character varying	32	YES	
+payers	26	claim_filing_indicator	character varying	2	YES	
+payers	27	organization_id	character varying		YES	
+payers	28	payer_category	character varying		YES	
+pcp_referrals	1	id	character varying		NO	(gen_random_uuid())::text
+pcp_referrals	2	organization_id	character varying		NO	
+pcp_referrals	3	patient_id	character varying		NO	
+pcp_referrals	4	pcp_name	text		NO	
+pcp_referrals	5	pcp_npi	text		YES	
+pcp_referrals	6	pcp_phone	text		YES	
+pcp_referrals	7	pcp_practice_name	text		YES	
+pcp_referrals	8	referral_number	text		YES	
+pcp_referrals	9	issue_date	date		NO	
+pcp_referrals	10	expiration_date	date		YES	
+pcp_referrals	11	visits_authorized	integer		YES	
+pcp_referrals	12	visits_used	integer		YES	0
+pcp_referrals	13	specialty_authorized	text		YES	
+pcp_referrals	14	diagnosis_authorized	text		YES	
+pcp_referrals	15	captured_via	text		NO	'manual_entry'::text
+pcp_referrals	16	captured_by	text		NO	
+pcp_referrals	17	captured_at	timestamp without time zone		YES	now()
+pcp_referrals	18	status	text		NO	'active'::text
+plan_products	1	code	character varying		NO	
+plan_products	2	label	character varying		NO	
+plan_products	3	parent_plan_family	character varying		NO	
+plan_products	4	plan_type	character varying		NO	
+plan_products	5	requires_pcp	boolean		NO	false
+plan_products	6	requires_referral	boolean		NO	false
+plan_products	7	is_government	boolean		NO	false
+plan_products	8	regulatory_basis	character varying		YES	
+plan_products	9	sort_order	integer		NO	0
+plan_products	10	active	boolean		NO	true
+pos_codes	1	id	integer		NO	nextval('pos_codes_id_seq'::regclass)
+pos_codes	2	code	character varying	2	NO	
+pos_codes	3	description	character varying	200	NO	
+pos_codes	4	notes	text		YES	
+practice_payer_enrollments	1	id	uuid		NO	gen_random_uuid()
+practice_payer_enrollments	2	organization_id	character varying		NO	
+practice_payer_enrollments	3	payer_id	character varying		NO	
+practice_payer_enrollments	4	plan_product_code	character varying		YES	
+practice_payer_enrollments	5	enrolled_at	timestamp with time zone		NO	now()
+practice_payer_enrollments	6	enrolled_by	character varying		YES	
+practice_payer_enrollments	7	disabled_at	timestamp with time zone		YES	
+practice_payer_enrollments	8	notes	text		YES	
+practice_settings	1	id	character varying		NO	(gen_random_uuid())::text
+practice_settings	2	practice_name	character varying		NO	''::character varying
+practice_settings	3	primary_npi	character varying	10	YES	
+practice_settings	4	tax_id	character varying	20	YES	
+practice_settings	5	taxonomy_code	character varying	10	YES	
+practice_settings	6	address	jsonb		YES	'{}'::jsonb
+practice_settings	7	phone	character varying		YES	
+practice_settings	8	default_pos	character varying	2	YES	'12'::character varying
+practice_settings	9	organization_id	character varying		YES	
+practice_settings	10	created_at	timestamp without time zone		YES	now()
+practice_settings	11	updated_at	timestamp without time zone		YES	now()
+practice_settings	12	billing_location	character varying		YES	
+practice_settings	13	oa_submitter_id	character varying		YES	
+practice_settings	14	oa_sftp_username	character varying		YES	
+practice_settings	15	oa_sftp_password	character varying		YES	
+practice_settings	16	oa_connected	boolean		YES	false
+practice_settings	17	default_tos	character varying		YES	
+practice_settings	18	default_ordering_provider_id	character varying		YES	
+practice_settings	19	homebound_default	boolean		YES	true
+practice_settings	20	exclude_facility	boolean		YES	true
+practice_settings	21	frcpb_enrolled	boolean		YES	false
+practice_settings	22	frcpb_enrolled_at	timestamp without time zone		YES	
+practice_settings	23	default_va_locality	character varying		YES	
+practice_settings	24	billing_model	character varying		YES	'direct'::character varying
+practice_settings	25	agency_npi	character varying		YES	
+practice_settings	26	agency_tax_id	character varying		YES	
+practice_settings	27	medicare_locality_code	text		YES	
+practice_settings	28	medicare_mac_carrier	text		YES	
+practice_settings	29	locality_resolved_at	timestamp without time zone		YES	
+practice_settings	30	locality_resolution_method	text		YES	
+practice_settings	31	locality_source_url	text		YES	
+practice_settings	32	pgba_trading_partner_id	character varying		YES	
+prior_authorizations	1	id	character varying		NO	gen_random_uuid()
+prior_authorizations	2	encounter_id	character varying		NO	
+prior_authorizations	3	patient_id	character varying		NO	
+prior_authorizations	4	payer	text		NO	
+prior_authorizations	5	service_type	text		NO	
+prior_authorizations	6	auth_number	text		YES	
+prior_authorizations	7	status	text		NO	'pending'::text
+prior_authorizations	8	requested_date	timestamp without time zone		NO	now()
+prior_authorizations	9	approved_date	timestamp without time zone		YES	
+prior_authorizations	10	expiration_date	timestamp without time zone		YES	
+prior_authorizations	11	approved_units	integer		YES	
+prior_authorizations	12	used_units	integer		YES	0
+prior_authorizations	13	notes	text		YES	
+prior_authorizations	14	denial_reason	text		YES	
+prior_authorizations	15	organization_id	character varying		YES	
+prior_authorizations	16	request_status	character varying		YES	'not_started'::character varying
+prior_authorizations	17	cpt_codes	jsonb		YES	'[]'::jsonb
+prior_authorizations	18	submitted_at	timestamp without time zone		YES	
+prior_authorizations	19	decision_at	timestamp without time zone		YES	
+prior_authorizations	20	clinical_notes	text		YES	
+prior_authorizations	21	request_method	character varying		YES	
+prior_authorizations	22	requested_by	character varying		YES	
+prior_authorizations	23	mode	character varying		YES	'received'::character varying
+prior_authorizations	24	source	character varying		YES	
+prior_authorizations	25	referring_provider_name	character varying		YES	
+prior_authorizations	26	referring_provider_npi	character varying		YES	
+prior_authorizations	27	clinical_justification	text		YES	
+prior_authorizations	28	authorized_visits	integer		YES	
+prior_authorizations	29	appeal_deadline	date		YES	
+providers	1	id	character varying		NO	(gen_random_uuid())::text
+providers	2	first_name	character varying		NO	
+providers	3	last_name	character varying		NO	
+providers	4	credentials	character varying		YES	
+providers	5	npi	character varying	10	YES	
+providers	6	taxonomy_code	character varying	10	YES	
+providers	7	individual_tax_id	character varying	9	YES	
+providers	8	is_default	boolean		YES	false
+providers	9	is_active	boolean		YES	true
+providers	10	created_at	timestamp without time zone		YES	now()
+providers	11	updated_at	timestamp without time zone		YES	now()
+providers	12	organization_id	character varying		YES	
+providers	13	license_number	character varying		YES	
+providers	14	entity_type	character varying		YES	'individual'::character varying
+providers	15	provider_type	character varying		YES	'rendering'::character varying
+rarc_codes	1	id	integer		NO	nextval('rarc_codes_id_seq'::regclass)
+rarc_codes	2	code	character varying	10	NO	
+rarc_codes	3	description	text		NO	
+rarc_codes	4	type	character varying	20	NO	'informational'::character varying
+role_permissions	1	id	character varying		NO	(gen_random_uuid())::text
+role_permissions	2	role	character varying		NO	
+role_permissions	3	resource	character varying		NO	
+role_permissions	4	actions	ARRAY		NO	'{}'::text[]
+role_permissions	5	created_at	timestamp without time zone		YES	now()
+rule_kinds	1	code	character varying		NO	
+rule_kinds	2	label	character varying		NO	
+rule_kinds	3	description	text		YES	
+rule_kinds	4	ui_group	character varying		NO	'Operational'::character varying
+rule_kinds	5	active_in_extraction	boolean		NO	true
+rule_kinds	6	active_in_rules_engine	boolean		NO	false
+rule_kinds	7	sort_order	integer		NO	99
+rule_kinds	8	created_at	timestamp without time zone		YES	now()
+rules	1	id	character varying		NO	gen_random_uuid()
+rules	2	name	text		NO	
+rules	3	description	text		NO	
+rules	4	payer	text		YES	
+rules	5	cpt_code	text		YES	
+rules	6	trigger_pattern	text		NO	
+rules	7	prevention_action	text		NO	
+rules	8	enabled	boolean		NO	true
+rules	9	impact_count	integer		NO	0
+rules	10	created_at	timestamp without time zone		NO	now()
+rules	11	triggered_count	integer		NO	0
+rules	12	prevented_count	integer		NO	0
+rules	13	protected_amount	real		NO	0
+rules	14	organization_id	character varying		YES	
+rules	15	specialty_tags	ARRAY		YES	'{}'::text[]
+rules	16	condition_type	character varying		YES	
+rules	17	condition_value	character varying		YES	
+rules	18	action	character varying		YES	
+rules	19	is_active	boolean		YES	true
+scrape_runs	1	id	uuid		NO	
+scrape_runs	2	payer_code	character varying		NO	
+scrape_runs	3	started_at	timestamp with time zone		NO	now()
+scrape_runs	4	completed_at	timestamp with time zone		YES	
+scrape_runs	5	status	character varying		NO	'running'::character varying
+scrape_runs	6	report	jsonb		YES	
+scrape_runs	7	triggered_by	character varying		NO	'manual_admin'::character varying
+scrape_runs	8	triggered_by_user_id	character varying		YES	
+scrape_runs	9	used_fallback	boolean		NO	false
+scraper_circuit_state	1	payer_code	character varying		NO	
+scraper_circuit_state	2	state	character varying		NO	'closed'::character varying
+scraper_circuit_state	3	consecutive_errors	integer		NO	0
+scraper_circuit_state	4	last_error_at	timestamp with time zone		YES	
+scraper_circuit_state	5	opened_at	timestamp with time zone		YES	
+scraper_circuit_state	6	reopens_at	timestamp with time zone		YES	
+scraper_circuit_state	7	notes	text		YES	
+scraper_monitor_log	1	id	uuid		NO	
+scraper_monitor_log	2	event_type	character varying		NO	
+scraper_monitor_log	3	alert_level	character varying		NO	
+scraper_monitor_log	4	payer_code	character varying		NO	
+scraper_monitor_log	5	run_id	character varying		YES	
+scraper_monitor_log	6	payload	jsonb		NO	
+scraper_monitor_log	7	created_at	timestamp with time zone		NO	now()
+session	1	sid	character varying		NO	
+session	2	sess	json		NO	
+session	3	expire	timestamp without time zone		NO	
+step_types	1	step_type	text		NO	
+step_types	2	display_name	text		NO	
+step_types	3	category	text		NO	
+step_types	4	config_schema	jsonb		NO	
+step_types	5	description	text		YES	
+step_types	6	is_active	boolean		NO	true
+submission_attempts	1	id	character varying		NO	(gen_random_uuid())::character varying
+submission_attempts	2	claim_id	character varying		NO	
+submission_attempts	3	organization_id	character varying		YES	
+submission_attempts	4	isa15	character varying	1	NO	
+submission_attempts	5	test_mode_override	boolean		YES	false
+submission_attempts	6	automated	boolean		YES	false
+submission_attempts	7	test_data_result	character varying	16	YES	
+submission_attempts	8	test_data_score	integer		YES	
+submission_attempts	9	attempted_by	character varying		YES	
+submission_attempts	10	attempted_at	timestamp without time zone		YES	now()
+submission_attempts	11	blocked	boolean		YES	false
+submission_attempts	12	block_reason	character varying		YES	
+system_settings	1	key	character varying		NO	
+system_settings	2	value	text		YES	
+system_settings	3	updated_at	timestamp without time zone		YES	now()
+taxonomy_codes	1	id	integer		NO	nextval('taxonomy_codes_id_seq'::regclass)
+taxonomy_codes	2	code	character varying	20	NO	
+taxonomy_codes	3	display	text		NO	
+taxonomy_codes	4	category	character varying	100	NO	'Other'::character varying
+timely_filing_alerts	1	id	character varying		NO	(gen_random_uuid())::text
+timely_filing_alerts	2	claim_id	character varying		NO	
+timely_filing_alerts	3	organization_id	character varying		NO	
+timely_filing_alerts	4	alert_status	text		NO	
+timely_filing_alerts	5	days_remaining	integer		NO	
+timely_filing_alerts	6	deadline_date	date		NO	
+timely_filing_alerts	7	alert_method	text		NO	'in_app'::text
+timely_filing_alerts	8	alert_sent_at	timestamp without time zone		YES	now()
+timely_filing_alerts	9	alert_acknowledged_at	timestamp without time zone		YES	
+timely_filing_alerts	10	alert_acknowledged_by	text		YES	
+timely_filing_alerts	11	snoozed_until	timestamp without time zone		YES	
+users	1	id	character varying		NO	gen_random_uuid()
+users	2	email	text		NO	
+users	3	password	text		NO	
+users	4	role	text		NO	'intake'::text
+users	5	name	text		NO	
+users	6	created_at	timestamp without time zone		YES	now()
+users	7	organization_id	character varying		YES	
+users	8	last_active_at	timestamp without time zone		YES	
+va_fee_schedule	1	id	uuid		NO	gen_random_uuid()
+va_fee_schedule	2	hcpcs_code	text		NO	
+va_fee_schedule	3	modifier	text		YES	
+va_fee_schedule	4	schedule_type	text		NO	
+va_fee_schedule	5	facility_rate	numeric		YES	
+va_fee_schedule	6	non_facility_rate	numeric		YES	
+va_fee_schedule	7	unit_rate	numeric		YES	
+va_fee_schedule	8	unit_description	text		YES	
+va_fee_schedule	9	geographic_scope	text		NO	'national'::text
+va_fee_schedule	10	mac_carrier	text		YES	
+va_fee_schedule	11	locality_code	text		YES	
+va_fee_schedule	12	code_description	text		YES	
+va_fee_schedule	13	effective_date	date		NO	
+va_fee_schedule	14	termination_date	date		YES	
+va_fee_schedule	15	fee_schedule_year	integer		NO	
+va_fee_schedule	16	source_url	text		YES	
+va_fee_schedule	17	ingested_at	timestamp without time zone		YES	now()
+va_location_rates	1	id	character varying		NO	(gen_random_uuid())::text
+va_location_rates	2	hcpcs_code	character varying	6	NO	
+va_location_rates	3	location_name	character varying		NO	
+va_location_rates	4	carrier	character varying	10	YES	
+va_location_rates	5	locality_code	character varying	5	YES	
+va_location_rates	6	facility_rate	numeric		YES	
+va_location_rates	7	non_facility_rate	numeric		YES	
+va_location_rates	8	effective_date	date		YES	'2026-01-01'::date
+va_location_rates	9	is_non_reimbursable	boolean		YES	false
+va_location_rates	10	created_at	timestamp without time zone		YES	now()
+va_location_rates	11	last_updated	timestamp without time zone		YES	now()
+vob_verifications	1	id	character varying		NO	gen_random_uuid()
+vob_verifications	2	lead_id	character varying		YES	
+vob_verifications	3	patient_id	character varying		YES	
+vob_verifications	4	verifytx_vob_id	text		YES	
+vob_verifications	5	payer_id	text		YES	
+vob_verifications	6	payer_name	text		NO	
+vob_verifications	7	member_id	text		NO	
+vob_verifications	8	status	text		NO	'pending'::text
+vob_verifications	9	policy_status	text		YES	
+vob_verifications	10	policy_type	text		YES	
+vob_verifications	11	effective_date	text		YES	
+vob_verifications	12	term_date	text		YES	
+vob_verifications	13	copay	real		YES	
+vob_verifications	14	deductible	real		YES	
+vob_verifications	15	deductible_met	real		YES	
+vob_verifications	16	coinsurance	real		YES	
+vob_verifications	17	out_of_pocket_max	real		YES	
+vob_verifications	18	out_of_pocket_met	real		YES	
+vob_verifications	19	benefits_remaining	real		YES	
+vob_verifications	20	prior_auth_required	boolean		YES	
+vob_verifications	21	network_status	text		YES	
+vob_verifications	22	coverage_limits	text		YES	
+vob_verifications	23	plan_name	text		YES	
+vob_verifications	24	payer_notes	text		YES	
+vob_verifications	25	pdf_url	text		YES	
+vob_verifications	26	raw_response	jsonb		YES	'{}'::jsonb
+vob_verifications	27	error_message	text		YES	
+vob_verifications	28	verified_at	timestamp without time zone		YES	
+vob_verifications	29	created_at	timestamp without time zone		NO	now()
+vob_verifications	30	context	character varying		YES	'intake'::character varying
+vob_verifications	31	organization_id	character varying		YES	
+vob_verifications	32	verification_method	character varying		YES	'manual'::character varying
+vob_verifications	33	stedi_transaction_id	character varying		YES	
+vob_verifications	34	verified_by	character varying		YES	
+webhook_events	1	event_id	character varying		NO	
+webhook_events	2	event_type	character varying		YES	
+webhook_events	3	transaction_id	character varying		YES	
+webhook_events	4	transaction_set	character varying		YES	
+webhook_events	5	processed_at	timestamp without time zone		YES	now()
+webhook_events	6	status	character varying		YES	'processed'::character varying
