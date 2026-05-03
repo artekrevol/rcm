@@ -519,7 +519,10 @@ export const organizations = pgTable("organizations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
+  onboardingDismissedAt: timestamp("onboarding_dismissed_at"),
+  contactEmail: text("contact_email"),
+  status: text("status").notNull().default("active"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 export type Organization = typeof organizations.$inferSelect;

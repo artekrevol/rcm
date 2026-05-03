@@ -7,3 +7,4 @@ vite.config.ts.*
 
 # Sprint 0 DB snapshots — local only, do not commit
 docs/architecture/sprint0-snapshots/
+docs/architecture/sprint1a-snapshots/

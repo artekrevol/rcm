@@ -1,0 +1,436 @@
+# ClaimShield — Phase 3 Sprint 1a: Safety Prerequisites + Tier 1 Wire-In
+
+This sprint follows directly from Phase 3 Sprint 0 (completed 2026-05-03, see `docs/architecture/sprint0-audit-report.md` and `docs/architecture/migration-state.md`). It closes two safety/drift gaps surfaced by Sprint 0 and wires the Tier 1 validator into the live rules engine.
+
+This sprint is intentionally conservative. Daniela starts on the platform Tuesday. Sprint 1a must not change anything she sees. The only behavior change a user could possibly observe is that a structurally-broken claim now returns Tier 1 findings before EDI generation instead of being silently passed to Stedi.
+
+By end of sprint, the new code paths shipped in Sprint 0 are safe to extend with write helpers in future sprints.
+
+## Anchors from Sprint 0
+
+These facts are confirmed in `docs/architecture/sprint0-audit-report.md` (cited as `audit:§N`):
+
+- 6 tenant-scoped tables have RLS + FORCE RLS (audit:§1, §2.5a–c).
+- Each has 2 policies: `tenant_isolation` (USING only) and `service_role_bypass` (USING + WITH CHECK) (audit:§2.5b–c).
+- The `tenant_isolation` policies are missing `WITH CHECK` clauses. DDL to fix this is **already drafted** in `docs/architecture/migration-state.md §3.1`. Sprint 1a applies that DDL.
+- `claimshield_app_role` is the runtime role for tenant-scoped queries (audit:§2.5f). `withTenantTx` issues `SET LOCAL ROLE` per request.
+- Helper service layer at `server/services/practice-profile-helpers.ts` (audit:§2.6). Names: `getActivePracticeProfile`, `getEnrolledPayers`, `getActiveProviders`, `getProviderPayerParticipation`, `getPatientCoverages`, `getClaimProviderAssignments`.
+- Tier 1 validator at `server/services/rules-engine/tier1-structural-integrity.ts` (audit:§2.7). Pure function `validateTier1Structural(input)` returning `Tier1Finding[]`. Eight rules, codes T1-001 through T1-008.
+- Tier 1 is **not yet wired** into `server/services/rules-engine.ts`'s `evaluateClaim` (audit:§2.7).
+- Drizzle definition of `organizations` declares 4 columns; the DB has 7 (audit:§3 — `onboarding_dismissed_at, contact_email, status` exist in DB, missing from Drizzle).
+- App connects as `postgres` (superuser); RLS only enforced via `withTenantTx` → `SET LOCAL ROLE claimshield_app_role` (audit:§2.5f).
+
+## What this sprint is
+
+1. Pre-flight: snapshot, baseline verification.
+2. Apply WITH CHECK DDL (closes Sprint 1 prerequisite).
+3. Fix Drizzle drift on `organizations` (adds the 3 missing column declarations).
+4. Wire `validateTier1Structural` into `evaluateClaim` so Tier 1 findings are returned alongside legacy rule evaluation.
+5. Investigate (read-only) whether the EDI generator path calls `evaluateClaim` before claim generation, and document the trace.
+6. Verification, smoke test, audit report.
+
+## What this sprint is NOT
+
+- No new tables, no new columns (other than the WITH CHECK addendums to existing policies).
+- No changes to the claim wizard, payer dropdown, voice persona builder, intake forms, or any frontend component.
+- No changes to seeded data (Chajinel's `organization_practice_profiles` row stays, demo-org-001's 2 enrollments stay at `enrollment_status='pending'`).
+- No write helpers added to the helper service layer.
+- No changes to `server/services/edi-generator.ts` itself — only investigation.
+- No changes to `replit.md` or any documentation outside `docs/architecture/`.
+- No production deploy.
+
+If a step seems to require touching a frontend component, Daniela's UX, or the EDI generator's logic, stop and flag.
+
+---
+
+## Hard rules
+
+1. Take a database snapshot before any DDL. Save the path in the audit report.
+2. Existing tables are not modified. The only DDL is `ALTER POLICY` statements, no schema changes.
+3. The Tier 1 wiring change is unconditional (no feature flag). It's a defect closure — Sprint 0 explicitly identified the missing wire-in as a bug. The validator has been tested 16/16; wiring it cannot make things worse.
+4. The Drizzle organizations fix must not change behavior in any existing query. Search for every reference to `organizations` in `server/` and `shared/` and confirm none of them assumed the 4-column shape in a way that breaks when columns are added (TypeScript should catch this; if any caller selects with explicit column lists, those are unaffected).
+5. If the EDI generator path investigation surfaces that `evaluateClaim` is NOT called before generation, document the gap and surface it in the audit report. Do NOT fix it in this sprint — that's a separate decision.
+6. If anything in this prompt conflicts with `docs/architecture/sprint0-audit-report.md` or `docs/architecture/migration-state.md`, those documents win. Flag and propose a fix.
+7. Standing order: dev only. No production deploy.
+
+---
+
+## Step 1 — Pre-flight
+
+### 1a. Snapshot
+
+```bash
+pg_dump --no-owner --no-privileges $DATABASE_URL > docs/architecture/sprint1a-snapshots/dev-pre-sprint1a-$(date -u +%Y%m%d-%H%M%SZ).sql
+```
+
+Add `docs/architecture/sprint1a-snapshots/` to `.gitignore` if not already present (Sprint 0 added a similar directory).
+
+### 1b. Baseline verification — confirm Sprint 0 still green
+
+Before any change, run:
+
+```bash
+npx tsx scripts/verify-tenant-isolation.ts
+npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts
+npx tsx scripts/smoke-helpers.ts
+```
+
+All three must pass exactly as documented in Sprint 0 (12/12, 16/16, helper smoke green). If any baseline check fails, **stop and flag** — Sprint 1a does not start until the baseline is confirmed clean.
+
+Record the baseline output in `docs/architecture/sprint1a-audit-report.md` §1.
+
+---
+
+## Step 2 — Apply WITH CHECK DDL
+
+### 2a. Locate the DDL
+
+The DDL is drafted in `docs/architecture/migration-state.md §3.1`. Read that section, copy the DDL verbatim into `docs/architecture/sprint1a-snapshots/sprint1a-with-check.sql`. Six `ALTER POLICY` statements expected — one per tenant-scoped table:
+
+- `organization_practice_profiles`
+- `practice_payer_enrollments`
+- `provider_practice_relationships`
+- `provider_payer_relationships`
+- `patient_insurance_enrollments`
+- `claim_provider_assignments`
+
+If `migration-state.md §3.1` is missing or its DDL doesn't match the expected shape, stop and flag — do not improvise the DDL.
+
+The expected pattern is:
+
+```sql
+ALTER POLICY tenant_isolation ON <table_name>
+  USING (organization_id = current_setting('app.current_organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.current_organization_id', true));
+```
+
+Per the GUC name actually used in Sprint 0 (`current_setting('app.current_organization_id', true)` — confirm against `docs/architecture/sprint0-audit-report.md §2.5b` before applying; one Sprint 0 doc references `app.current_org_id` and the other references `app.current_organization_id`, so verify the live setting name via `pg_policies` first).
+
+### 2b. Verify the actual GUC name in use
+
+Run:
+
+```sql
+SELECT polname, pg_get_expr(polqual, polrelid) AS using_expr
+FROM pg_policy
+WHERE polname = 'tenant_isolation';
+```
+
+This returns the exact `current_setting(...)` argument used in the existing USING clause. The new WITH CHECK must use the **identical** argument string. Mismatch will silently break isolation.
+
+### 2c. Apply the DDL
+
+Run the six `ALTER POLICY` statements in a single transaction.
+
+### 2d. Verify
+
+```sql
+SELECT polname, polrelid::regclass AS table_name,
+       pg_get_expr(polqual, polrelid) AS using_expr,
+       pg_get_expr(polwithcheck, polrelid) AS with_check_expr
+FROM pg_policy
+WHERE polname = 'tenant_isolation'
+ORDER BY polrelid::regclass::text;
+```
+
+Expected: 6 rows, each with both `using_expr` and `with_check_expr` populated and identical to each other. Save output to the audit report §2.
+
+### 2e. Re-run isolation script
+
+```bash
+npx tsx scripts/verify-tenant-isolation.ts
+```
+
+Still 12/12. The WITH CHECK addition does not affect SELECT — these tests must remain unchanged.
+
+---
+
+## Step 3 — Fix Drizzle drift on `organizations`
+
+### 3a. Locate the existing declaration
+
+`shared/schema.ts:518-523` per Sprint 0 audit. Confirm the line range; the file grew during Sprint 0 (now 842 lines).
+
+Current declaration is approximately:
+
+```typescript
+export const organizations = pgTable("organizations", {
+  id: varchar("id").primaryKey(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+```
+
+### 3b. Inspect actual DB shape
+
+```sql
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'organizations'
+ORDER BY ordinal_position;
+```
+
+Expected (per sprint0-existing-schemas.md §3 audit-drift findings):
+
+| # | Column | Type | Nullable |
+|---|---|---|---|
+| 1 | id | varchar | NO |
+| 2 | name | text | NO |
+| 3 | created_at | timestamp with time zone | NO |
+| 4 | onboarding_dismissed_at | timestamp with time zone | YES |
+| 5 | contact_email | text | YES |
+| 6 | status | varchar | NO |
+| 7 | updated_at | timestamp with time zone | NO |
+
+If actual differs from expected, **stop and flag** — the audit may have additional drift since Sprint 0.
+
+### 3c. Update Drizzle declaration
+
+Add the three missing columns. Match types and nullability exactly. The new declaration:
+
+```typescript
+export const organizations = pgTable("organizations", {
+  id: varchar("id").primaryKey(),
+  name: text("name").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  onboardingDismissedAt: timestamp("onboarding_dismissed_at", { withTimezone: true }),
+  contactEmail: text("contact_email"),
+  status: varchar("status").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+```
+
+Verify field order and column-name string casing match the live DB exactly. Drizzle is case-sensitive on the SQL column name; the JS field name is for code reference.
+
+### 3d. Search for callers that might break
+
+Run a grep across `server/` and `client/` and `shared/`:
+
+```bash
+grep -rn "organizations\." server/ shared/ client/ | grep -v "shared/schema.ts"
+grep -rn "organizations.is_active" server/ shared/ client/
+grep -rn '"organizations"' server/ shared/ client/
+```
+
+For each match, check whether the new columns affect behavior:
+
+- Selects with explicit column lists → unaffected.
+- Selects via Drizzle `select()` → now returns 3 extra fields. Unaffected unless callers rely on the shape.
+- Any `organizations.is_active` reference → BROKEN; the column doesn't exist. Must be replaced with `status = 'active'` comparison. Sprint 0 audit (`docs/architecture/sprint0-existing-schemas.md §8b` and `docs/architecture/migration-state.md`) flagged this. Replace any such reference; if the surrounding logic is non-trivial, **stop and flag** rather than guessing the intent.
+
+Save the search output in the audit report §3.
+
+### 3e. TypeScript compilation check
+
+```bash
+npx tsc --noEmit
+```
+
+Must pass. If new errors appear, they're either real (a caller assumed the 4-column shape) or false positives (Drizzle inference change). Investigate each.
+
+---
+
+## Step 4 — Wire Tier 1 into `evaluateClaim`
+
+### 4a. Read the existing rules engine
+
+Open `server/services/rules-engine.ts`. Identify:
+
+- The `evaluateClaim` function signature and its input shape (probably a Claim object with service lines, diagnoses, etc.).
+- The return type — what shape are findings in? `code, severity, message, ...` or something else?
+- The current control flow: does it short-circuit on errors, or accumulate all findings?
+
+Document the existing shape in the audit report §4 before making changes.
+
+### 4b. Read Tier 1 validator's input/output
+
+Open `server/services/rules-engine/tier1-structural-integrity.ts`. Identify:
+
+- `validateTier1Structural` input type — is it the same Claim shape as `evaluateClaim`'s input, or a different intermediate shape?
+- `Tier1Finding` shape: code, severity, message, fieldPath, suggestedFix (per audit:§2.7).
+
+If the input shapes differ, write a thin adapter function in `server/services/rules-engine/tier1-adapter.ts` that maps the legacy claim shape to whatever Tier 1 expects. Do NOT modify Tier 1's signature — its tests pass and we don't want to invalidate them.
+
+### 4c. Wire Tier 1 at the start of `evaluateClaim`
+
+The integration pattern:
+
+```typescript
+// At the top of evaluateClaim, before any legacy rule evaluation:
+const tier1Findings = validateTier1Structural(adaptToTier1(claim));
+
+// Map Tier1Finding → the shape evaluateClaim returns
+const mappedTier1 = tier1Findings.map(f => ({
+  code: f.code,
+  severity: f.severity,        // 'block' from Tier 1 → whatever 'block' equivalent is in legacy shape
+  message: f.message,
+  fieldPath: f.fieldPath,
+  source: 'tier1-structural',  // tag so callers can distinguish if needed
+  // ...other legacy-shape fields filled with defaults
+}));
+
+const blockingTier1 = mappedTier1.filter(f => f.severity === 'block');
+
+if (blockingTier1.length > 0) {
+  // Short-circuit. Legacy rules cannot evaluate correctly on a structurally broken claim.
+  return {
+    findings: mappedTier1,
+    // ...whatever else the legacy return shape needs (score, status, etc.)
+    shortCircuited: true,
+    shortCircuitReason: 'tier1-structural-blocking',
+  };
+}
+
+// If Tier 1 passes, continue with existing legacy rule evaluation.
+// Legacy findings get added to mappedTier1 (which is empty or non-blocking warnings only).
+const legacyFindings = await runExistingRules(claim);
+return {
+  findings: [...mappedTier1, ...legacyFindings],
+  // ...
+};
+```
+
+The exact shape of the return depends on what `evaluateClaim` already returns. Match that shape; do not invent new fields except `source`/`shortCircuited` if they're useful additions.
+
+### 4d. Add a test
+
+Create `server/services/rules-engine.test.ts` (or extend if it exists):
+
+- A claim with no service lines → `evaluateClaim` returns Tier 1 finding T1-003, short-circuited.
+- A claim with all Tier 1 rules satisfied → `evaluateClaim` proceeds to legacy rules and returns whatever they return.
+- A claim with Tier 1 satisfied but a legacy rule violation → `evaluateClaim` returns the legacy finding, no Tier 1 findings.
+
+Use the same `tsx`-runnable assertion pattern Sprint 0 used. Run: `npx tsx server/services/rules-engine.test.ts`.
+
+If the existing rules engine has integration tests that mock or stub specific behavior, the new wiring may break them — investigate and fix any broken tests, but only if the fix is mechanical. If a test breakage indicates a real semantic change, stop and flag.
+
+---
+
+## Step 5 — Investigate EDI generator path (read-only)
+
+This is investigation, not change. Document findings in the audit report §5.
+
+### 5a. Read the EDI generator
+
+Open `server/services/edi-generator.ts`. Identify:
+
+- Entry point function (likely `generate837P` or similar).
+- Whether it accepts a pre-validated claim, or fetches/computes claim data itself.
+- Whether it calls `evaluateClaim` (or any rule evaluation) internally before generating segments.
+
+### 5b. Read the routes that call it
+
+Per audit:§04-api-surface, two routes invoke EDI generation:
+
+- `server/routes.ts:6348` — `POST /api/billing/claims/:id/submit-stedi`
+- `server/routes.ts:6623` — `POST /api/billing/claims/:id/test-stedi`
+
+Read both route handlers. Trace the sequence: do they call `evaluateClaim` before `generate837P`? If yes, document the call chain. If no, document the gap.
+
+### 5c. Document, don't fix
+
+Whatever the trace reveals, document it in the audit report §5. Two outcomes possible:
+
+- **Already wired:** `evaluateClaim` is called before EDI generation, so Step 4's Tier 1 wire-in automatically gates EDI generation on Tier 1 findings. Sprint 1a is complete.
+- **Gap:** `evaluateClaim` is NOT called before EDI generation. Sprint 1a closes the rules-engine-level gap but the EDI generator could still emit a structurally broken claim if a route bypasses the rules engine. This becomes a separate known-issue, surfaced in the audit report and added to `docs/architecture/migration-state.md` for a future sprint.
+
+---
+
+## Step 6 — Verification
+
+Run all of the following, save outputs to the audit report §6:
+
+```bash
+# Sprint 0 baselines (must still pass)
+npx tsx scripts/verify-tenant-isolation.ts
+npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts
+npx tsx scripts/smoke-helpers.ts
+
+# Sprint 1a additions
+npx tsx server/services/rules-engine.test.ts
+npx tsc --noEmit
+
+# Policy verification
+psql $DATABASE_URL -c "SELECT polname, polrelid::regclass, pg_get_expr(polwithcheck, polrelid) FROM pg_policy WHERE polname = 'tenant_isolation' ORDER BY polrelid::regclass::text;"
+```
+
+Expected:
+
+- 12/12 isolation cases pass.
+- 16/16 Tier 1 unit tests pass.
+- New rules-engine.test.ts cases pass (count varies; at least 3).
+- TypeScript compiles clean.
+- All 6 `tenant_isolation` policies show non-NULL `with_check_expr` matching their `polqual`.
+
+## Step 7 — Smoke test the Daniela demo path
+
+This is the user-facing safety check. Execute manually or via Playwright if a smoke harness exists:
+
+1. App boots cleanly (no errors in workflow log after restart).
+2. Log in as Daniela.
+3. View patient list, view a patient detail page.
+4. View claims list, view a claim detail page.
+5. Generate an EDI envelope for a known-good claim (any of the 147 existing claims).
+
+Expected: behavior identical to before Sprint 1a. Generated EDI should be byte-identical to a known-good baseline (capture the EDI for one specific claim before Sprint 1a starts; compare after).
+
+If any step behaves differently, stop and flag. Document in the audit report.
+
+## Step 8 — Audit report
+
+Create `docs/architecture/sprint1a-audit-report.md` covering:
+
+- §1 Executive summary + baseline verification
+- §2 WITH CHECK DDL applied (DDL bundle reference, before/after `pg_policy` query results)
+- §3 Drizzle drift fix (before/after declaration, grep results for callers, TypeScript compile clean)
+- §4 Tier 1 wire-in (existing evaluateClaim shape, adapter if needed, integration code, test results)
+- §5 EDI generator path investigation (read-only trace, gap or no-gap conclusion)
+- §6 Verification matrix
+- §7 Smoke test result
+- §8 Files created / modified / DDL applied
+- §9 Risks carried into Sprint 1b/1c (e.g., if §5 surfaced an EDI-generator gap)
+- §10 Standing-order attestation: no production deploy, dev only, no UI changes, snapshot taken
+
+## Step 9 — Update migration-state
+
+Append to `docs/architecture/migration-state.md`:
+
+- Mark §3.1 (WITH CHECK) as **DONE** with reference to Sprint 1a audit report.
+- Mark Drizzle drift on `organizations` as **DONE** (or partial, if any callers needed sprint 1b+ to fix).
+- Add Tier 1 wire-in to the "what's now in production code paths" section.
+- If §5 surfaced an EDI gap, add to the open questions section as a Sprint 1c+ prerequisite.
+
+---
+
+## Out of scope — confirm none touched
+
+- Frontend components (any file under `client/`).
+- `server/services/edi-generator.ts` (read-only investigation only).
+- `server/services/practice-profile-helpers.ts` (no new helpers, no helper signature changes).
+- Voice persona builder.
+- Claim wizard, payer dropdown, intake forms.
+- Caritas onboarding, profile seeding.
+- Any cron job (`server/jobs/*-cron.ts`).
+- `replit.md` or audit docs other than `migration-state.md` and the new sprint1a docs.
+- `practice_settings.billing_model` reconciliation (Sprint 2 work per migration-state §4.1).
+
+If any modified, revert and flag.
+
+---
+
+## End-of-sprint state
+
+- Snapshot taken, path recorded.
+- WITH CHECK clauses live on all 6 tenant-isolation policies. Sprint 1b/1c can safely ship write helpers.
+- Drizzle declaration of `organizations` matches live DB shape.
+- `evaluateClaim` calls Tier 1 first; structurally broken claims short-circuit rule evaluation with a clear T1-NNN finding code.
+- EDI generator path documented (whether it gates on rule evaluation or not).
+- All Sprint 0 verifications still green.
+- New rules-engine integration test covers Tier 1 wire-in.
+- TypeScript compiles clean.
+- Daniela demo path unchanged in user-visible behavior.
+- Audit report committed.
+- Migration-state document updated.
+
+Sprint 1b will refactor the voice persona system-prompt builder to compose intake fields from the active profile — that work unblocks Caritas onboarding. Sprint 1c migrates the first user-facing read path (most likely the payer dropdown) onto the helper layer; this only ships after Daniela has been stable on the platform for several days.
