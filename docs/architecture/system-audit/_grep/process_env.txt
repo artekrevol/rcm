@@ -1,0 +1,73 @@
+server/lib/environment.ts:13:  const env = (process.env.STEDI_ENV || process.env.NODE_ENV || "").toLowerCase();
+server/verifytx.ts:585:  const username = process.env.VERIFYTX_USERNAME;
+server/verifytx.ts:586:  const password = process.env.VERIFYTX_PASSWORD;
+server/verifytx.ts:587:  const clientId = process.env.VERIFYTX_CLIENT_ID;
+server/verifytx.ts:588:  const clientSecret = process.env.VERIFYTX_CLIENT_SECRET;
+server/verifytx.ts:589:  const facilityId = process.env.VERIFYTX_FACILITY_ID;
+server/routes.ts:32:const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+server/routes.ts:33:  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+server/routes.ts:35:const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+server/routes.ts:36:const twilioMessagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+server/routes.ts:39:const gmailUser = process.env.GMAIL_USER;
+server/routes.ts:40:const gmailAppPassword = process.env.GMAIL_APP_PASSWORD;
+server/routes.ts:501:        const superPwd = process.env.SUPER_ADMIN_PASSWORD || 'Apps@1986N';
+server/routes.ts:508:      } else if (process.env.SUPER_ADMIN_PASSWORD) {
+server/routes.ts:510:        const hashed = await hashPassword(process.env.SUPER_ADMIN_PASSWORD);
+server/routes.ts:540:        const chajinelPwd = process.env.DANIELA_PASSWORD || 'clinic123';
+server/routes.ts:541:        if (!process.env.DANIELA_PASSWORD) {
+server/routes.ts:547:          { email: process.env.DANIELA_EMAIL || 'daniela@chajinel.com', name: 'Daniela' },
+server/routes.ts:4770:        const stediConfigured = !!process.env.STEDI_API_KEY;
+server/routes.ts:6397:      if (automated && process.env.STEDI_AUTOMATED_TEST_MODE !== "true") {
+server/routes.ts:7044:    const apiKey = process.env.STEDI_API_KEY;
+server/routes.ts:7078:      const apiKey = process.env.STEDI_API_KEY;
+server/routes.ts:9152:    const vapiApiKey = process.env.VAPI_API_KEY;
+server/routes.ts:9153:    const assistantId = process.env.VAPI_ASSISTANT_ID;
+server/routes.ts:9154:    const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+server/routes.ts:9243:    const vapiApiKey = process.env.VAPI_API_KEY;
+server/routes.ts:9279:      if (!process.env.VAPI_WEBHOOK_SECRET) {
+server/routes.ts:9281:      } else if (incomingSecret !== process.env.VAPI_WEBHOOK_SECRET) {
+server/routes.ts:9442:    const vapiApiKey = process.env.VAPI_API_KEY;
+server/routes.ts:10843:    const publicKey = process.env.VAPI_PUBLIC_KEY;
+server/routes.ts:10844:    const assistantId = process.env.VAPI_ASSISTANT_ID;
+server/routes.ts:10973:                    <a href="${process.env.PUBLIC_URL || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000')}/leads/${lead.id}" class="btn">View Conversation</a>
+server/routes.ts:11710:        stediConfigured: !!process.env.STEDI_API_KEY,
+server/routes.ts:12747:    const isConfigured = !!process.env.STEDI_API_KEY;
+server/routes.ts:12767:    const webhookSecret = process.env.STEDI_WEBHOOK_SECRET;
+server/routes.ts:13657:        env: process.env.NODE_ENV ?? "development",
+server/auth.ts:105:  const isProduction = process.env.NODE_ENV === "production";
+server/auth.ts:106:  const sessionSecret = process.env.SESSION_SECRET;
+server/services/stedi-webhooks.ts:3:const STEDI_API_KEY = process.env.STEDI_API_KEY;
+server/db.ts:7:if (!process.env.DATABASE_URL) {
+server/db.ts:13:export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+server/services/timely-filing-guardian.ts:212:  const user = process.env.GMAIL_USER;
+server/services/timely-filing-guardian.ts:213:  const pass = process.env.GMAIL_APP_PASSWORD;
+server/services/timely-filing-guardian.ts:300:          <a href="${process.env.APP_URL || "https://app.claimshield.ai"}/billing/filing-alerts"
+server/services/stedi-claims.ts:3:const STEDI_API_KEY = process.env.STEDI_API_KEY;
+server/services/stedi-claims.ts:89:    xAutomatedAgent: process.env.X_AUTOMATED_AGENT,
+server/services/stedi-claims.ts:92:    const automatedTestMode = process.env.STEDI_AUTOMATED_TEST_MODE === "true";
+server/services/flow-step-executor.ts:11:  process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
+server/services/flow-step-executor.ts:12:    ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
+server/services/flow-step-executor.ts:14:const twilioMessagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
+server/services/flow-step-executor.ts:16:const gmailUser = process.env.GMAIL_USER;
+server/services/flow-step-executor.ts:17:const gmailAppPassword = process.env.GMAIL_APP_PASSWORD;
+server/services/flow-step-executor.ts:321:            : { from: process.env.TWILIO_PHONE_NUMBER }),
+server/services/flow-step-executor.ts:534:        } else if (process.env.TWILIO_PHONE_NUMBER) {
+server/services/flow-step-executor.ts:535:          msgParams.from = process.env.TWILIO_PHONE_NUMBER;
+server/services/flow-step-executor.ts:566:      const vapiApiKey = process.env.VAPI_API_KEY;
+server/services/flow-step-executor.ts:567:      const phoneNumberId = process.env.VAPI_PHONE_NUMBER_ID;
+server/services/flow-step-executor.ts:571:      const assistantId = persona?.vapi_assistant_id || process.env.VAPI_ASSISTANT_ID;
+server/services/flow-step-executor.ts:599:      if (!process.env.CALL_WINDOW_OVERRIDE) {
+server/services/manual-extractor.ts:297:  const apiKey = process.env.ANTHROPIC_API_KEY;
+server/services/manual-extractor.ts:384:  if (process.env.ANTHROPIC_API_KEY) {
+server/services/stedi-eligibility.ts:1:const STEDI_API_KEY = process.env.STEDI_API_KEY;
+server/services/claude-extractor.ts:336:  return !!(process.env.ANTHROPIC_API_KEY);
+server/services/claude-extractor.ts:340:  const apiKey = process.env.ANTHROPIC_API_KEY;
+server/services/office-ally.ts:4:  host: process.env.OA_SFTP_HOST || "sftp.officeally.com",
+server/services/office-ally.ts:6:  username: process.env.OA_SFTP_USERNAME,
+server/services/office-ally.ts:7:  password: process.env.OA_SFTP_PASSWORD,
+server/services/transcript-extractor.ts:4:  const apiKey = process.env.ANTHROPIC_API_KEY;
+server/services/scraper-monitor.ts:173:  const webhookUrl = process.env.SCRAPER_ALERT_WEBHOOK_URL;
+server/services/scraper-monitor.ts:328:    env: process.env.NODE_ENV ?? "development",
+server/services/scraper-monitor.ts:360:      env: process.env.NODE_ENV ?? "development",
+server/index.ts:97:  if (process.env.NODE_ENV === "production") {
+server/index.ts:108:  const port = parseInt(process.env.PORT || "5000", 10);

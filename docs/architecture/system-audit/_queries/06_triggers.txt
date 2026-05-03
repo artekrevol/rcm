@@ -1,0 +1,4 @@
+ event_object_table | trigger_name | event_manipulation | action_timing | action_statement 
+--------------------+--------------+--------------------+---------------+------------------
+(0 rows)
+

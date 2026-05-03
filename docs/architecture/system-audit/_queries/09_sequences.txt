@@ -1,0 +1,3 @@
+psql:docs/architecture/system-audit/_queries/09_sequences.sql:3: ERROR:  column reference "data_type" is ambiguous
+LINE 1: SELECT sequence_name, data_type, start_value, increment, las...
+                              ^

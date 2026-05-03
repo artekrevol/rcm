@@ -1,0 +1,504 @@
+server/storage.ts:167:    return db.select().from(leads).where(eq(leads.organizationId, orgId)).orderBy(desc(leads.createdAt));
+server/storage.ts:187:    if (orgId) conds.push(eq(patients.organizationId, orgId));
+server/storage.ts:219:    return db.select().from(claims).where(eq(claims.organizationId, orgId)).orderBy(desc(claims.createdAt));
+server/storage.ts:254:    return db.select().from(denials).where(eq(denials.organizationId, orgId)).orderBy(desc(denials.createdAt));
+server/storage.ts:268:    return db.select().from(rules).where(eq(rules.organizationId, orgId)).orderBy(desc(rules.createdAt));
+server/storage.ts:315:    if (orgId) conds.push(eq(priorAuthorizations.organizationId, orgId));
+server/storage.ts:321:    if (orgId) conds.push(eq(priorAuthorizations.organizationId, orgId));
+server/storage.ts:432:    const orgId = claim.organizationId || undefined;
+server/storage.ts:653:    return db.select().from(emailTemplates).where(eq(emailTemplates.organizationId, orgId)).orderBy(desc(emailTemplates.createdAt));
+server/storage.ts:677:    return db.select().from(nurtureSections).where(eq(nurtureSections.organizationId, orgId)).orderBy(desc(nurtureSections.createdAt));
+server/storage.ts:729:    return db.select().from(availabilitySlots).where(eq(availabilitySlots.organizationId, orgId)).orderBy(availabilitySlots.dayOfWeek, availabilitySlots.startTime);
+server/storage.ts:748:    return db.select().from(appointments).where(eq(appointments.organizationId, orgId)).orderBy(desc(appointments.scheduledAt));
+server/storage.ts:772:    return db.select().from(chatSessions).where(eq(chatSessions.organizationId, orgId)).orderBy(desc(chatSessions.startedAt));
+server/storage.ts:814:    const conditions: any[] = [eq(chatAnalytics.organizationId, orgId)];
+server/storage.ts:851:    const allSessions = await db.select().from(chatSessions).where(eq(chatSessions.organizationId, orgId));
+shared/schema.ts:12:  organizationId: varchar("organization_id"),
+shared/schema.ts:54:  organizationId: varchar("organization_id"),
+shared/schema.ts:94:  organizationId: varchar("organization_id"),
+shared/schema.ts:115:  organizationId: varchar("organization_id"),
+shared/schema.ts:148:  organizationId: varchar("organization_id"),
+shared/schema.ts:171:  organizationId: varchar("organization_id"),
+shared/schema.ts:187:  organizationId: varchar("organization_id"),
+shared/schema.ts:208:  organizationId: varchar("organization_id"),
+shared/schema.ts:249:  organizationId: varchar("organization_id"),
+shared/schema.ts:273:  organizationId: varchar("organization_id"),
+shared/schema.ts:319:  organizationId: varchar("organization_id"),
+shared/schema.ts:338:  organizationId: varchar("organization_id"),
+shared/schema.ts:359:  organizationId: varchar("organization_id"),
+shared/schema.ts:374:  organizationId: varchar("organization_id"),
+shared/schema.ts:395:  organizationId: varchar("organization_id"),
+shared/schema.ts:419:  organizationId: varchar("organization_id"),
+shared/schema.ts:433:  organizationId: varchar("organization_id"),
+shared/schema.ts:452:  organizationId: varchar("organization_id"),
+shared/schema.ts:490:  organizationId: varchar("organization_id"),
+shared/schema.ts:510:  organizationId: varchar("organization_id"),
+shared/schema.ts:536:  organizationId: varchar("organization_id"),
+shared/schema.ts:563:  organizationId: varchar("organization_id"),
+shared/schema.ts:584:  organizationId: varchar("organization_id"),
+shared/schema.ts:636:  organizationId: varchar("organization_id"),
+shared/schema.ts:652:  organizationId: varchar("organization_id"),
+shared/schema.ts:677:  organizationId: varchar("organization_id"),
+shared/schema.ts:746:  organizationId: varchar("organization_id").notNull(),
+shared/schema.ts:753:  pk: primaryKey({ columns: [t.organizationId, t.profileCode] }),
+shared/schema.ts:759:  organizationId: varchar("organization_id").notNull(),
+shared/schema.ts:789:  organizationId: varchar("organization_id").notNull(),
+shared/schema.ts:804:  organizationId: varchar("organization_id").notNull(),
+shared/schema.ts:819:  organizationId: varchar("organization_id").notNull(),
+shared/schema.ts:836:  organizationId: varchar("organization_id").notNull(),
+server/services/rules-engine/tier1-structural-integrity.test.ts:42:  organizationId: "chajinel-org-001",
+server/services/rules-engine/tier1-structural-integrity.test.ts:67:it("T1-001 — missing organization_id is flagged", () => {
+server/services/rules-engine/tier1-structural-integrity.test.ts:68:  const codes = findingCodes({ ...validClaim, organizationId: "" });
+server/services/rules-engine/tier1-structural-integrity.test.ts:183:    organizationId: "",
+server/seed.ts:140:  // Ensure organization_id exists on all org-scoped tables before any Drizzle query
+server/seed.ts:149:    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
+server/services/rules-engine/tier1-structural-integrity.ts:29:  organizationId?: string | null;
+server/services/rules-engine/tier1-structural-integrity.ts:69: *   T1-001  organization_id present                 (block)
+server/services/rules-engine/tier1-structural-integrity.ts:82:  if (!nonEmpty(input.organizationId)) {
+server/services/rules-engine/tier1-structural-integrity.ts:86:      message: "Claim is missing organization_id",
+server/services/rules-engine/tier1-structural-integrity.ts:87:      field: "organizationId",
+server/services/practice-profile-helpers.ts:41:  organizationIdOverride?: string,
+server/services/practice-profile-helpers.ts:48:         opp.organization_id, opp.profile_code, opp.is_primary,
+server/services/practice-profile-helpers.ts:67:      organizationId: row.organization_id,
+server/services/practice-profile-helpers.ts:93:  }, organizationIdOverride);
+server/services/practice-profile-helpers.ts:113:      organizationId: row.organization_id,
+server/services/practice-profile-helpers.ts:152:      organizationId: row.organization_id,
+server/services/practice-profile-helpers.ts:177:      organizationId: row.organization_id,
+server/services/practice-profile-helpers.ts:211:      organizationId: row.organization_id,
+server/services/practice-profile-helpers.ts:243:      organizationId: row.organization_id,
+server/seeds/caritas-flow.ts:10:      `UPDATE flows SET organization_id = 'caritas-org-001', updated_at = NOW()
+server/seeds/caritas-flow.ts:12:         AND (organization_id IS NULL OR organization_id = 'demo-org-001')`
+server/seeds/caritas-flow.ts:19:    `INSERT INTO flows (name, description, trigger_event, trigger_conditions, is_active, organization_id, version)
+server/routes.ts:159:  return user.organization_id || null;
+server/routes.ts:174:  const entityOrgId = entity.organizationId || entity.organization_id;
+server/routes.ts:191:      `SELECT COUNT(*)::int AS cnt FROM patients WHERE organization_id = $1 AND is_demo = FALSE AND archived_at IS NULL`,
+server/routes.ts:198:         WHERE organization_id = $1 AND is_demo = TRUE AND archived_at IS NULL`,
+server/routes.ts:244:    // Add organization_id to every org-scoped table (idempotent; safe on fresh and old DBs)
+server/routes.ts:253:      await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
+server/routes.ts:298:    await pool.query(`DO $$ BEGIN ALTER TABLE providers ADD CONSTRAINT providers_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+server/routes.ts:299:    await pool.query(`DO $$ BEGIN ALTER TABLE claims ADD CONSTRAINT claims_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+server/routes.ts:300:    await pool.query(`DO $$ BEGIN ALTER TABLE patients ADD CONSTRAINT patients_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+server/routes.ts:301:    await pool.query(`DO $$ BEGIN ALTER TABLE practice_settings ADD CONSTRAINT practice_settings_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+server/routes.ts:302:    await pool.query(`DO $$ BEGIN ALTER TABLE users ADD CONSTRAINT users_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
+server/routes.ts:490:        await pool.query(`UPDATE ${t} SET organization_id = $1 WHERE organization_id IS NULL`, [DEMO_ORG_ID]);
+server/routes.ts:504:          "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, 'abeer@tekrevol.com', $1, 'super_admin', 'Abeer (Platform Admin)', NULL)",
+server/routes.ts:531:          `INSERT INTO practice_settings (id, organization_id, practice_name, default_pos, homebound_default, exclude_facility, created_at, updated_at)
+server/routes.ts:555:              "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, $1, $2, 'admin', $3, $4)",
+server/routes.ts:561:              "UPDATE users SET password = $1, organization_id = $2, role = 'admin' WHERE email = $3",
+server/routes.ts:575:    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
+server/routes.ts:597:        WHERE organization_id = $1
+server/routes.ts:602:        `SELECT id FROM payers WHERE organization_id=$1 AND name='TriWest Healthcare Alliance' LIMIT 1`,
+server/routes.ts:607:          INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, organization_id, created_at)
+server/routes.ts:614:        `SELECT id FROM payers WHERE organization_id=$1 AND name='San Mateo County IHSS' LIMIT 1`,
+server/routes.ts:619:          INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, organization_id, created_at)
+server/routes.ts:626:        `SELECT id FROM payers WHERE organization_id=$1 AND name='LTC Insurance (configure per claim)' LIMIT 1`,
+server/routes.ts:631:          INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, organization_id, created_at)
+server/routes.ts:644:          `SELECT id FROM providers WHERE organization_id=$1 AND first_name=$2 AND last_name=$3 LIMIT 1`,
+server/routes.ts:649:            INSERT INTO providers (id, first_name, last_name, credentials, npi, entity_type, provider_type, is_active, is_default, organization_id, created_at, updated_at)
+server/routes.ts:659:        WHERE organization_id = 'chajinel-org-001'
+server/routes.ts:662:            WHERE organization_id = 'chajinel-org-001' AND is_demo = TRUE
+server/routes.ts:669:        WHERE organization_id = 'chajinel-org-001'
+server/routes.ts:672:            WHERE organization_id = 'chajinel-org-001' AND is_demo = TRUE
+server/routes.ts:679:        WHERE organization_id = 'chajinel-org-001'
+server/routes.ts:682:            WHERE organization_id = 'chajinel-org-001' AND is_demo = TRUE
+server/routes.ts:690:        WHERE organization_id = 'chajinel-org-001'
+server/routes.ts:697:        `SELECT id FROM payers WHERE organization_id=$1 AND name='TriWest Healthcare Alliance' LIMIT 1`,
+server/routes.ts:701:        `SELECT id FROM payers WHERE organization_id=$1 AND name='San Mateo County IHSS' LIMIT 1`,
+server/routes.ts:706:        INSERT INTO patients (id, first_name, last_name, dob, payer_id, insurance_carrier, plan_type, is_demo, organization_id, created_at, updated_at)
+server/routes.ts:716:        INSERT INTO patients (id, first_name, last_name, dob, payer_id, insurance_carrier, plan_type, is_demo, organization_id, created_at, updated_at)
+server/routes.ts:742:            "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, $1, $2, $3, $4, 'demo-org-001')",
+server/routes.ts:748:            "UPDATE users SET password = $1, role = $2, organization_id = 'demo-org-001' WHERE email = $3",
+server/routes.ts:1273:      WHERE organization_id = 'demo-org-001'
+server/routes.ts:1303:        organization_id VARCHAR,
+server/routes.ts:1341:    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
+server/routes.ts:1395:      INSERT INTO rules (id, name, description, trigger_pattern, prevention_action, enabled, condition_type, condition_value, action, is_active, specialty_tags, organization_id)
+server/routes.ts:1414:      DELETE FROM providers WHERE npi IN ('1234567893','1245319599') AND organization_id != 'demo-org-001'
+server/routes.ts:1422:      const { rows: providerRows } = await pool.query(`SELECT id FROM providers WHERE organization_id = 'demo-org-001' ORDER BY created_at LIMIT 2`);
+server/routes.ts:1437:            service_lines, cpt_codes, organization_id, availity_icn, submission_method,
+server/routes.ts:1460:          INSERT INTO claim_events (id, claim_id, type, timestamp, notes, organization_id) VALUES
+server/routes.ts:1474:          INSERT INTO denials (id, claim_id, denial_category, denial_reason_text, payer, cpt_code, root_cause_tag, resolved, created_at, organization_id)
+server/routes.ts:1485:      const { rows: [chajPt] } = await pool.query(`SELECT id FROM patients WHERE organization_id='chajinel-org-001' AND last_name='Garcia' AND first_name='TEST: Maria' LIMIT 1`);
+server/routes.ts:1486:      const { rows: chajProvRows } = await pool.query(`SELECT id FROM providers WHERE organization_id='chajinel-org-001' ORDER BY created_at LIMIT 1`);
+server/routes.ts:1508:          INSERT INTO encounters (id, patient_id, service_type, facility_type, admission_type, expected_start_date, organization_id, created_at)
+server/routes.ts:1517:            service_lines, cpt_codes, organization_id, submission_method, created_at, updated_at)
+server/routes.ts:1605:        organization_id VARCHAR,
+server/routes.ts:1676:            status, error_message, uploaded_by, organization_id, created_at, updated_at
+server/routes.ts:1686:            error_message, uploaded_by, organization_id, created_at, updated_at
+server/routes.ts:2062:        organization_id VARCHAR,
+server/routes.ts:2093:        organization_id VARCHAR,
+server/routes.ts:2151:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flows_org_active ON flows(organization_id, is_active)`);
+server/routes.ts:2152:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_flow_runs_org ON flow_runs(organization_id, status)`);
+server/routes.ts:2159:        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2168:        UNIQUE(organization_id, template_key, channel)
+server/routes.ts:2175:        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2181:        UNIQUE(organization_id, service_code)
+server/routes.ts:2188:        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2201:        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2209:        UNIQUE(organization_id, persona_key)
+server/routes.ts:2216:        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2221:        UNIQUE(organization_id, slug)
+server/routes.ts:2228:        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2271:      INSERT INTO org_lead_sources (organization_id, slug, label, source_type, is_active) VALUES
+server/routes.ts:2282:      ON CONFLICT (organization_id, slug) DO NOTHING
+server/routes.ts:2287:      INSERT INTO org_service_types (organization_id, service_code, service_name, description, is_active) VALUES
+server/routes.ts:2296:      ON CONFLICT (organization_id, service_code) DO NOTHING
+server/routes.ts:2301:      INSERT INTO org_message_templates (organization_id, template_key, channel, subject, body, variables, is_active) VALUES
+server/routes.ts:2322:      ON CONFLICT (organization_id, template_key, channel) DO NOTHING
+server/routes.ts:2327:      INSERT INTO org_voice_personas (organization_id, persona_key, vapi_assistant_id, persona_name, greeting, is_active) VALUES
+server/routes.ts:2336:      ON CONFLICT (organization_id, persona_key) DO NOTHING
+server/routes.ts:2390:          organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2404:          ON timely_filing_alerts (organization_id, alert_acknowledged_at)
+server/routes.ts:2414:          organization_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2435:      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pcp_ref_org_active ON pcp_referrals (organization_id, status) WHERE status = 'active'`).catch(() => {});
+server/routes.ts:2503:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_patients_archived ON patients (organization_id) WHERE archived_at IS NULL`).catch(() => {});
+server/routes.ts:2504:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_archived ON claims (organization_id) WHERE archived_at IS NULL`).catch(() => {});
+server/routes.ts:2508:      WHERE organization_id = 'chajinel-org-001'
+server/routes.ts:2548:          organization_id   VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+server/routes.ts:2555:          UNIQUE (organization_id, payer_id, plan_product_code)
+server/routes.ts:2558:      await pool.query(`CREATE INDEX IF NOT EXISTS idx_ppe_org ON practice_payer_enrollments (organization_id) WHERE disabled_at IS NULL`);
+server/routes.ts:2559:      await pool.query(`CREATE INDEX IF NOT EXISTS idx_ppe_org_payer ON practice_payer_enrollments (organization_id, payer_id) WHERE disabled_at IS NULL`);
+server/routes.ts:2817:          WHERE organization_id = $1 AND payer_id = $2 AND plan_product_code IS NULL AND disabled_at IS NULL
+server/routes.ts:2822:              (id, organization_id, payer_id, plan_product_code, enrolled_at, notes)
+server/routes.ts:2864:                (id, payer_id, document_name, document_type, source_url, status, created_at, organization_id, parent_document_id)
+server/routes.ts:3157:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_org        ON activity_logs(organization_id)`).catch(() => {});
+server/routes.ts:3160:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claims_org         ON claims(organization_id)`).catch(() => {});
+server/routes.ts:3167:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_patients_org        ON patients(organization_id)`).catch(() => {});
+server/routes.ts:3168:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_prior_authorizations_org ON prior_authorizations(organization_id)`).catch(() => {});
+server/routes.ts:3169:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_providers_org       ON providers(organization_id)`).catch(() => {});
+server/routes.ts:3170:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rules_org           ON rules(organization_id)`).catch(() => {});
+server/routes.ts:3171:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_org           ON users(organization_id)`).catch(() => {});
+server/routes.ts:3172:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_leads_org           ON leads(organization_id)`).catch(() => {});
+server/routes.ts:3175:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_encounters_org      ON encounters(organization_id)`).catch(() => {});
+server/routes.ts:3176:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_denials_org         ON denials(organization_id)`).catch(() => {});
+server/routes.ts:3177:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vob_verifications_org ON vob_verifications(organization_id)`).catch(() => {});
+server/routes.ts:3178:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claim_events_org    ON claim_events(organization_id)`).catch(() => {});
+server/routes.ts:3179:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_logs_org      ON email_logs(organization_id)`).catch(() => {});
+server/routes.ts:3183:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_appointments_org       ON appointments(organization_id)`).catch(() => {});
+server/routes.ts:3184:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_availability_slots_org ON availability_slots(organization_id)`).catch(() => {});
+server/routes.ts:3185:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_calls_org              ON calls(organization_id)`).catch(() => {});
+server/routes.ts:3186:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_analytics_org     ON chat_analytics(organization_id)`).catch(() => {});
+server/routes.ts:3187:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_org      ON chat_messages(organization_id)`).catch(() => {});
+server/routes.ts:3188:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_org      ON chat_sessions(organization_id)`).catch(() => {});
+server/routes.ts:3189:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_claim_templates_org    ON claim_templates(organization_id)`).catch(() => {});
+server/routes.ts:3191:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_email_templates_org    ON email_templates(organization_id)`).catch(() => {});
+server/routes.ts:3193:    await pool.query(`CREATE INDEX IF NOT EXISTS idx_nurture_sequences_org  ON nurture_sequences(organization_id)`).catch(() => {});
+server/routes.ts:3301:      // Return global payers (organization_id IS NULL) plus payers owned by this org.
+server/routes.ts:3305:          WHERE organization_id IS NULL
+server/routes.ts:3306:             OR organization_id = $1
+server/routes.ts:3322:        ? "WHERE organization_id = $1"
+server/routes.ts:3323:        : "WHERE organization_id = $1 AND is_active = true";
+server/routes.ts:3364:          await client.query("UPDATE providers SET is_default = false WHERE organization_id = $1 AND is_default = true", [orgId]);
+server/routes.ts:3367:          `INSERT INTO providers (id, first_name, last_name, credentials, npi, taxonomy_code, individual_tax_id, license_number, is_default, organization_id, entity_type, provider_type)
+server/routes.ts:3388:      const ownerCheck = await db.query("SELECT organization_id FROM providers WHERE id = $1", [id]);
+server/routes.ts:3400:        const orgIdForPatch = ownerCheck.rows[0].organization_id;
+server/routes.ts:3402:          await client.query("UPDATE providers SET is_default = false WHERE organization_id = $1 AND is_default = true", [orgIdForPatch]);
+server/routes.ts:3446:        ? (await db.query("SELECT primary_npi, tax_id, practice_name FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])).rows[0]
+server/routes.ts:3456:        ? await db.query("SELECT COUNT(*) FROM providers WHERE organization_id = $1 AND is_active = true", [orgId])
+server/routes.ts:3461:        ? await db.query("SELECT COUNT(*) FROM payers WHERE (organization_id = $1 OR organization_id IS NULL) AND is_active = true AND payer_id IS NOT NULL AND payer_id != ''", [orgId])
+server/routes.ts:3476:        ? await import("./db").then(m => m.pool.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]))
+server/routes.ts:3490:        ? await db.query("SELECT id FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])
+server/routes.ts:3509:          `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location, default_va_locality, organization_id, default_tos, default_ordering_provider_id, homebound_default, exclude_facility)
+server/routes.ts:3527:        ? await db.query("SELECT id FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])
+server/routes.ts:3532:          `INSERT INTO practice_settings (id, practice_name, organization_id) VALUES (gen_random_uuid()::text, '', $1) RETURNING id`,
+server/routes.ts:3562:          WHERE ppe.organization_id = $1
+server/routes.ts:3587:        `INSERT INTO practice_payer_enrollments (organization_id, payer_id, plan_product_code, enrolled_by, notes, disabled_at)
+server/routes.ts:3589:         ON CONFLICT (organization_id, payer_id, plan_product_code) DO UPDATE
+server/routes.ts:3610:          WHERE id = $1 AND organization_id = $2
+server/routes.ts:3629:        organizationId: orgId,
+server/routes.ts:3684:            ? await db.query(`SELECT default_va_locality, billing_location FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+server/routes.ts:3748:      let where = `tfa.organization_id = $1 AND tfa.alert_acknowledged_at IS NULL`;
+server/routes.ts:3793:        WHERE tfa.organization_id = $1
+server/routes.ts:3855:        `SELECT c.id FROM claims c WHERE c.id = $1 AND c.organization_id = $2`,
+server/routes.ts:3887:         WHERE r.patient_id = $1 AND r.organization_id = $2
+server/routes.ts:3915:           (organization_id, patient_id, pcp_name, pcp_npi, pcp_phone, pcp_practice_name,
+server/routes.ts:3949:        `UPDATE pcp_referrals SET ${sets.join(", ")} WHERE id = $${vals.length - 1} AND organization_id = $${vals.length} RETURNING *`,
+server/routes.ts:3968:        `SELECT id FROM claims WHERE id = $1 AND organization_id = $2`, [req.params.id, orgId]
+server/routes.ts:3975:          `SELECT id, status, visits_authorized, visits_used FROM pcp_referrals WHERE id = $1 AND organization_id = $2`,
+server/routes.ts:4018:          c.organization_id, c.archived_at, c.archived_by,
+server/routes.ts:4034:      baseQuery += ` AND c.organization_id = $${idx}`; params.push(orgId); idx++;
+server/routes.ts:4083:          `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1, $2, 'MarkedFixed', 'Error marked as fixed without resubmission', $3)`,
+server/routes.ts:4084:          [crypto.randomUUID(), req.params.id, c.organization_id]
+server/routes.ts:4110:        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [stOrgId])
+server/routes.ts:4117:        const dp = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
+server/routes.ts:4246:          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+server/routes.ts:4252:            c.organization_id,
+server/routes.ts:4259:          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+server/routes.ts:4260:          [crypto.randomUUID(), c.id, "Submission Failed", `Resubmission failed: ${errMsg}`, c.organization_id]
+server/routes.ts:4348:            `SELECT organization_id FROM claims WHERE id = $1 LIMIT 1`,
+server/routes.ts:4351:          if (!claimOrgRow || claimOrgRow.organization_id !== era.org_id) {
+server/routes.ts:4407:            `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1, $2, $3, $4, $5)`,
+server/routes.ts:4479:      if (orgId) { query += ` AND c.organization_id = $${idx}`; params.push(orgId); idx++; }
+server/routes.ts:4529:        `SELECT id FROM claims WHERE patient_id = $1 AND id != $2 AND status NOT IN ('paid','draft','void') AND organization_id = $3`,
+server/routes.ts:4551:      const { rows: [claim] } = await db.query(`SELECT * FROM claims WHERE id = $1 AND organization_id = $2`, [req.params.id, orgId]);
+server/routes.ts:4556:        db.query(`SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId]),
+server/routes.ts:4598:          WHERE l.organization_id = $1
+server/routes.ts:4606:            AND a.organization_id = $1
+server/routes.ts:4613:          WHERE cs.organization_id = $1
+server/routes.ts:4634:      const orgFilter = `AND organization_id = '${safeOrgId}'`;
+server/routes.ts:4635:      const orgPatientFilter = `AND p.organization_id = '${safeOrgId}'`;
+server/routes.ts:4636:      const orgClaimFilter = `AND c.organization_id = '${safeOrgId}'`;
+server/routes.ts:4750:          ? db.query(`SELECT practice_name, address, primary_npi, tax_id, default_pos FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+server/routes.ts:4753:          ? db.query(`SELECT COUNT(*)::int as cnt FROM providers WHERE is_active = true AND organization_id = $1`, [orgId])
+server/routes.ts:4755:        // payers is a global reference table — no organization_id
+server/routes.ts:4758:          ? db.query(`SELECT COUNT(*)::int as cnt FROM claims WHERE status != 'draft' AND organization_id = $1`, [orgId])
+server/routes.ts:4773:            ? await db.query(`SELECT oa_connected, oa_sftp_username FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
+server/routes.ts:4920:                    `UPDATE claims SET status = $1, updated_at = NOW() WHERE id LIKE $2 AND organization_id = $3`,
+server/routes.ts:4982:        WHERE pa.organization_id = $1
+server/routes.ts:5002:        AND al.organization_id = $1
+server/routes.ts:5032:          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.activity_type IN ('view_patient','view_claim','exported','export_pdf') AND al.created_at BETWEEN $1 AND $2 AND al.organization_id = $3 ORDER BY al.created_at DESC LIMIT 500`;
+server/routes.ts:5035:          query = `SELECT al.*, u.email as user_email FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text WHERE al.field IS NOT NULL AND al.created_at BETWEEN $1 AND $2 AND al.organization_id = $3 ORDER BY al.created_at DESC LIMIT 500`;
+server/routes.ts:5038:          query = `SELECT al.*, u.email as user_email, c.amount, c.status as claim_status FROM activity_logs al LEFT JOIN users u ON al.performed_by::text = u.id::text LEFT JOIN claims c ON al.claim_id::text = c.id::text WHERE al.activity_type = 'export_pdf' AND al.created_at BETWEEN $1 AND $2 AND al.organization_id = $3 ORDER BY al.created_at DESC LIMIT 500`;
+server/routes.ts:5041:          query = `SELECT c.id, c.status, c.amount, c.created_at, c.updated_at, c.service_date, c.readiness_status, c.submission_method, COALESCE(p.first_name || ' ' || p.last_name, 'Unknown') as patient_name FROM claims c LEFT JOIN patients p ON c.patient_id = p.id WHERE c.created_at BETWEEN $1 AND $2 AND c.organization_id = $3 ORDER BY c.created_at DESC LIMIT 500`;
+server/routes.ts:5066:      const user = await createUser({ ...req.body, organizationId: getOrgId(req) });
+server/routes.ts:5125:        db.query("SELECT id, first_name, last_name, credentials, npi, is_default FROM providers WHERE is_active = true AND organization_id = $1 ORDER BY last_name", [orgId]),
+server/routes.ts:5126:        db.query("SELECT id, name, payer_id, timely_filing_days, auth_required, is_active FROM payers WHERE organization_id = $1 ORDER BY name", [orgId]),
+server/routes.ts:5127:        db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]),
+server/routes.ts:5146:      const patient = await db.query("SELECT * FROM patients WHERE id = $1 AND organization_id = $2", [patientId, orgId]);
+server/routes.ts:5155:        `INSERT INTO encounters (id, patient_id, service_type, facility_type, admission_type, expected_start_date, created_by, created_at, organization_id)
+server/routes.ts:5161:        `INSERT INTO claims (id, organization_id, patient_id, encounter_id, payer, cpt_codes, amount, status, risk_score, readiness_status, created_at, payer_id, authorization_number, created_by, plan_product)
+server/routes.ts:5167:        `INSERT INTO claim_events (id, claim_id, type, timestamp, notes, organization_id)
+server/routes.ts:5173:        `INSERT INTO activity_logs (id, claim_id, patient_id, activity_type, description, performed_by, organization_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+server/routes.ts:5212:          organizationId: getOrgId(req),
+server/routes.ts:5269:        organizationId: (req.user as any)?.organization_id || b.organizationId || "",
+server/routes.ts:5314:      const existing = await db.query("SELECT id, status, organization_id FROM claims WHERE id = $1", [req.params.id]);
+server/routes.ts:5405:            `INSERT INTO prior_authorizations (id, patient_id, organization_id, auth_number, status, mode, source, created_at, updated_at)
+server/routes.ts:5408:            [crypto.randomUUID(), rows[0].patient_id, rows[0].organization_id, authNum]
+server/routes.ts:5445:        organizationId: claim.organization_id,
+server/routes.ts:5564:        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId])
+server/routes.ts:5583:      const ownerCheck = await db.query("SELECT organization_id FROM claims WHERE id = $1", [req.params.id]);
+server/routes.ts:5656:        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [ediOrgId])
+server/routes.ts:5770:        const dp = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
+server/routes.ts:5784:        `SELECT * FROM rules WHERE enabled = true AND (organization_id = $1 OR organization_id IS NULL OR payer = 'All')
+server/routes.ts:5921:           AND (organization_id = $1 OR organization_id IS NULL)`,
+server/routes.ts:5973:               AND (organization_id=$4 OR organization_id IS NULL)
+server/routes.ts:6021:        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [ediOrgId])
+server/routes.ts:6028:        const defaultProv = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
+server/routes.ts:6201:        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [oaOrgId])
+server/routes.ts:6209:        const defaultProv = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
+server/routes.ts:6364:        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [stOrgId])
+server/routes.ts:6371:        const defaultProv = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
+server/routes.ts:6480:          `INSERT INTO submission_attempts (id, claim_id, organization_id, isa15, test_mode_override, automated, test_data_result, test_data_score, attempted_by, attempted_at)
+server/routes.ts:6485:            c.organization_id,
+server/routes.ts:6579:          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+server/routes.ts:6580:          [crypto.randomUUID(), c.id, "Submitted via Stedi", `837P submitted to Stedi. Transaction ID: ${result.transactionId || "N/A"}. Status: ${result.status || "Accepted"}`, c.organization_id]
+server/routes.ts:6584:            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+server/routes.ts:6585:            [crypto.randomUUID(), c.id, "Follow-Up Scheduled", `Auto follow-up scheduled for ${followUpDate} (${followUpDays} days from submission)`, c.organization_id]
+server/routes.ts:6646:        ? await db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [stOrgId])
+server/routes.ts:6653:        const defaultProv = await db.query("SELECT id FROM providers WHERE organization_id = $1 AND is_default = true AND is_active = true LIMIT 1", [c.organization_id]);
+server/routes.ts:6781:        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+server/routes.ts:6782:        [crypto.randomUUID(), c.id, "Test Validation", eventNotes, c.organization_id]
+server/routes.ts:6827:      const claimResult = await db.query("SELECT stedi_transaction_id, status, organization_id FROM claims WHERE id = $1", [req.params.id]);
+server/routes.ts:6835:      const orgId = claimResult.rows[0].organization_id;
+server/routes.ts:6846:            `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+server/routes.ts:7370:        const psResult = await db.query("SELECT billing_location FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]);
+server/routes.ts:7528:      query += ` AND p.organization_id = $${idx}`; params.push(orgId); idx++;
+server/routes.ts:7598:          id, organization_id, first_name, last_name, dob, sex, insurance_carrier, member_id, group_number,
+server/routes.ts:7645:      const ownerCheck = await dbCheck.query("SELECT organization_id FROM patients WHERE id = $1", [id]);
+server/routes.ts:7714:      const ownerCheck = await db.query("SELECT organization_id, archived_at FROM patients WHERE id = $1", [id]);
+server/routes.ts:7722:           AND organization_id = $2
+server/routes.ts:7754:      const ownerCheck = await db.query("SELECT organization_id, archived_at FROM patients WHERE id = $1", [id]);
+server/routes.ts:7771:      const ownerCheck = await db.query("SELECT organization_id FROM patients WHERE id = $1", [req.params.id]);
+server/routes.ts:7791:      const existing = await db.query("SELECT notes, organization_id FROM patients WHERE id = $1", [req.params.id]);
+server/routes.ts:7813:      const ownerCheck = await db.query("SELECT organization_id FROM patients WHERE id = $1", [req.params.id]);
+server/routes.ts:7850:         LEFT JOIN practice_settings ps ON ps.organization_id = p.organization_id
+server/routes.ts:7908:            verification_method, stedi_transaction_id, verified_by, context, organization_id, verified_at)
+server/routes.ts:7939:      const ownerCheck = await db.query("SELECT organization_id FROM patients WHERE id = $1", [patientId]);
+server/routes.ts:7961:            verification_method, verified_by, context, organization_id, verified_at)
+server/routes.ts:7998:         WHERE c.organization_id = $1 AND c.readiness_status = 'RED' AND c.archived_at IS NULL
+server/routes.ts:8006:         WHERE c.organization_id = $1 AND c.archived_at IS NULL
+server/routes.ts:8175:      organizationId: getOrgId(req),
+server/routes.ts:8403:          organizationId: getOrgId(req),
+server/routes.ts:8498:        `SELECT id FROM leads WHERE id = $1 AND organization_id = $2`,
+server/routes.ts:8519:        `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+server/routes.ts:8536:        `SELECT id FROM leads WHERE id = $1 AND organization_id = $2`,
+server/routes.ts:8546:        `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+server/routes.ts:8575:        `INSERT INTO patients (id, lead_id, first_name, last_name, dob, email, phone, insurance_carrier, member_id, plan_type, state, service_needed, referral_source, intake_completed, organization_id)
+server/routes.ts:8753:      organizationId: getOrgId(req),
+server/routes.ts:8795:          organizationId: getOrgId(req),
+server/routes.ts:8841:      organizationId: getOrgId(req),
+server/routes.ts:8859:      organizationId: getOrgId(req),
+server/routes.ts:8866:      organizationId: getOrgId(req),
+server/routes.ts:8934:      organizationId: getOrgId(req),
+server/routes.ts:8956:        `SELECT *, COALESCE(specialty_tags, '{}') as specialty_tags FROM rules WHERE organization_id = $1 OR organization_id IS NULL ORDER BY created_at DESC`,
+server/routes.ts:8966:        organizationId: r.organization_id ?? r.organizationId,
+server/routes.ts:8984:    const rule = await storage.createRule({ ...parsed.data, organizationId: getOrgId(req) });
+server/routes.ts:9003:      organizationId: getOrgId(req),
+server/routes.ts:9223:        organizationId: getOrgId(req),
+server/routes.ts:9570:          (organization_id, patient_id, payer, service_type, auth_number, expiration_date,
+server/routes.ts:9676:        organizationId: getOrgId(req),
+server/routes.ts:9687:        organizationId: getOrgId(req),
+server/routes.ts:9749:        organizationId: matchingLead.organizationId || undefined,
+server/routes.ts:9806:        `SELECT id, organization_id FROM leads WHERE REGEXP_REPLACE(phone, '[^0-9]', '', 'g') LIKE $1 LIMIT 1`,
+server/routes.ts:9832:        `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+server/routes.ts:9834:        [leadRow.id, `Inbound SMS: ${(Body || "").slice(0, 200)}`, leadRow.organization_id]
+server/routes.ts:9859:    const template = await storage.createEmailTemplate({ ...result.data, organizationId: getOrgId(req) });
+server/routes.ts:9894:    const sequence = await storage.createNurtureSequence({ ...result.data, organizationId: getOrgId(req) });
+server/routes.ts:10058:          "SELECT practice_name FROM practice_settings WHERE organization_id = $1 LIMIT 1",
+server/routes.ts:10089:      organizationId: getOrgId(req),
+server/routes.ts:10132:      organizationId: getOrgId(req),
+server/routes.ts:10290:          `INSERT INTO flow_runs (flow_id, lead_id, status, current_step_index, next_action_at, organization_id)
+server/routes.ts:10292:          [flow.id, leadId, nextActionAt, (lead as any).organizationId || (lead as any).organization_id || null]
+server/routes.ts:10325:      const whereClause = isSuperAdmin ? "" : "WHERE f.organization_id = $1";
+server/routes.ts:10336:          f.organization_id,
+server/routes.ts:10344:        LEFT JOIN organizations o ON o.id = f.organization_id
+server/routes.ts:10411:         WHERE organization_id = $1 AND is_active = true
+server/routes.ts:10430:         WHERE organization_id = $1 AND is_active = true
+server/routes.ts:10474:          AND l.organization_id = $1
+server/routes.ts:10597:        organizationId: getOrgId(req),
+server/routes.ts:10636:    const slot = await storage.createAvailabilitySlot({ ...result.data, organizationId: getOrgId(req) });
+server/routes.ts:10692:    const appointment = await storage.createAppointment({ ...result.data, organizationId: getOrgId(req) });
+server/routes.ts:10831:        organizationId: getOrgId(req),
+server/routes.ts:11121:        WHERE l.organization_id = $1
+server/routes.ts:11309:        organizationId: getOrgId(req),
+server/routes.ts:11318:        organizationId: getOrgId(req),
+server/routes.ts:11374:            organizationId: getOrgId(req),
+server/routes.ts:11428:        organizationId: getOrgId(req),
+server/routes.ts:11441:        organizationId: getOrgId(req),
+server/routes.ts:11608:          (SELECT COUNT(*)::int FROM users u WHERE u.organization_id = o.id) as user_count,
+server/routes.ts:11609:          (SELECT COUNT(*)::int FROM claims c WHERE c.organization_id = o.id) as total_claims,
+server/routes.ts:11610:          (SELECT COUNT(*)::int FROM claims c WHERE c.organization_id = o.id AND c.created_at > NOW() - INTERVAL '30 days') as claims_last_30d,
+server/routes.ts:11611:          (SELECT COUNT(*)::int FROM leads l WHERE l.organization_id = o.id) as total_leads,
+server/routes.ts:11621:          db.query("SELECT practice_name, phone, default_pos FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]),
+server/routes.ts:11622:          db.query("SELECT COUNT(*)::int as cnt FROM providers WHERE organization_id = $1", [orgId]),
+server/routes.ts:11624:          db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1", [orgId]),
+server/routes.ts:11656:        db.query("SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]),
+server/routes.ts:11657:        db.query("SELECT id, name, email, role, created_at, last_active_at FROM users WHERE organization_id = $1 ORDER BY name", [orgId]),
+server/routes.ts:11658:        db.query("SELECT COUNT(*)::int as cnt FROM providers WHERE organization_id = $1", [orgId]),
+server/routes.ts:11666:        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND created_at > NOW() - INTERVAL '30 days'", [orgId]).catch(() => ({ rows: [{ cnt: 0 }] })),
+server/routes.ts:11670:        db.query("SELECT COUNT(*)::int as cnt FROM vob_verifications WHERE organization_id = $1 AND created_at > NOW() - INTERVAL '30 days'", [orgId]).catch(() => ({ rows: [{ cnt: 0 }] })),
+server/routes.ts:11676:        db.query("SELECT id, created_at FROM claims WHERE organization_id = $1 AND status = 'draft' AND created_at < NOW() - INTERVAL '7 days'", [orgId]),
+server/routes.ts:11678:        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND follow_up_date < NOW() - INTERVAL '14 days' AND status NOT IN ('paid', 'denied')", [orgId]).catch(() => ({ rows: [{ cnt: 0 }] })),
+server/routes.ts:11756:        `INSERT INTO practice_settings (id, organization_id, created_at, updated_at)
+server/routes.ts:12555:        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND status = 'submitted' AND created_at > NOW() - INTERVAL '30 days'", [orgId]),
+server/routes.ts:12556:        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND status = 'paid' AND created_at > NOW() - INTERVAL '30 days'", [orgId]),
+server/routes.ts:12557:        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND follow_up_date IS NOT NULL AND status != 'paid'", [orgId]).catch(() => ({ rows: [{ cnt: 0 }] })),
+server/routes.ts:12558:        db.query("SELECT COUNT(*)::int as cnt FROM claims WHERE organization_id = $1 AND status = 'denied'", [orgId]),
+server/routes.ts:12584:      params.push(orgId); conditions.push(`c.organization_id = $${params.length}`);
+server/routes.ts:12613:      claimParams.push(orgId); claimConds.push(`c.organization_id = $${claimParams.length}`);
+server/routes.ts:12630:      denialParams.push(orgId); denialConds.push(`d.organization_id = $${denialParams.length}`);
+server/routes.ts:12657:      params.push(orgId); conds.push(`c.organization_id = $${params.length}`);
+server/routes.ts:12693:      params.push(orgId); conds.push(`c.organization_id = $${params.length}`);
+server/routes.ts:12836:              `SELECT id, organization_id FROM claims WHERE stedi_transaction_id = $1 LIMIT 1`,
+server/routes.ts:12842:                `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+server/routes.ts:12844:                [crypto.randomUUID(), cl.id, `File delivery to payer failed: ${msg}`, cl.organization_id]
+server/routes.ts:12870:              `SELECT id, organization_id FROM claims WHERE stedi_transaction_id = $1 LIMIT 1`,
+server/routes.ts:12876:                `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+server/routes.ts:12878:                [crypto.randomUUID(), cl.id, `File delivered to ${partnerLabel} via Stedi. File execution ID: ${fileExecId}.`, cl.organization_id]
+server/routes.ts:13709:        `SELECT id, status, organization_id FROM claims WHERE id = $1 OR stedi_transaction_id = $2 LIMIT 1`,
+server/routes.ts:13722:        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
+server/routes.ts:13723:        [crypto.randomUUID(), claim.id, pollEventType, `Payer acknowledgment (polling): ${ack.statusDescription}. Payer: ${ack.payer}.`, claim.organization_id]
+server/routes.ts:13780:        const claimRow = await db.query("SELECT organization_id FROM claims WHERE id = $1 LIMIT 1", [line.claimControlNumber]);
+server/routes.ts:13781:        if (claimRow.rows[0]?.organization_id) { orgId = claimRow.rows[0].organization_id; break; }
+server/services/timely-filing-guardian.ts:54:      c.organization_id,
+server/services/timely-filing-guardian.ts:178:          (id, claim_id, patient_id, activity_type, description, metadata, organization_id)
+server/services/timely-filing-guardian.ts:189:        claim.organization_id,
+server/services/timely-filing-guardian.ts:197:          (claim_id, organization_id, alert_status, days_remaining, deadline_date, alert_method)
+server/services/timely-filing-guardian.ts:200:      `, [claim.id, claim.organization_id, newStatus, daysRemaining, deadlineStr])
+server/services/timely-filing-guardian.ts:247:           c.timely_filing_deadline, c.organization_id,
+server/middleware/tenant-context.ts:6: * `app.current_organization_id` for the duration of a transaction so RLS
+server/middleware/tenant-context.ts:14: *     calls `set_config('app.current_organization_id', <orgId>, true)` so the
+server/middleware/tenant-context.ts:18: *     `current_setting('app.current_organization_id', true)` which returns
+server/middleware/tenant-context.ts:33:  organizationId: string | null;
+server/middleware/tenant-context.ts:50:  const organizationId =
+server/middleware/tenant-context.ts:51:    user?.organizationId ?? user?.organization_id ?? null;
+server/middleware/tenant-context.ts:55:  storage.run({ organizationId, userId, role }, () => next());
+server/middleware/tenant-context.ts:60:  return storage.getStore()?.organizationId ?? null;
+server/middleware/tenant-context.ts:69: * Run `fn` inside a Postgres transaction with `app.current_organization_id`
+server/middleware/tenant-context.ts:97:        "SELECT set_config('app.current_organization_id', $1, true)",
+server/services/user-service.ts:10:  organization_id: string | null;
+server/services/user-service.ts:19:  organization_id: string | null;
+server/services/user-service.ts:59:  organizationId?: string;
+server/services/user-service.ts:76:    `INSERT INTO users (id, email, name, role, password, organization_id, created_at)
+server/services/user-service.ts:78:     RETURNING id, email, name, role, organization_id, created_at`,
+server/services/user-service.ts:79:    [email, data.name.trim(), data.role, hashed, data.organizationId || null]
+server/services/user-service.ts:127:    "SELECT id, email, name, role, password, organization_id, created_at FROM users WHERE email = $1",
+server/services/user-service.ts:135:    "SELECT id, email, name, role, organization_id, created_at FROM users WHERE email = $1",
+server/services/user-service.ts:144:    "SELECT id, email, name, role, organization_id, created_at FROM users WHERE id = $1",
+server/services/user-service.ts:150:export async function listUsers(organizationId?: string): Promise<SafeUser[]> {
+server/services/user-service.ts:152:  if (organizationId) {
+server/services/user-service.ts:154:      "SELECT id, email, name, role, organization_id, created_at FROM users WHERE organization_id = $1 ORDER BY email",
+server/services/user-service.ts:155:      [organizationId]
+server/services/user-service.ts:160:    "SELECT id, email, name, role, organization_id, created_at FROM users ORDER BY email"
+server/services/stedi-webhooks.ts:111:      `SELECT id, status, organization_id FROM claims 
+server/services/stedi-webhooks.ts:150:       (id, claim_id, type, notes, timestamp, organization_id)
+server/services/stedi-webhooks.ts:157:        claim.organization_id
+server/services/stedi-webhooks.ts:230:      'SELECT organization_id FROM claims WHERE id=$1 LIMIT 1',
+server/services/stedi-webhooks.ts:233:    if (match.rows[0]?.organization_id) {
+server/services/stedi-webhooks.ts:234:      orgId = match.rows[0].organization_id;
+server/services/stedi-webhooks.ts:242:     (id, organization_id, payer_name, check_number,
+server/services/stedi-webhooks.ts:306:    'SELECT id, organization_id FROM claims WHERE id=$1 LIMIT 1',
+server/services/stedi-webhooks.ts:354:       (id, claim_id, type, notes, timestamp, organization_id)
+server/services/stedi-webhooks.ts:361:        claim.organization_id
+server/services/flow-step-executor.ts:296:      `SELECT email, first_name FROM users WHERE organization_id = $1 AND role = 'admin'`,
+server/services/flow-step-executor.ts:297:      [orgCtx.organization_id]
+server/services/flow-step-executor.ts:377:      `SELECT fr.current_step_index, fr.flow_id, fr.organization_id, fr.metadata
+server/services/flow-step-executor.ts:385:    // Determine org — run's organization_id takes priority, then flow's
+server/services/flow-step-executor.ts:386:    let organizationId = run.organization_id as string | null;
+server/services/flow-step-executor.ts:387:    if (!organizationId) {
+server/services/flow-step-executor.ts:389:        `SELECT organization_id FROM flows WHERE id = $1`,
+server/services/flow-step-executor.ts:392:      organizationId = flowRes.rows[0]?.organization_id || null;
+server/services/flow-step-executor.ts:436:    const orgCtx = organizationId
+server/services/flow-step-executor.ts:437:      ? await getOrgContext(organizationId)
+server/services/flow-step-executor.ts:438:      : { organization_id: "", templates: {}, personas: {}, service_types: [], payers: [], lead_sources: [], providers: [] };
+server/services/flow-step-executor.ts:541:          `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+server/services/flow-step-executor.ts:543:          [leadId, `[Flow] SMS sent: ${body.slice(0, 80)}`, lead.organization_id]
+server/services/flow-step-executor.ts:665:          orgId: organizationId,
+server/services/flow-step-executor.ts:730:           (id, lead_id, vapi_call_id, transcript, summary, disposition, organization_id, channel)
+server/services/flow-step-executor.ts:733:        [leadId, callData.id, lead.organization_id]
+server/services/flow-step-executor.ts:821:          `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+server/services/flow-step-executor.ts:823:          [leadId, `[Flow] Email sent: ${subject}`, lead.organization_id]
+server/services/flow-step-executor.ts:867:        `SELECT primary_npi, practice_name FROM practice_settings WHERE organization_id = $1 LIMIT 1`,
+server/services/flow-step-executor.ts:868:        [organizationId]
+server/services/flow-step-executor.ts:903:          `INSERT INTO activity_logs (lead_id, activity_type, description, created_at, organization_id)
+server/services/flow-step-executor.ts:908:            lead.organization_id,
+server/services/flow-step-executor.ts:960:          body: method !== "GET" ? JSON.stringify({ lead, flowRunId, orgId: organizationId }) : undefined,
+server/services/rules-engine.ts:16:  organizationId: string;
+server/services/rules-engine.ts:574:          pool, line.code, firstMod, ctx.organizationId, ctx.serviceDate, "non_facility", payerTypeForRate
+server/services/org-context.ts:67:  organization_id: string;
+server/services/org-context.ts:88:export async function getOrgContext(organizationId: string): Promise<OrgContext> {
+server/services/org-context.ts:90:  const cached = cache.get(organizationId);
+server/services/org-context.ts:99:       WHERE organization_id = $1 AND is_active = true`,
+server/services/org-context.ts:100:      [organizationId]
+server/services/org-context.ts:105:       WHERE organization_id = $1 AND is_active = true`,
+server/services/org-context.ts:106:      [organizationId]
+server/services/org-context.ts:111:       WHERE organization_id = $1 AND is_active = true`,
+server/services/org-context.ts:112:      [organizationId]
+server/services/org-context.ts:117:       WHERE organization_id = $1 AND is_active = true`,
+server/services/org-context.ts:118:      [organizationId]
+server/services/org-context.ts:123:       WHERE organization_id = $1 AND is_active = true`,
+server/services/org-context.ts:124:      [organizationId]
+server/services/org-context.ts:130:       WHERE organization_id = $1 AND is_active = true`,
+server/services/org-context.ts:131:      [organizationId]
+server/services/org-context.ts:147:    organization_id: organizationId,
+server/services/org-context.ts:156:  cache.set(organizationId, { context, expires_at: now + CACHE_TTL_MS });
+server/services/org-context.ts:160:export function invalidateOrgContext(organizationId: string): void {
+server/services/org-context.ts:161:  cache.delete(organizationId);
+server/services/flow-trigger.ts:7:  organizationId?: string | null;
+server/services/flow-trigger.ts:14:    // A flow matches if its organization_id equals the lead's org, OR if organization_id is NULL (legacy global flows)
+server/services/flow-trigger.ts:16:      `SELECT id, name, trigger_conditions, organization_id
+server/services/flow-trigger.ts:20:         AND (organization_id = $1 OR organization_id IS NULL)`,
+server/services/flow-trigger.ts:21:      [lead.organizationId || null]
+server/services/flow-trigger.ts:68:           (flow_id, lead_id, status, current_step_index, next_action_at, organization_id)
+server/services/flow-trigger.ts:71:        [flow.id, lead.id, nextActionAt, lead.organizationId || flow.organization_id || null]
+server/services/rate-ingest.ts:335:    `SELECT address, medicare_locality_code, medicare_mac_carrier FROM practice_settings WHERE organization_id = $1`,
+server/services/rate-ingest.ts:364:    `SELECT address->>'zip' AS zip FROM practice_settings WHERE organization_id = $1 LIMIT 1`,
+server/services/rate-ingest.ts:389:    `SELECT address->>'state' AS state FROM practice_settings WHERE organization_id = $1 LIMIT 1`,
+server/services/rate-ingest.ts:418:    `SELECT DISTINCT organization_id FROM practice_settings
+server/services/rate-ingest.ts:423:    const orgId = row.organization_id;
+server/services/rate-ingest.ts:434:        WHERE organization_id = $4
+server/services/rate-ingest.ts:464:    WHERE organization_id = 'chajinel-org-001'
+server/services/expected-payment.ts:24:  organizationId: string,
+server/services/expected-payment.ts:34:    `SELECT medicare_locality_code, medicare_mac_carrier FROM practice_settings WHERE organization_id = $1`,
+server/services/expected-payment.ts:35:    [organizationId]
+server/services/expected-payment.ts:199:  organizationId: string,
+server/services/expected-payment.ts:213:      pool, line.code, line.modifier ?? null, organizationId, serviceDate, "non_facility", payerType
+server/services/expected-payment.ts:246:    pool.query(`SELECT medicare_locality_code, medicare_mac_carrier FROM practice_settings WHERE organization_id = 'chajinel-org-001' LIMIT 1`),
+server/services/field-resolver.ts:4:  organizationId: string;
+server/services/field-resolver.ts:34:    ctx.organizationId,
+server/services/field-resolver.ts:42:export function invalidateResolverCache(organizationId: string): void {
+server/services/field-resolver.ts:44:    if (key.startsWith(organizationId + "|")) {
+server/services/field-resolver.ts:66:  const { organizationId, payerId, planProductCode, includeDemoSeed = false } = ctx;
+server/services/field-resolver.ts:100:      WHERE organization_id = $1
+server/services/field-resolver.ts:104:    [organizationId, payerId]
+server/services/field-resolver.ts:122:  const params: (string | undefined)[] = [organizationId, payerId];
+server/services/field-resolver.ts:134:        AND psd.organization_id = $1

@@ -5,7 +5,8 @@ This section consolidates UNVERIFIED items, observable drift, and structural tec
 ## Verified gaps (high signal)
 
 1. **Monolithic `server/routes.ts`** — 13,867 lines, 261 routes, all in one `registerRoutes()` (`routes.ts:207`). Splitting per-module (`routes/billing.ts`, `routes/intake.ts`, `routes/admin.ts`, `routes/webhooks.ts`) would cut review time and reduce merge conflicts.
-2. **No row-level security** (`_queries/12_rls_policies.tsv` empty). Tenancy is enforced exclusively in app code via `verifyOrg`/`requireOrgCtx` (`routes.ts:168-186`). Any new query that forgets the org filter is silently cross-tenant. **Recommend** adding RLS policies on org-scoped tables as defense-in-depth.
+2. **RLS partial — only on 6 of 88 tables (Phase 3 only).** Sprint 0 (2026-05-03) added RLS + `FORCE ROW LEVEL SECURITY` to the 6 Phase 3 tables, with `claimshield_app_role` and `withTenantTx` middleware. The legacy 82 tables (incl. `claims`, `patients`, `leads`, `calls`) still depend exclusively on app-level `verifyOrg`/`requireOrgCtx` (`routes.ts:168-186`). **Recommend** extending RLS to legacy tenant-scoped tables once `WITH CHECK` clauses are validated on the Phase 3 set. See `docs/architecture/migration-state.md` and `sprint0-audit-report.md`.
+2b. **`WITH CHECK` clauses missing** on the 6 Phase 3 RLS policies — cross-tenant INSERTs are not blocked by the DB. Must land before any Sprint-1 INSERT helper ships (`migration-state.md` §3.1).
 3. **Missing FK on tenant-scoped tables** — `leads`, `calls`, `chat_sessions`, `appointments`, `flows`, `flow_runs`, `denials`, `era_batches`, `activity_logs`, `email_logs` carry `organization_id` per the Drizzle schema but the FK constraint is absent in `_queries/04_foreign_keys.tsv`. Adding the FK would prevent orphan rows and make tenancy auditing trivial.
 4. **Duplicate FK on `practice_settings`** — both `practice_settings_org_fk` (RESTRICT) and `practice_settings_organization_id_fkey` (NO ACTION) exist (`_queries/04_foreign_keys.tsv:36-37`). Drop one.
 5. **No DB triggers / no views / no stored procedures / no sequences for ID generation on most tables.** All business logic lives in Node. This is fine, but it means any DB-level safety net is absent — every safeguard must be a code path.
@@ -18,7 +19,7 @@ This section consolidates UNVERIFIED items, observable drift, and structural tec
 
 ## UNVERIFIED items (require follow-up reads)
 
-- `IStorage` interface and per-method org filtering (`server/storage.ts` not read this session). The grep for `organization_id` filters returned 0 hits in `_queries/21_code_inventory.txt:284-285`, which is almost certainly a pattern miss; verify by reading `storage.ts` directly.
+- `IStorage` interface and per-method org filtering (`server/storage.ts` not read in detail this session). The refreshed grep at `_grep/org_filters.txt` shows 504 matches of `organizationId` / `organization_id` filter patterns across server code, confirming the filter is widely applied — but 100% coverage on every query path is still **UNVERIFIED**.
 - `rules-engine.ts` lines 120–698 (DB-backed rule fetch + risk-score calculation).
 - `rules-engine.ts` integration with `cci_edits` (currently 0 rows; UNVERIFIED whether the engine handles an empty CCI table gracefully).
 - `transcript-extractor.ts` — Vapi call → patient field mapping; only the env import was sampled.
@@ -31,8 +32,9 @@ This section consolidates UNVERIFIED items, observable drift, and structural tec
 
 ## Drift between `replit.md` and code
 
-- `replit.md` mentions a `practice_settings.billing_model` column. Code references `frcpb_enrolled` instead (`routes.ts:3520`). Stale docs.
-- `replit.md` references `org_types` and `org_type_field_specs` tables — **these tables do not exist** in `_queries/01_tables_with_rowcounts.tsv`. Either feature was descoped or never landed.
+- `practice_settings.billing_model` exists per the Sprint 0 audit and must be reconciled with profile rule `edi_structural_rules.rendering_provider_loop_2310B.omit_when='agency_billed'` during Sprint 2 EDI refactor. `routes.ts:3520` route `/api/billing/practice-settings/frcpb-enrollment` references `frcpb_enrolled` separately.
+- `replit.md` references `org_types` and `org_type_field_specs` tables — **these tables do not exist**. Phase 3 (`practice_profiles` + `organization_practice_profiles`) is the live profile-aware design.
+- `organizations.is_active` does **not** exist in the DB — code must filter on `status = 'active'`. The Drizzle declaration of `organizations` (`shared/schema.ts:518-523`) is out of date; fix tracked in `migration-state.md`.
 - `replit.md` lists `caritas-org-001` and `chajinel-org-001`. The DB has 3 organizations — third org identity UNVERIFIED here.
 - `<missing_secrets>` lists `VERIFYTX_API_KEY` / `VERIFYTX_API_SECRET` — names not referenced in code (`verifytx.ts` uses USERNAME/PASSWORD/CLIENT_ID/CLIENT_SECRET). The missing-secrets list appears stale.
 

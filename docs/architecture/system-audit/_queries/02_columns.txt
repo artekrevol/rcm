@@ -1,0 +1,1080 @@
+           table_name            |            column_name            |          data_type          |  udt_name   | is_nullable |                 column_default                 
+---------------------------------+-----------------------------------+-----------------------------+-------------+-------------+------------------------------------------------
+ activity_logs                   | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ activity_logs                   | lead_id                           | character varying           | varchar     | YES         | 
+ activity_logs                   | activity_type                     | text                        | text        | NO          | 
+ activity_logs                   | field                             | text                        | text        | YES         | 
+ activity_logs                   | old_value                         | text                        | text        | YES         | 
+ activity_logs                   | new_value                         | text                        | text        | YES         | 
+ activity_logs                   | description                       | text                        | text        | YES         | 
+ activity_logs                   | metadata                          | jsonb                       | jsonb       | YES         | '{}'::jsonb
+ activity_logs                   | performed_by                      | text                        | text        | YES         | 
+ activity_logs                   | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ activity_logs                   | claim_id                          | character varying           | varchar     | YES         | 
+ activity_logs                   | patient_id                        | character varying           | varchar     | YES         | 
+ activity_logs                   | organization_id                   | character varying           | varchar     | YES         | 
+ appointments                    | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ appointments                    | lead_id                           | character varying           | varchar     | NO          | 
+ appointments                    | title                             | text                        | text        | NO          | 
+ appointments                    | description                       | text                        | text        | YES         | 
+ appointments                    | scheduled_at                      | timestamp without time zone | timestamp   | NO          | 
+ appointments                    | duration                          | integer                     | int4        | NO          | 30
+ appointments                    | timezone                          | text                        | text        | NO          | 'America/Chicago'::text
+ appointments                    | status                            | text                        | text        | NO          | 'scheduled'::text
+ appointments                    | reminder_sent                     | boolean                     | bool        | NO          | false
+ appointments                    | confirmed_at                      | timestamp without time zone | timestamp   | YES         | 
+ appointments                    | cancelled_at                      | timestamp without time zone | timestamp   | YES         | 
+ appointments                    | cancel_reason                     | text                        | text        | YES         | 
+ appointments                    | notes                             | text                        | text        | YES         | 
+ appointments                    | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ appointments                    | organization_id                   | character varying           | varchar     | YES         | 
+ availability_slots              | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ availability_slots              | day_of_week                       | integer                     | int4        | NO          | 
+ availability_slots              | start_time                        | text                        | text        | NO          | 
+ availability_slots              | end_time                          | text                        | text        | NO          | 
+ availability_slots              | timezone                          | text                        | text        | NO          | 'America/Chicago'::text
+ availability_slots              | enabled                           | boolean                     | bool        | NO          | true
+ availability_slots              | organization_id                   | character varying           | varchar     | YES         | 
+ calls                           | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ calls                           | lead_id                           | character varying           | varchar     | NO          | 
+ calls                           | vapi_call_id                      | text                        | text        | YES         | 
+ calls                           | transcript                        | text                        | text        | NO          | 
+ calls                           | summary                           | text                        | text        | NO          | 
+ calls                           | disposition                       | text                        | text        | NO          | 
+ calls                           | extracted_data                    | jsonb                       | jsonb       | YES         | 
+ calls                           | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ calls                           | notes                             | text                        | text        | YES         | 
+ calls                           | duration                          | integer                     | int4        | YES         | 
+ calls                           | vob_data                          | jsonb                       | jsonb       | YES         | 
+ calls                           | recording_url                     | text                        | text        | YES         | 
+ calls                           | organization_id                   | character varying           | varchar     | YES         | 
+ carc_codes                      | id                                | integer                     | int4        | NO          | nextval('carc_codes_id_seq'::regclass)
+ carc_codes                      | code                              | character varying           | varchar     | NO          | 
+ carc_codes                      | description                       | text                        | text        | NO          | 
+ carc_codes                      | group_codes                       | character varying           | varchar     | NO          | 'CO'::character varying
+ carc_posting_rules              | id                                | integer                     | int4        | NO          | nextval('carc_posting_rules_id_seq'::regclass)
+ carc_posting_rules              | carc_code                         | character varying           | varchar     | NO          | 
+ carc_posting_rules              | description                       | text                        | text        | YES         | 
+ carc_posting_rules              | default_action                    | character varying           | varchar     | NO          | 
+ carc_posting_rules              | group_code                        | character varying           | varchar     | YES         | 
+ carc_posting_rules              | is_active                         | boolean                     | bool        | YES         | true
+ carc_posting_rules              | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ cci_edits                       | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ cci_edits                       | column_1_code                     | text                        | text        | NO          | 
+ cci_edits                       | column_2_code                     | text                        | text        | NO          | 
+ cci_edits                       | modifier_indicator                | text                        | text        | NO          | 
+ cci_edits                       | effective_date                    | date                        | date        | NO          | 
+ cci_edits                       | deletion_date                     | date                        | date        | YES         | 
+ cci_edits                       | ptp_edit_rationale                | text                        | text        | YES         | 
+ cci_edits                       | ncci_version                      | text                        | text        | NO          | 
+ cci_edits                       | source_file                       | text                        | text        | NO          | 
+ cci_edits                       | ingested_at                       | timestamp without time zone | timestamp   | YES         | now()
+ chat_analytics                  | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ chat_analytics                  | date                              | text                        | text        | NO          | 
+ chat_analytics                  | total_sessions                    | integer                     | int4        | NO          | 0
+ chat_analytics                  | completed_sessions                | integer                     | int4        | NO          | 0
+ chat_analytics                  | abandoned_sessions                | integer                     | int4        | NO          | 0
+ chat_analytics                  | leads_generated                   | integer                     | int4        | NO          | 0
+ chat_analytics                  | appointments_booked               | integer                     | int4        | NO          | 0
+ chat_analytics                  | avg_session_duration              | integer                     | int4        | YES         | 
+ chat_analytics                  | dropoff_by_step                   | jsonb                       | jsonb       | YES         | '{}'::jsonb
+ chat_analytics                  | conversion_rate                   | real                        | float4      | YES         | 
+ chat_analytics                  | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ chat_analytics                  | organization_id                   | character varying           | varchar     | YES         | 
+ chat_messages                   | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ chat_messages                   | session_id                        | character varying           | varchar     | NO          | 
+ chat_messages                   | type                              | text                        | text        | NO          | 'bot'::text
+ chat_messages                   | step_id                           | text                        | text        | YES         | 
+ chat_messages                   | content                           | text                        | text        | NO          | 
+ chat_messages                   | metadata                          | jsonb                       | jsonb       | YES         | 
+ chat_messages                   | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ chat_messages                   | organization_id                   | character varying           | varchar     | YES         | 
+ chat_sessions                   | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ chat_sessions                   | visitor_token                     | text                        | text        | NO          | 
+ chat_sessions                   | lead_id                           | character varying           | varchar     | YES         | 
+ chat_sessions                   | status                            | text                        | text        | NO          | 'active'::text
+ chat_sessions                   | current_step_id                   | text                        | text        | NO          | 'welcome'::text
+ chat_sessions                   | collected_data                    | jsonb                       | jsonb       | YES         | '{}'::jsonb
+ chat_sessions                   | qualification_score               | integer                     | int4        | YES         | 
+ chat_sessions                   | source                            | text                        | text        | NO          | 'chat_widget'::text
+ chat_sessions                   | referrer_url                      | text                        | text        | YES         | 
+ chat_sessions                   | user_agent                        | text                        | text        | YES         | 
+ chat_sessions                   | ip_address                        | text                        | text        | YES         | 
+ chat_sessions                   | started_at                        | timestamp without time zone | timestamp   | NO          | now()
+ chat_sessions                   | completed_at                      | timestamp without time zone | timestamp   | YES         | 
+ chat_sessions                   | abandoned_at                      | timestamp without time zone | timestamp   | YES         | 
+ chat_sessions                   | last_activity_at                  | timestamp without time zone | timestamp   | NO          | now()
+ chat_sessions                   | organization_id                   | character varying           | varchar     | YES         | 
+ claim_events                    | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ claim_events                    | claim_id                          | character varying           | varchar     | NO          | 
+ claim_events                    | type                              | text                        | text        | NO          | 
+ claim_events                    | timestamp                         | timestamp without time zone | timestamp   | NO          | now()
+ claim_events                    | notes                             | text                        | text        | YES         | 
+ claim_events                    | organization_id                   | character varying           | varchar     | YES         | 
+ claim_follow_up_notes           | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ claim_follow_up_notes           | claim_id                          | character varying           | varchar     | NO          | 
+ claim_follow_up_notes           | org_id                            | character varying           | varchar     | YES         | 
+ claim_follow_up_notes           | user_id                           | character varying           | varchar     | YES         | 
+ claim_follow_up_notes           | user_name                         | character varying           | varchar     | YES         | 
+ claim_follow_up_notes           | note_text                         | text                        | text        | NO          | 
+ claim_follow_up_notes           | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ claim_provider_assignments      | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ claim_provider_assignments      | claim_id                          | character varying           | varchar     | NO          | 
+ claim_provider_assignments      | provider_id                       | character varying           | varchar     | NO          | 
+ claim_provider_assignments      | organization_id                   | character varying           | varchar     | NO          | 
+ claim_provider_assignments      | role_code                         | text                        | text        | NO          | 
+ claim_provider_assignments      | npi_used                          | text                        | text        | YES         | 
+ claim_provider_assignments      | taxonomy_code                     | text                        | text        | YES         | 
+ claim_provider_assignments      | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ claim_templates                 | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ claim_templates                 | name                              | character varying           | varchar     | NO          | 
+ claim_templates                 | provider_id                       | character varying           | varchar     | YES         | 
+ claim_templates                 | payer_id                          | character varying           | varchar     | YES         | 
+ claim_templates                 | place_of_service                  | character varying           | varchar     | YES         | '12'::character varying
+ claim_templates                 | service_lines                     | jsonb                       | jsonb       | YES         | 
+ claim_templates                 | created_by                        | character varying           | varchar     | YES         | 
+ claim_templates                 | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ claim_templates                 | organization_id                   | character varying           | varchar     | YES         | 
+ claims                          | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ claims                          | patient_id                        | character varying           | varchar     | NO          | 
+ claims                          | encounter_id                      | character varying           | varchar     | NO          | 
+ claims                          | payer                             | text                        | text        | NO          | 
+ claims                          | cpt_codes                         | jsonb                       | jsonb       | NO          | 
+ claims                          | amount                            | real                        | float4      | NO          | 
+ claims                          | status                            | text                        | text        | NO          | 'created'::text
+ claims                          | risk_score                        | integer                     | int4        | NO          | 0
+ claims                          | readiness_status                  | text                        | text        | NO          | 'GREEN'::text
+ claims                          | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ claims                          | reason                            | text                        | text        | YES         | 
+ claims                          | next_step                         | text                        | text        | YES         | 
+ claims                          | provider_id                       | character varying           | varchar     | YES         | 
+ claims                          | payer_id                          | character varying           | varchar     | YES         | 
+ claims                          | service_date                      | date                        | date        | YES         | 
+ claims                          | place_of_service                  | character varying           | varchar     | YES         | '12'::character varying
+ claims                          | icd10_primary                     | character varying           | varchar     | YES         | 
+ claims                          | icd10_secondary                   | jsonb                       | jsonb       | YES         | 
+ claims                          | authorization_number              | character varying           | varchar     | YES         | 
+ claims                          | service_lines                     | jsonb                       | jsonb       | YES         | 
+ claims                          | pdf_url                           | character varying           | varchar     | YES         | 
+ claims                          | submission_method                 | character varying           | varchar     | YES         | 'manual'::character varying
+ claims                          | availity_icn                      | character varying           | varchar     | YES         | 
+ claims                          | charge_overridden                 | boolean                     | bool        | YES         | false
+ claims                          | created_by                        | character varying           | varchar     | YES         | 
+ claims                          | updated_at                        | timestamp without time zone | timestamp   | YES         | 
+ claims                          | organization_id                   | character varying           | varchar     | YES         | 
+ claims                          | claim_frequency_code              | character varying           | varchar     | YES         | '1'::character varying
+ claims                          | orig_claim_number                 | character varying           | varchar     | YES         | 
+ claims                          | homebound_indicator               | character varying           | varchar     | YES         | 'Y'::character varying
+ claims                          | ordering_provider_id              | character varying           | varchar     | YES         | 
+ claims                          | delay_reason_code                 | character varying           | varchar     | YES         | 
+ claims                          | follow_up_date                    | date                        | date        | YES         | 
+ claims                          | follow_up_status                  | character varying           | varchar     | YES         | 
+ claims                          | stedi_transaction_id              | character varying           | varchar     | YES         | 
+ claims                          | external_ordering_provider_name   | character varying           | varchar     | YES         | 
+ claims                          | external_ordering_provider_npi    | character varying           | varchar     | YES         | 
+ claims                          | last_test_status                  | character varying           | varchar     | YES         | 
+ claims                          | last_test_at                      | timestamp without time zone | timestamp   | YES         | 
+ claims                          | last_test_errors                  | jsonb                       | jsonb       | YES         | 
+ claims                          | secondary_payer_id                | character varying           | varchar     | YES         | 
+ claims                          | secondary_member_id               | character varying           | varchar     | YES         | 
+ claims                          | secondary_group_number            | character varying           | varchar     | YES         | 
+ claims                          | cob_order                         | character varying           | varchar     | YES         | 
+ claims                          | ordering_provider_first_name      | character varying           | varchar     | YES         | 
+ claims                          | ordering_provider_last_name       | character varying           | varchar     | YES         | 
+ claims                          | ordering_provider_npi             | character varying           | varchar     | YES         | 
+ claims                          | ordering_provider_org             | character varying           | varchar     | YES         | 
+ claims                          | last_test_correlation_id          | character varying           | varchar     | YES         | 
+ claims                          | plan_product                      | text                        | text        | YES         | 
+ claims                          | last_risk_evaluation_at           | timestamp without time zone | timestamp   | YES         | 
+ claims                          | last_risk_factors                 | jsonb                       | jsonb       | YES         | 
+ claims                          | timely_filing_deadline            | date                        | date        | YES         | 
+ claims                          | timely_filing_days_remaining      | integer                     | int4        | YES         | 
+ claims                          | timely_filing_status              | text                        | text        | YES         | 
+ claims                          | timely_filing_last_evaluated_at   | timestamp without time zone | timestamp   | YES         | 
+ claims                          | pcp_referral_id                   | character varying           | varchar     | YES         | 
+ claims                          | pcp_referral_required             | boolean                     | bool        | YES         | 
+ claims                          | pcp_referral_check_status         | text                        | text        | YES         | 
+ claims                          | rules_snapshot                    | jsonb                       | jsonb       | YES         | 
+ claims                          | rules_engine_version              | text                        | text        | YES         | 
+ claims                          | ncci_version_at_creation          | text                        | text        | YES         | 
+ claims                          | archived_at                       | timestamp without time zone | timestamp   | YES         | 
+ claims                          | archived_by                       | text                        | text        | YES         | 
+ claims                          | statement_period_start            | date                        | date        | YES         | 
+ claims                          | statement_period_end              | date                        | date        | YES         | 
+ claims                          | payer_claim_number                | character varying           | varchar     | YES         | 
+ cms_gpci                        | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ cms_gpci                        | mac_carrier                       | text                        | text        | NO          | 
+ cms_gpci                        | locality_code                     | text                        | text        | NO          | 
+ cms_gpci                        | locality_name                     | text                        | text        | NO          | 
+ cms_gpci                        | state                             | text                        | text        | NO          | 
+ cms_gpci                        | state_fips                        | text                        | text        | YES         | 
+ cms_gpci                        | counties                          | ARRAY                       | _text       | YES         | 
+ cms_gpci                        | work_gpci                         | numeric                     | numeric     | YES         | 
+ cms_gpci                        | practice_expense_gpci             | numeric                     | numeric     | YES         | 
+ cms_gpci                        | malpractice_gpci                  | numeric                     | numeric     | YES         | 
+ cms_gpci                        | effective_date                    | date                        | date        | NO          | 
+ cms_gpci                        | termination_date                  | date                        | date        | YES         | 
+ cms_gpci                        | pfs_year                          | integer                     | int4        | NO          | 
+ cms_gpci                        | source_url                        | text                        | text        | YES         | 
+ cms_gpci                        | ingested_at                       | timestamp without time zone | timestamp   | YES         | now()
+ cms_locality_county             | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ cms_locality_county             | mac_carrier                       | text                        | text        | NO          | 
+ cms_locality_county             | locality_code                     | text                        | text        | NO          | 
+ cms_locality_county             | state                             | text                        | text        | NO          | 
+ cms_locality_county             | locality_name                     | text                        | text        | NO          | 
+ cms_locality_county             | counties                          | ARRAY                       | _text       | YES         | 
+ cms_locality_county             | pfs_year                          | integer                     | int4        | NO          | 
+ cms_locality_county             | source_url                        | text                        | text        | YES         | 
+ cms_locality_county             | ingested_at                       | timestamp without time zone | timestamp   | YES         | now()
+ cms_pfs_rvu                     | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ cms_pfs_rvu                     | hcpcs_code                        | text                        | text        | NO          | 
+ cms_pfs_rvu                     | modifier                          | text                        | text        | YES         | 
+ cms_pfs_rvu                     | work_rvu                          | numeric                     | numeric     | YES         | 
+ cms_pfs_rvu                     | practice_expense_rvu_facility     | numeric                     | numeric     | YES         | 
+ cms_pfs_rvu                     | practice_expense_rvu_non_facility | numeric                     | numeric     | YES         | 
+ cms_pfs_rvu                     | malpractice_rvu                   | numeric                     | numeric     | YES         | 
+ cms_pfs_rvu                     | status_indicator                  | text                        | text        | YES         | 
+ cms_pfs_rvu                     | global_period                     | text                        | text        | YES         | 
+ cms_pfs_rvu                     | professional_component_indicator  | text                        | text        | YES         | 
+ cms_pfs_rvu                     | multiple_procedure_indicator      | text                        | text        | YES         | 
+ cms_pfs_rvu                     | bilateral_surgery_indicator       | text                        | text        | YES         | 
+ cms_pfs_rvu                     | assistant_surgery_indicator       | text                        | text        | YES         | 
+ cms_pfs_rvu                     | co_surgeon_indicator              | text                        | text        | YES         | 
+ cms_pfs_rvu                     | team_surgery_indicator            | text                        | text        | YES         | 
+ cms_pfs_rvu                     | effective_date                    | date                        | date        | NO          | 
+ cms_pfs_rvu                     | termination_date                  | date                        | date        | YES         | 
+ cms_pfs_rvu                     | pfs_year                          | integer                     | int4        | NO          | 
+ cms_pfs_rvu                     | conversion_factor                 | numeric                     | numeric     | YES         | 
+ cms_pfs_rvu                     | source_url                        | text                        | text        | YES         | 
+ cms_pfs_rvu                     | ingested_at                       | timestamp without time zone | timestamp   | YES         | now()
+ cms_zip_locality                | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ cms_zip_locality                | zip_code                          | text                        | text        | NO          | 
+ cms_zip_locality                | zip_plus_4                        | text                        | text        | YES         | 
+ cms_zip_locality                | state                             | text                        | text        | NO          | 
+ cms_zip_locality                | mac_carrier                       | text                        | text        | NO          | 
+ cms_zip_locality                | locality_code                     | text                        | text        | NO          | 
+ cms_zip_locality                | rural_indicator                   | text                        | text        | YES         | 
+ cms_zip_locality                | effective_date                    | date                        | date        | NO          | 
+ cms_zip_locality                | termination_date                  | date                        | date        | YES         | 
+ cms_zip_locality                | source_url                        | text                        | text        | YES         | 
+ cms_zip_locality                | ingested_at                       | timestamp without time zone | timestamp   | YES         | now()
+ comm_locks                      | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ comm_locks                      | lead_id                           | text                        | text        | NO          | 
+ comm_locks                      | acquired_by_type                  | character varying           | varchar     | NO          | 
+ comm_locks                      | acquired_by_id                    | character varying           | varchar     | NO          | 
+ comm_locks                      | channel                           | character varying           | varchar     | NO          | 
+ comm_locks                      | reason                            | text                        | text        | YES         | 
+ comm_locks                      | expires_at                        | timestamp without time zone | timestamp   | NO          | 
+ comm_locks                      | released_at                       | timestamp without time zone | timestamp   | YES         | 
+ comm_locks                      | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ comm_locks                      | released_reason                   | text                        | text        | YES         | 
+ cpt_codes                       | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ cpt_codes                       | code                              | character varying           | varchar     | NO          | 
+ cpt_codes                       | description                       | text                        | text        | NO          | 
+ cpt_codes                       | work_rvu                          | numeric                     | numeric     | YES         | 
+ cpt_codes                       | unit_type                         | character varying           | varchar     | YES         | 'quantity'::character varying
+ cpt_codes                       | is_active                         | boolean                     | bool        | YES         | true
+ delegated_entities              | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ delegated_entities              | name                              | character varying           | varchar     | NO          | 
+ delegated_entities              | entity_type                       | character varying           | varchar     | NO          | 
+ delegated_entities              | tax_id                            | character varying           | varchar     | YES         | 
+ delegated_entities              | state                             | character varying           | varchar     | YES         | 
+ delegated_entities              | claims_address                    | text                        | text        | YES         | 
+ delegated_entities              | claims_payer_id_override          | character varying           | varchar     | YES         | 
+ delegated_entities              | active                            | boolean                     | bool        | NO          | true
+ delegated_entities              | notes                             | text                        | text        | YES         | 
+ denial_patterns                 | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ denial_patterns                 | claim_id                          | character varying           | varchar     | YES         | 
+ denial_patterns                 | carc_code                         | character varying           | varchar     | NO          | 
+ denial_patterns                 | carc_description                  | text                        | text        | YES         | 
+ denial_patterns                 | rarc_code                         | character varying           | varchar     | YES         | 
+ denial_patterns                 | amount                            | numeric                     | numeric     | YES         | 
+ denial_patterns                 | service_date                      | date                        | date        | YES         | 
+ denial_patterns                 | hcpcs_code                        | character varying           | varchar     | YES         | 
+ denial_patterns                 | payer                             | character varying           | varchar     | YES         | 
+ denial_patterns                 | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ denials                         | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ denials                         | claim_id                          | character varying           | varchar     | NO          | 
+ denials                         | denial_category                   | text                        | text        | NO          | 
+ denials                         | denial_reason_text                | text                        | text        | NO          | 
+ denials                         | payer                             | text                        | text        | NO          | 
+ denials                         | cpt_code                          | text                        | text        | NO          | 
+ denials                         | root_cause_tag                    | text                        | text        | NO          | 
+ denials                         | resolved                          | boolean                     | bool        | NO          | false
+ denials                         | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ denials                         | organization_id                   | character varying           | varchar     | YES         | 
+ document_types                  | code                              | character varying           | varchar     | NO          | 
+ document_types                  | label                             | character varying           | varchar     | NO          | 
+ document_types                  | typical_update_cadence            | character varying           | varchar     | YES         | 
+ document_types                  | active_for_extraction             | boolean                     | bool        | NO          | false
+ document_types                  | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ email_logs                      | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ email_logs                      | lead_id                           | character varying           | varchar     | NO          | 
+ email_logs                      | template_id                       | character varying           | varchar     | YES         | 
+ email_logs                      | sequence_id                       | character varying           | varchar     | YES         | 
+ email_logs                      | subject                           | text                        | text        | NO          | 
+ email_logs                      | body                              | text                        | text        | NO          | 
+ email_logs                      | to_email                          | text                        | text        | NO          | 
+ email_logs                      | status                            | text                        | text        | NO          | 'pending'::text
+ email_logs                      | sent_at                           | timestamp without time zone | timestamp   | YES         | 
+ email_logs                      | opened_at                         | timestamp without time zone | timestamp   | YES         | 
+ email_logs                      | clicked_at                        | timestamp without time zone | timestamp   | YES         | 
+ email_logs                      | error_message                     | text                        | text        | YES         | 
+ email_logs                      | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ email_logs                      | organization_id                   | character varying           | varchar     | YES         | 
+ email_templates                 | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ email_templates                 | name                              | text                        | text        | NO          | 
+ email_templates                 | subject                           | text                        | text        | NO          | 
+ email_templates                 | body                              | text                        | text        | NO          | 
+ email_templates                 | category                          | text                        | text        | NO          | 'general'::text
+ email_templates                 | variables                         | jsonb                       | jsonb       | YES         | '[]'::jsonb
+ email_templates                 | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ email_templates                 | organization_id                   | character varying           | varchar     | YES         | 
+ encounters                      | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ encounters                      | patient_id                        | character varying           | varchar     | NO          | 
+ encounters                      | service_type                      | text                        | text        | NO          | 
+ encounters                      | facility_type                     | text                        | text        | NO          | 
+ encounters                      | admission_type                    | text                        | text        | NO          | 
+ encounters                      | expected_start_date               | text                        | text        | NO          | 
+ encounters                      | provider_id                       | character varying           | varchar     | YES         | 
+ encounters                      | place_of_service                  | character varying           | varchar     | YES         | '12'::character varying
+ encounters                      | service_date                      | date                        | date        | YES         | 
+ encounters                      | authorization_number              | character varying           | varchar     | YES         | 
+ encounters                      | created_by                        | character varying           | varchar     | YES         | 
+ encounters                      | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ encounters                      | organization_id                   | character varying           | varchar     | YES         | 
+ era_batches                     | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ era_batches                     | org_id                            | character varying           | varchar     | YES         | 
+ era_batches                     | payer_name                        | character varying           | varchar     | NO          | 
+ era_batches                     | check_number                      | character varying           | varchar     | YES         | 
+ era_batches                     | payment_date                      | date                        | date        | YES         | 
+ era_batches                     | total_amount                      | real                        | float4      | YES         | 0
+ era_batches                     | status                            | character varying           | varchar     | YES         | 'unposted'::character varying
+ era_batches                     | raw_edi                           | text                        | text        | YES         | 
+ era_batches                     | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ era_batches                     | stedi_era_id                      | character varying           | varchar     | YES         | 
+ era_batches                     | raw_data                          | jsonb                       | jsonb       | YES         | 
+ era_batches                     | source                            | character varying           | varchar     | YES         | 'stedi'::character varying
+ era_claim_lines                 | id                                | character varying           | varchar     | NO          | 
+ era_claim_lines                 | era_batch_id                      | character varying           | varchar     | NO          | 
+ era_claim_lines                 | claim_control_number              | character varying           | varchar     | YES         | 
+ era_claim_lines                 | patient_name                      | character varying           | varchar     | YES         | 
+ era_claim_lines                 | billed_amount                     | numeric                     | numeric     | YES         | 
+ era_claim_lines                 | allowed_amount                    | numeric                     | numeric     | YES         | 
+ era_claim_lines                 | paid_amount                       | numeric                     | numeric     | YES         | 
+ era_claim_lines                 | adjustment_codes                  | jsonb                       | jsonb       | YES         | '[]'::jsonb
+ era_claim_lines                 | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ era_lines                       | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ era_lines                       | era_id                            | character varying           | varchar     | NO          | 
+ era_lines                       | claim_id                          | character varying           | varchar     | YES         | 
+ era_lines                       | org_id                            | character varying           | varchar     | YES         | 
+ era_lines                       | patient_name                      | character varying           | varchar     | YES         | 
+ era_lines                       | dos                               | date                        | date        | YES         | 
+ era_lines                       | billed_amount                     | real                        | float4      | YES         | 0
+ era_lines                       | allowed_amount                    | real                        | float4      | YES         | 0
+ era_lines                       | paid_amount                       | real                        | float4      | YES         | 0
+ era_lines                       | service_lines                     | jsonb                       | jsonb       | YES         | '[]'::jsonb
+ era_lines                       | status                            | character varying           | varchar     | YES         | 'unposted'::character varying
+ era_lines                       | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ field_definitions               | code                              | character varying           | varchar     | NO          | 
+ field_definitions               | label                             | character varying           | varchar     | NO          | 
+ field_definitions               | applies_to                        | character varying           | varchar     | NO          | 
+ field_definitions               | data_type                         | character varying           | varchar     | NO          | 
+ field_definitions               | always_required                   | boolean                     | bool        | NO          | false
+ field_definitions               | activated_by_rule_kinds           | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ flow_run_events                 | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ flow_run_events                 | flow_run_id                       | character varying           | varchar     | NO          | 
+ flow_run_events                 | event_type                        | character varying           | varchar     | NO          | 
+ flow_run_events                 | step_id                           | character varying           | varchar     | YES         | 
+ flow_run_events                 | payload                           | jsonb                       | jsonb       | YES         | '{}'::jsonb
+ flow_run_events                 | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ flow_runs                       | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ flow_runs                       | flow_id                           | character varying           | varchar     | NO          | 
+ flow_runs                       | lead_id                           | text                        | text        | NO          | 
+ flow_runs                       | status                            | character varying           | varchar     | NO          | 'running'::character varying
+ flow_runs                       | current_step_index                | integer                     | int4        | YES         | 0
+ flow_runs                       | next_action_at                    | timestamp without time zone | timestamp   | YES         | 
+ flow_runs                       | started_at                        | timestamp without time zone | timestamp   | YES         | now()
+ flow_runs                       | completed_at                      | timestamp without time zone | timestamp   | YES         | 
+ flow_runs                       | organization_id                   | character varying           | varchar     | YES         | 
+ flow_runs                       | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ flow_runs                       | updated_at                        | timestamp without time zone | timestamp   | YES         | now()
+ flow_runs                       | attempt_count                     | integer                     | int4        | YES         | 0
+ flow_runs                       | failure_reason                    | text                        | text        | YES         | 
+ flow_runs                       | halted_at                         | timestamp with time zone    | timestamptz | YES         | 
+ flow_runs                       | failed_at                         | timestamp with time zone    | timestamptz | YES         | 
+ flow_steps                      | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ flow_steps                      | flow_id                           | character varying           | varchar     | NO          | 
+ flow_steps                      | step_order                        | integer                     | int4        | NO          | 
+ flow_steps                      | step_type                         | character varying           | varchar     | NO          | 
+ flow_steps                      | channel                           | character varying           | varchar     | YES         | 
+ flow_steps                      | delay_minutes                     | integer                     | int4        | YES         | 0
+ flow_steps                      | template_inline                   | text                        | text        | YES         | 
+ flow_steps                      | config                            | jsonb                       | jsonb       | YES         | '{}'::jsonb
+ flow_steps                      | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ flow_steps                      | max_attempts                      | integer                     | int4        | YES         | 3
+ flow_steps                      | condition                         | jsonb                       | jsonb       | YES         | 
+ flow_steps                      | success_criteria                  | jsonb                       | jsonb       | YES         | 
+ flow_steps                      | template_key                      | text                        | text        | YES         | 
+ flows                           | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ flows                           | name                              | character varying           | varchar     | NO          | 
+ flows                           | description                       | text                        | text        | YES         | 
+ flows                           | trigger_event                     | character varying           | varchar     | NO          | 
+ flows                           | trigger_conditions                | jsonb                       | jsonb       | YES         | '{}'::jsonb
+ flows                           | is_active                         | boolean                     | bool        | YES         | true
+ flows                           | organization_id                   | character varying           | varchar     | YES         | 
+ flows                           | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ flows                           | updated_at                        | timestamp without time zone | timestamp   | YES         | now()
+ flows                           | version                           | integer                     | int4        | NO          | 1
+ hcpcs_codes                     | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ hcpcs_codes                     | code                              | character varying           | varchar     | NO          | 
+ hcpcs_codes                     | description_official              | text                        | text        | NO          | 
+ hcpcs_codes                     | description_plain                 | text                        | text        | YES         | 
+ hcpcs_codes                     | unit_type                         | character varying           | varchar     | NO          | 
+ hcpcs_codes                     | unit_interval_minutes             | integer                     | int4        | YES         | 
+ hcpcs_codes                     | default_pos                       | character varying           | varchar     | YES         | '12'::character varying
+ hcpcs_codes                     | requires_modifier                 | boolean                     | bool        | YES         | false
+ hcpcs_codes                     | notes                             | text                        | text        | YES         | 
+ hcpcs_codes                     | is_active                         | boolean                     | bool        | YES         | true
+ hcpcs_codes                     | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ hcpcs_rates                     | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ hcpcs_rates                     | hcpcs_code                        | character varying           | varchar     | YES         | 
+ hcpcs_rates                     | payer_id                          | character varying           | varchar     | YES         | 
+ hcpcs_rates                     | payer_name                        | character varying           | varchar     | NO          | 
+ hcpcs_rates                     | rate_per_unit                     | numeric                     | numeric     | NO          | 
+ hcpcs_rates                     | unit_interval_minutes             | integer                     | int4        | YES         | 
+ hcpcs_rates                     | effective_date                    | date                        | date        | NO          | 
+ hcpcs_rates                     | end_date                          | date                        | date        | YES         | 
+ hcpcs_rates                     | is_override                       | boolean                     | bool        | YES         | false
+ hcpcs_rates                     | created_by                        | character varying           | varchar     | YES         | 
+ hcpcs_rates                     | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ hcpcs_rates                     | is_legacy                         | boolean                     | bool        | YES         | false
+ icd10_codes                     | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ icd10_codes                     | code                              | character varying           | varchar     | NO          | 
+ icd10_codes                     | description                       | text                        | text        | NO          | 
+ icd10_codes                     | is_header                         | boolean                     | bool        | YES         | false
+ icd10_codes                     | is_active                         | boolean                     | bool        | YES         | true
+ leads                           | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ leads                           | name                              | text                        | text        | NO          | 
+ leads                           | phone                             | text                        | text        | NO          | 
+ leads                           | email                             | text                        | text        | YES         | 
+ leads                           | source                            | text                        | text        | NO          | 'website'::text
+ leads                           | status                            | text                        | text        | NO          | 'new'::text
+ leads                           | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ leads                           | service_needed                    | text                        | text        | YES         | 
+ leads                           | insurance_carrier                 | text                        | text        | YES         | 
+ leads                           | member_id                         | text                        | text        | YES         | 
+ leads                           | priority                          | text                        | text        | NO          | 'P2'::text
+ leads                           | next_action                       | text                        | text        | YES         | 
+ leads                           | next_action_at                    | timestamp without time zone | timestamp   | YES         | 
+ leads                           | last_outcome                      | text                        | text        | YES         | 
+ leads                           | attempt_count                     | integer                     | int4        | NO          | 0
+ leads                           | last_contacted_at                 | timestamp without time zone | timestamp   | YES         | 
+ leads                           | vob_status                        | text                        | text        | NO          | 'not_started'::text
+ leads                           | vob_score                         | integer                     | int4        | NO          | 0
+ leads                           | plan_type                         | text                        | text        | YES         | 
+ leads                           | owner_user_id                     | character varying           | varchar     | YES         | 
+ leads                           | handoff_status                    | text                        | text        | NO          | 'not_sent'::text
+ leads                           | next_action_type                  | text                        | text        | NO          | 'call'::text
+ leads                           | sla_deadline_at                   | timestamp without time zone | timestamp   | YES         | 
+ leads                           | outcome_code                      | text                        | text        | YES         | 
+ leads                           | vob_missing_fields                | jsonb                       | jsonb       | YES         | '[]'::jsonb
+ leads                           | first_name                        | text                        | text        | YES         | 
+ leads                           | last_name                         | text                        | text        | YES         | 
+ leads                           | preferred_name                    | text                        | text        | YES         | 
+ leads                           | state                             | text                        | text        | YES         | 
+ leads                           | timezone                          | text                        | text        | YES         | 
+ leads                           | best_time_to_call                 | text                        | text        | YES         | 
+ leads                           | notes                             | text                        | text        | YES         | 
+ leads                           | consent_to_call                   | boolean                     | bool        | NO          | true
+ leads                           | referral_partner_name             | character varying           | varchar     | YES         | 
+ leads                           | organization_id                   | character varying           | varchar     | YES         | 
+ leads                           | dob                               | text                        | text        | YES         | 
+ leads                           | engagement_halted                 | boolean                     | bool        | NO          | false
+ login_attempts                  | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ login_attempts                  | ip                                | character varying           | varchar     | NO          | 
+ login_attempts                  | attempted_at                      | timestamp without time zone | timestamp   | NO          | now()
+ manual_extraction_items         | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ manual_extraction_items         | section_type                      | character varying           | varchar     | NO          | 
+ manual_extraction_items         | raw_snippet                       | text                        | text        | YES         | 
+ manual_extraction_items         | extracted_json                    | jsonb                       | jsonb       | YES         | 
+ manual_extraction_items         | confidence                        | real                        | float4      | YES         | 
+ manual_extraction_items         | review_status                     | character varying           | varchar     | NO          | 'pending'::character varying
+ manual_extraction_items         | reviewed_by                       | character varying           | varchar     | YES         | 
+ manual_extraction_items         | reviewed_at                       | timestamp without time zone | timestamp   | YES         | 
+ manual_extraction_items         | applied_rule_id                   | character varying           | varchar     | YES         | 
+ manual_extraction_items         | notes                             | text                        | text        | YES         | 
+ manual_extraction_items         | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ manual_extraction_items         | applies_to_plan_products          | jsonb                       | jsonb       | YES         | '["all"]'::jsonb
+ manual_extraction_items         | last_verified_at                  | timestamp without time zone | timestamp   | YES         | 
+ manual_extraction_items         | needs_reverification              | boolean                     | bool        | YES         | false
+ manual_extraction_items         | source_document_id                | character varying           | varchar     | YES         | 
+ manual_extraction_items         | is_demo_seed                      | boolean                     | bool        | NO          | false
+ nurture_sequences               | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ nurture_sequences               | name                              | text                        | text        | NO          | 
+ nurture_sequences               | description                       | text                        | text        | YES         | 
+ nurture_sequences               | trigger_event                     | text                        | text        | NO          | 
+ nurture_sequences               | steps                             | jsonb                       | jsonb       | YES         | '[]'::jsonb
+ nurture_sequences               | enabled                           | boolean                     | bool        | NO          | true
+ nurture_sequences               | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ nurture_sequences               | organization_id                   | character varying           | varchar     | YES         | 
+ org_lead_sources                | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ org_lead_sources                | organization_id                   | text                        | text        | NO          | 
+ org_lead_sources                | slug                              | text                        | text        | NO          | 
+ org_lead_sources                | label                             | text                        | text        | NO          | 
+ org_lead_sources                | source_type                       | text                        | text        | NO          | 
+ org_lead_sources                | is_active                         | boolean                     | bool        | NO          | true
+ org_message_templates           | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ org_message_templates           | organization_id                   | text                        | text        | NO          | 
+ org_message_templates           | template_key                      | text                        | text        | NO          | 
+ org_message_templates           | channel                           | text                        | text        | NO          | 
+ org_message_templates           | subject                           | text                        | text        | YES         | 
+ org_message_templates           | body                              | text                        | text        | NO          | 
+ org_message_templates           | variables                         | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ org_message_templates           | is_active                         | boolean                     | bool        | NO          | true
+ org_message_templates           | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ org_message_templates           | updated_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ org_payer_mappings              | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ org_payer_mappings              | organization_id                   | text                        | text        | NO          | 
+ org_payer_mappings              | payer_name                        | text                        | text        | NO          | 
+ org_payer_mappings              | payer_id                          | text                        | text        | NO          | 
+ org_payer_mappings              | payer_type                        | text                        | text        | YES         | 
+ org_payer_mappings              | is_primary                        | boolean                     | bool        | NO          | false
+ org_payer_mappings              | is_active                         | boolean                     | bool        | NO          | true
+ org_payer_mappings              | metadata                          | jsonb                       | jsonb       | NO          | '{}'::jsonb
+ org_providers                   | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ org_providers                   | organization_id                   | text                        | text        | NO          | 
+ org_providers                   | first_name                        | text                        | text        | NO          | 
+ org_providers                   | last_name                         | text                        | text        | NO          | 
+ org_providers                   | npi                               | text                        | text        | YES         | 
+ org_providers                   | email                             | text                        | text        | YES         | 
+ org_providers                   | phone                             | text                        | text        | YES         | 
+ org_providers                   | specialties                       | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ org_providers                   | service_types                     | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ org_providers                   | languages                         | jsonb                       | jsonb       | NO          | '["en"]'::jsonb
+ org_providers                   | availability                      | jsonb                       | jsonb       | NO          | '{}'::jsonb
+ org_providers                   | metadata                          | jsonb                       | jsonb       | NO          | '{}'::jsonb
+ org_providers                   | is_active                         | boolean                     | bool        | NO          | true
+ org_service_types               | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ org_service_types               | organization_id                   | text                        | text        | NO          | 
+ org_service_types               | service_code                      | text                        | text        | NO          | 
+ org_service_types               | service_name                      | text                        | text        | NO          | 
+ org_service_types               | description                       | text                        | text        | YES         | 
+ org_service_types               | metadata                          | jsonb                       | jsonb       | NO          | '{}'::jsonb
+ org_service_types               | is_active                         | boolean                     | bool        | NO          | true
+ org_voice_personas              | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ org_voice_personas              | organization_id                   | text                        | text        | NO          | 
+ org_voice_personas              | persona_key                       | text                        | text        | NO          | 
+ org_voice_personas              | vapi_assistant_id                 | text                        | text        | NO          | 
+ org_voice_personas              | persona_name                      | text                        | text        | NO          | 
+ org_voice_personas              | greeting                          | text                        | text        | YES         | 
+ org_voice_personas              | system_prompt                     | text                        | text        | YES         | 
+ org_voice_personas              | metadata                          | jsonb                       | jsonb       | NO          | '{}'::jsonb
+ org_voice_personas              | is_active                         | boolean                     | bool        | NO          | true
+ organization_practice_profiles  | organization_id                   | character varying           | varchar     | NO          | 
+ organization_practice_profiles  | profile_code                      | text                        | text        | NO          | 
+ organization_practice_profiles  | is_primary                        | boolean                     | bool        | NO          | false
+ organization_practice_profiles  | effective_from                    | date                        | date        | NO          | CURRENT_DATE
+ organization_practice_profiles  | effective_to                      | date                        | date        | YES         | 
+ organization_practice_profiles  | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ organizations                   | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ organizations                   | name                              | character varying           | varchar     | NO          | 
+ organizations                   | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ organizations                   | onboarding_dismissed_at           | timestamp without time zone | timestamp   | YES         | 
+ organizations                   | contact_email                     | text                        | text        | YES         | 
+ organizations                   | status                            | text                        | text        | NO          | 'active'::text
+ organizations                   | updated_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ patient_insurance_enrollments   | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ patient_insurance_enrollments   | patient_id                        | character varying           | varchar     | NO          | 
+ patient_insurance_enrollments   | payer_id                          | character varying           | varchar     | NO          | 
+ patient_insurance_enrollments   | organization_id                   | character varying           | varchar     | NO          | 
+ patient_insurance_enrollments   | member_id                         | text                        | text        | NO          | 
+ patient_insurance_enrollments   | group_number                      | text                        | text        | YES         | 
+ patient_insurance_enrollments   | coverage_priority                 | text                        | text        | NO          | 'primary'::text
+ patient_insurance_enrollments   | effective_from                    | date                        | date        | YES         | 
+ patient_insurance_enrollments   | effective_to                      | date                        | date        | YES         | 
+ patient_insurance_enrollments   | subscriber_relationship           | text                        | text        | YES         | 
+ patient_insurance_enrollments   | is_active                         | boolean                     | bool        | NO          | true
+ patient_insurance_enrollments   | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ patient_insurance_enrollments   | updated_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ patients                        | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ patients                        | lead_id                           | character varying           | varchar     | YES         | 
+ patients                        | dob                               | text                        | text        | NO          | 
+ patients                        | state                             | text                        | text        | YES         | 
+ patients                        | insurance_carrier                 | text                        | text        | YES         | 
+ patients                        | member_id                         | text                        | text        | YES         | 
+ patients                        | plan_type                         | text                        | text        | YES         | 
+ patients                        | first_name                        | character varying           | varchar     | YES         | 
+ patients                        | last_name                         | character varying           | varchar     | YES         | 
+ patients                        | preferred_name                    | character varying           | varchar     | YES         | 
+ patients                        | phone                             | character varying           | varchar     | YES         | 
+ patients                        | email                             | character varying           | varchar     | YES         | 
+ patients                        | sex                               | character varying           | varchar     | YES         | 
+ patients                        | address                           | jsonb                       | jsonb       | YES         | 
+ patients                        | group_number                      | character varying           | varchar     | YES         | 
+ patients                        | insured_name                      | character varying           | varchar     | YES         | 
+ patients                        | relationship_to_insured           | character varying           | varchar     | YES         | 
+ patients                        | authorization_number              | character varying           | varchar     | YES         | 
+ patients                        | payer_id                          | character varying           | varchar     | YES         | 
+ patients                        | referring_provider_name           | character varying           | varchar     | YES         | 
+ patients                        | referring_provider_npi            | character varying           | varchar     | YES         | 
+ patients                        | default_provider_id               | character varying           | varchar     | YES         | 
+ patients                        | referral_source                   | character varying           | varchar     | YES         | 
+ patients                        | referral_partner_name             | character varying           | varchar     | YES         | 
+ patients                        | service_needed                    | character varying           | varchar     | YES         | 
+ patients                        | intake_completed                  | boolean                     | bool        | YES         | false
+ patients                        | vob_verified                      | boolean                     | bool        | YES         | false
+ patients                        | notes                             | text                        | text        | YES         | 
+ patients                        | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ patients                        | updated_at                        | timestamp without time zone | timestamp   | YES         | 
+ patients                        | organization_id                   | character varying           | varchar     | YES         | 
+ patients                        | secondary_payer_id                | character varying           | varchar     | YES         | 
+ patients                        | secondary_member_id               | character varying           | varchar     | YES         | 
+ patients                        | secondary_group_number            | character varying           | varchar     | YES         | 
+ patients                        | secondary_plan_name               | character varying           | varchar     | YES         | 
+ patients                        | secondary_relationship            | character varying           | varchar     | YES         | 'self'::character varying
+ patients                        | street_address                    | character varying           | varchar     | YES         | 
+ patients                        | city                              | character varying           | varchar     | YES         | 
+ patients                        | zip_code                          | character varying           | varchar     | YES         | 
+ patients                        | plan_product                      | text                        | text        | YES         | 
+ patients                        | plan_product_code                 | character varying           | varchar     | YES         | 
+ patients                        | delegated_entity_id               | uuid                        | uuid        | YES         | 
+ patients                        | pcp_id                            | text                        | text        | YES         | 
+ patients                        | pcp_referral_number               | text                        | text        | YES         | 
+ patients                        | archived_at                       | timestamp without time zone | timestamp   | YES         | 
+ patients                        | archived_by                       | text                        | text        | YES         | 
+ patients                        | archive_reason                    | text                        | text        | YES         | 
+ patients                        | is_demo                           | boolean                     | bool        | NO          | false
+ payer_auth_requirements         | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ payer_auth_requirements         | payer_id                          | character varying           | varchar     | NO          | 
+ payer_auth_requirements         | payer_name                        | character varying           | varchar     | NO          | 
+ payer_auth_requirements         | code                              | character varying           | varchar     | NO          | 
+ payer_auth_requirements         | code_type                         | character varying           | varchar     | NO          | 'HCPCS'::character varying
+ payer_auth_requirements         | auth_required                     | boolean                     | bool        | NO          | true
+ payer_auth_requirements         | auth_conditions                   | text                        | text        | YES         | 
+ payer_auth_requirements         | auth_validity_days                | integer                     | int4        | YES         | 
+ payer_auth_requirements         | auth_number_format                | character varying           | varchar     | YES         | 
+ payer_auth_requirements         | auth_number_format_hint           | character varying           | varchar     | YES         | 
+ payer_auth_requirements         | typical_turnaround_days           | integer                     | int4        | YES         | 
+ payer_auth_requirements         | submission_method                 | character varying           | varchar     | YES         | 
+ payer_auth_requirements         | portal_url                        | text                        | text        | YES         | 
+ payer_auth_requirements         | notes                             | text                        | text        | YES         | 
+ payer_auth_requirements         | is_active                         | boolean                     | bool        | NO          | true
+ payer_auth_requirements         | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ payer_auth_requirements         | updated_at                        | timestamp without time zone | timestamp   | YES         | now()
+ payer_delegated_entities        | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ payer_delegated_entities        | payer_id                          | character varying           | varchar     | NO          | 
+ payer_delegated_entities        | delegated_entity_id               | uuid                        | uuid        | NO          | 
+ payer_delegated_entities        | plan_product_code                 | character varying           | varchar     | YES         | 
+ payer_delegated_entities        | state                             | character varying           | varchar     | YES         | 
+ payer_manual_extraction_history | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ payer_manual_extraction_history | extraction_id                     | character varying           | varchar     | NO          | 
+ payer_manual_extraction_history | changed_at                        | timestamp without time zone | timestamp   | YES         | now()
+ payer_manual_extraction_history | changed_by                        | text                        | text        | NO          | 
+ payer_manual_extraction_history | change_type                       | text                        | text        | NO          | 
+ payer_manual_extraction_history | state_snapshot                    | jsonb                       | jsonb       | NO          | 
+ payer_manual_extraction_history | change_notes                      | text                        | text        | YES         | 
+ payer_manual_extraction_history | payer_name                        | text                        | text        | YES         | 
+ payer_manual_extraction_history | section_type                      | text                        | text        | YES         | 
+ payer_manual_sources            | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ payer_manual_sources            | payer_name                        | character varying           | varchar     | NO          | 
+ payer_manual_sources            | canonical_url                     | text                        | text        | YES         | 
+ payer_manual_sources            | last_verified_date                | date                        | date        | YES         | 
+ payer_manual_sources            | notes                             | text                        | text        | YES         | 
+ payer_manual_sources            | priority                          | integer                     | int4        | NO          | 99
+ payer_manual_sources            | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ payer_manual_sources            | updated_at                        | timestamp without time zone | timestamp   | YES         | now()
+ payer_manual_sources            | linked_source_document_id         | character varying           | varchar     | YES         | 
+ payer_source_documents          | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ payer_source_documents          | payer_id                          | character varying           | varchar     | YES         | 
+ payer_source_documents          | document_type                     | character varying           | varchar     | NO          | 'admin_guide'::character varying
+ payer_source_documents          | parent_document_id                | character varying           | varchar     | YES         | 
+ payer_source_documents          | document_name                     | character varying           | varchar     | NO          | 
+ payer_source_documents          | source_url                        | text                        | text        | YES         | 
+ payer_source_documents          | file_content                      | bytea                       | bytea       | YES         | 
+ payer_source_documents          | file_name                         | character varying           | varchar     | YES         | 
+ payer_source_documents          | document_version                  | character varying           | varchar     | YES         | 
+ payer_source_documents          | effective_start                   | date                        | date        | YES         | 
+ payer_source_documents          | effective_end                     | date                        | date        | YES         | 
+ payer_source_documents          | status                            | character varying           | varchar     | NO          | 'pending'::character varying
+ payer_source_documents          | last_verified_date                | date                        | date        | YES         | 
+ payer_source_documents          | error_message                     | text                        | text        | YES         | 
+ payer_source_documents          | uploaded_by                       | character varying           | varchar     | YES         | 
+ payer_source_documents          | organization_id                   | character varying           | varchar     | YES         | 
+ payer_source_documents          | notes                             | text                        | text        | YES         | 
+ payer_source_documents          | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ payer_source_documents          | updated_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ payer_source_documents          | source_acquisition_method         | character varying           | varchar     | NO          | 'manual_upload'::character varying
+ payer_source_documents          | source_url_canonical              | character varying           | varchar     | YES         | 
+ payer_source_documents          | content_hash                      | character varying           | varchar     | YES         | 
+ payer_source_documents          | last_scraped_at                   | timestamp with time zone    | timestamptz | YES         | 
+ payer_source_documents          | scrape_status                     | character varying           | varchar     | YES         | 
+ payer_supported_plan_products   | payer_id                          | character varying           | varchar     | NO          | 
+ payer_supported_plan_products   | plan_product_code                 | character varying           | varchar     | NO          | 
+ payers                          | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ payers                          | name                              | character varying           | varchar     | NO          | 
+ payers                          | payer_id                          | character varying           | varchar     | YES         | 
+ payers                          | timely_filing_days                | integer                     | int4        | YES         | 365
+ payers                          | auth_required                     | boolean                     | bool        | YES         | false
+ payers                          | billing_type                      | character varying           | varchar     | YES         | 'professional'::character varying
+ payers                          | is_active                         | boolean                     | bool        | YES         | true
+ payers                          | is_custom                         | boolean                     | bool        | YES         | false
+ payers                          | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ payers                          | auto_followup_days                | integer                     | int4        | YES         | 30
+ payers                          | era_auto_post_clean               | boolean                     | bool        | YES         | false
+ payers                          | era_auto_post_contractual         | boolean                     | bool        | YES         | false
+ payers                          | era_auto_post_secondary           | boolean                     | bool        | YES         | true
+ payers                          | era_auto_post_refunds             | boolean                     | bool        | YES         | true
+ payers                          | era_hold_if_mismatch              | boolean                     | bool        | YES         | true
+ payers                          | stedi_payer_id                    | character varying           | varchar     | YES         | 
+ payers                          | supported_transactions            | jsonb                       | jsonb       | YES         | '[]'::jsonb
+ payers                          | updated_at                        | timestamp without time zone | timestamp   | YES         | 
+ payers                          | stedi_synced_at                   | timestamp without time zone | timestamp   | YES         | 
+ payers                          | enrollment_status_835             | character varying           | varchar     | YES         | 'not_enrolled'::character varying
+ payers                          | enrollment_status_837             | character varying           | varchar     | YES         | 'not_enrolled'::character varying
+ payers                          | enrollment_activated_at           | timestamp without time zone | timestamp   | YES         | 
+ payers                          | payer_classification              | character varying           | varchar     | YES         | 
+ payers                          | claim_filing_indicator            | character varying           | varchar     | YES         | 
+ payers                          | organization_id                   | character varying           | varchar     | YES         | 
+ payers                          | payer_category                    | character varying           | varchar     | YES         | 
+ pcp_referrals                   | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ pcp_referrals                   | organization_id                   | character varying           | varchar     | NO          | 
+ pcp_referrals                   | patient_id                        | character varying           | varchar     | NO          | 
+ pcp_referrals                   | pcp_name                          | text                        | text        | NO          | 
+ pcp_referrals                   | pcp_npi                           | text                        | text        | YES         | 
+ pcp_referrals                   | pcp_phone                         | text                        | text        | YES         | 
+ pcp_referrals                   | pcp_practice_name                 | text                        | text        | YES         | 
+ pcp_referrals                   | referral_number                   | text                        | text        | YES         | 
+ pcp_referrals                   | issue_date                        | date                        | date        | NO          | 
+ pcp_referrals                   | expiration_date                   | date                        | date        | YES         | 
+ pcp_referrals                   | visits_authorized                 | integer                     | int4        | YES         | 
+ pcp_referrals                   | visits_used                       | integer                     | int4        | YES         | 0
+ pcp_referrals                   | specialty_authorized              | text                        | text        | YES         | 
+ pcp_referrals                   | diagnosis_authorized              | text                        | text        | YES         | 
+ pcp_referrals                   | captured_via                      | text                        | text        | NO          | 'manual_entry'::text
+ pcp_referrals                   | captured_by                       | text                        | text        | NO          | 
+ pcp_referrals                   | captured_at                       | timestamp without time zone | timestamp   | YES         | now()
+ pcp_referrals                   | status                            | text                        | text        | NO          | 'active'::text
+ plan_products                   | code                              | character varying           | varchar     | NO          | 
+ plan_products                   | label                             | character varying           | varchar     | NO          | 
+ plan_products                   | parent_plan_family                | character varying           | varchar     | NO          | 
+ plan_products                   | plan_type                         | character varying           | varchar     | NO          | 
+ plan_products                   | requires_pcp                      | boolean                     | bool        | NO          | false
+ plan_products                   | requires_referral                 | boolean                     | bool        | NO          | false
+ plan_products                   | is_government                     | boolean                     | bool        | NO          | false
+ plan_products                   | regulatory_basis                  | character varying           | varchar     | YES         | 
+ plan_products                   | sort_order                        | integer                     | int4        | NO          | 0
+ plan_products                   | active                            | boolean                     | bool        | NO          | true
+ pos_codes                       | id                                | integer                     | int4        | NO          | nextval('pos_codes_id_seq'::regclass)
+ pos_codes                       | code                              | character varying           | varchar     | NO          | 
+ pos_codes                       | description                       | character varying           | varchar     | NO          | 
+ pos_codes                       | notes                             | text                        | text        | YES         | 
+ practice_payer_enrollments      | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ practice_payer_enrollments      | organization_id                   | character varying           | varchar     | NO          | 
+ practice_payer_enrollments      | payer_id                          | character varying           | varchar     | NO          | 
+ practice_payer_enrollments      | plan_product_code                 | character varying           | varchar     | YES         | 
+ practice_payer_enrollments      | enrolled_at                       | timestamp with time zone    | timestamptz | NO          | now()
+ practice_payer_enrollments      | enrolled_by                       | character varying           | varchar     | YES         | 
+ practice_payer_enrollments      | disabled_at                       | timestamp with time zone    | timestamptz | YES         | 
+ practice_payer_enrollments      | notes                             | text                        | text        | YES         | 
+ practice_payer_enrollments      | enrollment_status                 | text                        | text        | NO          | 'pending'::text
+ practice_payer_enrollments      | effective_from                    | date                        | date        | YES         | 
+ practice_payer_enrollments      | effective_to                      | date                        | date        | YES         | 
+ practice_payer_enrollments      | billing_npi                       | text                        | text        | YES         | 
+ practice_payer_enrollments      | taxonomy_code                     | text                        | text        | YES         | 
+ practice_payer_enrollments      | submission_method                 | text                        | text        | YES         | 
+ practice_payer_enrollments      | clearinghouse                     | text                        | text        | YES         | 
+ practice_payer_enrollments      | timely_filing_days                | integer                     | int4        | YES         | 
+ practice_payer_enrollments      | prior_auth_required               | boolean                     | bool        | NO          | false
+ practice_payer_enrollments      | contracted_rate_table_id          | uuid                        | uuid        | YES         | 
+ practice_payer_enrollments      | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ practice_payer_enrollments      | updated_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ practice_profiles               | profile_code                      | text                        | text        | NO          | 
+ practice_profiles               | display_name                      | text                        | text        | NO          | 
+ practice_profiles               | description                       | text                        | text        | YES         | 
+ practice_profiles               | version_label                     | text                        | text        | NO          | 'v1'::text
+ practice_profiles               | service_code_catalog              | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ practice_profiles               | intake_field_specs                | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ practice_profiles               | claim_field_specs                 | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ practice_profiles               | payer_relationship_templates      | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ practice_profiles               | provider_role_definitions         | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ practice_profiles               | authorization_templates           | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ practice_profiles               | rule_subscriptions                | jsonb                       | jsonb       | NO          | '[]'::jsonb
+ practice_profiles               | ui_surface_config                 | jsonb                       | jsonb       | NO          | '{}'::jsonb
+ practice_profiles               | edi_structural_rules              | jsonb                       | jsonb       | NO          | '{}'::jsonb
+ practice_profiles               | is_active                         | boolean                     | bool        | NO          | true
+ practice_profiles               | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ practice_profiles               | updated_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ practice_settings               | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ practice_settings               | practice_name                     | character varying           | varchar     | NO          | ''::character varying
+ practice_settings               | primary_npi                       | character varying           | varchar     | YES         | 
+ practice_settings               | tax_id                            | character varying           | varchar     | YES         | 
+ practice_settings               | taxonomy_code                     | character varying           | varchar     | YES         | 
+ practice_settings               | address                           | jsonb                       | jsonb       | YES         | '{}'::jsonb
+ practice_settings               | phone                             | character varying           | varchar     | YES         | 
+ practice_settings               | default_pos                       | character varying           | varchar     | YES         | '12'::character varying
+ practice_settings               | organization_id                   | character varying           | varchar     | YES         | 
+ practice_settings               | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ practice_settings               | updated_at                        | timestamp without time zone | timestamp   | YES         | now()
+ practice_settings               | billing_location                  | character varying           | varchar     | YES         | 
+ practice_settings               | oa_submitter_id                   | character varying           | varchar     | YES         | 
+ practice_settings               | oa_sftp_username                  | character varying           | varchar     | YES         | 
+ practice_settings               | oa_sftp_password                  | character varying           | varchar     | YES         | 
+ practice_settings               | oa_connected                      | boolean                     | bool        | YES         | false
+ practice_settings               | default_tos                       | character varying           | varchar     | YES         | 
+ practice_settings               | default_ordering_provider_id      | character varying           | varchar     | YES         | 
+ practice_settings               | homebound_default                 | boolean                     | bool        | YES         | true
+ practice_settings               | exclude_facility                  | boolean                     | bool        | YES         | true
+ practice_settings               | frcpb_enrolled                    | boolean                     | bool        | YES         | false
+ practice_settings               | frcpb_enrolled_at                 | timestamp without time zone | timestamp   | YES         | 
+ practice_settings               | default_va_locality               | character varying           | varchar     | YES         | 
+ practice_settings               | billing_model                     | character varying           | varchar     | YES         | 'direct'::character varying
+ practice_settings               | agency_npi                        | character varying           | varchar     | YES         | 
+ practice_settings               | agency_tax_id                     | character varying           | varchar     | YES         | 
+ practice_settings               | medicare_locality_code            | text                        | text        | YES         | 
+ practice_settings               | medicare_mac_carrier              | text                        | text        | YES         | 
+ practice_settings               | locality_resolved_at              | timestamp without time zone | timestamp   | YES         | 
+ practice_settings               | locality_resolution_method        | text                        | text        | YES         | 
+ practice_settings               | locality_source_url               | text                        | text        | YES         | 
+ practice_settings               | pgba_trading_partner_id           | character varying           | varchar     | YES         | 
+ prior_authorizations            | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ prior_authorizations            | encounter_id                      | character varying           | varchar     | NO          | 
+ prior_authorizations            | patient_id                        | character varying           | varchar     | NO          | 
+ prior_authorizations            | payer                             | text                        | text        | NO          | 
+ prior_authorizations            | service_type                      | text                        | text        | NO          | 
+ prior_authorizations            | auth_number                       | text                        | text        | YES         | 
+ prior_authorizations            | status                            | text                        | text        | NO          | 'pending'::text
+ prior_authorizations            | requested_date                    | timestamp without time zone | timestamp   | NO          | now()
+ prior_authorizations            | approved_date                     | timestamp without time zone | timestamp   | YES         | 
+ prior_authorizations            | expiration_date                   | timestamp without time zone | timestamp   | YES         | 
+ prior_authorizations            | approved_units                    | integer                     | int4        | YES         | 
+ prior_authorizations            | used_units                        | integer                     | int4        | YES         | 0
+ prior_authorizations            | notes                             | text                        | text        | YES         | 
+ prior_authorizations            | denial_reason                     | text                        | text        | YES         | 
+ prior_authorizations            | organization_id                   | character varying           | varchar     | YES         | 
+ prior_authorizations            | request_status                    | character varying           | varchar     | YES         | 'not_started'::character varying
+ prior_authorizations            | cpt_codes                         | jsonb                       | jsonb       | YES         | '[]'::jsonb
+ prior_authorizations            | submitted_at                      | timestamp without time zone | timestamp   | YES         | 
+ prior_authorizations            | decision_at                       | timestamp without time zone | timestamp   | YES         | 
+ prior_authorizations            | clinical_notes                    | text                        | text        | YES         | 
+ prior_authorizations            | request_method                    | character varying           | varchar     | YES         | 
+ prior_authorizations            | requested_by                      | character varying           | varchar     | YES         | 
+ prior_authorizations            | mode                              | character varying           | varchar     | YES         | 'received'::character varying
+ prior_authorizations            | source                            | character varying           | varchar     | YES         | 
+ prior_authorizations            | referring_provider_name           | character varying           | varchar     | YES         | 
+ prior_authorizations            | referring_provider_npi            | character varying           | varchar     | YES         | 
+ prior_authorizations            | clinical_justification            | text                        | text        | YES         | 
+ prior_authorizations            | authorized_visits                 | integer                     | int4        | YES         | 
+ prior_authorizations            | appeal_deadline                   | date                        | date        | YES         | 
+ provider_payer_relationships    | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ provider_payer_relationships    | provider_id                       | character varying           | varchar     | NO          | 
+ provider_payer_relationships    | payer_id                          | character varying           | varchar     | NO          | 
+ provider_payer_relationships    | organization_id                   | character varying           | varchar     | NO          | 
+ provider_payer_relationships    | participates                      | boolean                     | bool        | NO          | false
+ provider_payer_relationships    | taxonomy_submitted                | text                        | text        | YES         | 
+ provider_payer_relationships    | credentialing_status              | text                        | text        | YES         | 
+ provider_payer_relationships    | effective_from                    | date                        | date        | YES         | 
+ provider_payer_relationships    | effective_to                      | date                        | date        | YES         | 
+ provider_payer_relationships    | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ provider_payer_relationships    | updated_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ provider_practice_relationships | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ provider_practice_relationships | provider_id                       | character varying           | varchar     | NO          | 
+ provider_practice_relationships | organization_id                   | character varying           | varchar     | NO          | 
+ provider_practice_relationships | role_code                         | text                        | text        | NO          | 
+ provider_practice_relationships | npi_used_at_practice              | text                        | text        | YES         | 
+ provider_practice_relationships | effective_from                    | date                        | date        | YES         | 
+ provider_practice_relationships | effective_to                      | date                        | date        | YES         | 
+ provider_practice_relationships | is_active                         | boolean                     | bool        | NO          | true
+ provider_practice_relationships | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ provider_practice_relationships | updated_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ providers                       | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ providers                       | first_name                        | character varying           | varchar     | NO          | 
+ providers                       | last_name                         | character varying           | varchar     | NO          | 
+ providers                       | credentials                       | character varying           | varchar     | YES         | 
+ providers                       | npi                               | character varying           | varchar     | YES         | 
+ providers                       | taxonomy_code                     | character varying           | varchar     | YES         | 
+ providers                       | individual_tax_id                 | character varying           | varchar     | YES         | 
+ providers                       | is_default                        | boolean                     | bool        | YES         | false
+ providers                       | is_active                         | boolean                     | bool        | YES         | true
+ providers                       | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ providers                       | updated_at                        | timestamp without time zone | timestamp   | YES         | now()
+ providers                       | organization_id                   | character varying           | varchar     | YES         | 
+ providers                       | license_number                    | character varying           | varchar     | YES         | 
+ providers                       | entity_type                       | character varying           | varchar     | YES         | 'individual'::character varying
+ providers                       | provider_type                     | character varying           | varchar     | YES         | 'rendering'::character varying
+ rarc_codes                      | id                                | integer                     | int4        | NO          | nextval('rarc_codes_id_seq'::regclass)
+ rarc_codes                      | code                              | character varying           | varchar     | NO          | 
+ rarc_codes                      | description                       | text                        | text        | NO          | 
+ rarc_codes                      | type                              | character varying           | varchar     | NO          | 'informational'::character varying
+ role_permissions                | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ role_permissions                | role                              | character varying           | varchar     | NO          | 
+ role_permissions                | resource                          | character varying           | varchar     | NO          | 
+ role_permissions                | actions                           | ARRAY                       | _text       | NO          | '{}'::text[]
+ role_permissions                | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ rule_kinds                      | code                              | character varying           | varchar     | NO          | 
+ rule_kinds                      | label                             | character varying           | varchar     | NO          | 
+ rule_kinds                      | description                       | text                        | text        | YES         | 
+ rule_kinds                      | ui_group                          | character varying           | varchar     | NO          | 'Operational'::character varying
+ rule_kinds                      | active_in_extraction              | boolean                     | bool        | NO          | true
+ rule_kinds                      | active_in_rules_engine            | boolean                     | bool        | NO          | false
+ rule_kinds                      | sort_order                        | integer                     | int4        | NO          | 99
+ rule_kinds                      | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ rules                           | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ rules                           | name                              | text                        | text        | NO          | 
+ rules                           | description                       | text                        | text        | NO          | 
+ rules                           | payer                             | text                        | text        | YES         | 
+ rules                           | cpt_code                          | text                        | text        | YES         | 
+ rules                           | trigger_pattern                   | text                        | text        | NO          | 
+ rules                           | prevention_action                 | text                        | text        | NO          | 
+ rules                           | enabled                           | boolean                     | bool        | NO          | true
+ rules                           | impact_count                      | integer                     | int4        | NO          | 0
+ rules                           | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ rules                           | triggered_count                   | integer                     | int4        | NO          | 0
+ rules                           | prevented_count                   | integer                     | int4        | NO          | 0
+ rules                           | protected_amount                  | real                        | float4      | NO          | 0
+ rules                           | organization_id                   | character varying           | varchar     | YES         | 
+ rules                           | specialty_tags                    | ARRAY                       | _text       | YES         | '{}'::text[]
+ rules                           | condition_type                    | character varying           | varchar     | YES         | 
+ rules                           | condition_value                   | character varying           | varchar     | YES         | 
+ rules                           | action                            | character varying           | varchar     | YES         | 
+ rules                           | is_active                         | boolean                     | bool        | YES         | true
+ scrape_runs                     | id                                | uuid                        | uuid        | NO          | 
+ scrape_runs                     | payer_code                        | character varying           | varchar     | NO          | 
+ scrape_runs                     | started_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ scrape_runs                     | completed_at                      | timestamp with time zone    | timestamptz | YES         | 
+ scrape_runs                     | status                            | character varying           | varchar     | NO          | 'running'::character varying
+ scrape_runs                     | report                            | jsonb                       | jsonb       | YES         | 
+ scrape_runs                     | triggered_by                      | character varying           | varchar     | NO          | 'manual_admin'::character varying
+ scrape_runs                     | triggered_by_user_id              | character varying           | varchar     | YES         | 
+ scrape_runs                     | used_fallback                     | boolean                     | bool        | NO          | false
+ scraper_circuit_state           | payer_code                        | character varying           | varchar     | NO          | 
+ scraper_circuit_state           | state                             | character varying           | varchar     | NO          | 'closed'::character varying
+ scraper_circuit_state           | consecutive_errors                | integer                     | int4        | NO          | 0
+ scraper_circuit_state           | last_error_at                     | timestamp with time zone    | timestamptz | YES         | 
+ scraper_circuit_state           | opened_at                         | timestamp with time zone    | timestamptz | YES         | 
+ scraper_circuit_state           | reopens_at                        | timestamp with time zone    | timestamptz | YES         | 
+ scraper_circuit_state           | notes                             | text                        | text        | YES         | 
+ scraper_monitor_log             | id                                | uuid                        | uuid        | NO          | 
+ scraper_monitor_log             | event_type                        | character varying           | varchar     | NO          | 
+ scraper_monitor_log             | alert_level                       | character varying           | varchar     | NO          | 
+ scraper_monitor_log             | payer_code                        | character varying           | varchar     | NO          | 
+ scraper_monitor_log             | run_id                            | character varying           | varchar     | YES         | 
+ scraper_monitor_log             | payload                           | jsonb                       | jsonb       | NO          | 
+ scraper_monitor_log             | created_at                        | timestamp with time zone    | timestamptz | NO          | now()
+ session                         | sid                               | character varying           | varchar     | NO          | 
+ session                         | sess                              | json                        | json        | NO          | 
+ session                         | expire                            | timestamp without time zone | timestamp   | NO          | 
+ step_types                      | step_type                         | text                        | text        | NO          | 
+ step_types                      | display_name                      | text                        | text        | NO          | 
+ step_types                      | category                          | text                        | text        | NO          | 
+ step_types                      | config_schema                     | jsonb                       | jsonb       | NO          | 
+ step_types                      | description                       | text                        | text        | YES         | 
+ step_types                      | is_active                         | boolean                     | bool        | NO          | true
+ submission_attempts             | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::character varying
+ submission_attempts             | claim_id                          | character varying           | varchar     | NO          | 
+ submission_attempts             | organization_id                   | character varying           | varchar     | YES         | 
+ submission_attempts             | isa15                             | character varying           | varchar     | NO          | 
+ submission_attempts             | test_mode_override                | boolean                     | bool        | YES         | false
+ submission_attempts             | automated                         | boolean                     | bool        | YES         | false
+ submission_attempts             | test_data_result                  | character varying           | varchar     | YES         | 
+ submission_attempts             | test_data_score                   | integer                     | int4        | YES         | 
+ submission_attempts             | attempted_by                      | character varying           | varchar     | YES         | 
+ submission_attempts             | attempted_at                      | timestamp without time zone | timestamp   | YES         | now()
+ submission_attempts             | blocked                           | boolean                     | bool        | YES         | false
+ submission_attempts             | block_reason                      | character varying           | varchar     | YES         | 
+ system_settings                 | key                               | character varying           | varchar     | NO          | 
+ system_settings                 | value                             | text                        | text        | YES         | 
+ system_settings                 | updated_at                        | timestamp without time zone | timestamp   | YES         | now()
+ taxonomy_codes                  | id                                | integer                     | int4        | NO          | nextval('taxonomy_codes_id_seq'::regclass)
+ taxonomy_codes                  | code                              | character varying           | varchar     | NO          | 
+ taxonomy_codes                  | display                           | text                        | text        | NO          | 
+ taxonomy_codes                  | category                          | character varying           | varchar     | NO          | 'Other'::character varying
+ timely_filing_alerts            | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ timely_filing_alerts            | claim_id                          | character varying           | varchar     | NO          | 
+ timely_filing_alerts            | organization_id                   | character varying           | varchar     | NO          | 
+ timely_filing_alerts            | alert_status                      | text                        | text        | NO          | 
+ timely_filing_alerts            | days_remaining                    | integer                     | int4        | NO          | 
+ timely_filing_alerts            | deadline_date                     | date                        | date        | NO          | 
+ timely_filing_alerts            | alert_method                      | text                        | text        | NO          | 'in_app'::text
+ timely_filing_alerts            | alert_sent_at                     | timestamp without time zone | timestamp   | YES         | now()
+ timely_filing_alerts            | alert_acknowledged_at             | timestamp without time zone | timestamp   | YES         | 
+ timely_filing_alerts            | alert_acknowledged_by             | text                        | text        | YES         | 
+ timely_filing_alerts            | snoozed_until                     | timestamp without time zone | timestamp   | YES         | 
+ users                           | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ users                           | email                             | text                        | text        | NO          | 
+ users                           | password                          | text                        | text        | NO          | 
+ users                           | role                              | text                        | text        | NO          | 'intake'::text
+ users                           | name                              | text                        | text        | NO          | 
+ users                           | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ users                           | organization_id                   | character varying           | varchar     | YES         | 
+ users                           | last_active_at                    | timestamp without time zone | timestamp   | YES         | 
+ va_fee_schedule                 | id                                | uuid                        | uuid        | NO          | gen_random_uuid()
+ va_fee_schedule                 | hcpcs_code                        | text                        | text        | NO          | 
+ va_fee_schedule                 | modifier                          | text                        | text        | YES         | 
+ va_fee_schedule                 | schedule_type                     | text                        | text        | NO          | 
+ va_fee_schedule                 | facility_rate                     | numeric                     | numeric     | YES         | 
+ va_fee_schedule                 | non_facility_rate                 | numeric                     | numeric     | YES         | 
+ va_fee_schedule                 | unit_rate                         | numeric                     | numeric     | YES         | 
+ va_fee_schedule                 | unit_description                  | text                        | text        | YES         | 
+ va_fee_schedule                 | geographic_scope                  | text                        | text        | NO          | 'national'::text
+ va_fee_schedule                 | mac_carrier                       | text                        | text        | YES         | 
+ va_fee_schedule                 | locality_code                     | text                        | text        | YES         | 
+ va_fee_schedule                 | code_description                  | text                        | text        | YES         | 
+ va_fee_schedule                 | effective_date                    | date                        | date        | NO          | 
+ va_fee_schedule                 | termination_date                  | date                        | date        | YES         | 
+ va_fee_schedule                 | fee_schedule_year                 | integer                     | int4        | NO          | 
+ va_fee_schedule                 | source_url                        | text                        | text        | YES         | 
+ va_fee_schedule                 | ingested_at                       | timestamp without time zone | timestamp   | YES         | now()
+ va_location_rates               | id                                | character varying           | varchar     | NO          | (gen_random_uuid())::text
+ va_location_rates               | hcpcs_code                        | character varying           | varchar     | NO          | 
+ va_location_rates               | location_name                     | character varying           | varchar     | NO          | 
+ va_location_rates               | carrier                           | character varying           | varchar     | YES         | 
+ va_location_rates               | locality_code                     | character varying           | varchar     | YES         | 
+ va_location_rates               | facility_rate                     | numeric                     | numeric     | YES         | 
+ va_location_rates               | non_facility_rate                 | numeric                     | numeric     | YES         | 
+ va_location_rates               | effective_date                    | date                        | date        | YES         | '2026-01-01'::date
+ va_location_rates               | is_non_reimbursable               | boolean                     | bool        | YES         | false
+ va_location_rates               | created_at                        | timestamp without time zone | timestamp   | YES         | now()
+ va_location_rates               | last_updated                      | timestamp without time zone | timestamp   | YES         | now()
+ vob_verifications               | id                                | character varying           | varchar     | NO          | gen_random_uuid()
+ vob_verifications               | lead_id                           | character varying           | varchar     | YES         | 
+ vob_verifications               | patient_id                        | character varying           | varchar     | YES         | 
+ vob_verifications               | verifytx_vob_id                   | text                        | text        | YES         | 
+ vob_verifications               | payer_id                          | text                        | text        | YES         | 
+ vob_verifications               | payer_name                        | text                        | text        | NO          | 
+ vob_verifications               | member_id                         | text                        | text        | NO          | 
+ vob_verifications               | status                            | text                        | text        | NO          | 'pending'::text
+ vob_verifications               | policy_status                     | text                        | text        | YES         | 
+ vob_verifications               | policy_type                       | text                        | text        | YES         | 
+ vob_verifications               | effective_date                    | text                        | text        | YES         | 
+ vob_verifications               | term_date                         | text                        | text        | YES         | 
+ vob_verifications               | copay                             | real                        | float4      | YES         | 
+ vob_verifications               | deductible                        | real                        | float4      | YES         | 
+ vob_verifications               | deductible_met                    | real                        | float4      | YES         | 
+ vob_verifications               | coinsurance                       | real                        | float4      | YES         | 
+ vob_verifications               | out_of_pocket_max                 | real                        | float4      | YES         | 
+ vob_verifications               | out_of_pocket_met                 | real                        | float4      | YES         | 
+ vob_verifications               | benefits_remaining                | real                        | float4      | YES         | 
+ vob_verifications               | prior_auth_required               | boolean                     | bool        | YES         | 
+ vob_verifications               | network_status                    | text                        | text        | YES         | 
+ vob_verifications               | coverage_limits                   | text                        | text        | YES         | 
+ vob_verifications               | plan_name                         | text                        | text        | YES         | 
+ vob_verifications               | payer_notes                       | text                        | text        | YES         | 
+ vob_verifications               | pdf_url                           | text                        | text        | YES         | 
+ vob_verifications               | raw_response                      | jsonb                       | jsonb       | YES         | '{}'::jsonb
+ vob_verifications               | error_message                     | text                        | text        | YES         | 
+ vob_verifications               | verified_at                       | timestamp without time zone | timestamp   | YES         | 
+ vob_verifications               | created_at                        | timestamp without time zone | timestamp   | NO          | now()
+ vob_verifications               | context                           | character varying           | varchar     | YES         | 'intake'::character varying
+ vob_verifications               | organization_id                   | character varying           | varchar     | YES         | 
+ vob_verifications               | verification_method               | character varying           | varchar     | YES         | 'manual'::character varying
+ vob_verifications               | stedi_transaction_id              | character varying           | varchar     | YES         | 
+ vob_verifications               | verified_by                       | character varying           | varchar     | YES         | 
+ webhook_events                  | event_id                          | character varying           | varchar     | NO          | 
+ webhook_events                  | event_type                        | character varying           | varchar     | YES         | 
+ webhook_events                  | transaction_id                    | character varying           | varchar     | YES         | 
+ webhook_events                  | transaction_set                   | character varying           | varchar     | YES         | 
+ webhook_events                  | processed_at                      | timestamp without time zone | timestamp   | YES         | now()
+ webhook_events                  | status                            | character varying           | varchar     | YES         | 'processed'::character varying
+(1076 rows)
+

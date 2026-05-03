@@ -1,0 +1,7 @@
+         rolname          | rolsuper | rolcanlogin | rolinherit | rolcreaterole | rolbypassrls 
+--------------------------+----------+-------------+------------+---------------+--------------
+ claimshield_app_role     | f        | f           | f          | f             | f
+ claimshield_service_role | f        | f           | f          | f             | f
+ postgres                 | t        | t           | t          | t             | t
+(3 rows)
+

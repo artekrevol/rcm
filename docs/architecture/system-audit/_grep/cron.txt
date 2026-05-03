@@ -1,0 +1,7 @@
+server/auth.ts:14:    this.pruneInterval = setInterval(() => this.pruneSessions(), 15 * 60 * 1000);
+server/jobs/scraper-cron.ts:140:  cronInterval = setInterval(() => { tick().catch(() => {}); }, CHECK_INTERVAL_MS);
+server/jobs/flow-orchestrator.ts:69:  setInterval(() => {
+server/routes.ts:13819:  setInterval(pollStedi277Acknowledgments, 4 * 60 * 60 * 1000); // Every 4 hours (webhooks are primary)
+server/routes.ts:13821:  setInterval(pollStedi835ERA, 24 * 60 * 60 * 1000); // Every 24 hours (webhooks are primary)
+server/jobs/timely-filing-cron.ts:74:  setInterval(maybeRun, CHECK_INTERVAL_MS);
+server/jobs/cci-cron.ts:43:  setInterval(() => {

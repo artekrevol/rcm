@@ -1,0 +1,247 @@
+server/routes.ts:9:import { requireAuth, requireRole, requireSuperAdmin } from "./auth";
+server/routes.ts:154:  const user = req.user as any;
+server/routes.ts:3203:  app.get("/api/npi-lookup", requireAuth, async (req, res) => {
+server/routes.ts:3239:  app.get("/api/taxonomy-codes", requireAuth, async (_req, res) => {
+server/routes.ts:3249:  app.get("/api/carc-codes", requireAuth, async (req, res) => {
+server/routes.ts:3266:  app.get("/api/rarc-codes", requireAuth, async (req, res) => {
+server/routes.ts:3283:  app.get("/api/pos-codes", requireAuth, async (_req, res) => {
+server/routes.ts:3293:  app.get("/api/payers", requireAuth, async (req, res) => {
+server/routes.ts:3297:  app.get("/api/billing/payers", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3316:  app.get("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3334:  app.post("/api/billing/providers", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3384:  app.patch("/api/billing/providers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3439:  app.get("/api/billing/org-readiness", requireRole("admin", "rcm_manager", "biller", "coder", "front_desk"), async (req, res) => {
+server/routes.ts:3472:  app.get("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3484:  app.put("/api/billing/practice-settings", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3520:  app.patch("/api/billing/practice-settings/frcpb-enrollment", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3551:  app.get("/api/practice/payer-enrollments", requireAuth, async (req, res) => {
+server/routes.ts:3573:  app.post("/api/practice/payer-enrollments", requireAuth, async (req, res) => {
+server/routes.ts:3576:      const userId = (req.user as any)?.id;
+server/routes.ts:3602:  app.delete("/api/practice/payer-enrollments/:id", requireAuth, async (req, res) => {
+server/routes.ts:3623:  app.get("/api/practice/activated-fields", requireAuth, async (req, res) => {
+server/routes.ts:3642:  app.get("/api/admin/field-definitions", requireAuth, async (req, res) => {
+server/routes.ts:3658:  app.get("/api/billing/va-locations", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3668:  app.get("/api/billing/va-rate", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3729:  app.get("/api/billing/va-rates-age", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3742:  app.get("/api/billing/filing-alerts", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3815:  app.post("/api/billing/filing-alerts/:id/acknowledge", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3818:      const userId = (req.user as any)?.id;
+server/routes.ts:3832:  app.post("/api/billing/filing-alerts/:id/snooze", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3850:  app.post("/api/billing/claims/:id/timely-filing-evaluate", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:3879:  app.get("/api/billing/patients/:id/referrals", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3898:  app.post("/api/billing/patients/:id/referrals", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3934:  app.patch("/api/billing/referrals/:id", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:3960:  app.post("/api/billing/claims/:id/link-referral", requireRole("admin", "rcm_manager", "biller"), async (req, res) => {
+server/routes.ts:4007:  app.get("/api/billing/claim-tracker", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4071:  app.post("/api/billing/claims/:id/mark-fixed", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4271:  app.get("/api/billing/eras", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4286:  app.post("/api/billing/eras", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4308:  app.get("/api/billing/eras/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4324:  app.patch("/api/billing/eras/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4457:  app.get("/api/billing/follow-up", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4488:  app.post("/api/billing/follow-up-notes", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4494:      const user = req.user as any;
+server/routes.ts:4505:  app.get("/api/billing/follow-up-notes/:claimId", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4518:  app.post("/api/billing/follow-up-notes/copy-to-patient", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4524:      const user = req.user as any;
+server/routes.ts:4547:  app.get("/api/billing/claims/:id/letter-data", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4588:  app.get("/api/intake/dashboard/stats", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:4628:  app.get("/api/billing/dashboard/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4743:  app.get("/api/billing/onboarding-checklist", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4814:  app.post("/api/billing/onboarding-checklist/dismiss", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4828:  app.get("/api/billing/claims/:id/denial-recovery", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4891:  app.post("/api/billing/refresh-responses", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4969:  app.get("/api/billing/prior-auths", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:4991:  app.get("/api/billing/activity-logs", requireRole("admin"), async (req, res) => {
+server/routes.ts:5018:  app.get("/api/billing/compliance-report/:type", requireRole("admin"), async (req, res) => {
+server/routes.ts:5053:  app.get("/api/admin/users", requireRole("admin"), async (req, res) => {
+server/routes.ts:5063:  app.post("/api/admin/users", requireRole("admin"), async (req, res) => {
+server/routes.ts:5076:  app.patch("/api/admin/users/:id", requireRole("admin"), async (req, res) => {
+server/routes.ts:5091:  app.patch("/api/admin/users/:id/password", requireRole("admin"), async (req, res) => {
+server/routes.ts:5104:  app.delete("/api/admin/users/:id", requireRole("admin"), async (req, res) => {
+server/routes.ts:5119:  app.get("/api/billing/claims/wizard-data", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:5139:  app.post("/api/billing/claims/draft", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:5157:        [encounterId, patientId, now.toISOString().split("T")[0], (req.user as any)?.email || null, now, orgId]
+server/routes.ts:5163:        [claimId, orgId, patientId, encounterId, p.insurance_carrier || 'Unknown', '[]', now, p.payer_id || null, p.authorization_number || null, (req.user as any)?.email || null, p.plan_product || null]
+server/routes.ts:5174:        [crypto.randomUUID(), claimId, patientId, 'created', 'Claim draft created via wizard', (req.user as any)?.id || null, orgId]
+server/routes.ts:5262:  app.post("/api/billing/claims/preflight", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:5269:        organizationId: (req.user as any)?.organization_id || b.organizationId || "",
+server/routes.ts:5311:  app.patch("/api/billing/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:5384:            [crypto.randomUUID(), req.params.id, rows[0].patient_id, 'status_change', 'status', oldStatus, req.body.status, `Claim status changed from ${oldStatus} to ${req.body.status}`, (req.user as any)?.id || null]
+server/routes.ts:5392:          [crypto.randomUUID(), req.params.id, rows[0]?.patient_id, 'updated', 'Claim data updated', (req.user as any)?.id || null]
+server/routes.ts:5419:  app.post("/api/billing/claims/:id/risk", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:5522:  app.get("/api/billing/claims/:id/pdf-data", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:5580:  app.patch("/api/billing/claims/:id/pdf-generated", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:5597:        [crypto.randomUUID(), req.params.id, claimRow.rows[0]?.patient_id || null, 'export_pdf', 'Claim PDF generated', (req.user as any)?.id || null]
+server/routes.ts:5606:  app.patch("/api/billing/claims/:id/archive", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:5610:      const user = req.user as any;
+server/routes.ts:5643:  app.get("/api/billing/claims/:id/edi-validate", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6006:  app.get("/api/billing/claims/:id/edi", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6147:        [crypto.randomUUID(), req.params.id, c.patient_id, "edi_export", "837P EDI file generated", (req.user as any)?.id || null]
+server/routes.ts:6168:  app.post("/api/billing/test-oa-connection", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6190:  app.post("/api/billing/claims/:id/submit-oa", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6336:          [crypto.randomUUID(), c.id, c.patient_id, "edi_submitted", `837P submitted via Office Ally: ${result.filename}`, (req.user as any)?.id || null]
+server/routes.ts:6348:  app.post("/api/billing/claims/:id/submit-stedi", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6393:        hasUserSession: !!(req.user),
+server/routes.ts:6491:            (req.user as any)?.id || null,
+server/routes.ts:6590:          [crypto.randomUUID(), c.id, c.patient_id, "edi_submitted", `837P submitted via Stedi. Transaction: ${result.transactionId || "N/A"}`, (req.user as any)?.id || null]
+server/routes.ts:6623:  app.post("/api/billing/claims/:id/test-stedi", requireRole("admin", "rcm_manager", "super_admin"), async (req, res) => {
+server/routes.ts:6821:  app.post("/api/billing/claims/:id/check-277", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6859:  app.get("/api/billing/hcpcs", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6868:  app.get("/api/billing/hcpcs/search", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6935:  app.get("/api/billing/hcpcs/:code", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6953:  app.get("/api/billing/hcpcs/:code/rates", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6965:  app.get("/api/billing/icd10/search", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:6990:  app.post("/api/billing/payers", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7005:  app.patch("/api/billing/payers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7076:  app.post("/api/billing/payers/sync-stedi", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7182:  app.get("/api/billing/payers/stedi-search", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7197:  app.get("/api/billing/payer-auth-requirements", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7213:  app.get("/api/billing/payer-auth-requirements/check", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7272:  app.post("/api/billing/payer-auth-requirements", requireRole("admin"), async (req, res) => {
+server/routes.ts:7310:  app.patch("/api/billing/payer-auth-requirements/:id", requireRole("admin"), async (req, res) => {
+server/routes.ts:7341:  app.delete("/api/billing/payer-auth-requirements/:id", requireRole("admin"), async (req, res) => {
+server/routes.ts:7351:  app.get("/api/billing/rates", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7364:  app.get("/api/billing/va-rates", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7401:  app.post("/api/billing/rates", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7416:  app.patch("/api/billing/rates/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7441:  app.delete("/api/billing/rates/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7453:  app.get("/api/billing/payers/:id/plan-products", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7471:  app.get("/api/billing/payers/:id/delegated-entities", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7501:  app.get("/api/billing/plan-products", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7511:  app.get("/api/billing/patients", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7554:  app.get("/api/billing/patients/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7576:  app.post("/api/billing/patients", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7641:  app.patch("/api/billing/patients/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7706:  app.patch("/api/billing/patients/:id/archive", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7711:      const user = req.user as any;
+server/routes.ts:7750:  app.patch("/api/billing/patients/:id/restore", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7768:  app.get("/api/billing/patients/:id/claims", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7783:  app.post("/api/billing/patients/:id/notes", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7788:      const user = req.user as any;
+server/routes.ts:7810:  app.get("/api/billing/patients/:id/vob", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7829:  app.get("/api/billing/stedi/status", requireRole("admin", "rcm_manager"), async (_req, res) => {
+server/routes.ts:7840:  app.post("/api/billing/patients/:id/vob/check", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7933:  app.post("/api/billing/patients/:id/vob/manual", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:7983:  app.get("/api/dashboard/metrics", requireRole("admin", "rcm_manager", "intake"), async (req, res) => {
+server/routes.ts:7990:  app.get("/api/dashboard/alerts", requireRole("admin", "rcm_manager", "intake"), async (req, res) => {
+server/routes.ts:8047:  app.get("/api/leads", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8053:  app.get("/api/leads/worklist", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8127:  app.get("/api/leads/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8135:  // NOTE: This endpoint is intentionally open (no requireRole) because it is also
+server/routes.ts:8188:  app.patch("/api/leads/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8412:  app.get("/api/leads/:id/calls", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8419:  app.get("/api/leads/:id/patient", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8427:  app.patch("/api/leads/:id/patient", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8493:  app.post("/api/leads/:id/halt-engagement", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8531:  app.post("/api/leads/:id/resume-engagement", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8557:  app.post("/api/leads/:id/convert-to-patient", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8598:  app.post("/api/leads/:id/sync-patient", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8646:  app.get("/api/leads/:id/call-context", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8737:  app.post("/api/leads/:id/call", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8824:  app.post("/api/leads/:id/claim-packet", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:8874:  app.get("/api/claims/recent", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8879:  app.get("/api/claims", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8884:  app.get("/api/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8892:  app.get("/api/claims/:id/events", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8901:  app.get("/api/claims/:id/explanation", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8910:  app.get("/api/claims/:id/patient", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8919:  app.post("/api/claims/:id/submit", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8940:  app.get("/api/intelligence/clusters", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8945:  app.get("/api/intelligence/top-patterns", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8950:  app.get("/api/rules", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8979:  app.post("/api/rules", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:8992:  app.post("/api/rules/generate", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:9009:  app.patch("/api/rules/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:9018:  app.delete("/api/rules/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:9149:  app.post("/api/vapi/outbound-call", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9177:    const callUserId = (req.user as any)?.id || "unknown";
+server/routes.ts:9242:  app.get("/api/vapi/call-status/:vapiCallId", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9432:  app.post("/api/calls/:id/refresh", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9519:  app.get("/api/calls/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9527:  app.patch("/api/calls/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9537:  app.get("/api/prior-auth/encounter/:encounterId", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:9544:  app.get("/api/prior-auth/patient/:patientId", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:9551:  app.get("/api/prior-auth/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:9559:  app.post("/api/prior-auth", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:9588:  app.patch("/api/prior-auth/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:9602:  app.post("/api/leads/:id/sms", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9617:    const userId = (req.user as any)?.id || "unknown";
+server/routes.ts:9711:  app.get("/api/sms/templates", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9789:  app.get("/api/sms/status", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9848:  app.get("/api/email-templates", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9854:  app.post("/api/email-templates", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9864:  app.patch("/api/email-templates/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9873:  app.delete("/api/email-templates/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9883:  app.get("/api/nurture-sequences", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9889:  app.post("/api/nurture-sequences", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9899:  app.patch("/api/nurture-sequences/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9908:  app.delete("/api/nurture-sequences/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:9998:  app.post("/api/leads/:id/email", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10009:    const emailUserId = (req.user as any)?.id || "unknown";
+server/routes.ts:10146:  app.get("/api/leads/:id/emails", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10152:  app.get("/api/leads/:id/activity", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10158:  app.get("/api/leads/:id/flow-runs", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10210:  app.post("/api/flow-runs/:id/retry", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10247:  app.post("/api/leads/:id/trigger-flow", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10316:  app.get("/api/flows", requireRole("admin", "intake", "super_admin"), async (req, res) => {
+server/routes.ts:10356:  app.get("/api/flows/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10404:  app.get("/api/orgs/:slug/service-types", requireAuth, async (req, res) => {
+server/routes.ts:10423:  app.get("/api/orgs/:slug/lead-sources", requireAuth, async (req, res) => {
+server/routes.ts:10442:  app.get("/api/flow-runs/active", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10486:  app.get("/api/email/status", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10494:  app.post("/api/leads/:id/send-confirmation", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10613:  app.get("/api/email/presets", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10625:  app.get("/api/availability", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10631:  app.post("/api/availability", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10641:  app.patch("/api/availability/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10650:  app.delete("/api/availability/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10660:  app.get("/api/appointments", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10666:  app.get("/api/leads/:id/appointments", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10674:  app.post("/api/leads/:id/appointments", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10705:  app.patch("/api/appointments/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10714:  app.post("/api/appointments/:id/cancel", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10739:  app.post("/api/appointments/:id/confirm", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10752:  app.get("/api/availability/slots", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:10816:  app.post("/api/availability/seed", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11088:  app.get("/api/chat-analytics/stats", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11096:  app.get("/api/calls-analytics/stats", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11146:  app.get("/api/chat-analytics/timeseries", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11193:  app.get("/api/chat-sessions", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11199:  app.get("/api/chat-sessions/:id", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11208:  app.get("/api/chat-analytics", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11221:  app.get("/api/verifytx/payers", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11254:  app.get("/api/leads/:id/vob-verifications", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11260:  app.get("/api/leads/:id/vob-verifications/latest", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11266:  app.post("/api/leads/:id/verify-insurance", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11449:  app.post("/api/vob-verifications/:id/reverify", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11491:  app.get("/api/vob-verifications/:id/pdf", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11531:  app.get("/api/stedi/status", requireRole("admin", "intake"), async (_req, res) => {
+server/routes.ts:11563:  app.get("/api/stedi/payers", requireRole("admin", "intake"), (req, res) => {
+server/routes.ts:11570:  app.get("/api/verifytx/status", requireRole("admin", "intake"), async (req, res) => {
+server/routes.ts:11862:        const user = req.user as any;
+server/routes.ts:12009:      const user = req.user as any;
+server/routes.ts:12548:  app.get("/api/billing/clinic/stats", requireRole("admin"), async (req, res) => {
+server/routes.ts:12575:  app.get("/api/billing/reports/ar-aging", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:12604:  app.get("/api/billing/reports/denial-analysis", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:12648:  app.get("/api/billing/reports/collections", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:12684:  app.get("/api/billing/reports/clean-claim-rate", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:12715:  app.post("/api/billing/eras/upload", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:12746:  app.get("/api/billing/stedi-status", requireRole("admin", "rcm_manager"), async (_req, res) => {
+server/routes.ts:12995:  app.get("/api/admin/cci/stats", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:13018:  app.get("/api/admin/cci/search", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:13105:  app.get("/api/billing/cci/check", requireRole("admin", "rcm_manager"), async (req, res) => {
+server/routes.ts:13362:          (req.user as any)?.email || 'system',
+server/routes.ts:13397:        userId: (req.user as any)?.id,
+server/middleware/tenant-context.ts:11: *     authenticated user (passport sets req.user) and stores it in an
+server/middleware/tenant-context.ts:42: * `req.user` is populated. Safe to mount before route registration.
+server/auth.ts:221:    if (!req.user) {
+server/auth.ts:224:    const { password, ...safeUser } = req.user as any;
+server/auth.ts:231:export function requireAuth(req: any, res: any, next: any) {
+server/auth.ts:232:  if (!req.user) {
+server/auth.ts:238:export function requireRole(...roles: string[]) {
+server/auth.ts:240:    if (!req.user) {
+server/auth.ts:243:    const userRole = (req.user as any).role;
+server/auth.ts:253:  if (!req.user) {
+server/auth.ts:256:  if ((req.user as any).role !== "super_admin") {
+server/index.ts:81:  // setupAuth so passport has populated req.user, and before route

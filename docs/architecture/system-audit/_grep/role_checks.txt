@@ -1,0 +1,15 @@
+server/auth.ts:256:  if ((req.user as any).role !== "super_admin") {
+client/src/pages/deals.tsx:175:  const effectiveOrgId = authUser?.role === "super_admin"
+server/routes.ts:156:  if (user.role === "super_admin") {
+server/routes.ts:10319:      const isSuperAdmin = user?.role === "super_admin";
+server/routes.ts:11587:        db.query("SELECT COUNT(*)::int as cnt FROM users WHERE role != 'super_admin'"),
+client/src/hooks/use-auth.ts:20:  if (user.role === "super_admin") return user.impersonatingOrgId || null;
+client/src/components/lead-form-dialog.tsx:38:  const effectiveOrgId = authUser?.role === "super_admin"
+client/src/components/billing-sidebar.tsx:107:                .filter((item) => !("adminOnly" in item && (item as any).adminOnly) || user?.role === "admin" || user?.role === "super_admin")
+client/src/components/billing-sidebar.tsx:139:        {(user?.role === "admin" || user?.role === "super_admin") && (
+client/src/components/billing-sidebar.tsx:151:                {user?.role === "super_admin" && (
+client/src/components/auth-guard.tsx:28:  if (allowedRoles && user.role !== "super_admin" && !allowedRoles.includes(user.role)) {
+client/src/components/intake-sidebar.tsx:86:        {user?.role === "admin" && (
+client/src/pages/billing/compliance-reports.tsx:229:  if (user?.role !== "admin") {
+client/src/pages/billing/activity-log.tsx:37:    enabled: user?.role === "admin",
+client/src/pages/billing/activity-log.tsx:40:  if (user?.role !== "admin") {

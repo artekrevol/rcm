@@ -1,0 +1,5 @@
+server/index.ts:30:app.use(
+server/index.ts:38:app.use(express.urlencoded({ extended: false }));
+server/index.ts:51:app.use((req, res, next) => {
+server/index.ts:83:  app.use(tenantContextMiddleware);
+server/index.ts:86:  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

@@ -76,6 +76,41 @@ UI/UX Design:
 ### Pending (requires Abeer input)
 - Chajinel Vapi assistant ID is `PLACEHOLDER_AWAITING_VAPI_CONFIG` — must be replaced with real assistant ID before `is_active` is set to true
 
+## Phase 3 Sprint 0 — Architectural Foundation (Completed 2026-05-03)
+
+Foundation for profile-aware multi-tenancy. All work on dev only; zero production deploys.
+
+### What shipped
+- **6 new tables**: `practice_profiles` (global catalog), `organization_practice_profiles`, `provider_practice_relationships`, `provider_payer_relationships`, `patient_insurance_enrollments`, `claim_provider_assignments`
+- **`practice_payer_enrollments` reconciled** 8 → 20 cols (additive ALTERs only; existing 2 demo rows preserved)
+- **RLS + FORCE RLS** on all 6 tenant-scoped tables; 2 policies each (`tenant_isolation` + `service_role_bypass`)
+- **`claimshield_app_role`** (NOLOGIN, NOINHERIT) — RLS-subject role; `withTenantTx` does `SET LOCAL ROLE` to drop superuser privileges per transaction
+- **Tenant context middleware** wired in `server/index.ts:86` (AsyncLocalStorage + transaction-scoped `set_config`)
+- **Helper service layer** in `server/services/practice-profile-helpers.ts` (6 helpers, idle behind feature flag)
+- **Tier 1 structural validator** at `server/services/rules-engine/tier1-structural-integrity.ts` (8 rules, 16/16 tests pass, not wired)
+- **Feature flag** `USE_PROFILE_AWARE_QUERIES=false` in `server/config/feature-flags.ts`
+- **Drizzle definitions** for all 7 new/reconciled tables in `shared/schema.ts:721-842`
+- **Seed**: `home_care_agency_personal_care` profile mapped to `chajinel-org-001` as `is_primary=true`
+
+### Critical rule for new code
+Any tenant-scoped query MUST use `withTenantTx` (or the helpers in `practice-profile-helpers.ts`). The global `db`/`pool` from `server/db.ts` connects as the `postgres` superuser and bypasses RLS — using it for tenant-scoped reads will silently leak cross-tenant rows.
+
+### Sprint 1 prerequisites
+- Add `WITH CHECK` clauses to every `tenant_isolation` policy before any Sprint-1 INSERT helper ships (DDL in `docs/architecture/migration-state.md` §3.1)
+- `organizations.is_active` does NOT exist — use `status = 'active'`. Audit drift; Drizzle declaration of `organizations` (`shared/schema.ts:518-523`) is also out of date
+- `practice_settings.billing_model` DOES exist — Sprint 2 EDI refactor must reconcile profile rule `edi_structural_rules.rendering_provider_loop_2310B.omit_when='agency_billed'` with the existing column
+
+### Verification
+- Tenant isolation: 12/12 cases pass (`scripts/verify-tenant-isolation.ts`)
+- Tier 1 structural: 16/16 tests pass
+- Helper smoke: `chajinel-org-001` resolves home_care profile; RLS isolates demo (2 enrollments) from chajinel (0) and no-ctx (0)
+
+### Key docs
+- `docs/architecture/sprint0-audit-report.md` — final audit report
+- `docs/architecture/migration-state.md` — single source of truth for Phase 3 migration state and Sprint 1+ prerequisites
+- `docs/architecture/sprint0-existing-schemas.md` — pre-sprint inspection + audit drift findings
+- `docs/architecture/sprint0-snapshots/sprint0-ddl.sql` + `sprint0-app-role.sql` — applied DDL bundles
+
 ## External Dependencies
 - **PostgreSQL**: Primary database.
 - **Drizzle ORM**: Database interaction layer.

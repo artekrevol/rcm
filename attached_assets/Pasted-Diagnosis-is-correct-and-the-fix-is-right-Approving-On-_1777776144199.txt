@@ -1,0 +1,20 @@
+Diagnosis is correct and the fix is right. Approving.
+On the role + SET LOCAL ROLE approach: green-light. This is the standard pattern when the app connects as superuser. SET LOCAL ROLE inside a transaction is correctly scoped — privileges revert on COMMIT/ROLLBACK, the pool client returns clean to the pool. SET LOCAL app.current_organization_id after the role switch still works because custom GUCs are settable by any role.
+One substantive addition before you run it. The role needs SELECT on the parent tables that helpers will join to. Step 6 helpers in v3 join across tables — getEnrolledPayers joins practice_payer_enrollments to payers, getActiveProviders joins to providers, getPatientCoverages joins to patients, getClaimProviderAssignments joins to claims. Without SELECT on those, helpers will throw permission denied for table X the first time a join runs. Add to the grant list:
+sqlGRANT SELECT ON organizations, payers, providers, patients, claims TO claimshield_app_role;
+SELECT only — not INSERT/UPDATE/DELETE. The new helpers don't write to parent tables, and we don't want to accidentally enable cross-domain mutations through this role.
+Note for sprint 1, not sprint 0. The current policies use only USING clauses. USING applies to SELECT, UPDATE row-visibility, and DELETE. INSERT and UPDATE row-validation use WITH CHECK, which is absent. Through claimshield_app_role, an INSERT could write a row with any organization_id, even one that doesn't match the current tenant context. Sprint 0 doesn't INSERT through the helper layer (the seed runs as postgres, bypassing RLS — correct for seeding). But sprint 1 starts wiring helpers into write paths. Before that runs, every policy needs a matching WITH CHECK:
+sqlALTER POLICY tenant_isolation ON organization_practice_profiles
+  USING (organization_id = current_setting('app.current_organization_id', true))
+  WITH CHECK (organization_id = current_setting('app.current_organization_id', true));
+-- (Repeat for the five other tables.)
+Add this to migration-state.md as a sprint 1 prerequisite. Don't apply now — sprint 0 doesn't write through the helpers.
+On the rejected alternative (non-superuser in DATABASE_URL): correct call to reject. That would change the runtime role for every existing query in the codebase — every cron, every existing route, every seeder. Blast radius is exactly what sprint 0 is supposed to avoid. SET LOCAL ROLE is the right scoping.
+On your three asks:
+
+Approach approved as described, with the parent-table SELECT grants added.
+Permission granted to write the DDL block (CREATE ROLE + GRANTs + GRANT membership to postgres) and edit server/middleware/tenant-context.ts. Keep the change scoped — role creation, grants, the one-line SET LOCAL ROLE in the transaction wrapper. Nothing else.
+Continue through Steps 6–9 after verification passes all 12 cases. The existing Step 6 verification (getActiveProfile returns a populated profile object) will catch any grant gaps when helpers run, so I'm not adding another formal pause. If something else genuinely unexpected surfaces — beyond a missing grant that's a one-line fix — pause and surface like you did here. Otherwise carry through to the audit report.
+
+Two items for your final audit report. First, the role + SET LOCAL ROLE design and why it was needed (postgres connection bypassing RLS by default). This is important context for sprint 1+ developers — they need to know that any new tenant-scoped helper must use withTenantTx, not the global db, because the global db connects as postgres and bypasses RLS. Second, the WITH CHECK gap noted as a sprint 1 prerequisite.
+Proceed.

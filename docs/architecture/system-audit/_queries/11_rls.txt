@@ -1,0 +1,16 @@
+             relname             | relrowsecurity | relforcerowsecurity |       polname       | polcmd |                                       using_expr                                       | check_expr |           roles            
+---------------------------------+----------------+---------------------+---------------------+--------+----------------------------------------------------------------------------------------+------------+----------------------------
+ claim_provider_assignments      | t              | t                   | service_role_bypass | *      | true                                                                                   | true       | {claimshield_service_role}
+ claim_provider_assignments      | t              | t                   | tenant_isolation    | *      | ((organization_id)::text = current_setting('app.current_organization_id'::text, true)) |            | 
+ organization_practice_profiles  | t              | t                   | service_role_bypass | *      | true                                                                                   | true       | {claimshield_service_role}
+ organization_practice_profiles  | t              | t                   | tenant_isolation    | *      | ((organization_id)::text = current_setting('app.current_organization_id'::text, true)) |            | 
+ patient_insurance_enrollments   | t              | t                   | service_role_bypass | *      | true                                                                                   | true       | {claimshield_service_role}
+ patient_insurance_enrollments   | t              | t                   | tenant_isolation    | *      | ((organization_id)::text = current_setting('app.current_organization_id'::text, true)) |            | 
+ practice_payer_enrollments      | t              | t                   | service_role_bypass | *      | true                                                                                   | true       | {claimshield_service_role}
+ practice_payer_enrollments      | t              | t                   | tenant_isolation    | *      | ((organization_id)::text = current_setting('app.current_organization_id'::text, true)) |            | 
+ provider_payer_relationships    | t              | t                   | service_role_bypass | *      | true                                                                                   | true       | {claimshield_service_role}
+ provider_payer_relationships    | t              | t                   | tenant_isolation    | *      | ((organization_id)::text = current_setting('app.current_organization_id'::text, true)) |            | 
+ provider_practice_relationships | t              | t                   | service_role_bypass | *      | true                                                                                   | true       | {claimshield_service_role}
+ provider_practice_relationships | t              | t                   | tenant_isolation    | *      | ((organization_id)::text = current_setting('app.current_organization_id'::text, true)) |            | 
+(12 rows)
+

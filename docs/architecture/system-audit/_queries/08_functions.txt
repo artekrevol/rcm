@@ -1,0 +1,4 @@
+ nspname | proname | args | result 
+---------+---------+------+--------
+(0 rows)
+

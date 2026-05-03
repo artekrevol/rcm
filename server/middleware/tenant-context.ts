@@ -84,6 +84,12 @@ export async function withTenantTx<T>(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // Drop privileges to the non-superuser app role for the lifetime of this
+    // transaction so RLS policies actually apply. The connecting role
+    // (postgres) is a superuser and bypasses RLS regardless of
+    // FORCE ROW LEVEL SECURITY; SET LOCAL ROLE reverts on COMMIT/ROLLBACK,
+    // returning the pool client clean.
+    await client.query("SET LOCAL ROLE claimshield_app_role");
     if (orgId) {
       // set_config supports parameter binding; SET LOCAL does not.
       // is_local=true scopes the setting to the current transaction only.

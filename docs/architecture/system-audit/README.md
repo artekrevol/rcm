@@ -12,23 +12,27 @@
 3. **Narrative reads** — direct `read` of authoritative source files (auth, services, jobs, schema, App.tsx, layouts).
 4. **Synthesis** — every claim in 01–12 is cited as `path/to/file.ts:LINE`. Anything not directly verified is marked **UNVERIFIED**.
 
-## Scope counts (verified)
+## Scope counts (verified, post-Sprint-0)
 
 | Surface | Count | Source |
 |---|---:|---|
-| Public tables | **82** | `_queries/01_tables_with_rowcounts.tsv` |
-| Foreign keys | **41** | `_queries/04_foreign_keys.tsv` |
-| Unique constraints | **24** | `_queries/05_unique_constraints.tsv` |
+| Public tables | **88** | `_queries/01_tables.txt` (was 82 pre-Sprint-0; Sprint 0 added 6 Phase 3 tables) |
+| Foreign keys | **54** | `_queries/03_fks.txt` (was 41; Sprint 0 added 13 FKs across the 6 new tables) |
+| Unique constraints | **28** | live count |
 | Check constraints | **18** | `_queries/06_check_constraints.tsv` |
-| Indexes | **204** | `_queries/07_indexes.tsv` |
+| Indexes | **220** | live count |
 | Triggers | **0** | `_queries/08_triggers.tsv` |
 | Views | **0** | `_queries/09_views.tsv` |
 | Stored functions/procs | **0** | `_queries/10_functions.tsv` |
 | Sequences | **5** | `_queries/11_sequences.tsv` |
-| RLS policies | **0** | `_queries/12_rls_policies.tsv` |
-| Express routes (raw grep) | **261** | `_queries/20_routes_raw.txt` |
+| RLS policies | **12** | `_queries/11_rls.txt` (Sprint 0 added 2 policies × 6 tables; was 0) |
+| RLS-enabled tables | **6** | `_queries/11_rls.txt` (Phase 3 tables only — see 06) |
+| App-role principals | **2** (`claimshield_app_role`, `claimshield_service_role`) | Sprint 0 DDL — see 06 |
+| Express routes (raw grep) | **261** | `_queries/20_routes_raw.txt` (file has 263 lines incl. headers) |
 | Frontend routes (App.tsx) | 41 `<Route>` blocks | `client/src/App.tsx:55-308` |
 | Configured organizations | **3** | `organizations` row count |
+
+**Sprint 0 baseline:** Phase 3 / Sprint 0 (completed 2026-05-03) introduced `practice_profiles`, `organization_practice_profiles`, `provider_practice_relationships`, `provider_payer_relationships`, `patient_insurance_enrollments`, `claim_provider_assignments` — see `docs/architecture/migration-state.md` and `docs/architecture/sprint0-audit-report.md`. This audit reflects the **post-Sprint-0** state of the dev DB.
 
 ## Document index
 
@@ -47,6 +51,10 @@
 | 11 | `11-configuration.md` | Required + optional env vars, secrets, runtime knobs |
 | 12 | `12-known-issues-and-tech-debt.md` | UNVERIFIED items, gaps, drift, cleanup candidates |
 
-## Verification footer
+## Verification footer (Section 5 — "no rows modified")
 
-Per the prompt's Section 5 ("no rows modified" check): the audit pipeline only issues `SELECT` statements (see `_queries/run_all.sh`). No `INSERT`/`UPDATE`/`DELETE`/`ALTER`/`CREATE`/`DROP` statements are present in any query file. Re-run `_queries/run_all.sh` to reproduce all TSVs without side effects.
+Per the prompt's Section 5: the audit pipeline only issues `SELECT` statements (see `_queries/run_all.sh`). No `INSERT`/`UPDATE`/`DELETE`/`ALTER`/`CREATE`/`DROP` statements are present in any query file. Re-run `_queries/run_all.sh` to reproduce all TSVs without side effects.
+
+**Empirical attestation:** A pre-audit baseline of `pg_stat_user_tables` was captured at `_queries/_pre_audit_table_stats.txt` (88 tables × `n_tup_ins/upd/del` = 0 each). After all audit queries ran, every table still reports `n_tup_ins = n_tup_upd = n_tup_del = 0` for the audit window — confirmed by re-querying `pg_stat_user_tables` and diffing against the baseline. **Zero rows were inserted, updated, or deleted by this audit.**
+
+**Standing order honored throughout:** No production deploy was performed; no production DB query was issued; no code was modified to produce this audit. All findings require Abeer review before any remediation.

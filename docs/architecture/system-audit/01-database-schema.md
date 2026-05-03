@@ -1,12 +1,12 @@
 # 01 — Database Schema
 
-**Source of truth:** Drizzle ORM definitions in `shared/schema.ts` (720 lines) + live introspection in `_queries/01..12_*.tsv`.
+**Source of truth:** Drizzle ORM definitions in `shared/schema.ts` (842 lines, post-Sprint-0) + live introspection in `_queries/01..12_*` files.
 
 ## Database identity
 
 PostgreSQL 16.10, database `heliumdb`, role `postgres`. Source: `_queries/00_db_identity.tsv`.
 
-## Table census (82 public tables)
+## Table census (88 public tables — post-Sprint-0)
 
 Full list with row counts: `_queries/01_tables_with_rowcounts.tsv`. Key tables grouped by domain:
 
@@ -39,6 +39,19 @@ Full list with row counts: `_queries/01_tables_with_rowcounts.tsv`. Key tables g
 | `org_providers` | 1 | CASCADE → organizations |
 | `org_service_types` | 15 | CASCADE → organizations |
 | `org_voice_personas` | 2 | CASCADE → organizations |
+
+### Phase 3 / Sprint 0 — Profile-aware multi-tenancy (added 2026-05-03)
+| Table | Rows | RLS | Notes |
+|---|---:|---|---|
+| `practice_profiles` | 1+ | NO (global catalog) | `home_care_agency_personal_care` seed; `shared/schema.ts:721+` |
+| `organization_practice_profiles` | 1 | YES (FORCE) | maps `chajinel-org-001` → `home_care_agency_personal_care` `is_primary=true` |
+| `provider_practice_relationships` | 0 | YES (FORCE) | per-org provider→profile binding |
+| `provider_payer_relationships` | 0 | YES (FORCE) | per-org provider→payer credentialing |
+| `patient_insurance_enrollments` | 0 | YES (FORCE) | per-patient insurance, replaces `practice_payer_enrollments` long-term |
+| `claim_provider_assignments` | 0 | YES (FORCE) | claim→provider linking, profile-aware |
+| `practice_payer_enrollments` | 2 | NO (legacy) | reconciled 8 → 20 columns this sprint (additive ALTERs only) |
+
+All 6 RLS-enabled tables have **2 policies each** (`tenant_isolation` + `service_role_bypass`). Sprint 0 audit + DDL: `docs/architecture/sprint0-audit-report.md`, `docs/architecture/sprint0-snapshots/sprint0-ddl.sql`.
 
 ### Billing core
 | Table | Rows |
@@ -106,9 +119,9 @@ Full list with row counts: `_queries/01_tables_with_rowcounts.tsv`. Key tables g
 | `field_definitions` | 15 |
 | `vob_verifications` | 1 |
 
-## Foreign-key topology (41 FKs)
+## Foreign-key topology (54 FKs — was 41 pre-Sprint-0)
 
-Full list: `_queries/04_foreign_keys.tsv`. Highlights:
+Full list: `_queries/03_fks.txt`. Highlights:
 
 - **Org isolation** is enforced via FK on every org-scoped table:
   `claims_org_fk`, `patients_org_fk`, `users_org_fk`, `providers_org_fk`,
@@ -119,6 +132,7 @@ Full list: `_queries/04_foreign_keys.tsv`. Highlights:
 - **No FK from `leads` → `organizations`** in `_queries/04_foreign_keys.tsv`. The `leads` table holds `organization_id` (per Drizzle schema and code filters) but **the FK constraint is missing in the DB**. Same gap for `calls`, `appointments`, `flows`, `flow_runs`, `denials`, `era_batches`, `activity_logs`, `email_logs`, `chat_sessions`. **Tenancy is enforced at the API layer only** for those tables.
 - `flow_runs` cascades to `flow_run_events` (CASCADE), and `flow_steps` cascades from `flows` (CASCADE).
 - `pcp_referrals` deletes cascade to claims via `claims.pcp_referral_id` set NULL on referral delete.
+- **Sprint 0 added 13 FKs** across the 6 Phase 3 tables — every Phase 3 tenant-scoped table has explicit `organization_id` FK to `organizations.id`, plus the natural-key FKs (`practice_profiles.profile_code`, `providers.id`, `payers.id`, `patients.id`, `claims.id`). See `_queries/03_fks.txt`.
 
 ## Unique constraints (24)
 
@@ -132,9 +146,27 @@ Full list: `_queries/04_foreign_keys.tsv`. Highlights:
 
 `_queries/07_indexes.tsv`. Bulk are auto-created PK/unique indexes plus org_id + foreign-key indexes.
 
-## Triggers / Views / Functions / RLS — **none**
+## Triggers / Views / Functions
 
-`_queries/08..12` are all empty. No PostgreSQL-side automation: no triggers, no views, no stored procedures, no row-level security policies. **All business logic lives in the Node.js layer.** This is a meaningful audit finding for tenancy hardening (see 06).
+`_queries/08_triggers.tsv`, `09_views.tsv`, `10_functions.tsv` are all empty. No PostgreSQL-side automation: no triggers, no views, no stored procedures. **All non-RLS business logic lives in the Node.js layer.**
+
+## Row-Level Security (post-Sprint-0)
+
+| Item | Count | Source |
+|---|---:|---|
+| RLS-enabled tables | 6 | `_queries/11_rls.txt` |
+| Policies total | 12 (2 per table) | `_queries/11_rls.txt` |
+| `FORCE ROW LEVEL SECURITY` | yes (all 6) | applies even to table owner |
+| App role | `claimshield_app_role` (NOLOGIN, NOINHERIT) | Sprint 0 DDL |
+| Service role | `claimshield_service_role` | bypass via second policy |
+
+The 6 enabled tables are exactly the Phase 3 tables listed above. Each has:
+- `tenant_isolation` — `USING (organization_id::text = current_setting('app.current_org_id', true))`
+- `service_role_bypass` — `USING (current_setting('app.bypass_rls', true) = 'true')`
+
+**Tenant context middleware** (`server/index.ts:86`) wires `withTenantTx` (AsyncLocalStorage + transaction-scoped `set_config` + `SET LOCAL ROLE claimshield_app_role`). All Phase 3 tenant-scoped reads must go through this path; using the global `db`/`pool` (which connects as superuser `postgres`) silently bypasses RLS.
+
+**Sprint 1 prerequisite — UNVERIFIED gap:** policies do not yet have `WITH CHECK` clauses, so RLS protects SELECT/UPDATE/DELETE but does not block cross-tenant INSERTs. Tracked in `docs/architecture/migration-state.md` §3.1 — must be added before any Sprint-1 INSERT helper ships.
 
 ## Sequences (5)
 
@@ -142,5 +174,6 @@ Full list: `_queries/04_foreign_keys.tsv`. Highlights:
 
 ## Drift / open items
 
-- `practice_settings` uses column `frcpb_enrolled` (referenced at `server/routes.ts:3520` route `/api/billing/practice-settings/frcpb-enrollment`). The `replit.md` reference to `billing_model` is **stale / UNVERIFIED**.
-- `org_types` and `org_type_field_specs` referenced in some product copy **do not exist** in `_queries/01_tables_with_rowcounts.tsv`. **UNVERIFIED feature; not in DB.**
+- `practice_settings` uses column `frcpb_enrolled` (referenced at `server/routes.ts:3520` route `/api/billing/practice-settings/frcpb-enrollment`). `practice_settings.billing_model` **also exists** (per `replit.md` Sprint 0 audit) — Sprint 2 EDI refactor must reconcile profile rule `edi_structural_rules.rendering_provider_loop_2310B.omit_when='agency_billed'` with this column.
+- `org_types` and `org_type_field_specs` referenced in some product copy **do not exist** in the DB. **UNVERIFIED feature; not in DB.** Phase 3 supersedes this concept with `practice_profiles` + `organization_practice_profiles`.
+- `organizations.is_active` does **not** exist — code must use `status = 'active'`. The Drizzle declaration of `organizations` (`shared/schema.ts:518-523`) is out of date relative to the DB (per Sprint 0 audit). Tracked in `migration-state.md`.

@@ -1,0 +1,58 @@
+           from_table            |         from_col          |        to_table        |    to_col    | delete_rule | update_rule |                   constraint_name                    
+---------------------------------+---------------------------+------------------------+--------------+-------------+-------------+------------------------------------------------------
+ claim_provider_assignments      | claim_id                  | claims                 | id           | CASCADE     | NO ACTION   | claim_provider_assignments_claim_id_fkey
+ claim_provider_assignments      | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | claim_provider_assignments_organization_id_fkey
+ claim_provider_assignments      | provider_id               | providers              | id           | RESTRICT    | NO ACTION   | claim_provider_assignments_provider_id_fkey
+ claim_templates                 | payer_id                  | payers                 | id           | NO ACTION   | NO ACTION   | claim_templates_payer_id_fkey
+ claim_templates                 | provider_id               | providers              | id           | NO ACTION   | NO ACTION   | claim_templates_provider_id_fkey
+ claims                          | organization_id           | organizations          | id           | RESTRICT    | NO ACTION   | claims_org_fk
+ claims                          | pcp_referral_id           | pcp_referrals          | id           | SET NULL    | NO ACTION   | claims_pcp_referral_id_fkey
+ era_lines                       | era_id                    | era_batches            | id           | CASCADE     | NO ACTION   | era_lines_era_id_fkey
+ flow_run_events                 | flow_run_id               | flow_runs              | id           | CASCADE     | NO ACTION   | flow_run_events_flow_run_id_fkey
+ flow_runs                       | flow_id                   | flows                  | id           | NO ACTION   | NO ACTION   | flow_runs_flow_id_fkey
+ flow_runs                       | lead_id                   | leads                  | id           | NO ACTION   | NO ACTION   | flow_runs_lead_id_fkey
+ flow_steps                      | flow_id                   | flows                  | id           | CASCADE     | NO ACTION   | flow_steps_flow_id_fkey
+ hcpcs_rates                     | hcpcs_code                | hcpcs_codes            | code         | NO ACTION   | NO ACTION   | hcpcs_rates_hcpcs_code_fkey
+ hcpcs_rates                     | payer_id                  | payers                 | id           | NO ACTION   | NO ACTION   | hcpcs_rates_payer_id_fkey
+ manual_extraction_items         | section_type              | rule_kinds             | code         | RESTRICT    | CASCADE     | fk_mei_section_type_rule_kinds
+ org_lead_sources                | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | org_lead_sources_organization_id_fkey
+ org_message_templates           | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | org_message_templates_organization_id_fkey
+ org_payer_mappings              | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | org_payer_mappings_organization_id_fkey
+ org_providers                   | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | org_providers_organization_id_fkey
+ org_service_types               | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | org_service_types_organization_id_fkey
+ org_voice_personas              | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | org_voice_personas_organization_id_fkey
+ organization_practice_profiles  | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | organization_practice_profiles_organization_id_fkey
+ organization_practice_profiles  | profile_code              | practice_profiles      | profile_code | RESTRICT    | NO ACTION   | organization_practice_profiles_profile_code_fkey
+ patient_insurance_enrollments   | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | patient_insurance_enrollments_organization_id_fkey
+ patient_insurance_enrollments   | patient_id                | patients               | id           | CASCADE     | NO ACTION   | patient_insurance_enrollments_patient_id_fkey
+ patient_insurance_enrollments   | payer_id                  | payers                 | id           | RESTRICT    | NO ACTION   | patient_insurance_enrollments_payer_id_fkey
+ patients                        | delegated_entity_id       | delegated_entities     | id           | SET NULL    | NO ACTION   | patients_delegated_entity_id_fkey
+ patients                        | organization_id           | organizations          | id           | RESTRICT    | NO ACTION   | patients_org_fk
+ patients                        | plan_product_code         | plan_products          | code         | SET NULL    | NO ACTION   | patients_plan_product_code_fkey
+ payer_delegated_entities        | delegated_entity_id       | delegated_entities     | id           | CASCADE     | NO ACTION   | payer_delegated_entities_delegated_entity_id_fkey
+ payer_delegated_entities        | payer_id                  | payers                 | id           | CASCADE     | NO ACTION   | payer_delegated_entities_payer_id_fkey
+ payer_delegated_entities        | plan_product_code         | plan_products          | code         | RESTRICT    | NO ACTION   | payer_delegated_entities_plan_product_code_fkey
+ payer_manual_sources            | linked_source_document_id | payer_source_documents | id           | SET NULL    | NO ACTION   | fk_pms_linked_source_document
+ payer_source_documents          | document_type             | document_types         | code         | RESTRICT    | CASCADE     | payer_source_documents_document_type_fkey
+ payer_source_documents          | parent_document_id        | payer_source_documents | id           | SET NULL    | NO ACTION   | payer_source_documents_parent_document_id_fkey
+ payer_supported_plan_products   | payer_id                  | payers                 | id           | CASCADE     | NO ACTION   | payer_supported_plan_products_payer_id_fkey
+ payer_supported_plan_products   | plan_product_code         | plan_products          | code         | RESTRICT    | NO ACTION   | payer_supported_plan_products_plan_product_code_fkey
+ pcp_referrals                   | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | pcp_referrals_organization_id_fkey
+ pcp_referrals                   | patient_id                | patients               | id           | CASCADE     | NO ACTION   | pcp_referrals_patient_id_fkey
+ practice_payer_enrollments      | enrolled_by               | users                  | id           | SET NULL    | NO ACTION   | practice_payer_enrollments_enrolled_by_fkey
+ practice_payer_enrollments      | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | practice_payer_enrollments_organization_id_fkey
+ practice_payer_enrollments      | payer_id                  | payers                 | id           | RESTRICT    | NO ACTION   | practice_payer_enrollments_payer_id_fkey
+ practice_payer_enrollments      | plan_product_code         | plan_products          | code         | RESTRICT    | NO ACTION   | fk_ppe_plan_product
+ practice_settings               | organization_id           | organizations          | id           | RESTRICT    | NO ACTION   | practice_settings_org_fk
+ practice_settings               | organization_id           | organizations          | id           | NO ACTION   | NO ACTION   | practice_settings_organization_id_fkey
+ provider_payer_relationships    | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | provider_payer_relationships_organization_id_fkey
+ provider_payer_relationships    | payer_id                  | payers                 | id           | RESTRICT    | NO ACTION   | provider_payer_relationships_payer_id_fkey
+ provider_payer_relationships    | provider_id               | providers              | id           | CASCADE     | NO ACTION   | provider_payer_relationships_provider_id_fkey
+ provider_practice_relationships | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | provider_practice_relationships_organization_id_fkey
+ provider_practice_relationships | provider_id               | providers              | id           | CASCADE     | NO ACTION   | provider_practice_relationships_provider_id_fkey
+ providers                       | organization_id           | organizations          | id           | RESTRICT    | NO ACTION   | providers_org_fk
+ timely_filing_alerts            | claim_id                  | claims                 | id           | CASCADE     | NO ACTION   | timely_filing_alerts_claim_id_fkey
+ timely_filing_alerts            | organization_id           | organizations          | id           | CASCADE     | NO ACTION   | timely_filing_alerts_organization_id_fkey
+ users                           | organization_id           | organizations          | id           | RESTRICT    | NO ACTION   | users_org_fk
+(54 rows)
+
