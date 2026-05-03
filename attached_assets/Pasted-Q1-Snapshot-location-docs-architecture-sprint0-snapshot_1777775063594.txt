@@ -1,0 +1,20 @@
+Q1 — Snapshot location. docs/architecture/sprint0-snapshots/dev-pre-sprint0-<timestamp>.sql is fine. Add the directory to .gitignore — don't check the dump into the repo. The dump exists for rollback, not for version history. If the file's needed beyond the sprint, it can be moved to S3 or wherever ClaimShield archives operational artifacts.
+Q2 — Gating. Option (a). Run Step 1, stop, surface the diff for review. This is correct. The hard rules and the prompt's own language all point to this being the right pause point.
+Specifically, what to surface in the Step 1 deliverable so I (and you, when you read it) can sign off quickly:
+
+The actual column list of practice_payer_enrollments from information_schema.columns, in a clean table.
+The two existing rows: their organization_id values and what payers they reference. If those organization_ids match real organizations (chajinel-org-001 and the other two known orgs), good. If they're orphan or test data, flag — they'll become invisible once RLS turns on, which is correct behavior, but you should know before that happens.
+The duplicate org FK situation on practice_payer_enrollments (the audit flagged duplicate FKs on practice_settings, but if practice_payer_enrollments has a similar duplicate, surface it). Don't fix it in this sprint — just surface.
+The exact ALTER statements proposed for any missing columns, with reasoning for each.
+Any column type mismatches that would require human decision (e.g., if id turns out to be a serial integer instead of UUID, the new architecture's UUID-everywhere assumption needs explicit override).
+The connection pool config from server/db.ts — pool size, whether it's a standard pg.Pool, whether there's any pgbouncer or other pooler in front. This validates the transaction-scoped SET LOCAL approach in Step 5.
+
+Three additional things to put in the Step 1 output that aren't strictly required but will save a round-trip:
+
+Confirm the three organization rows currently in the DB and their IDs. The audit said 3 orgs exist and named chajinel-org-001 and caritas-org-001; the third was UNVERIFIED. Knowing all three matters because the Chajinel INSERT in Step 4a needs the exact ID string.
+Confirm claims.id is varchar (Step 4f's FK assumes this).
+Confirm providers.id and patients.id are varchar (Steps 4c, 4d, 4e assume this).
+
+After you produce Step 1's output, pause and ping. I'll review the diff with Abeer, sign off (or propose adjustments), and then you continue Steps 2–9.
+One clarification on scope discipline that's worth being explicit about: if Step 1 surfaces something genuinely concerning — say, claims.id is integer not varchar, or the existing practice_payer_enrollments rows have orphan organization_ids, or the connection pool is pgbouncer in statement mode — the right move is not "propose a workaround in the diff." The right move is "stop, document, escalate." Sprint 0 is not the place to make architectural compromises on the foundation. Better to halt and rewrite v3 than to ship a foundation with hidden caveats.
+Proceed.

@@ -4,3 +4,6 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gzattached_assets/crawler-demo/
+
+# Sprint 0 DB snapshots — local only, do not commit
+docs/architecture/sprint0-snapshots/
