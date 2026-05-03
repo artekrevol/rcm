@@ -1,5 +1,6 @@
 {pkgs}: {
   deps = [
+    pkgs.postgresql
     pkgs.freetype
     pkgs.fontconfig
     pkgs.libpulseaudio
