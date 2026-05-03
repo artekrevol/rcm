@@ -344,6 +344,32 @@ bash scripts/apply-phase3-prod-migration.sh
 # Will prompt for "APPLY" before connecting to prod.
 ```
 
+### 6.5b Gate-3 review-pass changes (2026-05-03 post-Gate-2 sign-off)
+
+Three review items were addressed before Gate 3 sign-off:
+
+1. **Assertion list surfaced at top of `scripts/phase3-prod-migration.sql`** (lines 32–51). The 13 pre-commit assertions A1–A13 are now visible in the file header without needing to scroll to §7.
+2. **Query inventory surfaced at top of `scripts/verify-phase3-prod-migration.sql`** (lines 13–43). Q1–Q9 each have a one-line description of what they verify and the expected result.
+3. **`apply-phase3-prod-migration.sh` now refuses to execute** if either:
+   - `$PRODUCTION_DATABASE_URL` is unset (exit 1, message: "PRODUCTION_DATABASE_URL not set — refusing to run."), or
+   - `$PRODUCTION_DATABASE_URL` is identical to `$DATABASE_URL` (exit 1, message: "PRODUCTION_DATABASE_URL is identical to DATABASE_URL — refusing to run.")
+
+   Smoke-test results:
+   | Test | Result |
+   |---|---|
+   | Both env vars unset | exit 1, correct error |
+   | `PRODUCTION_DATABASE_URL == DATABASE_URL` | exit 1, correct error |
+   | Distinct URLs | proceeds past guards → hits interactive `APPLY` prompt → aborts on empty input |
+
+### 6.5c Decisions confirmed at Gate 3
+
+| Item | Decision |
+|---|---|
+| Chajinel `compose_from_profile=true` flip + prompt template update | Stays as separate post-deploy data step. |
+| `replit_readonly` SELECT grants on the 6 new tables | Stays as separate post-deploy task. |
+| Where to apply the migration from | This Replit workspace, using `PRODUCTION_DATABASE_URL` from env. |
+| Migration stdout log location | `docs/architecture/phase3-migration-applied-<timestamp>.log` (committed for audit trail). |
+
 ### 6.6 What's NOT done in Phase 2
 
 - **Not pushed to git** — files are committed in the workspace via Replit checkpoint, but `git push` has been deliberately withheld pending Gate 3.

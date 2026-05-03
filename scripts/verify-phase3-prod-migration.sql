@@ -6,6 +6,37 @@
 --
 -- Usage:
 --   psql "$PRODUCTION_DATABASE_URL" -X -f scripts/verify-phase3-prod-migration.sql
+--
+-- =============================================================================
+-- Query inventory (Q1–Q9):
+-- =============================================================================
+--   Q1.  Phase 3 tables present — count of the 6 new tables in `public` and
+--        a comma-separated list. Expected: 6 tables, all 6 names listed.
+--   Q2.  RLS policies on tenant-scoped tables — emits one row per policy with
+--        booleans for `has_using` and `has_with_check`. Expected: 12 rows
+--        (tenant_isolation + service_role_bypass on each of 6 tables) and
+--        every row shows `has_using=t, has_with_check=t`.
+--   Q3.  RLS enabled + FORCE — emits `relrowsecurity` and `relforcerowsecurity`
+--        for each of the 6 tenant tables. Expected: both `t` for all 6.
+--   Q4.  Roles inventory — lists rolname/rolsuper/rolcanlogin/rolinherit/
+--        rolbypassrls for postgres, replit_readonly, claimshield_app_role,
+--        claimshield_service_role. Expected: postgres super=t, app_role
+--        canlogin=f inherit=f, service_role canlogin=f inherit=f, none with
+--        bypassrls=t.
+--   Q4b. postgres MEMBER claimshield_app_role — single boolean. Expected: t
+--        (so withTenantTx's `SET LOCAL ROLE` works at runtime).
+--   Q5.  org_voice_personas.compose_from_profile — column metadata + a
+--        groupby of how many rows have each value. Expected: column exists
+--        with default `false`; both existing rows = false post-migration.
+--   Q6.  practice_payer_enrollments column count. Expected: 20.
+--   Q7.  Data preservation — row counts for organizations, org_voice_personas,
+--        practice_payer_enrollments (total + per-org for chajinel + demo),
+--        patients, claims, leads. Expected: orgs=3, personas=2, ppe=5
+--        (chajinel=3, demo=2); patients/claims/leads unchanged from pre-snap.
+--   Q8.  Seed presence — confirms `home_care_agency_personal_care` profile
+--        and the chajinel-org-001 → home_care primary mapping. Expected: 1
+--        row each.
+--   Q9.  Total public table count. Expected: 88 (was 82 pre-migration; +6).
 -- =============================================================================
 
 \echo === Q1: 6 Phase 3 tables present ===

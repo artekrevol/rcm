@@ -25,6 +25,26 @@
 -- existing rows). Flipping Chajinel to `true` and updating its
 -- `system_prompt` to end with `\n\n{{INTAKE_FIELDS}}` is a separate,
 -- post-deploy data step — see `docs/architecture/phase3-deploy-preflight.md` §6.4.
+--
+-- =============================================================================
+-- Pre-commit verification (§7) — 13 assertions inside the same BEGIN/COMMIT.
+-- Any failure RAISES EXCEPTION → ROLLBACK → ZERO state change in prod.
+-- =============================================================================
+--   A1.  6 Phase 3 tables present in `public` schema
+--   A2.  12 RLS policies (2 per table × 6 tenant-scoped tables)
+--   A3.  0 `tenant_isolation` policies missing WITH CHECK (Sprint 1a guarantee)
+--   A4.  `claimshield_app_role` exists in pg_roles
+--   A5.  `claimshield_service_role` exists in pg_roles
+--   A6.  `pg_has_role('postgres', 'claimshield_app_role', 'MEMBER')` = true
+--        (so withTenantTx's `SET LOCAL ROLE` will succeed at runtime)
+--   A7.  `org_voice_personas.compose_from_profile` column exists (Sprint 1b)
+--   A8.  `practice_payer_enrollments` has exactly 20 columns (8 → 20 ALTER)
+--   A9.  `organizations` row count = 3 (preserved; demo + chajinel + caritas)
+--   A10. `practice_payer_enrollments` rows for `chajinel-org-001` = 3 (preserved)
+--   A11. `practice_payer_enrollments` total row count = 5 (preserved)
+--   A12. `home_care_agency_personal_care` profile seeded (count = 1)
+--   A13. Chajinel ↔ home_care primary mapping seeded
+--        (`is_primary=true`, count = 1)
 -- =============================================================================
 
 \set ON_ERROR_STOP on

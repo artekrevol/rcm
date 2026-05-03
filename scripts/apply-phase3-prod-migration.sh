@@ -22,7 +22,15 @@
 set -euo pipefail
 
 if [[ -z "${PRODUCTION_DATABASE_URL:-}" ]]; then
-  echo "ERROR: PRODUCTION_DATABASE_URL not set" >&2
+  echo "ERROR: PRODUCTION_DATABASE_URL not set — refusing to run." >&2
+  echo "       Set this env var to the Railway production database URL." >&2
+  exit 1
+fi
+
+if [[ -n "${DATABASE_URL:-}" && "${PRODUCTION_DATABASE_URL}" == "${DATABASE_URL}" ]]; then
+  echo "ERROR: PRODUCTION_DATABASE_URL is identical to DATABASE_URL — refusing to run." >&2
+  echo "       This script must NEVER be executed against the dev database." >&2
+  echo "       Verify env var values and re-run with two distinct URLs." >&2
   exit 1
 fi
 
