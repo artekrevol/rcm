@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { setupAuth, ensureSessionTable } from "./auth";
+import { tenantContextMiddleware } from "./middleware/tenant-context";
 import { startOrchestrator } from "./jobs/flow-orchestrator";
 import { seedCaritasFlow } from "./seeds/caritas-flow";
 import { startCciCron } from "./jobs/cci-cron";
@@ -76,6 +77,10 @@ app.use((req, res, next) => {
 (async () => {
   await ensureSessionTable();
   setupAuth(app);
+  // Phase 3 Sprint 0 — tenant context AsyncLocalStorage. Must be after
+  // setupAuth so passport has populated req.user, and before route
+  // registration so all handlers run inside the storage frame.
+  app.use(tenantContextMiddleware);
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

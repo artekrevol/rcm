@@ -225,6 +225,16 @@ export const db = drizzle(pool, { schema });
 | `practice_payer_enrollments` table | **not declared in Drizzle at all** (grep of `shared/schema.ts` returns 0 hits) | exists, 8 columns | Step 6 helpers cannot use Drizzle's typed query builder for this table without first adding a Drizzle definition. **Recommend:** add the Drizzle table block alongside Step 4b's ALTERs. |
 | `practice_settings.billing_model` | declared (`shared/schema.ts:539`) | exists, populated | Audit drift only — code already works. The audit's `12-known-issues-and-tech-debt.md` claim that "this column does not exist" is wrong. |
 
+## §8b. Audit drift discovered during Step 1
+
+The Step 1 inspection surfaced three claims in `docs/architecture/system-audit/` that are inaccurate and need correction in future sprints. Listed here so future readers of the schema docs do not propagate them:
+
+1. **`organizations` has no `slug` column.** Audit `01-database-schema.md` listed `id, name, slug, is_active`. Actual columns are `id, name, created_at, onboarding_dismissed_at, contact_email, status, updated_at`.
+2. **`organizations` has no `is_active` column.** It has `status` (text) with values like `'active'`. Anywhere a Sprint 1+ query assumes `organizations.is_active`, it must use `status = 'active'` instead.
+3. **`practice_settings.billing_model` does exist** (and is populated — `chajinel-org-001` row has `billing_model='agency_billed'`, `demo-org-001` row has `billing_model='direct'`). Audit `12-known-issues-and-tech-debt.md` and `01-database-schema.md` claimed otherwise. Sprint 2's EDI-generator refactor must locate every reference to this column and decide whether profile-driven `edi_structural_rules.rendering_provider_loop_2310B.omit_when='agency_billed'` replaces it or augments it.
+
+These gaps do not invalidate the broader audit — they are isolated to a few `VERIFIED` claims that turned out wrong. The methodology lesson: future architectural work should re-introspect against the live DB on anything load-bearing rather than relying on audit text alone.
+
 ## §9. Out-of-scope items confirmed not touched
 
 - ✅ No DDL has been run.

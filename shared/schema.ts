@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, real, date, decimal } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, real, date, decimal, uuid, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -717,3 +717,126 @@ export const payerManualSources = pgTable("payer_manual_sources", {
 export const insertPayerManualSourceSchema = createInsertSchema(payerManualSources).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertPayerManualSource = z.infer<typeof insertPayerManualSourceSchema>;
 export type PayerManualSource = typeof payerManualSources.$inferSelect;
+
+// =========================================================================
+// Phase 3 Sprint 0 — Practice Profiles + Relationship Tables
+// =========================================================================
+
+export const practiceProfiles = pgTable("practice_profiles", {
+  profileCode: text("profile_code").primaryKey(),
+  displayName: text("display_name").notNull(),
+  description: text("description"),
+  versionLabel: text("version_label").notNull().default("v1"),
+  serviceCodeCatalog: jsonb("service_code_catalog").notNull().default(sql`'[]'::jsonb`),
+  intakeFieldSpecs: jsonb("intake_field_specs").notNull().default(sql`'[]'::jsonb`),
+  claimFieldSpecs: jsonb("claim_field_specs").notNull().default(sql`'[]'::jsonb`),
+  payerRelationshipTemplates: jsonb("payer_relationship_templates").notNull().default(sql`'[]'::jsonb`),
+  providerRoleDefinitions: jsonb("provider_role_definitions").notNull().default(sql`'[]'::jsonb`),
+  authorizationTemplates: jsonb("authorization_templates").notNull().default(sql`'[]'::jsonb`),
+  ruleSubscriptions: jsonb("rule_subscriptions").notNull().default(sql`'[]'::jsonb`),
+  uiSurfaceConfig: jsonb("ui_surface_config").notNull().default(sql`'{}'::jsonb`),
+  ediStructuralRules: jsonb("edi_structural_rules").notNull().default(sql`'{}'::jsonb`),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export type PracticeProfile = typeof practiceProfiles.$inferSelect;
+
+export const organizationPracticeProfiles = pgTable("organization_practice_profiles", {
+  organizationId: varchar("organization_id").notNull(),
+  profileCode: text("profile_code").notNull(),
+  isPrimary: boolean("is_primary").notNull().default(false),
+  effectiveFrom: date("effective_from").notNull().defaultNow(),
+  effectiveTo: date("effective_to"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.organizationId, t.profileCode] }),
+}));
+export type OrganizationPracticeProfile = typeof organizationPracticeProfiles.$inferSelect;
+
+export const practicePayerEnrollments = pgTable("practice_payer_enrollments", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  payerId: varchar("payer_id").notNull(),
+  planProductCode: varchar("plan_product_code"),
+  enrolledAt: timestamp("enrolled_at", { withTimezone: true }).notNull().defaultNow(),
+  enrolledBy: varchar("enrolled_by"),
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  notes: text("notes"),
+  // Sprint 0 additive columns:
+  enrollmentStatus: text("enrollment_status").notNull().default("pending"),
+  effectiveFrom: date("effective_from"),
+  effectiveTo: date("effective_to"),
+  billingNpi: text("billing_npi"),
+  taxonomyCode: text("taxonomy_code"),
+  submissionMethod: text("submission_method"),
+  clearinghouse: text("clearinghouse"),
+  timelyFilingDays: integer("timely_filing_days"),
+  priorAuthRequired: boolean("prior_auth_required").notNull().default(false),
+  contractedRateTableId: uuid("contracted_rate_table_id"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export const insertPracticePayerEnrollmentSchema = createInsertSchema(practicePayerEnrollments).omit({
+  id: true, enrolledAt: true, createdAt: true, updatedAt: true,
+});
+export type InsertPracticePayerEnrollment = z.infer<typeof insertPracticePayerEnrollmentSchema>;
+export type PracticePayerEnrollment = typeof practicePayerEnrollments.$inferSelect;
+
+export const providerPracticeRelationships = pgTable("provider_practice_relationships", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  providerId: varchar("provider_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  roleCode: text("role_code").notNull(),
+  npiUsedAtPractice: text("npi_used_at_practice"),
+  effectiveFrom: date("effective_from"),
+  effectiveTo: date("effective_to"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export type ProviderPracticeRelationship = typeof providerPracticeRelationships.$inferSelect;
+
+export const providerPayerRelationships = pgTable("provider_payer_relationships", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  providerId: varchar("provider_id").notNull(),
+  payerId: varchar("payer_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  participates: boolean("participates").notNull().default(false),
+  taxonomySubmitted: text("taxonomy_submitted"),
+  credentialingStatus: text("credentialing_status"),
+  effectiveFrom: date("effective_from"),
+  effectiveTo: date("effective_to"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export type ProviderPayerRelationship = typeof providerPayerRelationships.$inferSelect;
+
+export const patientInsuranceEnrollments = pgTable("patient_insurance_enrollments", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: varchar("patient_id").notNull(),
+  payerId: varchar("payer_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  memberId: text("member_id").notNull(),
+  groupNumber: text("group_number"),
+  coveragePriority: text("coverage_priority").notNull().default("primary"),
+  effectiveFrom: date("effective_from"),
+  effectiveTo: date("effective_to"),
+  subscriberRelationship: text("subscriber_relationship"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export type PatientInsuranceEnrollment = typeof patientInsuranceEnrollments.$inferSelect;
+
+export const claimProviderAssignments = pgTable("claim_provider_assignments", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  claimId: varchar("claim_id").notNull(),
+  providerId: varchar("provider_id").notNull(),
+  organizationId: varchar("organization_id").notNull(),
+  roleCode: text("role_code").notNull(),
+  npiUsed: text("npi_used"),
+  taxonomyCode: text("taxonomy_code"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+export type ClaimProviderAssignment = typeof claimProviderAssignments.$inferSelect;
