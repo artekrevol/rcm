@@ -111,6 +111,33 @@ Any tenant-scoped query MUST use `withTenantTx` (or the helpers in `practice-pro
 - `docs/architecture/sprint0-existing-schemas.md` — pre-sprint inspection + audit drift findings
 - `docs/architecture/sprint0-snapshots/sprint0-ddl.sql` + `sprint0-app-role.sql` — applied DDL bundles
 
+## Phase 3 Sprint 1c — EDI Preflight Gate (Completed 2026-05-03)
+
+Wires `evaluateClaim`'s Tier 1 structural-integrity rules (T1-001 … T1-008) into the two Stedi EDI submission routes immediately before `generate837P` is called. Server-side only, dev-only.
+
+### What shipped
+- **New helper** `server/services/rules-engine/edi-preflight.ts` (138 lines) exporting `requireTier1Pass(ctx)` and `buildClaimContextForGate({…})`.
+- **Two route gates** in `server/routes.ts`:
+  - `POST /api/billing/claims/:id/submit-stedi` (gate at 6502–6527)
+  - `POST /api/billing/claims/:id/test-stedi` (gate at 6735–6755)
+- **Failure contract:** HTTP 400 with `{success:false, error:"VALIDATION_ERROR: …", findings:[{code,severity,message,fixSuggestion}], gateName:"tier1-structural-preflight"}`.
+- **7 new tests** in `server/services/rules-engine/edi-preflight.test.ts` (all passing).
+- **Pre-existing in-route VALIDATION_ERROR checks** at `routes.ts` 6428/6441/6685/6698 left untouched (Hard Rule 3c) — harmless redundancy that preserves rollback safety.
+
+### Important contract clarification
+`evaluateClaim` returns `Promise<RuleViolation[]>` (a flat array) — not the `{ findings, shortCircuited, shortCircuitReason }` wrapper described in the Sprint 1c prompt's "Anchors" section. The gate detects Tier 1 blocks via filter on `source === "tier1-structural" && severity === "block"`. Functionally identical to the prompt's intent; uses the actual contract.
+
+### Path A baseline (carried forward from this sprint's pre-flight)
+The dev workspace had **85 pre-existing tsc errors** (63 in `routes.ts`, 5 in `storage.ts`, others scattered) that predate Sprint 1c. Per user direction, Sprint 1c success was redefined as "zero new tsc errors" rather than "tsc clean". Final count after Sprint 1c: **85 = 85** (only positional line-number shifts; no new error codes, files, or types). Sprint 2+ baselines should use explicit error-count assertions instead of binary "clean" claims (see `migration-state.md` §11.4).
+
+### Verification (post-sprint)
+- tenant-isolation 12/12, tier1-structural 16/16, rules-engine 4/4, voice-persona-builder 23/23, smoke-helpers green, edi-preflight 7/7, tsc count = 85, workflow boots clean.
+
+### Key docs
+- `docs/architecture/sprint1c-audit-report.md` — full Sprint 1c audit (8 sections, line-cited)
+- `docs/architecture/migration-state.md` §11 — sprint summary and Sprint 2 pre-flight recommendation
+- `docs/architecture/sprint1c-snapshots/dev-pre-sprint1c-20260503-072034Z.sql` — pre-sprint dev DB snapshot (gitignored)
+
 ## External Dependencies
 - **PostgreSQL**: Primary database.
 - **Drizzle ORM**: Database interaction layer.

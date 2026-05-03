@@ -6496,6 +6496,33 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
       const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
 
+      // ── Tier 1 structural integrity gate (Phase 3 Sprint 1c) ──────────
+      // Fires immediately before generate837P. Blocks submission when any
+      // Tier 1 rule (T1-001…T1-008) reports `block`-severity. Returns a
+      // 400 with `{success:false, error:"VALIDATION_ERROR: …", findings,
+      // gateName}` matching the existing EDI-route validation convention.
+      // The pre-existing in-route VALIDATION_ERROR checks above (empty
+      // service lines, empty ICD-10) are intentionally left in place per
+      // Sprint 1c Hard Rule 3c — they fire first and short-circuit before
+      // this gate would have run, so leaving them is harmless redundancy
+      // that keeps Sprint 1c rollback-safe.
+      {
+        const { requireTier1Pass, buildClaimContextForGate } = await import(
+          "./services/rules-engine/edi-preflight"
+        );
+        const tier1FailureBody = await requireTier1Pass(
+          buildClaimContextForGate({ c, pat, payerInfo, serviceLines, icd10Codes })
+        );
+        if (tier1FailureBody) {
+          console.warn(
+            `[Tier1Gate] Blocked submit-stedi claim=${c.id} codes=${tier1FailureBody.findings
+              .map((f) => f.code)
+              .join(",")}`
+          );
+          return res.status(400).json(tier1FailureBody);
+        }
+      }
+
       const { generate837P } = await import("./services/edi-generator");
       const ediString = generate837P({
         isa15,
@@ -6701,6 +6728,28 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
       const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
+
+      // ── Tier 1 structural integrity gate (Phase 3 Sprint 1c) ──────────
+      // Mirrors the gate in /submit-stedi. Same contract: 400 +
+      // `{success:false, error:"VALIDATION_ERROR: …", findings, gateName}`
+      // when any Tier 1 rule (T1-001…T1-008) blocks. Pre-existing in-route
+      // VALIDATION_ERROR checks above are left in place per Hard Rule 3c.
+      {
+        const { requireTier1Pass, buildClaimContextForGate } = await import(
+          "./services/rules-engine/edi-preflight"
+        );
+        const tier1FailureBody = await requireTier1Pass(
+          buildClaimContextForGate({ c, pat, payerInfo, serviceLines, icd10Codes })
+        );
+        if (tier1FailureBody) {
+          console.warn(
+            `[Tier1Gate] Blocked test-stedi claim=${c.id} codes=${tier1FailureBody.findings
+              .map((f) => f.code)
+              .join(",")}`
+          );
+          return res.status(400).json(tier1FailureBody);
+        }
+      }
 
       const { generate837P } = await import("./services/edi-generator");
       const ediString = generate837P({

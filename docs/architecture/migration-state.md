@@ -268,3 +268,50 @@ Sprint 0 + Sprint 1a + Sprint 1b promoted to Railway production. All gates (1, 2
 **Audit report:** `docs/architecture/phase3-prod-deploy-audit-report.md` is the authoritative end-to-end record of this deploy (timeline, pre-flight findings, migration design, execution evidence, push lessons learned, smoke results, files/DDL applied, open follow-ups, standing-order attestation).
 
 Open follow-ups carried forward (none gating further work): stale `.git/refs/remotes/origin/main.lock` cleanup, Chajinel `compose_from_profile=true` flip, optional `replit_readonly` SELECT grants on the 6 new tables, Drizzle `organizations` declaration drift (§3.3, §8.2).
+
+---
+
+## 11. Sprint 1c — EDI Preflight Gate (delivered 2026-05-03)
+
+Wires `evaluateClaim`'s Tier 1 structural-integrity rules (T1-001 … T1-008) into the two Stedi EDI submission routes. Server-side only, dev-only, no production deploy.
+
+### 11.1 What shipped
+
+- **New helper** `server/services/rules-engine/edi-preflight.ts` exporting:
+  - `requireTier1Pass(ctx: ClaimContext): Promise<Tier1FailureBody | null>` — calls `evaluateClaim`, filters `RuleViolation[]` for `source==="tier1-structural" && severity==="block"`, returns a 400-ready failure body or `null`.
+  - `buildClaimContextForGate({c, pat, payerInfo, serviceLines, icd10Codes})` — centralizes the snake_case → ClaimContext mapping shared by both stedi routes.
+- **Two route gates wired** at `server/routes.ts`:
+  - `POST /api/billing/claims/:id/submit-stedi` — gate at lines 6502–6527, fires after the synthetic-data gate / `submission_attempts` insert, before `generate837P`.
+  - `POST /api/billing/claims/:id/test-stedi` — gate at lines 6735–6755, fires after address building, before `generate837P`.
+- **Failure response contract** (matches the existing EDI-route Convention 2): HTTP 400 with `{success:false, error:"VALIDATION_ERROR: …", findings:[{code,severity,message,fixSuggestion}], gateName:"tier1-structural-preflight"}`.
+- **7 new tests** at `server/services/rules-engine/edi-preflight.test.ts` (6 documented + 1 bonus mapping check), all passing.
+- **Pre-existing in-route VALIDATION_ERROR checks** at `routes.ts` 6428/6441/6685/6698 left untouched per Hard Rule 3c; harmless redundancy that keeps Sprint 1c rollback-safe.
+
+### 11.2 Important contract correction discovered during Sprint 1c
+
+The Sprint 1c prompt's "Anchors" section claimed `evaluateClaim` returns `{ findings, shortCircuited, shortCircuitReason }`. **The actual contract has been `Promise<RuleViolation[]>` since Sprint 1a** — a flat array, no wrapper, no flag. The Sprint 1c gate detects Tier 1 blocks via filter (`f.source === "tier1-structural" && f.severity === "block"`) rather than a non-existent boolean. The behavior is functionally identical to the prompt's intent. See `docs/architecture/sprint1c-audit-report.md` §2c for line-cited evidence and Option (i) detection rationale.
+
+### 11.3 Verification
+
+| Suite | Result |
+|---|---|
+| `scripts/verify-tenant-isolation.ts` | 12/12 |
+| `tier1-structural-integrity.test.ts` | 16/16 |
+| `rules-engine.test.ts` | 4/4 |
+| `voice-persona-builder.test.ts` | 23/23 |
+| `scripts/smoke-helpers.ts` | green (chajinel→home_care, demo ppe=2, chajinel ppe=0, no-ctx=0) |
+| **`edi-preflight.test.ts`** (new) | **7/7** |
+| `tsc --noEmit` error count | 85 (= baseline; **zero new errors** introduced) |
+| Workflow boot | clean — `serving on port 5000`, all crons started |
+
+### 11.4 Sprint 2 pre-flight recommendation (carried forward from §1.8 of sprint1c-audit-report)
+
+When Sprint 2 captures its baselines, **replace any binary "tsc clean" assertion with an explicit error-count assertion** (e.g. `tsc count ≤ 85` or whatever the snapshot count is at Sprint 2 start). Rationale: Sprint 1a/1b's audit reports both claimed a clean tsc baseline, but the Sprint 1c pre-flight found 85 pre-existing errors with at least one (`server/services/rules-engine.ts:196` TS2802) traceable to commit `9537fc2` — well before Phase 3. Either the prior baselines measured something narrower than full-project strict tsc, or accumulated drift slipped through. An explicit numeric count is environment-stable and catches regressions even when the absolute floor is non-zero.
+
+Path A's Sprint 1c success criterion (no new tsc errors) should become the Sprint 2+ default for all baseline assertions: capture the pre-sprint count `N`, require post-sprint count `≤ N`, document any drift.
+
+### 11.5 Open follow-ups (non-blocking)
+
+- The pre-existing 85 tsc errors remain (63 in `routes.ts`, 5 in `storage.ts`, 4 each in `rate-ingest.ts` / `claim-wizard.tsx`, etc.). Hygiene-only; not Sprint-1c-relevant per Path A. A future hygiene sprint could drain them; the current report makes the count explicit and trackable.
+- The pre-existing in-route VALIDATION_ERROR checks at 6428/6441/6685/6698 are now functionally dead code (the Tier 1 gate validates the same conditions and more), but were intentionally kept for rollback safety. A future cleanup sprint can remove them once the gate has soaked.
+- Sprint 1c only covers the two Stedi EDI submission routes. Office Ally submission (`routes.ts:6298–6345`) and the resubmit-stedi route (~line 4167 vicinity) are NOT gated by Tier 1 yet. If the gate is desired there, it's a copy-paste of the same 4-line block — out of Sprint 1c scope.

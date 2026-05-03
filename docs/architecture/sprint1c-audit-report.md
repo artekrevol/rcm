@@ -3,7 +3,7 @@
 **Sprint:** EDI Route → `evaluateClaim` Wire-In
 **Scope:** server-side only; gates `POST /api/billing/claims/:id/submit-stedi` and `POST /api/billing/claims/:id/test-stedi` on Tier 1 structural integrity before `generate837P`
 **Mode:** Build (executed directly by main agent in dev workspace)
-**Status:** ⚠️ **STOPPED at Step 1 — `tsc --noEmit` baseline FAILED. Awaiting sign-off on how to proceed.**
+**Status:** ✅ **COMPLETE.** All 8 steps executed. Helper landed, both routes wired, 7/7 new tests pass, all 5 baseline suites still green, post-sprint `tsc` count = 85 (= baseline, zero new errors), workflow restarts clean.
 
 This report follows the same convention as `sprint1a-audit-report.md` / `sprint1b-…` / `phase3-prod-deploy-audit-report.md`: per-step results, line-cited evidence, no production touches, dev-only.
 
@@ -331,4 +331,168 @@ Once signed off, Steps 3 (helper + wire-in), 4 (tests), 5 (verification includin
 
 ---
 
-## §3+ — NOT STARTED
+## §3 Helper implementation (Step 3)
+
+### §3.1 New file — `server/services/rules-engine/edi-preflight.ts`
+
+Two exports:
+
+**`requireTier1Pass(ctx: ClaimContext): Promise<Tier1FailureBody | null>`**
+- Calls `evaluateClaim(ctx)` → `RuleViolation[]`
+- Filters via Option (i) per §2c sign-off: `f.source === "tier1-structural" && f.severity === "block"`
+- Returns `null` on pass, `Tier1FailureBody` on fail
+- Failure body: `{success:false, error:"VALIDATION_ERROR: …", findings:[{code,severity,message,fixSuggestion}], gateName:"tier1-structural-preflight"}`
+- Caller responds with `res.status(400).json(body)`
+- DB cost on failure path: zero — `evaluateClaim` short-circuits at `rules-engine.ts:353` before `pool.connect()` at `:360`
+
+**`buildClaimContextForGate({c, pat, payerInfo, serviceLines, icd10Codes}): ClaimContext`**
+- Centralizes the snake_case → ClaimContext mapping shared by both stedi routes
+- Conversions: `serviceLines[].hcpcs_code → .code`, `.charge → .totalCharge`; `icd10Codes` array split into `icd10Primary` + `icd10Secondary`; date strings coerced to `Date`
+
+### §3.2 Wire-in to `server/routes.ts`
+
+| Route | Line range | Insertion point |
+|---|---|---|
+| `POST /api/billing/claims/:id/submit-stedi` | added at 6502–6527 (26 lines) | after address building, before `generate837P` import |
+| `POST /api/billing/claims/:id/test-stedi` | added at 6735–6755 (21 lines) | after address building, before `generate837P` import |
+
+Both gates use dynamic import (`await import("./services/rules-engine/edi-preflight")`) to match the surrounding `await import("./services/edi-generator")` style. Each gate logs `[Tier1Gate] Blocked submit-stedi/test-stedi claim=<id> codes=<T1-NNN,…>` on the failure path.
+
+### §3.3 Hard Rule 3c compliance — confirmed
+
+The pre-existing in-route `VALIDATION_ERROR` checks at lines **6428–6432, 6441–6443, 6685–6689, 6698** were **not modified**. They overlap with Tier 1 rules T1-003 (no service lines) and T1-007 (no ICD-10) and now serve as harmless first-line shorts that fire before the gate would have run. Net effect: the gate runs on claims that have at least one service line and one ICD-10 code, where it then validates the full 8-rule Tier 1 surface (including T1-001 missing org_id, T1-004 malformed CPT, T1-005 invalid units, T1-006 invalid charge, T1-008 missing service date).
+
+---
+
+## §4 Tests (Step 4)
+
+### §4.1 New file — `server/services/rules-engine/edi-preflight.test.ts`
+
+Run with `npx tsx server/services/rules-engine/edi-preflight.test.ts`. No jest/vitest dependency — matches the Sprint 0/1a/1b test pattern.
+
+Result: **7 passed, 0 failed** (6 documented + 1 bonus mapping check).
+
+```
+edi-preflight — Tier 1 gate tests
+===================================
+
+  [PASS] returns null when every Tier 1 rule is satisfied
+  [PASS] returns failure body with T1-003 when service lines are empty
+  [PASS] returns failure body with T1-007 when primary ICD-10 is missing
+  [PASS] returns failure body with T1-001 when organization_id is missing
+  [PASS] reports multiple Tier 1 findings when multiple rules block
+  [PASS] failure body matches the documented Tier1FailureBody shape
+  [PASS] buildClaimContextForGate maps route variables into a ClaimContext
+
+7 passed, 0 failed (7 total)
+```
+
+### §4.2 Test coverage rationale
+
+| # | Case | Tier 1 rule | What it verifies |
+|---:|---|---|---|
+| 1 | Pass-through | (all pass) | Helper returns `null`; downstream `generate837P` proceeds |
+| 2 | Empty service lines | T1-003 | Gate fires; `findings` includes `T1-003` |
+| 3 | Missing primary ICD-10 | T1-007 | Gate fires; `findings` includes `T1-007` |
+| 4 | Missing organization_id | T1-001 | Gate fires; tenant-scoping prerequisite is enforced before EDI |
+| 5 | Multiple violations | T1-001 + T1-003 | Gate reports all blocking Tier 1 findings, not just the first |
+| 6 | Body shape contract | (n/a) | All required keys present, types correct, `success===false`, `error` starts with `VALIDATION_ERROR:`, `gateName` exact match |
+| 7 (bonus) | `buildClaimContextForGate` | (n/a) | Snake_case → ClaimContext mapping is correct (guards against silent shape drift in either route) |
+
+---
+
+## §5 Verification (Step 5)
+
+All 5 pre-sprint baselines still green after Sprint 1c, plus the new test suite. Path A criterion (post-sprint tsc errors ≤ 85) achieved exactly.
+
+| Suite | Pre-sprint | Post-sprint | Delta |
+|---|---|---|---|
+| `scripts/verify-tenant-isolation.ts` | 12/12 | 12/12 | — |
+| `tier1-structural-integrity.test.ts` | 16/16 | 16/16 | — |
+| `rules-engine.test.ts` | 4/4 | 4/4 | — |
+| `voice-persona-builder.test.ts` | 23/23 | 23/23 | — |
+| `scripts/smoke-helpers.ts` | green (chajinel→home_care, demo ppe=2, chajinel ppe=0, no-ctx=0) | green (identical) | — |
+| **`edi-preflight.test.ts`** | (new) | **7/7** | **+7** |
+| `tsc --noEmit` error count | 85 | **85** | **0** |
+
+### §5.1 tsc diff vs baseline — only positional shifts
+
+`diff <(grep "error TS" /tmp/tsc-baseline.log | sort -u) <(grep "error TS" /tmp/tsc-post.log | sort -u)` produced only **line-number deltas in `server/routes.ts`** caused by the ~26 lines inserted at the submit-stedi gate and ~21 lines at the test-stedi gate. No new error codes, no new files, no new error types. Sample shift: `routes.ts(10626,…) → routes.ts(10675,…)` (= +49 lines, sum of both insertion blocks plus blank lines, consistent with the actual edits).
+
+A line-only `client/src/pages/claim-detail.tsx(1195,23)` error string shifted slightly — unrelated to Sprint 1c (the file was untouched). The string difference is the inferred-tuple field ordering rendered by tsc, not a logic change. Confirmed by reading `git --no-optional-locks diff` on that file: zero modifications.
+
+**Conclusion: zero new TypeScript errors introduced.** Path A success criterion met (target: ≤ 85; achieved: 85 exactly).
+
+---
+
+## §6 Smoke (Step 6)
+
+Workflow `Start application` restarted automatically after the routes.ts edits. Server boot log shows:
+
+- All 30+ startup seeders complete (`[SEEDER] … already present`)
+- `serving on port 5000` reached
+- Cron startups complete (orchestrator, CCI, TF-Guardian, scraper)
+- No errors, no stack traces, no startup failures
+- First authed-route hit `GET /api/auth/me 401` — expected (no session in test refresh)
+
+Tier 1 gate is dynamically imported per request (`await import("./services/rules-engine/edi-preflight")`), so the gate code is exercised at runtime only when a `submit-stedi` or `test-stedi` request lands. Static smoke is sufficient — the helper's behavior is fully covered by the 7 unit tests in §4.
+
+---
+
+## §7 Documentation updates (Step 7+8)
+
+### §7.1 `replit.md`
+
+Added "Phase 3 Sprint 1c — EDI Preflight Gate (Completed 2026-05-03)" section under the existing "Phase 3 Sprint 0 — Architectural Foundation" section. Captures:
+- 1 new file: `server/services/rules-engine/edi-preflight.ts`
+- 1 new test file: `server/services/rules-engine/edi-preflight.test.ts` (7/7 pass)
+- 2 route gates added: submit-stedi (6502–6527), test-stedi (6735–6755)
+- Path A baseline: tsc count locked at 85, success = no new errors
+
+### §7.2 `docs/architecture/migration-state.md`
+
+Added §11 "Sprint 1c — EDI Preflight Gate (delivered 2026-05-03)" with the wire-in summary, plus a "Sprint 2 pre-flight recommendation" footnote per §1.8: replace binary "tsc clean" baseline assertions with explicit error-count assertions (`tsc count ≤ N`).
+
+---
+
+## §8 Standing-order attestation
+
+| Rule | Compliance |
+|---|---|
+| Dev-only, no production deploy | ✅ All work on dev `DATABASE_URL`. No `pg_dump` against prod. No Stedi/Office Ally calls made. |
+| Read-only where possible | ✅ Discovery (Step 2) was 100% read-only. Edits limited to: 2 new files, 2 surgical `routes.ts` insertions, 3 doc files. |
+| Line-cited claims | ✅ Every code/line reference in this report carries a line number traceable to git. |
+| No destructive git ops inline | ✅ No `git rm`, `git reset`, `git clean`, `git rebase`, `git restore`, `git checkout`, `git filter-branch`, etc. Only read-only `git --no-optional-locks log` for the §1.8 archaeology. |
+| `evaluateClaim` signature unchanged | ✅ The function's exported signature and return type are identical to Sprint 1a. |
+| `generate837P` unchanged | ✅ The EDI generator was not opened or modified. |
+| No DB schema changes | ✅ No DDL emitted. No new tables, no new columns. |
+| Tenant isolation preserved | ✅ Tenant-isolation 12/12 pass post-sprint. The gate runs in the route's request scope, which is already tenant-scoped via `verifyOrg(c, req)` upstream. |
+| Sprint 1c rollback safety | ✅ Rolling back the 4 file changes leaves all pre-existing in-route VALIDATION_ERROR checks intact (Hard Rule 3c). No behavioral regression on rollback. |
+
+---
+
+## Appendix A — Files changed
+
+| File | Status | Lines |
+|---|---|---|
+| `server/services/rules-engine/edi-preflight.ts` | **new** | 138 |
+| `server/services/rules-engine/edi-preflight.test.ts` | **new** | 217 |
+| `server/routes.ts` | **modified** | +47 (26 in submit-stedi, 21 in test-stedi) |
+| `docs/architecture/sprint1c-audit-report.md` | **modified** | this file |
+| `docs/architecture/migration-state.md` | **modified** | +§11 |
+| `replit.md` | **modified** | +Sprint 1c section |
+| `docs/architecture/sprint1c-snapshots/dev-pre-sprint1c-20260503-072034Z.sql` | **new (gitignored)** | snapshot |
+
+## Appendix B — Sprint 1c success criteria checklist
+
+- [x] New helper at `server/services/rules-engine/edi-preflight.ts`
+- [x] Helper exports `requireTier1Pass(ctx)` returning `null | Tier1FailureBody`
+- [x] Both stedi routes call the helper before `generate837P`
+- [x] Failure response: 400 with `{success:false, error:"VALIDATION_ERROR: …", findings, gateName}`
+- [x] Existing 6428/6441/6685/6698 VALIDATION_ERROR checks untouched
+- [x] 6 documented gate tests all pass (plus 1 bonus mapping check)
+- [x] All 5 prior baseline suites still pass
+- [x] `tsc --noEmit` error count ≤ 85 (achieved exactly 85)
+- [x] Workflow boots clean post-edit
+- [x] Dev-only, no prod touches
+- [x] Audit report complete with line-cited evidence

@@ -1,0 +1,30 @@
+All four sign-off questions: yes. The §2c finding is the most important and Replit handled it correctly.
+
+**On §2c — the anchor mismatch.** This is exactly the kind of finding that justifies the discovery gate. I wrote the prompt assuming `evaluateClaim` returned a wrapper object based on what sprint 1a's audit report described. Replit went and read the actual code and found the real return type is `Promise<RuleViolation[]>` — flat array, no wrapper. The proposed detection via `findings.filter(f => f.source === "tier1-structural" && f.severity === "block")` is functionally identical to the prompt's intent and uses the actual contract. Use that.
+
+The lesson here is the same one we kept hitting today: documentation can drift from code. Sprint 1a's audit report described an integration shape that wasn't quite what shipped — either the implementation evolved after the audit was written, or the audit described intent rather than reality. Either way, reading the actual code beats reading the audit. Replit did the right thing by checking.
+
+**On §2b — 400 with `{success:false, error:"VALIDATION_ERROR: …", findings, gateName}`.** Confirmed. Six existing precedents establish 400 as the input-validation pattern; 422 is for post-Stedi rejections and policy gates. Match the convention. Adding `findings` and `gateName` keys mirrors how `:6466` adds `testDataSignals` for the synthetic-data block — same shape extended for context, not a new shape invented.
+
+**On §2c.2 — leaving the existing `VALIDATION_ERROR` checks at 6428/6441/6685/6698 untouched.** Confirmed. Hard Rule 3c was deliberate. Removing them is a separate cleanup decision and not sprint 1c's call. Redundant but harmless is fine; the gate fires first and short-circuits the request before those checks would have run anyway, so they're effectively dead code post-sprint — but leaving them in place means rolling back sprint 1c (if ever needed) doesn't introduce a regression.
+
+**On insertion points (before 6499 in submit-stedi, before 6705 in test-stedi).** Confirmed. Both are after auth, claim load, synthetic-data gate, and `submission_attempts` insert (in submit-stedi) / address building (in test-stedi). The gate runs after pre-existing setup work but before EDI generation. Correct sequencing — failed gate doesn't pollute `submission_attempts` with attempts that never happened, and the gate doesn't run before synthetic-data protection (which is its own important guard).
+
+**§1.8 footnote on the historical TS error baseline:** noted. Worth adding a small action item to migration-state for sprint 2: pre-flight baselines should use explicit error-count assertions (`tsc count <= N`) rather than binary "clean" claims, because "clean" is environment-sensitive and the prior sprints' baselines may not have actually been measuring strict mode. Not gating sprint 1c, but worth the footnote becoming a tracked recommendation rather than just an audit observation.
+
+**Send Replit:**
+
+> All four sign-off questions confirmed:
+>
+> 1. Use Option (i) detection: `findings.filter(f => f.source === "tier1-structural" && f.severity === "block")`. The prompt's `shortCircuited` flag was based on stale audit description; the actual `evaluateClaim` contract returns `Promise<RuleViolation[]>`. Use the real contract.
+> 2. Failure body shape confirmed: 400 with `{success:false, error:"VALIDATION_ERROR: ...", findings:[...], gateName:"tier1-structural-preflight"}`.
+> 3. Insertion points confirmed: before line 6499 (submit-stedi), before line 6705 (test-stedi).
+> 4. Existing `VALIDATION_ERROR` checks at 6428/6441/6685/6698 stay untouched.
+>
+> Append to migration-state.md a small action item for sprint 2's pre-flight: explicit tsc-error-count assertions instead of binary "clean" claims, per §1.8 archaeology finding.
+>
+> Resume with Step 3 (helper implementation), Step 4 (tests), Step 5 (verification — final tsc count must be ≤ 85), Step 6 (smoke), Step 7 (audit report), Step 8 (migration-state update).
+>
+> No further sign-off pause needed. Execute through to the audit report and stop there. Surface results when done.
+
+Send. Replit executes the rest of sprint 1c without additional gates. The hard work was the discovery; the implementation is mechanical from here.
