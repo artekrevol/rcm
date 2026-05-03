@@ -217,12 +217,26 @@ User confirmed coverage by §3.
 **Tool:** `pg_dump` v**17.6** (`/nix/store/269nimkimaaivb4z46bjc1rnjv9jpc0l-postgresql-17.6/bin/pg_dump`)
 - Note: had to install `postgresql` system pkg via nix; default in-PATH `pg_dump` was 16.10 which refused to dump the v17.9 server. Installed via `installSystemDependencies(["postgresql"])`. The v17 binary is now resolvable in `/nix/store`.
 
-### Artifacts (NOT committed to repo — `/tmp` is ephemeral and outside the git tree)
+### Artifacts (NOT committed to repo — `snapshots/` is gitignored at line 18)
+
+**Originals in `/tmp` (ephemeral, full files):**
 
 | Path | Format | Size | sha256 |
 |---|---|---|---|
 | `/tmp/prod-snapshot-pre-phase3-20260503T045620Z.dump` | `pg_dump -F c` (custom, compressed, restorable) | 123 M | `ec74627e64c01904c21e706ea7034eb0bca2c08cf1f10600097bf0e76eb4a441` |
 | `/tmp/prod-schema-pre-phase3-20260503T045620Z.sql` | `pg_dump --schema-only` (DDL only, plain text) | 121 K, 4,265 lines | `3c331299ab7b96d7053a7e704dfeded498175d87beba8d9602cacd56bb5ad348` |
+
+**User-downloadable copies in `snapshots/` (workspace, gitignored):**
+
+| Path | Size | sha256 |
+|---|---|---|
+| `snapshots/prod-schema-pre-phase3-20260503T045620Z.sql` | 121 K | `3c331299…5ad348` |
+| `snapshots/prod-snapshot-pre-phase3-20260503T045620Z.dump.00.part` | 40 M | `d1de14d8…cd72ee` |
+| `snapshots/prod-snapshot-pre-phase3-20260503T045620Z.dump.01.part` | 40 M | `d7e71d32…d98c28` |
+| `snapshots/prod-snapshot-pre-phase3-20260503T045620Z.dump.02.part` | 40 M | `05aa920b…be833d` |
+| `snapshots/prod-snapshot-pre-phase3-20260503T045620Z.dump.03.part` | 2.3 M | `cb73f0cb…f21cdf` |
+
+**Why split:** Replit's checkpoint system truncated the unsplit 123 MB binary to 0 bytes mid-session (verified: file showed correct size + sha256 immediately post-`cp`, then 0 bytes + empty-file sha256 on later inspection). Splitting into ≤40 MB chunks bypasses the checkpoint truncation. Rejoin sha256 verified to match original (`ec74627e…b4a441`). Rejoin instructions in `snapshots/README.md`.
 
 ### Restore command (for reference; do not run unless rolling back)
 
