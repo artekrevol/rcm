@@ -137,3 +137,60 @@ The two existing rows in `practice_payer_enrollments` belong to `demo-org-001` (
 | Tier 1 structural integrity | `npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts` | 16/16 PASS |
 | Workflow startup | observed in `Start application` after middleware wire-up | clean (no errors) |
 | Existing rows preserved | `SELECT count(*) FROM practice_payer_enrollments;` returns 2 | ✅ |
+
+---
+
+## 8. Sprint 1a — additive update (2026-05-03)
+
+Sprint 1a closed two Sprint 0 prerequisites and shipped one functional change. **Existing §1–§7 above remain authoritative for Sprint 0 state**; this section records the deltas only.
+
+### 8.1 §3.1 (WITH CHECK on tenant_isolation policies) — DONE
+
+The 6× `ALTER POLICY ... WITH CHECK (...)` DDL bundle from §3.1 was applied verbatim in a single transaction on dev. DDL applied: `docs/architecture/sprint1a-snapshots/sprint1a-with-check.sql`. Pre-DDL snapshot at `docs/architecture/sprint1a-snapshots/dev-pre-sprint1a-20260503-031642Z.sql` (gitignored).
+
+Post-application verification — all 6 policies:
+
+| Table | has_using | has_with_check | expressions_match |
+|---|---|---|---|
+| `claim_provider_assignments` | t | t | t |
+| `organization_practice_profiles` | t | t | t |
+| `patient_insurance_enrollments` | t | t | t |
+| `practice_payer_enrollments` | t | t | t |
+| `provider_payer_relationships` | t | t | t |
+| `provider_practice_relationships` | t | t | t |
+
+Tenant isolation script re-run post-DDL: 12/12 PASS. Sprint 1b/1c may now ship `INSERT`/`UPDATE` helpers without re-opening the missing-WITH-CHECK gap.
+
+### 8.2 §3.3 — Drizzle drift on `organizations` — DONE
+
+`organizations` now declared in `shared/schema.ts:521-529` with all 7 live columns (`id`, `name`, `created_at`, `onboarding_dismissed_at`, `contact_email`, `status`, `updated_at`). Column types match live DB exactly (`name varchar`, `created_at timestamp without time zone nullable`, `updated_at timestamp with time zone notNull`). Zero `organizations.is_active` references found in `server/`, `shared/`, `client/`. `npx tsc --noEmit` error count unchanged at 85; zero errors mention `organizations`.
+
+### 8.3 Tier 1 structural integrity — wired into `evaluateClaim`
+
+Tier 1 validator (`server/services/rules-engine/tier1-structural-integrity.ts`) is now invoked at the top of `evaluateClaim` (`server/services/rules-engine.ts:347-358`). On any `block`-severity Tier 1 finding the function short-circuits and returns Tier 1 violations only; otherwise it falls through to legacy sanity rules + DB-driven rules as before. Adapter at `server/services/rules-engine/tier1-adapter.ts` handles the `code` ↔ `procedureCode` field-name remap. `RuleViolation` extended with optional `source?: string` (Tier 1 findings tag as `source: "tier1-structural"`, `ruleId: "T1-NNN"`, `ruleType: "data_quality"`).
+
+Integration test `server/services/rules-engine.test.ts` (4/4 PASS): empty service lines, missing org_id, fully clean ctx, Tier-1-clean with legacy warn. Tier 1 baseline test re-run: 16/16 PASS.
+
+### 8.4 New open question — EDI generator gating gap (Sprint 1c+ prerequisite)
+
+**Read-only investigation finding.** Both EDI submission routes call `generate837P` directly without invoking `evaluateClaim`:
+
+- `server/routes.ts:6348` — `POST /api/billing/claims/:id/submit-stedi` (production)
+- `server/routes.ts:6623` — `POST /api/billing/claims/:id/test-stedi` (test mode)
+
+`evaluateClaim` is only called from claim review/scoring/risk endpoints (`server/routes.ts:5179`, `5264`, `5422`). `server/services/edi-generator.ts` does not import `rules-engine` and does not perform structural validation beyond formatting. **Therefore Sprint 1a's Tier 1 wire-in does NOT gate EDI submission.** A claim that would fail Tier 1 (e.g. missing primary ICD-10, malformed CPT/HCPCS) can still be assembled into an 837P and submitted to Stedi if the route's hand-rolled "no service lines / no ICD-10" early-400 guards are satisfied.
+
+**Sprint 1c+ prerequisite (recommended fix):** Inside both `submit-stedi` and `test-stedi` route handlers, call `evaluateClaim` (or at minimum `validateTier1Structural`) before `generate837P` and reject the request on any blocking finding. This was deliberately NOT fixed in Sprint 1a — the standing order limited Sprint 1a to read-only investigation of the EDI path. Full analysis in `docs/architecture/sprint1a-audit-report.md` §5.
+
+### 8.5 Verification artifacts (Sprint 1a re-runs)
+
+| Check | Command | Result |
+|---|---|---|
+| Tenant isolation (post WITH CHECK) | `npx tsx scripts/verify-tenant-isolation.ts` | 12/12 PASS |
+| Tier 1 structural integrity baseline | `npx tsx server/services/rules-engine/tier1-structural-integrity.test.ts` | 16/16 PASS |
+| Helper smoke | `npx tsx scripts/smoke-helpers.ts` | green (chajinel→home_care_agency_personal_care; demo=2, chajinel=0, no-ctx=0) |
+| Rules-engine wire-in | `npx tsx server/services/rules-engine.test.ts` (NEW) | 4/4 PASS |
+| TypeScript | `npx tsc --noEmit` | 85 errors (unchanged baseline; 0 new) |
+| Workflow startup | observed in `Start application` post-change | clean (no errors) |
+
+Full Sprint 1a audit report: `docs/architecture/sprint1a-audit-report.md`.
