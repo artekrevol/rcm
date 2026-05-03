@@ -505,3 +505,118 @@ Carried forward to subsequent phases per Gate 2 & 3 sign-off:
 ### After Gate 4
 
 Phase 4 will trigger the Railway code redeploy of the latest committed dev SHA so the application code matches the new prod schema. `withTenantTx` and the helper service layer will then start being exercised against prod data.
+
+---
+
+## §8 — Phase 5 Production Smoke Test (2026-05-03)
+
+Run after Railway redeploy turned green (boot OK on :8080, health 200, background jobs started, no errors). Both scripts executed against `$PRODUCTION_DATABASE_URL` from this workspace.
+
+### §8.1 — Push that triggered the redeploy
+
+- Pre-push remote `main`: `e56f10e` (rollback target SHA)
+- Post-push remote `main`: `6e999373a463e9427ffa10a2d4c895954c275186`
+- Push output: `e56f10e..6e99937  main -> main` (261 objects, 7.80 MiB)
+- Verified post-push via `git ls-remote origin main` — matches local `HEAD` exactly.
+- Note: local tracking ref `.git/refs/remotes/origin/main` did NOT update due to the stale Apr 27 lock file `.git/refs/remotes/origin/main.lock`. This is cosmetic only — the push itself completed and Railway received it. The `rm` of the lock remains blocked by the main-agent sandbox guard; clearing it is a follow-up housekeeping item, not a deploy blocker.
+
+### §8.2 — `scripts/smoke-helpers.ts` against prod
+
+Command:
+```
+DATABASE_URL="$PRODUCTION_DATABASE_URL" npx tsx scripts/smoke-helpers.ts
+```
+
+Output:
+```
+Chajinel active profile code: home_care_agency_personal_care
+  display: Home Care Agency — Personal Care
+  is_primary: true
+  rule_subs count: 6
+demo-org-001 enrollments: 2
+chajinel-org-001 enrollments: 3
+no-ctx enrollments (must be 0): 0
+```
+
+Result: **PASS**. Matches expected.
+- Chajinel resolves to `home_care_agency_personal_care` (the seeded primary mapping from Sprint 0 step 4a).
+- `chajinel-org-001` enrollments = 3 — reflects prod data (dev had 0).
+- `demo-org-001` enrollments = 2 — preserved demo seed.
+- No-context returns 0 — RLS fails closed when `app.current_org_id` is unset, exactly as designed.
+
+### §8.3 — `scripts/verify-tenant-isolation.ts` against prod (raw run)
+
+Command:
+```
+DATABASE_URL="$PRODUCTION_DATABASE_URL" npx tsx scripts/verify-tenant-isolation.ts
+```
+
+Result: **11 passed, 1 failed (12 total)** — exit code 1.
+
+The single failure is the dev-vs-prod expectation mismatch the user predicted upfront:
+```
+[FAIL] Case 3 — chajinel  practice_payer_enrollments  expected=0 actual=3
+```
+
+The script (lines 32–45) hard-codes `Case 3` chajinel ppe = 0, which was true on dev but no longer true on prod. **This is not an isolation breach** — it is a stale assertion. Confirmation that isolation is intact:
+- `Case 2 — demo-org-001 practice_payer_enrollments expected=2 actual=2` — demo ctx still sees only its own 2 rows. If chajinel's 3 rows were leaking, demo would see 5.
+- `Case 1 — no ctx practice_payer_enrollments expected=0 actual=0` — RLS still fails closed.
+- `Case 4 — fake org practice_payer_enrollments expected=0 actual=0` — non-existent org sees nothing.
+
+### §8.4 — `verify-tenant-isolation` re-run with prod-correct expectations
+
+To produce the expected 12/12 PASS, ran the same 12 cases with `Case 3 ppe expected=3` (matching prod data). Script saved at `scripts/verify-tenant-isolation-prod.ts` (read-only, only differs from `verify-tenant-isolation.ts` by that one expected value and a header label).
+
+Command:
+```
+DATABASE_URL="$PRODUCTION_DATABASE_URL" npx tsx scripts/verify-tenant-isolation-prod.ts
+```
+
+Output:
+```
+Sprint 0 Step 5f — Tenant Isolation Verification (PROD expectations)
+=====================================================================
+
+  [PASS] Case 1 — no ctx              practice_payer_enrollments         expected=0 actual=0
+  [PASS] Case 1 — no ctx              organization_practice_profiles     expected=0 actual=0
+  [PASS] Case 1 — no ctx              patient_insurance_enrollments      expected=0 actual=0
+  [PASS] Case 1 — no ctx              provider_practice_relationships    expected=0 actual=0
+  [PASS] Case 1 — no ctx              provider_payer_relationships       expected=0 actual=0
+  [PASS] Case 1 — no ctx              claim_provider_assignments         expected=0 actual=0
+  [PASS] Case 2 — demo-org-001        practice_payer_enrollments         expected=2 actual=2
+  [PASS] Case 2 — demo-org-001        organization_practice_profiles     expected=0 actual=0
+  [PASS] Case 3 — chajinel            organization_practice_profiles     expected=1 actual=1
+  [PASS] Case 3 — chajinel            practice_payer_enrollments         expected=3 actual=3
+  [PASS] Case 4 — fake org            practice_payer_enrollments         expected=0 actual=0
+  [PASS] Case 4 — fake org            organization_practice_profiles     expected=0 actual=0
+
+12 passed, 0 failed (12 total)
+
+All tenant-isolation checks passed.
+```
+
+Result: **12/12 PASS** — exit code 0.
+
+### §8.5 — Phase 5 verdict
+
+- ✅ Helper service layer resolves the right profile and enrollments per org against prod data.
+- ✅ All four RLS isolation cases hold (no-ctx, own-org, other-org cross-check, non-existent org).
+- ✅ FORCE RLS confirmed effective: even as superuser-derived `claimshield_app_role`, queries return only the rows scoped to `app.current_org_id`.
+
+---
+
+## Gate 6 — Sign-off requested
+
+**Stopping here per instruction. Phase 5 smoke complete; awaiting Gate 6 review before authoring the deploy audit report at `docs/architecture/phase3-prod-deploy-audit-report.md`.**
+
+### What to review for Gate 6
+
+1. §8.1 push SHAs — confirm `6e999373a463e9427ffa10a2d4c895954c275186` is what Railway actually built.
+2. §8.2 smoke-helpers output — confirm chajinel/demo/no-ctx counts match expectations.
+3. §8.3 raw verify run — confirm the single FAIL is the predicted dev-vs-prod expectation drift, not a real RLS leak. The Case 2 demo=2 result is the cross-check that proves isolation.
+4. §8.4 prod-aware re-run — confirm 12/12 PASS.
+5. Open follow-ups still owner-driven: stale `origin/main.lock` cleanup, Chajinel persona `compose_from_profile=true` flip, optional `replit_readonly` SELECT grants on the 6 new tables, drift fixes (`organizations.is_active` → `status='active'`, Drizzle `organizations` declaration update).
+
+### After Gate 6
+
+Author `docs/architecture/phase3-prod-deploy-audit-report.md` summarizing Gates 1–6, applied DDL, verification evidence, residual risks, and rollback path. No further runtime/database changes in that step.
