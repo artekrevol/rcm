@@ -375,10 +375,10 @@ Container start 2026-05-03T07:56:30.543Z → healthy at 07:56:35.858Z (5.3s cold
 
 ---
 
-## §13 — Sprint 1d: Payer Enrollment Surface Migration (DEV)
+## §13 — Sprint 1d: Payer Enrollment Surface Migration
 
-**Status:** ✅ Complete in dev. Prod deploy pending (separate task).
-**Authoritative record:** `docs/architecture/sprint1d-audit-report.md`.
+**Status:** ✅ Complete in dev. ✅ **DEPLOYED TO PRODUCTION** 2026-05-04.
+**Authoritative records:** `docs/architecture/sprint1d-audit-report.md` (dev), `docs/architecture/sprint1d-prod-deploy-audit-report.md` (prod deploy).
 
 ### Scope
 
@@ -411,11 +411,20 @@ Migrated `GET /api/practice/payer-enrollments` from raw `pool.query` (postgres s
 
 `docs/architecture/sprint1d-snapshots/dev-pre-sprint1d-20260503-081958Z.sql` — 127 MB pre-migration dev pg_dump. Excluded from git.
 
+### Production deploy record (2026-05-04)
+
+| Step | Result |
+|---|---|
+| Step 1 — `GRANT SELECT ON users TO claimshield_app_role` (prod DB, pre-push) | ✅ `has_table_privilege = true` |
+| Step 2 — `git push origin main` (`eecedc6..7f430ff`) | ✅ Remote accepted; Railway redeploy triggered |
+| Step 3 — `DATABASE_URL="$PRODUCTION_DATABASE_URL" npx tsx scripts/smoke-helpers.ts` | ✅ `chajinel=3 demo=2 no-ctx=0`; profile + rule_subs green |
+| Railway boot logs | ⚠️ Not observable from Replit env — Abeer to confirm via Railway dashboard |
+
 ### Open follow-ups
 
-1. **Sprint 1d prod deploy** — separate task. Push to `origin/main` triggers Railway redeploy; the `users` SELECT grant in the migration SQL must apply (idempotent re-run) or already exist before the migrated route is hit, or it will throw `permission denied for table users`. Sequence: push → Railway boot → seeder runs the GRANT → route is safe.
-2. Write-path migration (POST/DELETE for payer enrollments) — out of 1d scope; requires `WITH CHECK` on RLS policies first (Sprint 0 §3.1 carry-over).
-3. Other endpoint consumers' UI test surfaces (`patient-detail.tsx`, `patient-create.tsx` form behavior) — auto-migrate via route flip; broader UI-test surface deferred.
+1. **Write-path migration (POST/DELETE for payer enrollments)** — out of 1d scope; requires `WITH CHECK` on RLS policies first (Sprint 0 §3.1 carry-over). Tracked as follow-up task #58.
+2. Other endpoint consumers' UI test surfaces (`patient-detail.tsx`, `patient-create.tsx` form behavior) — auto-migrate via route flip; broader UI-test surface deferred.
+3. Abeer's prod UI smoke — log in to prod, confirm 3 payers appear in settings page and patient-signup dropdown.
 
 ### Future-debugging note (psql vs RLS)
 
