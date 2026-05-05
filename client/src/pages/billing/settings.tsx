@@ -1156,6 +1156,8 @@ function PayersTab() {
     eraAutoPostSecondary: true, eraAutoPostRefunds: true, eraHoldIfMismatch: true,
     payerClassification: "" as string,
     claimFilingIndicator: "" as string,
+    requiresVob: true as boolean,
+    rateInputMode: "per_unit" as string,
   });
   const [payerSearch, setPayerSearch] = useState("");
   const [payerDialogTab, setPayerDialogTab] = useState("settings");
@@ -1483,6 +1485,8 @@ function PayersTab() {
                           eraHoldIfMismatch: p.era_hold_if_mismatch !== false,
                           payerClassification: p.payer_classification || "",
                           claimFilingIndicator: p.claim_filing_indicator || "",
+                          requiresVob: p.requires_vob !== false,
+                          rateInputMode: p.rate_input_mode || "per_unit",
                         });
                       }}
                       data-testid={`button-edit-payer-${p.id}`}
@@ -1670,6 +1674,32 @@ function PayersTab() {
                   </div>
                 </div>
 
+                <div className="flex items-center gap-3">
+                  <Switch
+                    checked={editForm.requiresVob}
+                    onCheckedChange={(v) => setEditForm({ ...editForm, requiresVob: v })}
+                    data-testid="toggle-edit-payer-requires-vob"
+                  />
+                  <div>
+                    <Label>Requires VOB verification before claims</Label>
+                    <p className="text-xs text-muted-foreground">When off, the "VOB not verified" warning is suppressed for claims to this payer.</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Rate Input Mode</Label>
+                  <Select value={editForm.rateInputMode} onValueChange={(v) => setEditForm({ ...editForm, rateInputMode: v })}>
+                    <SelectTrigger data-testid="select-edit-rate-input-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="per_unit">Per Unit (standard)</SelectItem>
+                      <SelectItem value="per_hour">Per Hour (hourly → units auto-converted)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">For hourly-rate payers (e.g. VA Community Care), the claim wizard will show an hourly rate input and convert to units automatically.</p>
+                </div>
+
                 <div className="border-t pt-4 space-y-3">
                   <p className="text-sm font-semibold">ERA Auto-Posting Rules</p>
                   <p className="text-xs text-muted-foreground">Configure which ERA line types are automatically posted without manual review.</p>
@@ -1717,6 +1747,8 @@ function PayersTab() {
                     eraHoldIfMismatch: editForm.eraHoldIfMismatch,
                     payerClassification: editForm.payerClassification || null,
                     claimFilingIndicator: editForm.claimFilingIndicator || null,
+                    requiresVob: editForm.requiresVob,
+                    rateInputMode: editForm.rateInputMode,
                   })}
                   disabled={updateMutation.isPending}
                   data-testid="button-save-edit-payer"

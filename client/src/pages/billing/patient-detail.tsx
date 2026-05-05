@@ -109,6 +109,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
       }
       setForm({
         firstName,
+        middleName: patient.middle_name || "",
         lastName,
         dob: patient.dob || "",
         sex: patient.sex || "",
@@ -163,6 +164,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
     }
     saveMutation.mutate({
       firstName: form.firstName || null,
+      middleName: form.middleName || null,
       lastName: form.lastName || null,
       dob: form.dob || null,
       sex: form.sex || null,
@@ -216,10 +218,14 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
       <Card>
         <CardHeader><CardTitle>Demographics</CardTitle></CardHeader>
         <CardContent className="grid gap-4">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-4 gap-4">
             <div className="space-y-2">
               <Label>First Name</Label>
               <Input value={form.firstName} onChange={(e) => set({ firstName: e.target.value })} data-testid="input-edit-first-name" />
+            </div>
+            <div className="space-y-2">
+              <Label>Middle Name <span className="text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
+              <Input value={form.middleName} onChange={(e) => set({ middleName: e.target.value })} data-testid="input-edit-middle-name" />
             </div>
             <div className="space-y-2">
               <Label>Last Name</Label>

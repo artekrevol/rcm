@@ -167,6 +167,7 @@ export interface EDI837PInput {
      * Inferred from member_id length when not explicitly set.
      */
     veteran_id_type?: "ssn" | "edipi" | "mvi_icn" | null;
+    middle_name?: string | null;
   };
   practice: {
     name: string;
@@ -520,8 +521,9 @@ export function generate837P(input: EDI837PInput): string {
     ? resolveVeteranId(patient)
     : { qualifier: NM1_QUALIFIER["IL"], id: patient.member_id };
 
+  const patientMiddleInitial = patient.middle_name ? patient.middle_name[0].toUpperCase() + "." : "";
   segments.push(
-    `NM1*IL*1*${patient.last_name}*${patient.first_name}****${patientIdQual}*${patientIdVal}`
+    `NM1*IL*1*${patient.last_name}*${patient.first_name}*${patientMiddleInitial}***${patientIdQual}*${patientIdVal}`
   );
   const patientAddr = patient.address || street;
   const patientCity = patient.city || city;

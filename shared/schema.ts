@@ -70,6 +70,7 @@ export const patients = pgTable("patients", {
   memberId: text("member_id"),
   planType: text("plan_type"),
   firstName: varchar("first_name"),
+  middleName: varchar("middle_name", { length: 50 }),
   lastName: varchar("last_name"),
   preferredName: varchar("preferred_name"),
   phone: varchar("phone"),
@@ -584,6 +585,8 @@ export const payers = pgTable("payers", {
   payerClassification: varchar("payer_classification", { length: 32 }),
   claimFilingIndicator: varchar("claim_filing_indicator", { length: 2 }),
   payerCategory: varchar("payer_category", { length: 32 }),
+  rateInputMode: varchar("rate_input_mode", { length: 20 }).default("per_unit"),
+  requiresVob: boolean("requires_vob").default(true),
   organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });

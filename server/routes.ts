@@ -598,16 +598,43 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         WHERE organization_id = $1
       `, [CHAJINEL_ORG_ID]).catch(() => {});
 
-      // Payer 1 — TriWest Healthcare Alliance (VA Community Care)
-      const { rows: tw } = await pool.query(
-        `SELECT id FROM payers WHERE organization_id=$1 AND name='TriWest Healthcare Alliance' LIMIT 1`,
+      // Payer 1 — TriWest Healthcare Alliance (legacy, deactivate if present)
+      await pool.query(`
+        UPDATE payers SET is_active = false
+        WHERE organization_id = $1 AND name = 'TriWest Healthcare Alliance'
+      `, [CHAJINEL_ORG_ID]).catch(() => {});
+
+      // Payer 1b — VA Community Care (canonical payer for Chajinel, per_hour rate, no VOB requirement)
+      const { rows: vacc } = await pool.query(
+        `SELECT id FROM payers WHERE organization_id=$1 AND name='VA Community Care' LIMIT 1`,
         [CHAJINEL_ORG_ID]
       );
-      if (tw.length === 0) {
-        await pool.query(`
-          INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, organization_id, created_at)
-          VALUES (gen_random_uuid()::text, 'TriWest Healthcare Alliance', 'VHPVI', 'va_community_care', 'va_community_care', 'CH', 365, true, 'professional', true, true, $1, NOW())
+      let vaccId: string;
+      if (vacc.length === 0) {
+        const { rows: vaccNew } = await pool.query(`
+          INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, rate_input_mode, requires_vob, organization_id, created_at)
+          VALUES (gen_random_uuid()::text, 'VA Community Care', 'PENDING_DANIELA_MONDAY', 'va_community_care', 'va_community_care', 'CH', 365, true, 'professional', true, true, 'per_hour', false, $1, NOW())
+          RETURNING id
         `, [CHAJINEL_ORG_ID]);
+        vaccId = vaccNew[0].id;
+      } else {
+        vaccId = vacc[0].id;
+        // Ensure fields are kept current on re-seed
+        await pool.query(`
+          UPDATE payers SET rate_input_mode='per_hour', requires_vob=false, is_active=true
+          WHERE id=$1
+        `, [vaccId]).catch(() => {});
+      }
+      // Enrollment row so patient + claim forms show it (check first since NULL plan_product_code breaks ON CONFLICT)
+      const { rows: vaccEnroll } = await pool.query(
+        `SELECT id FROM practice_payer_enrollments WHERE organization_id=$1 AND payer_id=$2 AND plan_product_code IS NULL LIMIT 1`,
+        [CHAJINEL_ORG_ID, vaccId]
+      ).catch(() => ({ rows: [] as any[] }));
+      if (!vaccEnroll.length) {
+        await pool.query(
+          `INSERT INTO practice_payer_enrollments (id, organization_id, payer_id, enrolled_at) VALUES (gen_random_uuid()::text, $1, $2, NOW())`,
+          [CHAJINEL_ORG_ID, vaccId]
+        ).catch(() => {});
       }
 
       // Payer 2 — San Mateo County IHSS
@@ -694,10 +721,6 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       `).catch(() => {});
 
       // Test patients — fixed IDs so inserts are idempotent across restarts/deployments
-      const { rows: twRow } = await pool.query(
-        `SELECT id FROM payers WHERE organization_id=$1 AND name='TriWest Healthcare Alliance' LIMIT 1`,
-        [CHAJINEL_ORG_ID]
-      );
       const { rows: ihssRow } = await pool.query(
         `SELECT id FROM payers WHERE organization_id=$1 AND name='San Mateo County IHSS' LIMIT 1`,
         [CHAJINEL_ORG_ID]
@@ -705,13 +728,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       await pool.query(`
         INSERT INTO patients (id, first_name, last_name, dob, payer_id, insurance_carrier, plan_type, is_demo, organization_id, created_at, updated_at)
-        VALUES ('chajinel-patient-001', 'TEST: Maria', 'Garcia', '1955-03-12', $1, 'TriWest Healthcare Alliance', 'unknown', TRUE, $2, NOW(), NOW())
+        VALUES ('chajinel-patient-001', 'TEST: Maria', 'Garcia', '1955-03-12', $1, 'VA Community Care', 'unknown', TRUE, $2, NOW(), NOW())
         ON CONFLICT (id) DO UPDATE SET
           payer_id = EXCLUDED.payer_id,
           insurance_carrier = EXCLUDED.insurance_carrier,
           is_demo = TRUE,
           updated_at = NOW()
-      `, [twRow[0]?.id ?? null, CHAJINEL_ORG_ID]);
+      `, [vaccId, CHAJINEL_ORG_ID]);
 
       await pool.query(`
         INSERT INTO patients (id, first_name, last_name, dob, payer_id, insurance_carrier, plan_type, is_demo, organization_id, created_at, updated_at)
@@ -7070,7 +7093,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.patch("/api/billing/payers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { id } = req.params;
-      const { isActive, name, payerId, timelyFilingDays, authRequired, autoFollowupDays, eraAutoPostClean, eraAutoPostContractual, eraAutoPostSecondary, eraAutoPostRefunds, eraHoldIfMismatch, payerClassification, claimFilingIndicator } = req.body;
+      const { isActive, name, payerId, timelyFilingDays, authRequired, autoFollowupDays, eraAutoPostClean, eraAutoPostContractual, eraAutoPostSecondary, eraAutoPostRefunds, eraHoldIfMismatch, payerClassification, claimFilingIndicator, requiresVob, rateInputMode } = req.body;
       const db = await import("./db").then(m => m.pool);
       const fields: string[] = [];
       const values: any[] = [];
@@ -7088,6 +7111,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (eraHoldIfMismatch !== undefined) { fields.push(`era_hold_if_mismatch = $${idx++}`); values.push(eraHoldIfMismatch); }
       if (payerClassification !== undefined) { fields.push(`payer_classification = $${idx++}`); values.push(payerClassification); }
       if (claimFilingIndicator !== undefined) { fields.push(`claim_filing_indicator = $${idx++}`); values.push(claimFilingIndicator); }
+      if (requiresVob !== undefined) { fields.push(`requires_vob = $${idx++}`); values.push(requiresVob); }
+      if (rateInputMode !== undefined) { fields.push(`rate_input_mode = $${idx++}`); values.push(rateInputMode); }
       if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
       values.push(id);
       const { rows } = await db.query(
@@ -7641,7 +7666,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/billing/patients", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const {
-        firstName, lastName, dob, sex, insuranceCarrier, memberId, groupNumber,
+        firstName, middleName, lastName, dob, sex, insuranceCarrier, memberId, groupNumber,
         insuredName, relationshipToInsured, authorizationNumber, referringProviderName,
         referringProviderNpi, referralSource, referralPartnerName, defaultProviderId,
         serviceNeeded, phone, email, preferredName, state, planType, address, payerId,
@@ -7667,6 +7692,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           secondary_payer_id, secondary_member_id, secondary_group_number, secondary_plan_name, secondary_relationship,
           street_address, city, zip_code,
           plan_product_code, delegated_entity_id, pcp_id, pcp_referral_number,
+          middle_name,
           created_at
         ) VALUES (
           gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8,
@@ -7675,6 +7701,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           $25, $26, $27, $28, $29,
           $30, $31, $32,
           $33, $34, $35, $36,
+          $37,
           NOW()
         ) RETURNING *`,
         [
@@ -7688,7 +7715,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           secondaryPayerId || null, secondaryMemberId || null, secondaryGroupNumber || null,
           secondaryPlanName || null, secondaryRelationship || null,
           address?.street || address?.street1 || null, address?.city || null, address?.zip || null,
-          planProductCode || null, delegatedEntityId || null, pcpId || null, pcpReferralNumber || null
+          planProductCode || null, delegatedEntityId || null, pcpId || null, pcpReferralNumber || null,
+          middleName?.trim() || null
         ]
       );
       const newPatient = rows[0];
@@ -7713,7 +7741,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const values: any[] = [];
       let idx = 1;
       const allowedFields: Record<string, string> = {
-        firstName: "first_name", lastName: "last_name", dob: "dob", sex: "sex",
+        firstName: "first_name", middleName: "middle_name", lastName: "last_name", dob: "dob", sex: "sex",
         insuranceCarrier: "insurance_carrier", memberId: "member_id", groupNumber: "group_number",
         insuredName: "insured_name", relationshipToInsured: "relationship_to_insured",
         authorizationNumber: "authorization_number", referringProviderName: "referring_provider_name",

@@ -134,6 +134,7 @@ interface ServiceLine {
   unitType: string;
   unitIntervalMinutes: number | null;
   hours: string;
+  hourlyRate: string;
   units: string;
   ratePerUnit: string;
   totalCharge: string;
@@ -195,7 +196,7 @@ function mapValidationError(err: any): { plain: string; fix: string; code: strin
 
 function emptyLine(defaultDate = ""): ServiceLine {
   return {
-    code: "", description: "", modifier: "", diagnosisPointers: "A",
+    code: "", description: "", modifier: "", diagnosisPointers: "A", hourlyRate: "",
     unitType: "per_visit", unitIntervalMinutes: null, hours: "", units: "1",
     ratePerUnit: "", totalCharge: "", chargeOverridden: false,
     requiresModifier: false, manualEntry: false, vaRate: null,
@@ -545,14 +546,16 @@ function isVACode(code: string) {
   return /^(G02|G01|T10|S91)/.test(upper);
 }
 
-function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billingLocation, periodStart, periodEnd }: {
+function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer, billingLocation, periodStart, periodEnd, rateInputMode }: {
   line: ServiceLine; index: number;
   onChange: (index: number, updates: Partial<ServiceLine>) => void;
   onRemove: (index: number) => void;
+  onClone: (index: number) => void;
   patientPayer: string | null;
   billingLocation: string | null;
   periodStart?: string;
   periodEnd?: string;
+  rateInputMode?: string;
 }) {
   const [showCodeSearch, setShowCodeSearch] = useState(false);
   const { data: vaLocations = [] } = useQuery<string[]>({
@@ -647,13 +650,34 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
     setShowCodeSearch(false);
   }
 
+  const isPerHour = rateInputMode === "per_hour";
+
   function handleHoursChange(hours: string) {
     const h = parseFloat(hours) || 0;
     const interval = line.unitIntervalMinutes || 15;
-    const units = h > 0 ? Math.ceil(h * (60 / interval)) : 0;
-    const rate = parseFloat(line.ratePerUnit) || 0;
-    const total = units * rate;
-    onChange(index, { hours, units: String(units), totalCharge: total > 0 ? total.toFixed(2) : "", chargeOverridden: false });
+    const unitsPerHour = 60 / interval;
+    const units = h > 0 ? Math.ceil(h * unitsPerHour) : 0;
+    if (isPerHour) {
+      const hourlyRateNum = parseFloat(line.hourlyRate) || 0;
+      const unitRate = unitsPerHour > 0 ? hourlyRateNum / unitsPerHour : 0;
+      const total = units * unitRate;
+      onChange(index, { hours, units: String(units), ratePerUnit: unitRate > 0 ? unitRate.toFixed(4) : "", totalCharge: total > 0 ? total.toFixed(2) : "", chargeOverridden: false });
+    } else {
+      const rate = parseFloat(line.ratePerUnit) || 0;
+      const total = units * rate;
+      onChange(index, { hours, units: String(units), totalCharge: total > 0 ? total.toFixed(2) : "", chargeOverridden: false });
+    }
+  }
+
+  function handleHourlyRateChange(hourlyRateStr: string) {
+    const interval = line.unitIntervalMinutes || 15;
+    const unitsPerHour = 60 / interval;
+    const h = parseFloat(line.hours) || 0;
+    const units = h > 0 ? Math.ceil(h * unitsPerHour) : 0;
+    const hourlyRate = parseFloat(hourlyRateStr) || 0;
+    const unitRate = unitsPerHour > 0 ? hourlyRate / unitsPerHour : 0;
+    const total = units * unitRate;
+    onChange(index, { hourlyRate: hourlyRateStr, ratePerUnit: unitRate > 0 ? unitRate.toFixed(4) : "", units: String(units), totalCharge: total > 0 ? total.toFixed(2) : "", chargeOverridden: false });
   }
 
   function handleUnitsChange(units: string) {
@@ -684,11 +708,17 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
     <Card className="p-4 space-y-3" data-testid={`card-service-line-${index}`}>
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium">Service Line {index + 1}</h4>
-        {index > 0 && (
-          <Button variant="ghost" size="sm" onClick={() => onRemove(index)} data-testid={`button-remove-line-${index}`}>
-            <Trash2 className="h-4 w-4 text-destructive" />
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={() => onClone(index)} data-testid={`button-clone-line-${index}`} title="Clone this line">
+            <Copy className="h-4 w-4 text-muted-foreground" />
+            <span className="text-xs ml-1">Clone</span>
           </Button>
-        )}
+          {index > 0 && (
+            <Button variant="ghost" size="sm" onClick={() => onRemove(index)} data-testid={`button-remove-line-${index}`}>
+              <Trash2 className="h-4 w-4 text-destructive" />
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-3 items-end">
@@ -723,7 +753,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="space-y-1.5">
-          <Label>Code</Label>
+          <Label>CPT/HCPCS Code</Label>
           <div className="flex gap-1">
             <Input
               value={line.code}
@@ -799,7 +829,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
           />
         </div>
         <div className="space-y-1.5">
-          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd… L=11th secondary">DX Pointers <span className="text-xs text-muted-foreground">(A–L)</span></Label>
+          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd… L=11th secondary">ICD Diagnosis Pointer <span className="text-xs text-muted-foreground">(A–L)</span></Label>
           <Input
             value={line.diagnosisPointers}
             onChange={(e) => onChange(index, { diagnosisPointers: e.target.value.toUpperCase().replace(/[^A-L]/g, "") })}
@@ -832,21 +862,39 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
                   <Label className="text-muted-foreground">Units ({interval} min each)</Label>
                   <Input value={line.units} readOnly className="bg-muted" data-testid={`input-line-units-${index}`} />
                 </div>
-                <div className="space-y-1.5">
-                  <Label>Rate / unit {line.vaRate ? <span className="text-green-600 text-xs ml-1">Rate from VA fee schedule</span> : <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={line.ratePerUnit}
-                      onChange={(e) => handleRateChange(e.target.value)}
-                      placeholder={line.vaRate ? "" : "Rate not on file"}
-                      className="pl-7"
-                      data-testid={`input-line-rate-${index}`}
-                    />
+                {isPerHour ? (
+                  <div className="space-y-1.5">
+                    <Label>Hourly Rate ($/hr)</Label>
+                    <div className="relative">
+                      <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={line.hourlyRate}
+                        onChange={(e) => handleHourlyRateChange(e.target.value)}
+                        placeholder="e.g. 57.00"
+                        className="pl-7"
+                        data-testid={`input-line-hourly-rate-${index}`}
+                      />
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label>Rate / unit {line.vaRate ? <span className="text-green-600 text-xs ml-1">Rate from VA fee schedule</span> : <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
+                    <div className="relative">
+                      <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                      <Input
+                        type="number"
+                        step="0.01"
+                        value={line.ratePerUnit}
+                        onChange={(e) => handleRateChange(e.target.value)}
+                        placeholder={line.vaRate ? "" : "Rate not on file"}
+                        className="pl-7"
+                        data-testid={`input-line-rate-${index}`}
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-1.5">
                   <Label>Total charge {line.chargeOverridden && <Badge variant="outline" className="text-xs ml-1">Overridden</Badge>}</Label>
                   <div className="relative">
@@ -862,9 +910,13 @@ function ServiceLineRow({ line, index, onChange, onRemove, patientPayer, billing
                   </div>
                 </div>
               </div>
-              {hoursNum > 0 && unitsNum > 0 && rateNum > 0 && (
+              {hoursNum > 0 && unitsNum > 0 && (
                 <p className="text-sm text-muted-foreground bg-muted/50 rounded p-2 font-mono" data-testid={`text-calc-${index}`}>
-                  {hoursNum} hrs × {60 / interval} units/hr = {unitsNum} units × ${rateNum.toFixed(2)} = ${(unitsNum * rateNum).toFixed(2)}
+                  {isPerHour && parseFloat(line.hourlyRate) > 0 ? (
+                    `$${parseFloat(line.hourlyRate).toFixed(2)}/hr ÷ ${60 / interval} units/hr = $${rateNum.toFixed(4)}/unit · ${hoursNum} hrs × ${60 / interval} = ${unitsNum} units · ${unitsNum} × $${rateNum.toFixed(4)} = $${(unitsNum * rateNum).toFixed(2)}`
+                  ) : rateNum > 0 ? (
+                    `${hoursNum} hrs × ${60 / interval} units/hr = ${unitsNum} units × $${rateNum.toFixed(2)} = $${(unitsNum * rateNum).toFixed(2)}`
+                  ) : null}
                 </p>
               )}
             </>
@@ -1430,6 +1482,15 @@ export default function ClaimWizard() {
     setServiceLines((prev) => [...prev, emptyLine(serviceDate || "")]);
   }
 
+  function cloneServiceLine(index: number) {
+    setServiceLines((prev) => {
+      const clone: ServiceLine = { ...prev[index], serviceDateFrom: "", serviceDateTo: "" };
+      const next = [...prev];
+      next.splice(index + 1, 0, clone);
+      return next;
+    });
+  }
+
   function buildClaimPayload() {
     const amount = serviceLines.reduce((sum, l) => sum + (parseFloat(l.totalCharge) || 0), 0);
     const cptCodes = serviceLines.filter((l) => l.code).map((l) => l.code);
@@ -1571,7 +1632,7 @@ export default function ClaimWizard() {
       if (l.chargeOverridden) warnings.push(`Line ${i + 1}: charge was manually overridden`);
       if (l.unitType === "time_based" && parseInt(l.units) > 32) warnings.push(`Line ${i + 1}: ${l.units} units on a 15-min code (> 8 hours)`);
     });
-    if (!patient?.vob_verified) warnings.push("Patient VOB not verified");
+    if (!patient?.vob_verified && matchedPayer?.requires_vob !== false) warnings.push("Patient VOB not verified");
 
     setValidationErrors(errors);
     setValidationWarnings(warnings);
@@ -1929,10 +1990,12 @@ export default function ClaimWizard() {
                   index={i}
                   onChange={updateServiceLine}
                   onRemove={removeServiceLine}
+                  onClone={cloneServiceLine}
                   patientPayer={patient?.insurance_carrier || null}
                   billingLocation={wizardData?.practiceSettings?.default_va_locality || wizardData?.practiceSettings?.billing_location || null}
                   periodStart={serviceDate || undefined}
                   periodEnd={statementPeriodEnd || undefined}
+                  rateInputMode={matchedPayer?.rate_input_mode || "per_unit"}
                 />
               ))}
               <Separator />
@@ -1946,7 +2009,7 @@ export default function ClaimWizard() {
             <CardHeader><CardTitle>ICD-10 Diagnosis</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               {step2Errors.icd10 && <p className="text-sm text-red-500" data-testid="error-icd10">{step2Errors.icd10}</p>}
-              <ICD10Search label="Primary Diagnosis (required)" value={icd10Primary} onChange={(val) => { setIcd10Primary(val); setStep2Errors(prev => { const n = {...prev}; delete n.icd10; return n; }); }} testId="icd10-primary" />
+              <ICD10Search label="ICD-10 Diagnosis Code (required)" value={icd10Primary} onChange={(val) => { setIcd10Primary(val); setStep2Errors(prev => { const n = {...prev}; delete n.icd10; return n; }); }} testId="icd10-primary" />
               <FieldViolationHint types={["data_quality"]} />
               {icd10Secondary.map((d, i) => (
                 <div key={i} className="flex items-end gap-2">

@@ -105,7 +105,7 @@ export default function PatientCreate() {
   const [npiError, setNpiError] = useState("");
 
   const [form, setForm] = useState({
-    firstName: "", lastName: "", dob: "", sex: "",
+    firstName: "", middleName: "", lastName: "", dob: "", sex: "",
     payerId: "", insuranceCarrier: "", memberId: "", groupNumber: "",
     insuredName: "", relationshipToInsured: "", authorizationNumber: "",
     referringProviderName: "", referringProviderNpi: "",
@@ -265,6 +265,7 @@ export default function PatientCreate() {
     const referralSource = form.referralSource === "Other" ? form.otherReferralSource : form.referralSource;
     createMutation.mutate({
       firstName: form.firstName.trim(),
+      middleName: form.middleName.trim() || null,
       lastName: form.lastName.trim(),
       dob: form.dob,
       sex: form.sex || null,
@@ -320,16 +321,20 @@ export default function PatientCreate() {
       <Card>
         <CardHeader>
           <CardTitle>Demographics</CardTitle>
-          <CardDescription>Required fields marked with *</CardDescription>
+          <CardDescription>Fields marked <span className="text-red-600 font-semibold">Required</span> must be completed before saving.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>First Name *</Label>
+              <Label>First Name <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={f.firstName} onChange={(e) => set({ firstName: e.target.value })} data-testid="input-first-name" />
             </div>
             <div className="space-y-2">
-              <Label>Last Name *</Label>
+              <Label>Middle Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
+              <Input value={f.middleName} onChange={(e) => set({ middleName: e.target.value })} data-testid="input-middle-name" />
+            </div>
+            <div className="space-y-2">
+              <Label>Last Name <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={f.lastName} onChange={(e) => set({ lastName: e.target.value })} data-testid="input-last-name" />
             </div>
           </div>
