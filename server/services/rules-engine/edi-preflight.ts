@@ -1,32 +1,7 @@
-/**
- * EDI Preflight Gate — Phase 3 Sprint 1c.
- *
- * Single-purpose helper invoked by the two stedi submission routes
- *   - `POST /api/billing/claims/:id/submit-stedi`  (server/routes.ts:6348)
- *   - `POST /api/billing/claims/:id/test-stedi`    (server/routes.ts:6623)
- * immediately before `generate837P` is called.
- *
- * Runs `evaluateClaim()` against the Tier 1 structural-integrity rules
- * (T1-001 … T1-008) and short-circuits the request with HTTP 400 if any
- * Tier 1 finding is `block`-severity.
- *
- * Why a separate file rather than inline in routes.ts:
- *   - The same gate is shared by two route handlers.
- *   - The Tier 1 ↔ ClaimContext mapping is identical across both routes
- *     and benefits from a single test surface.
- *   - Keeps `routes.ts` (already 13,867 lines) from growing further.
- *
- * Hard rule (Sprint 1c Step 3c): the existing in-route VALIDATION_ERROR
- * checks at routes.ts 6428/6441/6685/6698 are NOT removed. They overlap
- * with Tier 1 rules T1-003/T1-007 and become harmless redundancy after
- * this gate lands; rolling back Sprint 1c then does not introduce a
- * regression.
- */
-
 import { evaluateClaim, type ClaimContext } from "../rules-engine";
 
 export interface Tier1GateFinding {
-  code: string; // e.g. "T1-003"
+  code: string;
   severity: "block" | "warn" | "info";
   message: string;
   fixSuggestion: string;
@@ -34,36 +9,34 @@ export interface Tier1GateFinding {
 
 export interface Tier1FailureBody {
   success: false;
-  error: string; // begins with "VALIDATION_ERROR: "
+  error: string;
   findings: Tier1GateFinding[];
   gateName: "tier1-structural-preflight";
 }
 
+interface ClaimRow {
+  id: string;
+  organization_id: string;
+  patient_id: string;
+  payer_id?: string | null;
+  payer?: string | null;
+  service_date?: string | null;
+  authorization_number?: string | null;
+  place_of_service?: string | null;
+}
+
+interface PatientRow {
+  member_id?: string | null;
+  insurance_id?: string | null;
+  dob?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+}
+
 /**
  * Run the Tier 1 structural-integrity gate against a ClaimContext.
- *
- * Returns:
- *   - `null` if the claim has zero block-severity Tier 1 findings.
- *     The caller may proceed to `generate837P`.
- *   - A `Tier1FailureBody` if any Tier 1 rule blocks. The caller should
- *     respond with `res.status(400).json(body)` and return.
- *
- * Detection contract:
- *   `evaluateClaim` returns `Promise<RuleViolation[]>` (Sprint 1a). Tier 1
- *   findings are tagged with `source: "tier1-structural"` by the adapter
- *   (`tier1-adapter.ts:tier1FindingToViolation`). When any Tier 1 finding
- *   is `block`-severity, `evaluateClaim` short-circuits (rules-engine.ts
- *   line 351–354) and returns ONLY Tier 1 violations — but we filter
- *   explicitly on `source === "tier1-structural" && severity === "block"`
- *   so the gate is robust to any future change in the order or scope of
- *   rules that `evaluateClaim` runs.
- *
- * NOTE: We deliberately call the full `evaluateClaim` (not the lower-level
- * `runTier1AsViolations`) so the gate behaves identically to every other
- * invocation of the rules engine across the codebase. The DB cost is
- * negligible on the failure path: on a Tier 1 block, `evaluateClaim`
- * short-circuits BEFORE `pool.connect()` (rules-engine.ts:360), so no DB
- * connection is opened when the gate fires.
+ * Returns null when the claim passes, or a Tier1FailureBody when any
+ * Tier 1 block-severity finding fires.
  */
 export async function requireTier1Pass(
   ctx: ClaimContext
@@ -89,22 +62,13 @@ export async function requireTier1Pass(
 }
 
 /**
- * Build a `ClaimContext` from the snake_case row variables that both
- * stedi route handlers have already loaded (`c` claim row, `pat` patient
- * row, `payerInfo` payer row), plus the already-mapped `serviceLines`
- * and `icd10Codes` arrays. Centralized here so the two routes use an
- * identical mapping.
- *
- * The shape conversions:
- *   - serviceLines: `{hcpcs_code, units, charge, modifier}`
- *                   → `{code, units, totalCharge, modifier}`
- *   - icd10Codes:   `[primary, ...secondary]` array
- *                   → `{icd10Primary, icd10Secondary}` split
- *   - dates:        coerced to `Date` or `null`
+ * Build a ClaimContext from the already-loaded claim, patient, and payer
+ * rows that both stedi route handlers share. Centralised here so both
+ * routes use identical field mapping.
  */
 export function buildClaimContextForGate(args: {
-  c: any;
-  pat: any;
+  c: ClaimRow;
+  pat: PatientRow;
   payerInfo: { name?: string; payer_id?: string };
   serviceLines: Array<{
     hcpcs_code: string;
