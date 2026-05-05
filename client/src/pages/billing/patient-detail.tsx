@@ -220,29 +220,29 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-4 gap-4">
             <div className="space-y-2">
-              <Label>First Name</Label>
+              <Label>First Name <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.firstName} onChange={(e) => set({ firstName: e.target.value })} data-testid="input-edit-first-name" />
             </div>
             <div className="space-y-2">
-              <Label>Middle Name <span className="text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
+              <Label>Middle Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.middleName} onChange={(e) => set({ middleName: e.target.value })} data-testid="input-edit-middle-name" />
             </div>
             <div className="space-y-2">
-              <Label>Last Name</Label>
+              <Label>Last Name <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.lastName} onChange={(e) => set({ lastName: e.target.value })} data-testid="input-edit-last-name" />
             </div>
             <div className="space-y-2">
-              <Label>Preferred Name</Label>
+              <Label>Preferred Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.preferredName} onChange={(e) => set({ preferredName: e.target.value })} data-testid="input-edit-preferred-name" />
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Date of Birth</Label>
+              <Label>Date of Birth <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.dob} onChange={(e) => set({ dob: e.target.value })} data-testid="input-edit-dob" />
             </div>
             <div className="space-y-2">
-              <Label>Sex</Label>
+              <Label>Sex <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Select value={form.sex} onValueChange={(v) => set({ sex: v })}>
                 <SelectTrigger data-testid="select-edit-sex"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -251,31 +251,31 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>State</Label>
+              <Label>State <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.state} onChange={(e) => set({ state: e.target.value })} maxLength={2} data-testid="input-edit-state" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Phone</Label>
+              <Label>Phone <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.phone} onChange={(e) => set({ phone: e.target.value })} data-testid="input-edit-phone" />
             </div>
             <div className="space-y-2">
-              <Label>Email</Label>
+              <Label>Email <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.email} onChange={(e) => set({ email: e.target.value })} data-testid="input-edit-email" />
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="col-span-3 space-y-2">
-              <Label>Street Address</Label>
+              <Label>Street Address <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.streetAddress} onChange={(e) => set({ streetAddress: e.target.value })} placeholder="123 Main St" data-testid="input-edit-street-address" />
             </div>
             <div className="col-span-2 space-y-2">
-              <Label>City</Label>
+              <Label>City <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.city} onChange={(e) => set({ city: e.target.value })} placeholder="City" data-testid="input-edit-city" />
             </div>
             <div className="space-y-2">
-              <Label>ZIP Code</Label>
+              <Label>ZIP Code <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.zipCode} onChange={(e) => set({ zipCode: e.target.value })} maxLength={10} placeholder="12345" data-testid="input-edit-zip-code" />
             </div>
           </div>
@@ -287,7 +287,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Insurance Carrier</Label>
+              <Label>Insurance Carrier <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.insuranceCarrier} onChange={(e) => set({ insuranceCarrier: e.target.value })} list="payer-edit-list" data-testid="input-edit-insurance" />
               <datalist id="payer-edit-list">
                 {enrolledPayers.map((p: any) => (
@@ -296,12 +296,12 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
               </datalist>
             </div>
             <div className="space-y-2">
-              <Label>Member ID</Label>
+              <Label>Member ID <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={form.memberId} onChange={(e) => set({ memberId: e.target.value })} data-testid="input-edit-member-id" />
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Plan Product</Label>
+            <Label>Plan Product <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
             <Select
               value={form.planProduct || "__none__"}
               onValueChange={(v) => set({ planProduct: v === "__none__" ? "" : v })}
@@ -324,15 +324,15 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Group Number</Label>
+              <Label>Group Number <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.groupNumber} onChange={(e) => set({ groupNumber: e.target.value })} data-testid="input-edit-group" />
             </div>
             <div className="space-y-2">
-              <Label>Insured Name</Label>
+              <Label>Insured Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.insuredName} onChange={(e) => set({ insuredName: e.target.value })} data-testid="input-edit-insured-name" />
             </div>
             <div className="space-y-2">
-              <Label>Relationship</Label>
+              <Label>Relationship <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Select value={form.relationshipToInsured} onValueChange={(v) => set({ relationshipToInsured: v })}>
                 <SelectTrigger data-testid="select-edit-relationship"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -342,7 +342,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Authorization Number</Label>
+            <Label>Authorization Number <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
             <Input value={form.authorizationNumber} onChange={(e) => set({ authorizationNumber: e.target.value })} data-testid="input-edit-auth-number" />
           </div>
         </CardContent>
@@ -358,7 +358,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Secondary Payer</Label>
+              <Label>Secondary Payer <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Select
                 value={form.secondaryPayer || "__none__"}
                 onValueChange={(v) => set({ secondaryPayer: v === "__none__" ? "" : v })}
@@ -375,21 +375,21 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Member ID</Label>
+              <Label>Member ID <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.secondaryMemberId} onChange={(e) => set({ secondaryMemberId: e.target.value })} placeholder="Secondary member ID" data-testid="input-secondary-member-id" />
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Group Number</Label>
+              <Label>Group Number <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.secondaryGroupNumber} onChange={(e) => set({ secondaryGroupNumber: e.target.value })} placeholder="Group #" data-testid="input-secondary-group" />
             </div>
             <div className="space-y-2">
-              <Label>Plan Name</Label>
+              <Label>Plan Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.secondaryPlanName} onChange={(e) => set({ secondaryPlanName: e.target.value })} placeholder="Plan name (optional)" data-testid="input-secondary-plan-name" />
             </div>
             <div className="space-y-2">
-              <Label>Relationship</Label>
+              <Label>Relationship <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Select value={form.secondaryRelationship} onValueChange={(v) => set({ secondaryRelationship: v })}>
                 <SelectTrigger data-testid="select-secondary-relationship"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -406,11 +406,11 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Referring Provider</Label>
+              <Label>Referring Provider <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={form.referringProviderName} onChange={(e) => set({ referringProviderName: e.target.value })} data-testid="input-edit-ref-provider" />
             </div>
             <div className="space-y-2">
-              <Label>Referring NPI</Label>
+              <Label>Referring NPI <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input
                 value={form.referringProviderNpi}
                 maxLength={10}
@@ -427,7 +427,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Referral Source</Label>
+              <Label>Referral Source <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Select value={form.referralSource} onValueChange={(v) => set({ referralSource: v })}>
                 <SelectTrigger data-testid="select-edit-referral"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -436,7 +436,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Default Provider</Label>
+              <Label>Default Provider <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Select value={form.defaultProviderId} onValueChange={(v) => set({ defaultProviderId: v })}>
                 <SelectTrigger data-testid="select-edit-provider"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -454,7 +454,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
             </div>
           )}
           <div className="space-y-2">
-            <Label>Service Needed</Label>
+            <Label>Service Needed <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
             <Input value={form.serviceNeeded} onChange={(e) => set({ serviceNeeded: e.target.value })} data-testid="input-edit-service" />
           </div>
         </CardContent>

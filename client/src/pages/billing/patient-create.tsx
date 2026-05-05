@@ -340,11 +340,11 @@ export default function PatientCreate() {
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Date of Birth *</Label>
+              <Label>Date of Birth <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={f.dob} onChange={(e) => set({ dob: e.target.value })} placeholder="MM/DD/YYYY" data-testid="input-dob" />
             </div>
             <div className="space-y-2">
-              <Label>Sex</Label>
+              <Label>Sex <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Select value={f.sex} onValueChange={(v) => set({ sex: v })}>
                 <SelectTrigger data-testid="select-sex"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -353,33 +353,33 @@ export default function PatientCreate() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Phone</Label>
+              <Label>Phone <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.phone} onChange={(e) => set({ phone: e.target.value })} data-testid="input-phone" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2 col-span-2">
-              <Label>Street Address <span className="text-muted-foreground text-xs font-normal">(used in EDI — CMS-1500 Box 5)</span></Label>
+              <Label>Street Address <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> <span className="text-muted-foreground text-xs font-normal">(used in EDI — CMS-1500 Box 5)</span></Label>
               <Input value={f.street} onChange={(e) => set({ street: e.target.value })} placeholder="208 Cypress Avenue" data-testid="input-street" />
             </div>
           </div>
           <div className="grid grid-cols-4 gap-4">
             <div className="space-y-2 col-span-2">
-              <Label>City</Label>
+              <Label>City <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={f.city} onChange={(e) => set({ city: e.target.value })} placeholder="South San Francisco" data-testid="input-city" />
             </div>
             <div className="space-y-2">
-              <Label>State</Label>
+              <Label>State <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={f.state} onChange={(e) => set({ state: e.target.value })} maxLength={2} placeholder="CA" data-testid="input-state" />
             </div>
             <div className="space-y-2">
-              <Label>ZIP</Label>
+              <Label>ZIP <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={f.zip} onChange={(e) => set({ zip: e.target.value })} maxLength={10} placeholder="94080" data-testid="input-zip" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Email</Label>
+              <Label>Email <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.email} onChange={(e) => set({ email: e.target.value })} type="email" data-testid="input-email" />
             </div>
           </div>
@@ -395,7 +395,7 @@ export default function PatientCreate() {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label className="flex items-center gap-1.5">
-                Insurance Carrier
+                Insurance Carrier <span className="text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span>
                 {hasEnrollmentFilter && (
                   <span className="text-[10px] font-normal text-muted-foreground border rounded px-1 py-0.5">Enrolled only</span>
                 )}
@@ -424,7 +424,7 @@ export default function PatientCreate() {
               )}
             </div>
             <div className="space-y-2">
-              <Label>Member ID</Label>
+              <Label>Member ID <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Input value={f.memberId} onChange={(e) => set({ memberId: e.target.value })} data-testid="input-member-id" />
             </div>
           </div>
@@ -537,15 +537,15 @@ export default function PatientCreate() {
 
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Group Number</Label>
+              <Label>Group Number <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.groupNumber} onChange={(e) => set({ groupNumber: e.target.value })} data-testid="input-group-number" />
             </div>
             <div className="space-y-2">
-              <Label>Insured Name</Label>
+              <Label>Insured Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.insuredName} onChange={(e) => set({ insuredName: e.target.value })} data-testid="input-insured-name" />
             </div>
             <div className="space-y-2">
-              <Label>Relationship to Insured</Label>
+              <Label>Relationship to Insured <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Select value={f.relationshipToInsured} onValueChange={(v) => set({ relationshipToInsured: v })}>
                 <SelectTrigger data-testid="select-relationship"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -555,7 +555,7 @@ export default function PatientCreate() {
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Authorization Number</Label>
+            <Label>Authorization Number <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
             <Input value={f.authorizationNumber} onChange={(e) => set({ authorizationNumber: e.target.value })} data-testid="input-auth-number" />
           </div>
         </CardContent>
@@ -572,7 +572,7 @@ export default function PatientCreate() {
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Secondary Payer</Label>
+              <Label>Secondary Payer <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Select
                 value={f.secondaryPayerId || "__none__"}
                 onValueChange={(v) => set({ secondaryPayerId: v === "__none__" ? "" : v })}
@@ -589,21 +589,21 @@ export default function PatientCreate() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Member ID</Label>
+              <Label>Member ID <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.secondaryMemberId} onChange={(e) => set({ secondaryMemberId: e.target.value })} placeholder="Secondary member ID" data-testid="input-secondary-member-id" />
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Group Number</Label>
+              <Label>Group Number <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.secondaryGroupNumber} onChange={(e) => set({ secondaryGroupNumber: e.target.value })} placeholder="Group #" data-testid="input-secondary-group" />
             </div>
             <div className="space-y-2">
-              <Label>Plan Name</Label>
+              <Label>Plan Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.secondaryPlanName} onChange={(e) => set({ secondaryPlanName: e.target.value })} placeholder="Plan name (optional)" data-testid="input-secondary-plan-name" />
             </div>
             <div className="space-y-2">
-              <Label>Relationship</Label>
+              <Label>Relationship <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Select value={f.secondaryRelationship} onValueChange={(v) => set({ secondaryRelationship: v })}>
                 <SelectTrigger data-testid="select-secondary-relationship"><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
@@ -623,11 +623,11 @@ export default function PatientCreate() {
         <CardContent className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Referring Provider Name</Label>
+              <Label>Referring Provider Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.referringProviderName} onChange={(e) => set({ referringProviderName: e.target.value })} data-testid="input-referring-provider-name" />
             </div>
             <div className="space-y-2">
-              <Label>Referring Provider NPI</Label>
+              <Label>Referring Provider NPI <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input
                 value={f.referringProviderNpi}
                 maxLength={10}
@@ -647,7 +647,7 @@ export default function PatientCreate() {
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Referral Source</Label>
+            <Label>Referral Source <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
             <Select value={f.referralSource} onValueChange={(v) => set({ referralSource: v })}>
               <SelectTrigger data-testid="select-referral-source"><SelectValue placeholder="Select referral source" /></SelectTrigger>
               <SelectContent>
@@ -666,7 +666,7 @@ export default function PatientCreate() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Default Provider</Label>
+              <Label>Default Provider <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Select value={f.defaultProviderId} onValueChange={(v) => set({ defaultProviderId: v })}>
                 <SelectTrigger data-testid="select-default-provider"><SelectValue placeholder="Select provider" /></SelectTrigger>
                 <SelectContent>
@@ -679,7 +679,7 @@ export default function PatientCreate() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Service Needed</Label>
+              <Label>Service Needed <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
               <Input value={f.serviceNeeded} onChange={(e) => set({ serviceNeeded: e.target.value })} placeholder="e.g. Skilled Nursing" data-testid="input-service-needed" />
             </div>
           </div>

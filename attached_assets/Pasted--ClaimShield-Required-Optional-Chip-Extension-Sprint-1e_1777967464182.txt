@@ -1,0 +1,94 @@
+# ClaimShield — Required/Optional Chip Extension (Sprint 1e Follow-up)
+
+## Context
+
+Sprint 1e shipped Required/Optional chips on First Name, Middle Name, and Last Name only. The original spec called for chips across all user-facing forms. Tuesday's demo needs the chips to extend through the claim wizard (where Rachel actually got stuck on Friday — fields like DX Pointer, Modifier, and Delay Reason Code) and the rest of the patient form. The chip component is already implemented — this prompt just extends the existing pattern to the remaining fields.
+
+## Scope rules
+
+- Use the existing chip component implementation from First/Last Name. Do not create a new component or new styles.
+- Only extend coverage to: (1) all remaining patient create + edit form fields, (2) all claim wizard fields across every step. Skip payer setup, provider setup, and user management — those are out of scope for Tuesday and can wait.
+- Static rules only. Do not add conditional logic ("this field becomes required when X"). Chips reflect the static requirement.
+- Validation behavior unchanged. Chips are visual only.
+- If a field name in the tables below doesn't match the actual form field name in code, use the closest equivalent. Do not invent new fields or skip fields that exist in code but aren't listed.
+
+---
+
+## Section 1 — Patient form: remaining fields
+
+Apply chips to all fields on the patient create form and the patient edit form (same coverage on both).
+
+| Field | Chip |
+|---|---|
+| First Name | Required *(already done)* |
+| Middle Name | Optional *(already done)* |
+| Last Name | Required *(already done)* |
+| Date of Birth | Required |
+| Gender | Required |
+| Address Line 1 | Required |
+| Address Line 2 | Optional |
+| City | Required |
+| State | Required |
+| ZIP | Required |
+| Phone | Optional |
+| Email | Optional |
+| Member ID | Required |
+| Insurance / Payer | Required |
+| Relationship to Insured | Required |
+| Authorization Number / Referral Code | Required |
+| Group Number | Optional |
+| Referral Source | Optional |
+| Secondary Insurance — all fields | Optional |
+
+For any patient form field that exists in code but isn't in this table, default to Optional unless validation already marks it required.
+
+---
+
+## Section 2 — Claim wizard: all steps
+
+Apply chips to every input across every step of the claim wizard. Step through Patient → Service Lines → Diagnoses → Provider → Review and chip every field.
+
+**Required:**
+- Rendering Provider
+- Service Start Date
+- CPT/HCPCS Code
+- Hours (or per-unit count, whichever the payer's rate mode shows)
+- Rate (Hourly Rate or Rate per Unit, depending on payer mode)
+- ICD Diagnosis Pointer
+- Primary ICD-10 Diagnosis Code
+- Authorization Number / Referral Code
+- Place of Service
+
+**Optional:**
+- Service End Date
+- Modifier
+- Secondary ICD-10 Diagnosis Code
+- Delay Reason Code
+- Replacement / Void / Cancel flags
+- Ordering Provider *(defaults to Rendering Provider when blank)*
+- Notes / Comments
+
+For any claim wizard field that exists in code but isn't in either list above, default to Optional unless validation already marks it required.
+
+---
+
+## Verification
+
+1. Open patient create form. Confirm every field shows either a Required or Optional chip. No bare fields.
+2. Open patient edit form on an existing patient. Confirm same coverage.
+3. Open the claim wizard. Step through every screen end to end. Confirm every input on every step shows a chip.
+4. Submit a patient with required fields blank. Confirm validation still fires correctly — no regression on which fields actually block submission.
+5. Submit a claim with required fields blank. Same check — validation behavior unchanged from before.
+6. Open the demo tenant. Confirm chips render identically there. This is a UI-only change with no tenant-specific logic.
+7. TypeScript error count must hold at the 85-error baseline. No new errors introduced.
+
+---
+
+## Out of scope
+
+- Payer setup form (chips can be added post-Tuesday)
+- Provider setup form
+- User management form
+- Settings tabs (clearinghouse, fee schedules, etc.)
+- Any new conditional or dynamic chip logic
+- Any changes to the chip component itself

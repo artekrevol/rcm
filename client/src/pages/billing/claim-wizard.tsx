@@ -723,7 +723,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
 
       <div className="flex flex-wrap gap-3 items-end">
         <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">Date From</Label>
+          <Label className="text-xs text-muted-foreground">Date From <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
           <Input
             type="date"
             value={line.serviceDateFrom}
@@ -753,7 +753,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="space-y-1.5">
-          <Label>CPT/HCPCS Code</Label>
+          <Label>CPT/HCPCS Code <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
           <div className="flex gap-1">
             <Input
               value={line.code}
@@ -773,7 +773,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
           </div>
         </div>
         <div className="space-y-1.5 sm:col-span-2">
-          <Label>Description</Label>
+          <Label>Description <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
           <Input value={line.description} onChange={(e) => onChange(index, { description: e.target.value })} placeholder="Code description" className="text-sm" data-testid={`input-line-desc-${index}`} readOnly={!!line.code && !line.manualEntry} />
         </div>
       </div>
@@ -819,7 +819,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
-          <Label>Modifier</Label>
+          <Label>Modifier <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
           <Input
             value={line.modifier}
             onChange={(e) => onChange(index, { modifier: e.target.value.toUpperCase() })}
@@ -829,7 +829,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
           />
         </div>
         <div className="space-y-1.5">
-          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd… L=11th secondary">ICD Diagnosis Pointer <span className="text-xs text-muted-foreground">(A–L)</span></Label>
+          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd… L=11th secondary">ICD Diagnosis Pointer <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> <span className="text-xs text-muted-foreground">(A–L)</span></Label>
           <Input
             value={line.diagnosisPointers}
             onChange={(e) => onChange(index, { diagnosisPointers: e.target.value.toUpperCase().replace(/[^A-L]/g, "") })}
@@ -847,7 +847,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
             <>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="space-y-1.5">
-                  <Label>Service hours</Label>
+                  <Label>Service hours <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
                   <Input
                     type="number"
                     step="0.25"
@@ -864,7 +864,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
                 </div>
                 {isPerHour ? (
                   <div className="space-y-1.5">
-                    <Label>Hourly Rate ($/hr)</Label>
+                    <Label>Hourly Rate ($/hr) <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
                     <div className="relative">
                       <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                       <Input
@@ -880,7 +880,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
                   </div>
                 ) : (
                   <div className="space-y-1.5">
-                    <Label>Rate / unit {line.vaRate ? <span className="text-green-600 text-xs ml-1">Rate from VA fee schedule</span> : <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
+                    <Label>Rate / unit <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> {line.vaRate ? <span className="text-green-600 text-xs ml-1">Rate from VA fee schedule</span> : <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
                     <div className="relative">
                       <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                       <Input
@@ -896,7 +896,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
                   </div>
                 )}
                 <div className="space-y-1.5">
-                  <Label>Total charge {line.chargeOverridden && <Badge variant="outline" className="text-xs ml-1">Overridden</Badge>}</Label>
+                  <Label>Total charge <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span> {line.chargeOverridden && <Badge variant="outline" className="text-xs ml-1">Overridden</Badge>}</Label>
                   <div className="relative">
                     <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                     <Input
@@ -923,7 +923,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
           ) : (
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">
-                <Label>Quantity</Label>
+                <Label>Quantity <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
                 <Input
                   type="number"
                   min="1"
@@ -933,14 +933,14 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Rate {line.vaRate ? <span className="text-green-600 text-xs ml-1">VA fee schedule</span> : !line.ratePerUnit ? <span className="text-amber-600 text-xs">(enter manually)</span> : null}</Label>
+                <Label>Rate <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> {line.vaRate ? <span className="text-green-600 text-xs ml-1">VA fee schedule</span> : !line.ratePerUnit ? <span className="text-amber-600 text-xs">(enter manually)</span> : null}</Label>
                 <div className="relative">
                   <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input type="number" step="0.01" value={line.ratePerUnit} onChange={(e) => handleRateChange(e.target.value)} className="pl-7" data-testid={`input-line-rate-${index}`} />
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>Total {line.chargeOverridden && <Badge variant="outline" className="text-xs ml-1">Overridden</Badge>}</Label>
+                <Label>Total <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span> {line.chargeOverridden && <Badge variant="outline" className="text-xs ml-1">Overridden</Badge>}</Label>
                 <div className="relative">
                   <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input type="number" step="0.01" value={line.totalCharge} onChange={(e) => handleTotalChange(e.target.value)} className="pl-7" data-testid={`input-line-total-${index}`} />
@@ -1900,7 +1900,7 @@ export default function ClaimWizard() {
           )}
 
           <Card>
-            <CardHeader><CardTitle>Rendering Provider</CardTitle></CardHeader>
+            <CardHeader><CardTitle>Rendering Provider <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></CardTitle></CardHeader>
             <CardContent>
               <Select value={providerId} onValueChange={(v) => { setProviderId(v); setStep2Errors(prev => { const n = {...prev}; delete n.provider; return n; }); }}>
                 <SelectTrigger data-testid="select-provider" className={step2Errors.provider ? "border-red-500" : ""}>
@@ -1924,7 +1924,7 @@ export default function ClaimWizard() {
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Billing Period Start <span className="text-xs text-muted-foreground">(statement from)</span></Label>
+                  <Label>Billing Period Start <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> <span className="text-xs text-muted-foreground">(statement from)</span></Label>
                   <Input
                     type="date"
                     value={serviceDate}
@@ -1956,7 +1956,7 @@ export default function ClaimWizard() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Place of Service</Label>
+                  <Label>Place of Service <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
                   <Select value={placeOfService} onValueChange={setPlaceOfService}>
                     <SelectTrigger data-testid="select-pos">
                       <SelectValue />
@@ -2015,7 +2015,7 @@ export default function ClaimWizard() {
                 <div key={i} className="flex items-end gap-2">
                   <div className="flex-1">
                     <ICD10Search
-                      label={`Secondary ${i + 1}`}
+                      label={`Secondary ${i + 1} (Optional)`}
                       value={d}
                       onChange={(val) => {
                         setIcd10Secondary((prev) => prev.map((s, j) => j === i ? val : s));
@@ -2127,7 +2127,7 @@ export default function ClaimWizard() {
 
               {/* Auth number input */}
               <div className="space-y-1.5">
-                <Label>Authorization Number</Label>
+                <Label>Authorization Number <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
                 <Input
                   value={authNumber}
                   onChange={(e) => setAuthNumber(e.target.value)}
@@ -2157,7 +2157,7 @@ export default function ClaimWizard() {
             <CardContent className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Claim Frequency Code</Label>
+                  <Label>Claim Frequency Code <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
                   <Select value={claimFrequencyCode} onValueChange={setClaimFrequencyCode}>
                     <SelectTrigger data-testid="select-frequency-code">
                       <SelectValue />
@@ -2170,7 +2170,7 @@ export default function ClaimWizard() {
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Delay Reason Code</Label>
+                  <Label>Delay Reason Code <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
                   <Select value={delayReasonCode} onValueChange={setDelayReasonCode}>
                     <SelectTrigger data-testid="select-delay-reason">
                       <SelectValue />
@@ -2196,7 +2196,7 @@ export default function ClaimWizard() {
                 </div>
               )}
               <div className="space-y-1.5">
-                <Label>Ordering Provider <span className="text-xs text-muted-foreground">(CMS-1500 Box 17 — if different from rendering)</span></Label>
+                <Label>Ordering Provider <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span> <span className="text-xs text-muted-foreground">(CMS-1500 Box 17 — if different from rendering)</span></Label>
                 <Select value={orderingProviderId || "__none__"} onValueChange={(v) => setOrderingProviderId(v === "__none__" ? "" : v)}>
                   <SelectTrigger data-testid="select-ordering-provider">
                     <SelectValue placeholder="Same as rendering provider" />
