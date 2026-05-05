@@ -305,6 +305,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // Sprint-3 schema additions
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP`);
     // Secondary insurance / COB
+    await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS middle_name VARCHAR(50)`).catch(() => {});
     await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_payer_id VARCHAR`);
     await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_member_id VARCHAR`);
     await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_group_number VARCHAR`);
@@ -575,6 +576,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS agency_tax_id VARCHAR`).catch(() => {});
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS organization_id VARCHAR`).catch(() => {});
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS payer_category VARCHAR`).catch(() => {});
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS rate_input_mode VARCHAR(20) DEFAULT 'per_unit'`).catch(() => {});
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS requires_vob BOOLEAN DEFAULT true`).catch(() => {});
     await pool.query(`ALTER TABLE providers ADD COLUMN IF NOT EXISTS provider_type VARCHAR DEFAULT 'rendering'`).catch(() => {});
     await pool.query(`ALTER TABLE providers ALTER COLUMN npi DROP NOT NULL`).catch(() => {});
 
@@ -6535,16 +6538,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
       const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
 
-      // ── Tier 1 structural integrity gate (Phase 3 Sprint 1c) ──────────
-      // Fires immediately before generate837P. Blocks submission when any
-      // Tier 1 rule (T1-001…T1-008) reports `block`-severity. Returns a
-      // 400 with `{success:false, error:"VALIDATION_ERROR: …", findings,
-      // gateName}` matching the existing EDI-route validation convention.
-      // The pre-existing in-route VALIDATION_ERROR checks above (empty
-      // service lines, empty ICD-10) are intentionally left in place per
-      // Sprint 1c Hard Rule 3c — they fire first and short-circuit before
-      // this gate would have run, so leaving them is harmless redundancy
-      // that keeps Sprint 1c rollback-safe.
+      // Run Tier 1 structural integrity gate before generate837P.
+      // Blocks submission on any block-severity T1 rule finding.
       {
         const { requireTier1Pass, buildClaimContextForGate } = await import(
           "./services/rules-engine/edi-preflight"
@@ -6768,11 +6763,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
       const patAddr = typeof pat.address === "object" && pat.address ? pat.address : {};
 
-      // ── Tier 1 structural integrity gate (Phase 3 Sprint 1c) ──────────
-      // Mirrors the gate in /submit-stedi. Same contract: 400 +
-      // `{success:false, error:"VALIDATION_ERROR: …", findings, gateName}`
-      // when any Tier 1 rule (T1-001…T1-008) blocks. Pre-existing in-route
-      // VALIDATION_ERROR checks above are left in place per Hard Rule 3c.
+      // Run Tier 1 structural integrity gate before generate837P.
+      // Same contract as /submit-stedi: 400 on any block-severity T1 finding.
       {
         const { requireTier1Pass, buildClaimContextForGate } = await import(
           "./services/rules-engine/edi-preflight"
