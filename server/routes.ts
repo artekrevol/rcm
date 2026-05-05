@@ -278,6 +278,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_refunds BOOLEAN DEFAULT true`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_hold_if_mismatch BOOLEAN DEFAULT true`);
     await pool.query(`UPDATE payers SET era_auto_post_clean = true, era_auto_post_contractual = true WHERE payer_id IN ('VACCN', 'TWVACCN') AND (era_auto_post_clean = false OR era_auto_post_clean IS NULL)`);
+    // Canonical rename: consolidate all legacy TriWest / VA Community Care display names
+    await pool.query(`UPDATE payers SET name = 'VA Community Care (TriWest / TWVACCN)' WHERE payer_id = 'TWVACCN' AND name NOT LIKE 'VA Community Care (TriWest%'`);
 
     // Class A: Explicit payer classification columns (replaces name-string heuristics)
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS payer_classification VARCHAR(32)`);
@@ -601,30 +603,24 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         WHERE organization_id = $1
       `, [CHAJINEL_ORG_ID]).catch(() => {});
 
-      // Payer 1 — TriWest Healthcare Alliance (legacy, deactivate if present)
-      await pool.query(`
-        UPDATE payers SET is_active = false
-        WHERE organization_id = $1 AND name = 'TriWest Healthcare Alliance'
-      `, [CHAJINEL_ORG_ID]).catch(() => {});
-
-      // Payer 1b — VA Community Care (canonical payer for Chajinel, per_hour rate, no VOB requirement)
+      // Payer 1 — VA Community Care (canonical payer for Chajinel, per_hour rate, no VOB requirement)
       const { rows: vacc } = await pool.query(
-        `SELECT id FROM payers WHERE organization_id=$1 AND name='VA Community Care' LIMIT 1`,
+        `SELECT id FROM payers WHERE organization_id=$1 AND (payer_id='TWVACCN' OR name ILIKE '%VA Community Care%' OR name ILIKE '%TriWest%') LIMIT 1`,
         [CHAJINEL_ORG_ID]
       );
       let vaccId: string;
       if (vacc.length === 0) {
         const { rows: vaccNew } = await pool.query(`
           INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, rate_input_mode, requires_vob, organization_id, created_at)
-          VALUES (gen_random_uuid()::text, 'VA Community Care', 'PENDING_DANIELA_MONDAY', 'va_community_care', 'va_community_care', 'CH', 365, true, 'professional', true, true, 'per_hour', false, $1, NOW())
+          VALUES (gen_random_uuid()::text, 'VA Community Care (TriWest / TWVACCN)', 'TWVACCN', 'va_community_care', 'va_community_care', 'CH', 365, true, 'professional', true, true, 'per_hour', false, $1, NOW())
           RETURNING id
         `, [CHAJINEL_ORG_ID]);
         vaccId = vaccNew[0].id;
       } else {
         vaccId = vacc[0].id;
-        // Ensure fields are kept current on re-seed
+        // Ensure fields and canonical name are kept current on re-seed
         await pool.query(`
-          UPDATE payers SET rate_input_mode='per_hour', requires_vob=false, is_active=true
+          UPDATE payers SET name='VA Community Care (TriWest / TWVACCN)', payer_id='TWVACCN', rate_input_mode='per_hour', requires_vob=false, is_active=true
           WHERE id=$1
         `, [vaccId]).catch(() => {});
       }
@@ -823,7 +819,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ('CHAMPVA',                                             '84146', 365, false),
         ('Indian Health Service',                               'IHS01', 365, false),
         ('Workers Compensation (General)',                      'WCOMP', 365, false),
-        ('TriWest Healthcare Alliance',                         'TRWST', 365, true),
+        ('VA Community Care (TriWest / TWVACCN)',                'TWVACCN', 365, true),
         -- Medicare Advantage
         ('Medicare Advantage — Cigna',                          '62308', 365, true),
         ('Medicare Advantage — Aetna',                          '60054', 365, true),
@@ -869,6 +865,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       SELECT gen_random_uuid()::text, np.name, np.payer_id, np.timely_filing_days::integer, np.auth_required::boolean, 'professional', true, false
       FROM new_payers np
       WHERE NOT EXISTS (SELECT 1 FROM payers p WHERE p.name = np.name)
+    `);
+
+    // Post-insert canonical rename + dedup for TWVACCN/TRWST rows:
+    // 1. Rename any legacy-named rows to the canonical display label
+    await pool.query(`UPDATE payers SET name = 'VA Community Care (TriWest / TWVACCN)' WHERE payer_id IN ('TWVACCN','TRWST') AND name NOT LIKE 'VA Community Care (TriWest%'`);
+    // 2. Delete zero-reference duplicate rows per org scope, keeping the one with the most claims/patients
+    await pool.query(`
+      DELETE FROM payers
+       WHERE payer_id IN ('TWVACCN','TRWST')
+         AND NOT EXISTS (SELECT 1 FROM claims   c WHERE c.payer_id = payers.id)
+         AND NOT EXISTS (SELECT 1 FROM patients p WHERE p.payer_id = payers.id)
+         AND EXISTS (
+           SELECT 1 FROM payers p2
+            WHERE p2.payer_id IN ('TWVACCN','TRWST')
+              AND p2.organization_id IS NOT DISTINCT FROM payers.organization_id
+              AND p2.id <> payers.id
+         )
     `);
 
     // ── HCPCS plain-English descriptions for home health codes ─────────────
@@ -1937,16 +1950,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`
         INSERT INTO rules (id, name, description, trigger_pattern, prevention_action, payer, enabled, specialty_tags, created_at)
         VALUES
-        ('rule-from-manual-tw-mod', 'TriWest: GT Modifier Required for Telehealth',
-          'TriWest CCN requires modifier GT (interactive audio/video) on all telehealth claims. Modifier 95 is an acceptable alternative for synchronous telehealth.',
+        ('rule-from-manual-tw-mod', 'VA Community Care: GT Modifier Required for Telehealth',
+          'VA Community Care (TriWest / TWVACCN) requires modifier GT (interactive audio/video) on all telehealth claims. Modifier 95 is an acceptable alternative for synchronous telehealth.',
           'telehealth,remote,video',
-          'Append modifier GT to all telehealth service lines billed to TriWest. Alternatively, use modifier 95 for synchronous real-time telehealth.',
-          'TriWest Healthcare Alliance', true, ARRAY['VA Community Care'], NOW()),
-        ('rule-from-manual-tw-ap', 'TriWest: 180-Day Timely Filing Limit',
-          'TriWest CCN requires claims within 180 days of date of service. Claims submitted after 180 days will be denied.',
+          'Append modifier GT to all telehealth service lines billed to VA Community Care (TriWest). Alternatively, use modifier 95 for synchronous real-time telehealth.',
+          'VA Community Care (TriWest / TWVACCN)', true, ARRAY['VA Community Care'], NOW()),
+        ('rule-from-manual-tw-ap', 'VA Community Care: 180-Day Timely Filing Limit',
+          'VA Community Care (TriWest / TWVACCN) requires claims within 180 days of date of service. Claims submitted after 180 days will be denied.',
           'triwest,va_community_care',
-          'Verify claim is within 180-day timely filing window before submission to TriWest.',
-          'TriWest Healthcare Alliance', true, ARRAY['VA Community Care'], NOW()),
+          'Verify claim is within 180-day timely filing window before submission to VA Community Care (TriWest).',
+          'VA Community Care (TriWest / TWVACCN)', true, ARRAY['VA Community Care'], NOW()),
         ('rule-from-manual-mc-mod', 'Medicare: GP/GO/GN Modifier Required for Therapy',
           'Medicare requires modifier GP for physical therapy, GO for occupational therapy, GN for speech-language pathology. KX modifier required when exceeding therapy cap with supporting documentation.',
           'medicare,therapy,pt,ot,slp',
