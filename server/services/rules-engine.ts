@@ -487,6 +487,21 @@ export async function evaluateClaim(
           const payer_rule: string = ej.payer_rule || "";
           const description: string = ej.description || "";
 
+          // Telehealth-specific modifiers (GT, 95, GQ) only apply when the claim is a
+          // telehealth encounter. Skip the rule entirely if no telehealth indicators are present.
+          const isTelehealthModifier = ["GT", "95", "GQ"].includes(requiredModifier);
+          if (isTelehealthModifier) {
+            const telehealthPOS = ["02", "10"];
+            const telehealthMods = ["GT", "95", "GQ"];
+            const claimIsTelehealth =
+              telehealthPOS.includes((ctx.placeOfService || "").trim()) ||
+              ctx.serviceLines.some((l) => {
+                const mods = (l.modifier || "").toUpperCase().split(/[\s,;/]+/).map((m) => m.trim());
+                return mods.some((m) => telehealthMods.includes(m));
+              });
+            if (!claimIsTelehealth) continue;
+          }
+
           // Check if this modifier is already on all relevant service lines
           const allLines = ctx.serviceLines.filter((l) => l.code);
           const missingModifier = allLines.some((l) => {

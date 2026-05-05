@@ -1873,7 +1873,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       await pool.query(`
         INSERT INTO payer_source_documents (id, payer_id, document_name, document_type, source_url, status, uploaded_by, created_at, updated_at) VALUES
-        ('manual-triwest-001', $1, 'TriWest Healthcare Alliance (VA CCN)', 'admin_guide',
+        ('manual-triwest-001', $1, 'VA Community Care (TriWest / TWVACCN)', 'admin_guide',
           'https://www.triwest.com/globalassets/documents/tools-and-resources/billing-guidelines.pdf',
           'completed', 'system', NOW(), NOW()),
         ('manual-medicare-001', $2, 'Medicare Part B (CMS)', 'admin_guide',
@@ -1882,7 +1882,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ('manual-aetna-001', $3, 'Aetna Commercial', 'admin_guide',
           'https://www.aetna.com/health-care-professionals/claims-payments-billing/filing-claims/billing-guidelines.html',
           'completed', 'system', NOW(), NOW())
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT (id) DO UPDATE SET document_name = EXCLUDED.document_name
       `, [triwestPayerId, medicarePayerId, aetnaPayerId]);
 
       // Seed pre-approved extraction items for TriWest
@@ -5487,6 +5487,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       );
       const patient = patientResult.rows[0];
 
+      const payerResult = claim.payer_id
+        ? await db.query(`SELECT requires_vob FROM payers WHERE id = $1`, [claim.payer_id])
+        : { rows: [] };
+      const payerRequiresVob = payerResult.rows[0]?.requires_vob !== false;
+
       const rawServiceLines: any[] = claim.service_lines || [];
       const serviceLines = rawServiceLines.map((sl: any) => ({
         code: (sl.hcpcs_code || sl.code || "").trim(),
@@ -5521,7 +5526,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       // Legacy compat: also add VOB + charge_overridden as info factors
       const legacyFactors: any[] = [];
-      if (!patient?.vob_verified) {
+      if (!patient?.vob_verified && payerRequiresVob) {
         legacyFactors.push({
           ruleType: "data_quality", severity: "info",
           message: "Benefits (VOB) not yet verified for this patient.",
