@@ -3,7 +3,12 @@ dist
 .DS_Store
 server/public
 vite.config.ts.*
-*.tar.gzattached_assets/crawler-demo/
+*.tar.gz
+attached_assets/crawler-demo/
+
+# Sprint prompt transcripts and log exports — local only, do not commit
+attached_assets/Pasted--*.txt
+attached_assets/logs.*.csv
 
 # Sprint 0 DB snapshots — local only, do not commit
 docs/architecture/sprint0-snapshots/
@@ -13,5 +18,4 @@ docs/architecture/sprint1c-snapshots/
 docs/architecture/sprint1d-snapshots/
 
 # Phase 3 deploy preflight snapshots — local only, do not commit
-# Contains full prod data dump (123 MB binary + 121 KB schema)
 snapshots/
