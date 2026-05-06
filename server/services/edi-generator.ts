@@ -553,18 +553,20 @@ export function generate837P(input: EDI837PInput): string {
   `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:${freqCode}*Y*A*Y*Y`
   );
 
-  // ── Loop 2300 DTP*434: Statement Dates (home health billing period) ────────
+  // ── Loop 2300 DTP*472: Service Date range (home health billing period) ───────
   // X12 5010 TR3 Loop 2300 segment order: CLM → DTP → REF → NTE → HI.
   // DTP MUST appear before REF, NTE, and HI — placing it after HI causes Stedi's
   // strict X12 parser to lose Loop 2400 context (loop_repeat_less_than_required).
-  // Qualifier 434 = Statement Dates; format RD8 = date range CCYYMMDD-CCYYMMDD.
+  // Qualifier 472 = Service Date; this is the ONLY valid service-date qualifier
+  // in 837P. Qualifier 434 (Statement Dates) is 837I-only and must never appear
+  // in a professional claim. Format RD8 = date range CCYYMMDD-CCYYMMDD.
   // Only emit when a statement period is explicitly provided (home care multi-visit).
   if (claim.statement_period_start) {
     const periodStart = formatDate8(claim.statement_period_start);
     const periodEnd = claim.statement_period_end
       ? formatDate8(claim.statement_period_end)
       : periodStart;
-    segments.push(`DTP*434*RD8*${periodStart}-${periodEnd}`);
+    segments.push(`DTP*472*RD8*${periodStart}-${periodEnd}`);
   }
 
   // REF*F8: Original claim ICN/TCN for replacement/void claims
