@@ -6,9 +6,26 @@ vite.config.ts.*
 *.tar.gz
 attached_assets/crawler-demo/
 
-# Sprint prompt transcripts and log exports — local only, do not commit
+# All attached_assets except committed seed/reference data — local only, do not commit
+attached_assets/*.png
+attached_assets/*.jpg
+attached_assets/*.jpeg
+attached_assets/*.gif
+attached_assets/*.webp
+attached_assets/*.html
+attached_assets/*.md
+attached_assets/*.csv
+attached_assets/Pasted-*.txt
 attached_assets/Pasted--*.txt
 attached_assets/logs.*.csv
+attached_assets/Screenshot*
+attached_assets/WhatsApp*
+attached_assets/Gemini*
+attached_assets/screenshots/
+attached_assets/image_*.png
+attached_assets/claimshield_phase*.md
+attached_assets/*_1769*.pdf
+attached_assets/*_1776895*.pdf
 
 # Sprint 0 DB snapshots — local only, do not commit
 docs/architecture/sprint0-snapshots/
