@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Shield, Clock, CheckCircle2, XCircle, AlertTriangle, Calendar, Plus, Loader2, FileText, Send, UserRound } from "lucide-react";
+import { Shield, Clock, CheckCircle2, XCircle, AlertTriangle, Calendar, Plus, Loader2, FileText, Send, UserRound, Search } from "lucide-react";
 import { format, isPast, differenceInDays, addDays } from "date-fns";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -20,9 +20,23 @@ interface ReferringProviderOption {
   id: string;
   first_name: string;
   last_name: string;
-  npi: string;
+  npi: string | null;
   provider_type: string;
+  va_composite_id?: string | null;
+  verification_status?: string | null;
 }
+
+interface NppesResult {
+  npi: string;
+  first_name: string;
+  last_name: string;
+  credential?: string;
+  taxonomy?: string;
+  city?: string;
+  state?: string;
+}
+
+const VA_COMPOSITE_REGEX = /^\d{3}[_-]\d{6,8}$/;
 
 interface PriorAuthRecord {
   id: string;
@@ -69,24 +83,100 @@ function ReferringProviderPicker({
 }) {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
+  const [nppesResults, setNppesResults] = useState<NppesResult[] | null>(null);
+  const [nppesLoading, setNppesLoading] = useState(false);
+  const [savingPending, setSavingPending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
 
   const { data: providers = [] } = useQuery<ReferringProviderOption[]>({
     queryKey: ["/api/billing/referring-providers"],
   });
 
   const selected = providers.find(p => p.id === value) ?? null;
+  const isVaCompositeId = VA_COMPOSITE_REGEX.test(search.trim());
 
-  const filtered = search
+  const filtered = search && !isVaCompositeId
     ? providers.filter(p => {
         const q = search.toLowerCase();
         return (
           p.first_name.toLowerCase().includes(q) ||
           p.last_name.toLowerCase().includes(q) ||
-          p.npi.includes(q)
+          (p.npi || "").includes(q) ||
+          (p.va_composite_id || "").toLowerCase().includes(q)
         );
       })
-    : providers;
+    : isVaCompositeId ? [] : providers;
+
+  async function searchNppes() {
+    setNppesLoading(true);
+    setNppesResults(null);
+    try {
+      const parts = search.trim().split(/\s+/);
+      const params = new URLSearchParams();
+      if (parts.length >= 2) {
+        params.set("first_name", parts[0]);
+        params.set("last_name", parts.slice(1).join(" "));
+      } else {
+        params.set("last_name", parts[0]);
+      }
+      const resp = await fetch(`/api/billing/referring-providers/nppes-search?${params}`);
+      const data = await resp.json();
+      setNppesResults(data.results || []);
+    } catch {
+      toast({ title: "NPPES lookup failed", variant: "destructive" });
+    } finally {
+      setNppesLoading(false);
+    }
+  }
+
+  async function saveAsPending() {
+    setSavingPending(true);
+    try {
+      const vaId = search.trim();
+      const resp = await apiRequest("POST", "/api/billing/referring-providers", {
+        first_name: "VA",
+        last_name: `Referral ${vaId}`,
+        npi: null,
+        va_composite_id: vaId,
+        verification_status: "pending",
+        provider_type: "1",
+        notes: `Auto-created from VA composite ID ${vaId} — needs NPI verification`,
+      });
+      const saved = await resp.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/referring-providers"] });
+      onChange(saved.id, saved);
+      setOpen(false);
+      setSearch("");
+      toast({ title: "Saved as pending — NPI lookup still needed" });
+    } catch (e: any) {
+      toast({ title: e?.message ?? "Failed to save", variant: "destructive" });
+    } finally {
+      setSavingPending(false);
+    }
+  }
+
+  async function addFromNppes(r: NppesResult) {
+    try {
+      const resp = await apiRequest("POST", "/api/billing/referring-providers", {
+        first_name: r.first_name,
+        last_name: r.last_name,
+        npi: r.npi,
+        verification_status: "verified",
+        provider_type: "1",
+        notes: [r.taxonomy, r.city && r.state ? `${r.city}, ${r.state}` : ""].filter(Boolean).join(" · ") || null,
+      });
+      const saved = await resp.json();
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/referring-providers"] });
+      onChange(saved.id, saved);
+      setOpen(false);
+      setSearch("");
+      setNppesResults(null);
+      toast({ title: `${r.first_name} ${r.last_name} added to directory` });
+    } catch (e: any) {
+      toast({ title: e?.message ?? "Failed to add", variant: "destructive" });
+    }
+  }
 
   return (
     <div className="relative">
@@ -96,13 +186,20 @@ function ReferringProviderPicker({
         data-testid="picker-referring-provider"
       >
         {selected ? (
-          <span className="flex-1 text-sm">
-            <UserRound className="h-3.5 w-3.5 inline mr-1.5 text-muted-foreground" />
+          <span className="flex-1 text-sm flex items-center gap-1.5">
+            <UserRound className="h-3.5 w-3.5 text-muted-foreground" />
             {selected.first_name} {selected.last_name}
-            <span className="text-muted-foreground ml-2 text-xs font-mono">{selected.npi}</span>
+            {selected.npi ? (
+              <span className="text-muted-foreground font-mono text-xs">{selected.npi}</span>
+            ) : selected.va_composite_id ? (
+              <span className="text-amber-600 font-mono text-xs">VA {selected.va_composite_id}</span>
+            ) : null}
+            {selected.verification_status === "pending" && (
+              <span className="text-[10px] bg-amber-100 text-amber-700 px-1 rounded">pending</span>
+            )}
           </span>
         ) : (
-          <span className="flex-1 text-sm text-muted-foreground">Search by name or NPI…</span>
+          <span className="flex-1 text-sm text-muted-foreground">Search by name, NPI, or VA ID…</span>
         )}
         {selected && (
           <button
@@ -119,38 +216,107 @@ function ReferringProviderPicker({
           <div className="p-2">
             <Input
               ref={inputRef}
-              placeholder="Search name or NPI…"
+              placeholder="Search name, NPI, or VA composite ID…"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setNppesResults(null); }}
               data-testid="input-referring-provider-search"
             />
           </div>
-          <div className="max-h-48 overflow-y-auto">
-            {filtered.length === 0 ? (
-              <div className="px-3 py-2 text-sm text-muted-foreground">
-                No referring providers found.{" "}
-                <a href="/billing/settings/referring-providers" className="underline" target="_blank">
-                  Add one
-                </a>
+
+          {isVaCompositeId ? (
+            <div className="px-3 py-2 space-y-2">
+              <div className="flex items-start gap-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded p-2 text-sm">
+                <span className="text-blue-700 dark:text-blue-300 flex-1">
+                  VA composite ID detected: <span className="font-mono font-medium">{search.trim()}</span>.{" "}
+                  NPI is optional when an approved VA referral number is provided.
+                </span>
               </div>
-            ) : (
-              filtered.map(p => (
-                <div
-                  key={p.id}
-                  className="px-3 py-2 text-sm cursor-pointer hover:bg-accent/60 flex items-center justify-between"
-                  onClick={() => { onChange(p.id, p); setOpen(false); setSearch(""); }}
-                  data-testid={`option-rp-${p.id}`}
-                >
-                  <span>{p.first_name} {p.last_name}</span>
-                  <span className="text-muted-foreground font-mono text-xs">{p.npi}</span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={searchNppes} disabled={nppesLoading} data-testid="button-nppes-search">
+                  {nppesLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Search className="h-3.5 w-3.5 mr-1" />}
+                  Search NPPES
+                </Button>
+                <Button size="sm" variant="outline" onClick={saveAsPending} disabled={savingPending} data-testid="button-save-pending">
+                  {savingPending && <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />}
+                  Save as pending
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="max-h-48 overflow-y-auto">
+              {filtered.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-muted-foreground">
+                  No providers found.{" "}
+                  <button className="underline text-primary" onClick={searchNppes} disabled={nppesLoading}>
+                    {nppesLoading ? "Searching NPPES…" : "Search NPPES"}
+                  </button>
+                  {" or "}
+                  <a href="/billing/settings?tab=referring-providers" className="underline" target="_blank">
+                    add manually
+                  </a>
                 </div>
-              ))
-            )}
-          </div>
+              ) : (
+                filtered.map(p => (
+                  <div
+                    key={p.id}
+                    className="px-3 py-2 text-sm cursor-pointer hover:bg-accent/60 flex items-center justify-between"
+                    onClick={() => { onChange(p.id, p); setOpen(false); setSearch(""); }}
+                    data-testid={`option-rp-${p.id}`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      {p.first_name} {p.last_name}
+                      {p.verification_status === "pending" && (
+                        <span className="text-[10px] bg-amber-100 text-amber-700 px-1 rounded leading-4">pending</span>
+                      )}
+                    </span>
+                    <span className="text-muted-foreground font-mono text-xs">
+                      {p.npi || (p.va_composite_id ? `VA ${p.va_composite_id}` : "—")}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {nppesResults !== null && (
+            <div className="border-t">
+              <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                NPPES Results
+              </div>
+              {nppesResults.length === 0 ? (
+                <div className="px-3 py-2 text-sm text-muted-foreground">No NPPES results found.</div>
+              ) : (
+                <div className="max-h-40 overflow-y-auto">
+                  {nppesResults.map(r => (
+                    <div key={r.npi} className="px-3 py-2 text-sm flex items-center justify-between gap-2 hover:bg-accent/40">
+                      <span>
+                        <span className="font-medium">{r.first_name} {r.last_name}</span>
+                        {r.credential && <span className="text-muted-foreground ml-1 text-xs">{r.credential}</span>}
+                        {(r.city || r.state) && (
+                          <span className="text-muted-foreground ml-2 text-xs">{[r.city, r.state].filter(Boolean).join(", ")}</span>
+                        )}
+                        <span className="block text-xs text-muted-foreground font-mono">{r.npi}</span>
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0 h-7 text-xs"
+                        onClick={() => addFromNppes(r)}
+                        data-testid={`button-add-nppes-${r.npi}`}
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="border-t p-2">
             <button
               className="text-xs text-primary underline"
-              onClick={() => { setOpen(false); window.open('/billing/settings/referring-providers', '_blank'); }}
+              onClick={() => { setOpen(false); window.open('/billing/settings?tab=referring-providers', '_blank'); }}
             >
               + Manage referring providers
             </button>
@@ -158,7 +324,7 @@ function ReferringProviderPicker({
         </div>
       )}
       {open && (
-        <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+        <div className="fixed inset-0 z-40" onClick={() => { setOpen(false); setNppesResults(null); }} />
       )}
     </div>
   );
@@ -199,10 +365,8 @@ function NewAuthDialog({ open, onClose }: { open: boolean; onClose: () => void }
       toast({ title: "Patient, payer, and service type are required", variant: "destructive" });
       return;
     }
-    if (isVaPayerSelected && !form.referringProviderId) {
-      toast({ title: "Referring provider is required for VA Community Care authorizations", variant: "destructive" });
-      return;
-    }
+    // Situational policy: VA payer no longer hard-blocks on missing referring provider
+    // (policy logic in EDI generator handles omission when auth_number is present)
     createMutation.mutate({
       patientId: form.patientId,
       payer: form.payer,
@@ -315,15 +479,15 @@ function NewAuthDialog({ open, onClose }: { open: boolean; onClose: () => void }
             <div className="space-y-1">
               <Label>
                 Referring / Ordering Provider
-                {isVaPayerSelected && <span className="text-destructive ml-1">*</span>}
+                {isVaPayerSelected && <span className="text-muted-foreground text-xs ml-1">(optional)</span>}
               </Label>
               <ReferringProviderPicker
                 value={form.referringProviderId}
                 onChange={(id) => setForm(prev => ({ ...prev, referringProviderId: id }))}
               />
               {isVaPayerSelected && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                  Required for VA Community Care — links to Loop 2310A (NM1*DN) in the 837P.
+                <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                  Optional when an approved VA referral number is provided — links to Loop 2310A (NM1*DN) in the 837P.
                 </p>
               )}
             </div>

@@ -25,7 +25,9 @@ interface ReferringProvider {
   id: string;
   first_name: string;
   last_name: string;
-  npi: string;
+  npi: string | null;
+  va_composite_id: string | null;
+  verification_status: "verified" | "pending" | null;
   provider_type: "1" | "2";
   notes: string | null;
   created_at: string;
@@ -35,6 +37,7 @@ const emptyForm = {
   first_name: "",
   last_name: "",
   npi: "",
+  va_composite_id: "",
   provider_type: "1" as "1" | "2",
   notes: "",
 };
@@ -59,17 +62,26 @@ function ProviderDialog({
   const qc = useQueryClient();
   const [form, setForm] = useState(
     existing
-      ? { first_name: existing.first_name, last_name: existing.last_name, npi: existing.npi, provider_type: existing.provider_type, notes: existing.notes ?? "" }
+      ? { first_name: existing.first_name, last_name: existing.last_name, npi: existing.npi ?? "", va_composite_id: existing.va_composite_id ?? "", provider_type: existing.provider_type, notes: existing.notes ?? "" }
       : { ...emptyForm }
   );
 
   const npiStatus = getNpiStatus(form.npi);
+  const hasPendingId = !form.npi && !!form.va_composite_id.trim();
 
   const saveMutation = useMutation({
     mutationFn: (data: typeof form) =>
       existing
-        ? apiRequest("PATCH", `/api/billing/referring-providers/${existing.id}`, data)
-        : apiRequest("POST", "/api/billing/referring-providers", data),
+        ? apiRequest("PATCH", `/api/billing/referring-providers/${existing.id}`, {
+            ...data,
+            npi: data.npi || null,
+            va_composite_id: data.va_composite_id || null,
+          })
+        : apiRequest("POST", "/api/billing/referring-providers", {
+            ...data,
+            npi: data.npi || null,
+            va_composite_id: data.va_composite_id || null,
+          }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["/api/billing/referring-providers"] });
       toast({ title: existing ? "Provider updated" : "Provider created" });
@@ -83,7 +95,7 @@ function ProviderDialog({
   const f = (k: keyof typeof form) => (e: any) =>
     setForm(prev => ({ ...prev, [k]: e.target?.value ?? e }));
 
-  const canSave = form.first_name.trim() && form.last_name.trim() && npiStatus === "valid";
+  const canSave = form.first_name.trim() && form.last_name.trim() && (npiStatus === "valid" || hasPendingId);
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
@@ -119,7 +131,9 @@ function ProviderDialog({
           </div>
 
           <div className="space-y-1">
-            <Label htmlFor="rp-npi">NPI * (10 digits)</Label>
+            <Label htmlFor="rp-npi">
+              NPI (10 digits{hasPendingId ? " — optional when VA composite ID provided" : " *"})
+            </Label>
             <Input
               id="rp-npi"
               value={form.npi}
@@ -148,6 +162,26 @@ function ProviderDialog({
             {npiStatus === "valid" && (
               <p className="text-xs text-emerald-600" data-testid="text-npi-valid">
                 NPI passes check-digit validation.
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="rp-va-id">VA Composite ID (optional)</Label>
+            <Input
+              id="rp-va-id"
+              value={form.va_composite_id}
+              onChange={f("va_composite_id")}
+              maxLength={20}
+              placeholder="662_1375949"
+              data-testid="input-rp-va-id"
+            />
+            <p className="text-xs text-muted-foreground">
+              Required only for VA Community Care referrals without an NPI (e.g. 662_1375949).
+            </p>
+            {hasPendingId && (
+              <p className="text-xs text-amber-600" data-testid="text-rp-pending-notice">
+                Provider will be saved as <strong>pending</strong> — locate and add the NPI to upgrade to verified.
               </p>
             )}
           </div>
@@ -216,6 +250,7 @@ export default function ReferringProvidersPage() {
   const [editing, setEditing] = useState<ReferringProvider | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ReferringProvider | null>(null);
   const [search, setSearch] = useState("");
+  const [filterPending, setFilterPending] = useState(false);
 
   const { data: providers = [], isLoading } = useQuery<ReferringProvider[]>({
     queryKey: ["/api/billing/referring-providers"],
@@ -231,13 +266,17 @@ export default function ReferringProvidersPage() {
     onError: () => toast({ title: "Failed to remove provider", variant: "destructive" }),
   });
 
+  const pendingCount = providers.filter(p => p.verification_status === "pending").length;
+
   const filtered = providers.filter(p => {
+    if (filterPending && p.verification_status !== "pending") return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (
       p.first_name.toLowerCase().includes(q) ||
       p.last_name.toLowerCase().includes(q) ||
-      p.npi.includes(q)
+      (p.npi || "").includes(q) ||
+      (p.va_composite_id || "").toLowerCase().includes(q)
     );
   });
 
@@ -261,15 +300,30 @@ export default function ReferringProvidersPage() {
         </Button>
       </div>
 
-      <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder="Search by name or NPI…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="pl-9"
-          data-testid="input-rp-search"
-        />
+      <div className="flex items-center gap-3">
+        <div className="relative max-w-sm flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search by name, NPI, or VA ID…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-9"
+            data-testid="input-rp-search"
+          />
+        </div>
+        <Button
+          variant={filterPending ? "default" : "outline"}
+          size="sm"
+          onClick={() => setFilterPending(v => !v)}
+          data-testid="button-filter-pending"
+        >
+          Needs review
+          {pendingCount > 0 && (
+            <span className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 ${filterPending ? "bg-white/20" : "bg-amber-100 text-amber-700"}`}>
+              {pendingCount}
+            </span>
+          )}
+        </Button>
       </div>
 
       {isLoading ? (
@@ -285,7 +339,8 @@ export default function ReferringProvidersPage() {
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead>NPI</TableHead>
+              <TableHead>NPI / ID</TableHead>
+              <TableHead>Status</TableHead>
               <TableHead>Type</TableHead>
               <TableHead>Notes</TableHead>
               <TableHead className="w-24">Actions</TableHead>
@@ -298,7 +353,24 @@ export default function ReferringProvidersPage() {
                   {p.first_name} {p.last_name}
                 </TableCell>
                 <TableCell className="font-mono text-sm" data-testid={`text-rp-npi-${p.id}`}>
-                  {p.npi}
+                  {p.npi ? (
+                    p.npi
+                  ) : p.va_composite_id ? (
+                    <span className="text-amber-600">VA {p.va_composite_id}</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+                <TableCell data-testid={`badge-rp-status-${p.id}`}>
+                  {p.verification_status === "pending" ? (
+                    <Badge variant="outline" className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/20">
+                      Pending NPI
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-emerald-600 border-emerald-300 bg-emerald-50 dark:bg-emerald-950/20">
+                      Verified
+                    </Badge>
+                  )}
                 </TableCell>
                 <TableCell>
                   <Badge variant="outline" data-testid={`badge-rp-type-${p.id}`}>

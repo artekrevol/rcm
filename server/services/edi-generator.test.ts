@@ -117,21 +117,21 @@ console.log("===========================================================\n");
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("DTP*434 never appears in output without a statement period", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const dtp434 = segs.find(s => s.id === 'DTP' && s.elements[1] === '434');
   assert(dtp434 === undefined, `DTP*434 found — must never appear in 837P`);
 });
 
 it("DTP*434 never appears even with statement period (home health)", () => {
   const input = baseInput({ statement_period_start: "2026-04-01", statement_period_end: "2026-04-30" });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const dtp434 = segs.find(s => s.id === 'DTP' && s.elements[1] === '434');
   assert(dtp434 === undefined, `DTP*434 found — qualifier 434 is 837I-only`);
 });
 
 it("NO DTP segment between CLM and first LX (Loop 2300 must be DTP-free)", () => {
   const input = baseInput({ statement_period_start: "2026-04-01", statement_period_end: "2026-04-30" });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const clmIdx = segs.findIndex(s => s.id === 'CLM');
   const lxIdx  = segs.findIndex(s => s.id === 'LX');
   assert(clmIdx !== -1, "CLM not found");
@@ -145,7 +145,7 @@ it("NO DTP segment between CLM and first LX (Loop 2300 must be DTP-free)", () =>
 });
 
 it("DTP immediately after each SV1 has id='DTP', DTP01='472', DTP02='D8' (single date)", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const sv1Indices = segs.map((s, i) => s.id === 'SV1' ? i : -1).filter(i => i !== -1);
   assert(sv1Indices.length > 0, "No SV1 segments found");
   for (const idx of sv1Indices) {
@@ -165,7 +165,7 @@ it("DTP*472*RD8 with correct date range for date-range service lines", () => {
       service_date: "2026-04-01", service_date_to: "2026-04-07",
     }],
   });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const sv1Idx = segs.findIndex(s => s.id === 'SV1');
   assert(sv1Idx !== -1, "SV1 not found");
   const dtp = segs[sv1Idx + 1];
@@ -182,7 +182,7 @@ it("DTP*472 count equals service line count (one per SV1)", () => {
       { hcpcs_code: "T1020", units: 2, charge: 50.0,  modifier: null, diagnosis_pointer: "A", service_date: "2026-04-02" },
     ],
   });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   let count = 0;
   for (let i = 0; i < segs.length; i++) {
     if (segs[i].id === 'SV1' && segs[i + 1]?.id === 'DTP' && segs[i + 1]?.elements[1] === '472') count++;
@@ -197,7 +197,7 @@ it("DTP*434 never appears with multiple service lines", () => {
       { hcpcs_code: "T1020", units: 2, charge: 50.0,  modifier: null, diagnosis_pointer: "A", service_date: "2026-04-02" },
     ],
   });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   assert(!segs.some(s => s.id === 'DTP' && s.elements[1] === '434'), "DTP*434 found — must never appear");
 });
 
@@ -208,7 +208,7 @@ it("DTP*434 never appears with multiple service lines", () => {
 it("payer.member_id_qualifier='MI' → NM108='MI' at correct element position", () => {
   const input = baseInput();
   input.payer.member_id_qualifier = "MI";
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const nm1 = findSeg(segs, 'NM1', 'IL');
   assert(nm1 !== undefined,           "NM1*IL not found");
   assert(nm1!.elements[8] === 'MI',   `NM108 should be 'MI', got: '${nm1!.elements[8]}'`);
@@ -219,7 +219,7 @@ it("payer.member_id_qualifier='SY' → NM108='SY' at correct element position", 
   const input = baseInput();
   input.payer.member_id_qualifier = "SY";
   input.payer.payer_id = "NONPGBA";
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const nm1 = findSeg(segs, 'NM1', 'IL');
   assert(nm1 !== undefined,           "NM1*IL not found");
   assert(nm1!.elements[8] === 'SY',   `NM108 should be 'SY', got: '${nm1!.elements[8]}'`);
@@ -234,7 +234,7 @@ it("payer.member_id_qualifier='SY' → NM108='SY' at correct element position", 
 it("patient with middle name → NM105 contains full name, NM108/NM109 at correct positions", () => {
   const input = baseInput();
   input.patient.middle_name = "Alexander";
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const nm1 = findSeg(segs, 'NM1', 'IL');
   assert(nm1 !== undefined,                  "NM1*IL not found");
   assert(nm1!.elements[3] === 'Doe',         `NM103 last: '${nm1!.elements[3]}'`);
@@ -250,7 +250,7 @@ it("patient with middle name → NM105 contains full name, NM108/NM109 at correc
 it("patient with no middle name → NM105 is empty, NM108/NM109 at correct positions", () => {
   const input = baseInput();
   input.patient.middle_name = undefined;
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const nm1 = findSeg(segs, 'NM1', 'IL');
   assert(nm1 !== undefined,                "NM1*IL not found");
   assert(nm1!.elements[5] === '',          `NM105 should be empty, got: '${nm1!.elements[5]}'`);
@@ -264,7 +264,7 @@ it("patient with no middle name → NM105 is empty, NM108/NM109 at correct posit
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("NM1*85 billing provider: entity type=2, NM108=XX, NM109=NPI", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const nm1 = findSeg(segs, 'NM1', '85');
   assert(nm1 !== undefined,                    "NM1*85 not found");
   assert(nm1!.elements[2] === '2',             `NM102 entity type: '${nm1!.elements[2]}'`);
@@ -278,7 +278,7 @@ it("NM1*85 billing provider: entity type=2, NM108=XX, NM109=NPI", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("NM1*82 rendering provider individual: entity type=1, NM108=XX, NM109=NPI, no extra empties", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const nm1 = findSeg(segs, 'NM1', '82');
   assert(nm1 !== undefined,                 "NM1*82 not found");
   assert(nm1!.elements[2] === '1',          `NM102 entity type: '${nm1!.elements[2]}'`);
@@ -295,7 +295,7 @@ it("NM1*82 rendering provider individual: entity type=1, NM108=XX, NM109=NPI, no
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("NM1*PR payer: entity type=2, NM108=PI, NM109=payer_id", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const nm1 = findSeg(segs, 'NM1', 'PR');
   assert(nm1 !== undefined,               "NM1*PR not found");
   assert(nm1!.elements[2] === '2',        `NM102 entity type: '${nm1!.elements[2]}'`);
@@ -309,7 +309,7 @@ it("NM1*PR payer: entity type=2, NM108=PI, NM109=payer_id", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("NM1*41 submitter: entity type=2, NM108=46, NM109=practice NPI", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const nm1 = findSeg(segs, 'NM1', '41');
   assert(nm1 !== undefined,               "NM1*41 not found");
   assert(nm1!.elements[2] === '2',        `NM102 entity type: '${nm1!.elements[2]}'`);
@@ -322,7 +322,7 @@ it("NM1*41 submitter: entity type=2, NM108=46, NM109=practice NPI", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("NM1*40 receiver: entity type=2, NM108=46", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const nm1 = findSeg(segs, 'NM1', '40');
   assert(nm1 !== undefined,         "NM1*40 not found");
   assert(nm1!.elements[2] === '2',  `NM102 entity type: '${nm1!.elements[2]}'`);
@@ -334,7 +334,7 @@ it("NM1*40 receiver: entity type=2, NM108=46", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("SBR: SBR01='P', SBR02='18', SBR09=default 'CI' claim filing indicator", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const sbr = segs.find(s => s.id === 'SBR');
   assert(sbr !== undefined,             "SBR not found");
   assert(sbr!.elements[1] === 'P',      `SBR01: '${sbr!.elements[1]}'`);
@@ -349,7 +349,7 @@ it("SBR: SBR01='P', SBR02='18', SBR09=default 'CI' claim filing indicator", () =
 it("SBR09 reflects payer.claim_filing_indicator when set", () => {
   const input = baseInput();
   input.payer.claim_filing_indicator = "VA";
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const sbr = segs.find(s => s.id === 'SBR');
   assert(sbr !== undefined,         "SBR not found");
   assert(sbr!.elements[9] === 'VA', `SBR09: '${sbr!.elements[9]}'`);
@@ -360,7 +360,7 @@ it("SBR09 reflects payer.claim_filing_indicator when set", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("CLM: CLM02=total charge, CLM05=POS composite, CLM06-09 flags", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const clm = segs.find(s => s.id === 'CLM');
   assert(clm !== undefined,                   "CLM not found");
   assert(clm!.elements[2] === '100.00',       `CLM02 charge: '${clm!.elements[2]}'`);
@@ -380,7 +380,7 @@ it("CLM02 sums all service line charges", () => {
       { hcpcs_code: "T1020", units: 2, charge: 75.50, modifier: null, diagnosis_pointer: "A", service_date: "2026-04-02" },
     ],
   });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const clm = segs.find(s => s.id === 'CLM');
   assert(clm !== undefined,               "CLM not found");
   assert(clm!.elements[2] === '175.50',   `CLM02 should be '175.50', got: '${clm!.elements[2]}'`);
@@ -392,7 +392,7 @@ it("CLM02 sums all service line charges", () => {
 
 it("REF*G1 emitted when auth_number is present, REF02=auth number", () => {
   const input = baseInput({ auth_number: "AUTH12345" });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const ref = findSeg(segs, 'REF', 'G1');
   assert(ref !== undefined,                 "REF*G1 not found");
   assert(ref!.elements[2] === 'AUTH12345', `REF02: '${ref!.elements[2]}'`);
@@ -400,7 +400,7 @@ it("REF*G1 emitted when auth_number is present, REF02=auth number", () => {
 
 it("REF*G1 NOT emitted when auth_number is null", () => {
   const input = baseInput({ auth_number: null });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const ref = findSeg(segs, 'REF', 'G1');
   assert(ref === undefined, "REF*G1 should not be present when auth_number is null");
 });
@@ -410,7 +410,7 @@ it("REF*G1 NOT emitted when auth_number is null", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("REF*EI: REF01='EI', REF02=tax ID without dash", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const ref = findSeg(segs, 'REF', 'EI');
   assert(ref !== undefined,                "REF*EI not found");
   assert(ref!.elements[2] === '123456789', `REF02: '${ref!.elements[2]}'`);
@@ -421,7 +421,7 @@ it("REF*EI: REF01='EI', REF02=tax ID without dash", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("HI: first diagnosis has qualifier ABK, code F0390 in HI01 composite", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const hi = segs.find(s => s.id === 'HI');
   assert(hi !== undefined,                    "HI not found");
   assert(hi!.elements[1] === 'ABK:F0390',    `HI01: '${hi!.elements[1]}'`);
@@ -429,7 +429,7 @@ it("HI: first diagnosis has qualifier ABK, code F0390 in HI01 composite", () => 
 
 it("HI: second diagnosis has qualifier ABF in HI02", () => {
   const input = baseInput({ icd10_codes: ["F0390", "I10"] });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const hi = segs.find(s => s.id === 'HI');
   assert(hi !== undefined,                    "HI not found");
   assert(hi!.elements[1] === 'ABK:F0390',    `HI01 primary: '${hi!.elements[1]}'`);
@@ -441,7 +441,7 @@ it("HI: second diagnosis has qualifier ABF in HI02", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("SV1: SV101=composite, SV102=charge, SV103=UN, SV104=units, SV107=diag pointer", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const sv1 = segs.find(s => s.id === 'SV1');
   assert(sv1 !== undefined,                "SV1 not found");
   assert(sv1!.elements[1] === 'HC:T1019', `SV101 composite: '${sv1!.elements[1]}'`);
@@ -461,7 +461,7 @@ it("SV1 with modifier: SV101 includes modifier in composite", () => {
       modifier: "GT", diagnosis_pointer: "A", service_date: "2026-04-01",
     }],
   });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const sv1 = segs.find(s => s.id === 'SV1');
   assert(sv1 !== undefined,                    "SV1 not found");
   assert(sv1!.elements[1] === 'HC:T1019:GT',  `SV101 with modifier: '${sv1!.elements[1]}'`);
@@ -472,7 +472,7 @@ it("SV1 with modifier: SV101 includes modifier in composite", () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("DTP*472*D8: DTP01='472', DTP02='D8', DTP03=YYYYMMDD single date", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const dtp = segs.find(s => s.id === 'DTP' && s.elements[1] === '472');
   assert(dtp !== undefined,                       "DTP*472 not found");
   assert(dtp!.elements[1] === '472',              `DTP01: '${dtp!.elements[1]}'`);
@@ -489,7 +489,7 @@ it("DTP*472*RD8: DTP01='472', DTP02='RD8', DTP03=YYYYMMDD-YYYYMMDD range", () =>
       service_date: "2026-04-01", service_date_to: "2026-04-07",
     }],
   });
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const dtp = segs.find(s => s.id === 'DTP' && s.elements[1] === '472');
   assert(dtp !== undefined,                          "DTP*472 not found");
   assert(dtp!.elements[2] === 'RD8',                 `DTP02: '${dtp!.elements[2]}'`);
@@ -502,7 +502,7 @@ it("DTP*472*RD8: DTP01='472', DTP02='RD8', DTP03=YYYYMMDD-YYYYMMDD range", () =>
 // ═══════════════════════════════════════════════════════════════════════════════
 
 it("ISA: ISA15 usage indicator='T', ISA16=':'", () => {
-  const segs = parseEdi(generate837P(baseInput()));
+  const segs = parseEdi(generate837P(baseInput()).edi);
   const isa = segs.find(s => s.id === 'ISA');
   assert(isa !== undefined,            "ISA not found");
   assert(isa!.elements[15] === 'T',   `ISA15 usage: '${isa!.elements[15]}'`);
@@ -525,7 +525,7 @@ it("PGBA veteran (EDIPI): NM108='MI', NM105=full middle name, NM109=EDIPI", () =
   input.claim.service_lines = [
     { hcpcs_code: "T1019", units: 1, charge: 150.00, modifier: null, diagnosis_pointer: "A", service_date: "2026-04-01" },
   ];
-  const segs = parseEdi(generate837P(input));
+  const segs = parseEdi(generate837P(input).edi);
   const nm1 = findSeg(segs, 'NM1', 'IL');
   assert(nm1 !== undefined,                  "NM1*IL not found");
   assert(nm1!.elements[3] === 'Mandler',     `NM103 last: '${nm1!.elements[3]}'`);
@@ -553,7 +553,7 @@ it("NM1*DN present when referringProvider supplied — qualifier, name, NPI", ()
     npi: "1184288680",
     provider_type: "1",
   };
-  const edi = generate837P(input);
+  const { edi } = generate837P(input);
   const segs = parseEdi(edi);
   const nm1 = findSeg(segs, "NM1", "DN");
   assert(nm1 !== undefined,               "NM1*DN not found");
@@ -568,7 +568,7 @@ it("NM1*DN present when referringProvider supplied — qualifier, name, NPI", ()
 it("NM1*DN absent when referringProvider is null", () => {
   const input = baseInput();
   input.referringProvider = null;
-  const edi = generate837P(input);
+  const { edi } = generate837P(input);
   const segs = parseEdi(edi);
   const nm1 = findSeg(segs, "NM1", "DN");
   assert(nm1 === undefined, "NM1*DN should be absent when referringProvider is null");
@@ -576,7 +576,7 @@ it("NM1*DN absent when referringProvider is null", () => {
 
 it("NM1*DN absent when referringProvider is undefined (default)", () => {
   const input = baseInput();
-  const edi = generate837P(input);
+  const { edi } = generate837P(input);
   const segs = parseEdi(edi);
   const nm1 = findSeg(segs, "NM1", "DN");
   assert(nm1 === undefined, "NM1*DN should be absent when referringProvider is not set");
@@ -590,7 +590,7 @@ it("NM1*DN entity type qualifier = '2' when provider_type is '2' (org/facility)"
     npi: "1184288680",
     provider_type: "2",
   };
-  const edi = generate837P(input);
+  const { edi } = generate837P(input);
   const segs = parseEdi(edi);
   const nm1 = findSeg(segs, "NM1", "DN");
   assert(nm1 !== undefined,        "NM1*DN not found");
@@ -604,7 +604,7 @@ it("NM1*DN appears AFTER HI and BEFORE NM1*82 (segment ordering)", () => {
     last_name: "DOE",
     npi: "1184288680",
   };
-  const edi = generate837P(input);
+  const { edi } = generate837P(input);
   const segs = parseEdi(edi);
   const rawSegs = edi.split(/[~\n]+/).map(s => s.trim()).filter(Boolean);
   const idxHI  = rawSegs.findIndex(s => s.startsWith("HI"));

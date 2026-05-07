@@ -198,13 +198,16 @@ export interface EDI837PInput {
    * Resolved referring provider for Loop 2310A (NM1*DN).
    * Caller is responsible for fetching from the referring_providers table.
    * Resolve priority: claim.referring_provider_id → auth.referring_provider_id → null.
-   * When null, Loop 2310A is omitted (no error).
+   * When npi is null the provider is "pending verification" (VA composite ID saved),
+   * treated as absent for EDI purposes — policy logic below governs what happens.
    */
   referringProvider?: {
     first_name: string;
     last_name: string;
-    npi: string;
+    npi: string | null;
     provider_type?: string;
+    va_composite_id?: string | null;
+    verification_status?: string | null;
   } | null;
   ordering_provider?: {
     first_name: string;
@@ -238,6 +241,16 @@ export interface EDI837PInput {
      * Per PGBA 837P CG v1.0 (March 2021), Table 6, page 15.
      */
     pgba_region?: 4 | 5;
+    /**
+     * Payer-level Loop 2310A (NM1*DN) policy.
+     * 'required'    — referring provider with valid NPI must be present; throw if absent.
+     * 'situational' — omit Loop 2310A when referral number (REF*G1) is present; throw if neither.
+     *                 Per TriWest Claims Basics QRG (May 2023): field not required when
+     *                 REF*9F (referral number) is populated.
+     * 'forbidden'   — never emit Loop 2310A regardless of what the caller passes.
+     * Default: 'required' (preserves pre-policy commercial behavior).
+     */
+    referringProviderPolicy?: 'required' | 'situational' | 'forbidden';
   };
 }
 
@@ -405,8 +418,11 @@ import {
 } from './edi/segments';
 import { validateNpiOrThrow } from './validation/npi';
 
-export function generate837P(input: EDI837PInput): string {
+export type Generate837PResult = { edi: string; rpTransmitted: Record<string, unknown> };
+
+export function generate837P(input: EDI837PInput): Generate837PResult {
   const { claim, patient, practice, provider, ordering_provider, payer, referringProvider } = input;
+  let rpTransmitted: Record<string, unknown> = {};
   const freqCode = claim.claim_frequency_code || "1";
   const now = new Date();
   const date = now.toISOString().slice(0, 10).replace(/-/g, "");
@@ -685,23 +701,67 @@ export function generate837P(input: EDI837PInput): string {
     }));
   segments.push(HI(diagCodes));
 
-  // ── Loop 2310A: Referring Provider (NM1*DN) ──────────────────────────────
-  // Emitted only when a referring provider is resolved by the caller.
-  // Per X12 5010 005010X222A1: NM101=DN (Referring Provider), NM108=XX (NPI).
-  // For VA CCN: TriWest uses this to link the claim to the authorizing VA provider.
-  // NOT emitted when referringProvider is null/undefined — never crashes, never
-  // emits an empty NM1 segment. Validation rule (VA CCN requires this field) lives
-  // in the auth save logic upstream, not here.
-  if (referringProvider) {
-    validateNpiOrThrow(referringProvider.npi);
-    segments.push(NM1({
-      entityIdCode: 'DN',
-      entityTypeQualifier: (referringProvider.provider_type === '2' ? '2' : '1') as '1' | '2',
-      lastOrOrgName: referringProvider.last_name,
-      firstName: referringProvider.provider_type === '2' ? undefined : referringProvider.first_name,
-      idQualifier: NM1_QUALIFIER['DN'],
-      idCode: referringProvider.npi,
-    }));
+  // ── Loop 2310A: Referring Provider (NM1*DN) — payer-policy-aware ─────────
+  // Policy sourced from payer.referringProviderPolicy (DB column).
+  // Defaults to 'required' to preserve existing commercial-payer behavior.
+  // Per TriWest Claims Basics QRG (May 2023): "since all referrals must be
+  // pre-approved by VA and can be tracked in TriWest's system, this field is
+  // not required" when REF*G1 (Prior Authorization Number) is populated.
+  {
+    // policy=undefined → legacy behaviour: emit if present, silently skip if not (no throw).
+    // This preserves backward compatibility for callers that do not pass referringProviderPolicy.
+    const policy = payer.referringProviderPolicy; // undefined = legacy/no-op
+    // A provider is "transmittable" only when it has a Luhn-valid NPI.
+    const hasValidNpi = referringProvider?.npi && referringProvider.npi.trim() !== '';
+    const hasAuthNumber = !!(claim.auth_number && claim.auth_number.trim());
+
+    if (policy === 'forbidden') {
+      // Never emit Loop 2310A, discard any picker value.
+      rpTransmitted = { omitted: true, reason: 'policy=forbidden' };
+    } else if (!hasValidNpi || referringProvider?.verification_status === 'pending') {
+      // No usable NPI — consult policy.
+      if (policy === 'situational' && hasAuthNumber) {
+        // TriWest/VA path: referral number covers the referral — 2310A is optional.
+        rpTransmitted = {
+          omitted: true,
+          reason: 'policy=situational; referral_number present; Loop 2310A omitted',
+          referral_number: claim.auth_number,
+          ...(referringProvider?.va_composite_id ? { va_composite_id: referringProvider.va_composite_id } : {}),
+        };
+        console.log(`[EDI] Loop 2310A omitted — policy=situational, auth_number=${claim.auth_number}`);
+      } else if (policy === 'situational' && !hasAuthNumber) {
+        throw new Error(
+          'VALIDATION_ERROR: Referring provider NPI is required or a VA referral number must be present. ' +
+          'Enter a valid referring provider or add the VA authorization number to continue.'
+        );
+      } else if (policy === 'required') {
+        // Explicit required policy and no valid NPI → hard block.
+        throw new Error(
+          'VALIDATION_ERROR: Referring provider with a valid NPI is required for this payer. ' +
+          'Select a referring provider from the directory before generating the 837P.'
+        );
+      } else {
+        // policy === undefined (legacy) — silently skip Loop 2310A, no throw.
+        rpTransmitted = { omitted: true, reason: 'no_policy_set; no_rp; legacy_skip' };
+      }
+    } else {
+      // Happy path — valid NPI available, policy allows emission.
+      validateNpiOrThrow(referringProvider!.npi as string);
+      segments.push(NM1({
+        entityIdCode: 'DN',
+        entityTypeQualifier: (referringProvider!.provider_type === '2' ? '2' : '1') as '1' | '2',
+        lastOrOrgName: referringProvider!.last_name,
+        firstName: referringProvider!.provider_type === '2' ? undefined : referringProvider!.first_name,
+        idQualifier: NM1_QUALIFIER['DN'],
+        idCode: referringProvider!.npi as string,
+      }));
+      rpTransmitted = {
+        emitted: true,
+        npi: referringProvider!.npi,
+        name: `${referringProvider!.first_name} ${referringProvider!.last_name}`.trim(),
+        policy,
+      };
+    }
   }
 
   // ── Loop 2310B: Rendering Provider ────────────────────────────────────────
@@ -830,5 +890,6 @@ export function generate837P(input: EDI837PInput): string {
 
   segments.push(IEA({ functionalGroupCount: 1, controlNumber }));
 
-  return segments.join("\n");
+  const edi = segments.join("\n");
+  return { edi, rpTransmitted };
 }

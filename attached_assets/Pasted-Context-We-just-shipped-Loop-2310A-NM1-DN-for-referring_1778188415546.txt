@@ -1,0 +1,102 @@
+Context: We just shipped Loop 2310A (NM1*DN) for referring provider with strict
+Luhn-validated NPI enforcement, payer-driven qualifiers, and a ReferringProviderPicker
+on the PA form. VA payer shows an amber "required" hint.
+
+REAL-WORLD FAILURE FROM A CHAJINEL REFERRAL TODAY:
+
+VA Form 10-7080 from SF VAMC for veteran Peter Coit Mandler shows:
+  Referring Provider: JESSICA CAPISTRANO
+  Referring Provider NPI: 662_1375949
+
+That is not an NPI. "662" is the VA station number for SF VAMC. "1375949" is a
+7-digit VistA NEW PERSON file IEN. The composite is a VA-internal identifier that
+VistA/HSRM dropped into the NPI field on the form. validateNpiOrThrow rejects it
+(correctly — it fails Luhn). Rachel cannot save the referring provider, the PA form
+blocks her, the claim cannot ship. This is not a one-off; it is a recurring VA
+data-quality pattern across all CCN referrals.
+
+Per TriWest's Claims Basics QRG (May 2023): "FIELD 17, 17b – Name of Referring
+Provider or Other Source and NPI ... since all referrals must be pre-approved by VA
+and can be tracked in TriWest's system, this field is not required." So for VA
+payers, Loop 2310A is situational, not required, when REF*9F (referral number) is
+populated.
+
+Build the following without weakening NPI validation for non-VA payers:
+
+1) PAYER-LEVEL LOOP 2310A POLICY
+   - Add `referringProviderPolicy` enum to the payers table:
+     'required' | 'situational' | 'forbidden'
+   - Default: 'required' (preserves current behavior for commercial payers)
+   - Seed VA / TriWest / Optum payers as 'situational'
+   - Update all four generate837P call sites (resubmit, preview, Stedi submit,
+     Stedi test) to consult this policy:
+       'required'    + missing referring → throw current error
+       'situational' + missing + REF*9F present → omit Loop 2310A, log omission
+       'situational' + missing + no REF*9F → throw error
+       'forbidden'   → never emit Loop 2310A, ignore picker value
+   - Replace the VA payer amber hint "required" with:
+     "Optional when an approved VA referral number is provided."
+
+2) VA COMPOSITE ID DETECTION IN THE PICKER
+   - In ReferringProviderPicker, detect input matching `^\d{3}[_-]\d{6,8}$`
+   - When detected, do not run NPI validation. Show inline alert:
+     "Looks like a VA internal ID (station {prefix} + provider IEN), not an NPI.
+      [Search NPPES by name] [Save as pending verification]"
+   - "Save as pending verification" creates a referring_providers row with:
+       npi = NULL
+       vaCompositeId = '662_1375949'
+       verificationStatus = 'pending'
+       notes auto-stamped: "Imported from VA 10-7080; NPI requires manual verification"
+   - Pending rows are valid as FKs on PA/claim records but never transmitted in
+     Loop 2310A (policy logic in #1 handles omission).
+
+3) NPPES LIVE LOOKUP
+   - Add server-side proxy: GET /api/billing/referring-providers/nppes-search
+   - Query https://npiregistry.cms.hhs.gov/api/?version=2.1 with first_name,
+     last_name, state params
+   - Return parsed candidates: NPI, name, taxonomy, primary practice address
+   - Wire into picker: when local DB returns no match, show "Search NPPES" button
+   - Results list with one-click "Add to directory" that creates a Luhn-validated
+     referring_providers row
+   - Cache NPPES responses by query key for 24h to avoid hammering CMS
+
+4) AUDIT TRAIL ON LOOP 2310A
+   - Add `referringProviderTransmitted` JSONB column to claims table
+   - At 837P generation time, persist either:
+       what was emitted (NPI + name) OR
+       reason for omission (e.g. "policy=situational, referral_number=VA0056843497")
+   - Surface on claim detail page so Rachel can see exactly what TriWest received
+     without diffing the raw EDI
+
+5) BACKFILL MIGRATION
+   - One-off script: scan prior_authorizations for legacy free-text referring
+     provider fields (pre-FK era)
+   - For each, attempt in order:
+       (a) NPPES lookup by name + state
+       (b) if NPI text present and Luhn-valid, create referring_providers row
+       (c) otherwise create with verificationStatus='pending', surface in a
+           "Needs review" queue under Settings → Referring Providers
+   - Output CSV report: auto-resolved vs. flagged counts and per-row status
+
+6) END-TO-END TEST
+   - New integration test: Chajinel claim for Mandler with referring_provider in
+     'pending' status, VA payer
+   - Assert: 837P generates without Loop 2310A, REF*9F contains VA0056843497,
+     Stedi sandbox accepts, TriWest sandbox 277CA returns no referring-provider edits
+   - Add to CI
+
+ACCEPTANCE CRITERIA:
+- Rachel can process the Mandler 10-7080 end-to-end without the form blocking her
+- Non-VA commercial claims still hard-fail on missing/invalid referring NPI (no regression)
+- All four generate837P call sites apply the same policy logic
+- NPPES lookup works from the picker without leaving the page
+- Backfill report shows clean breakdown of auto-resolved vs. needs-review
+
+TESTS TO ADD:
+- Unit: payer policy resolution (3 payer types × 3 policies = 9 cases)
+- Unit: VA composite ID regex
+    positives: '662_1375949', '662-1375949', '640_12345678'
+    negatives: '1184288680', '662', '6621375949', random strings
+- Unit: NPPES response parser with mock CMS responses
+- Integration: full Mandler claim path described in #6
+- All existing 37 generator tests and 15 NPI validation tests must remain green

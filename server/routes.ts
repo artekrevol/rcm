@@ -1119,6 +1119,29 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await seederLog('column', 'claims', 'referring_provider_id');
     await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS referring_provider_id UUID REFERENCES referring_providers(id) ON DELETE SET NULL`);
 
+    // ── Referring Providers: VA composite ID + pending verification + policy ───
+    // Make npi nullable to support VA-internal IDs saved as pending verification
+    await pool.query(`ALTER TABLE referring_providers ALTER COLUMN npi DROP NOT NULL`).catch(() => {});
+    await seederLog('column', 'referring_providers', 'va_composite_id');
+    await pool.query(`ALTER TABLE referring_providers ADD COLUMN IF NOT EXISTS va_composite_id VARCHAR`);
+    await seederLog('column', 'referring_providers', 'verification_status');
+    await pool.query(`ALTER TABLE referring_providers ADD COLUMN IF NOT EXISTS verification_status VARCHAR NOT NULL DEFAULT 'verified'`);
+    // Replace the old UNIQUE(tenant_id, npi) with a partial unique index that allows multiple NULL npis
+    await pool.query(`ALTER TABLE referring_providers DROP CONSTRAINT IF EXISTS referring_providers_tenant_id_npi_key`).catch(() => {});
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_rp_tenant_npi ON referring_providers(tenant_id, npi) WHERE npi IS NOT NULL`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_rp_tenant_va_composite ON referring_providers(tenant_id, va_composite_id) WHERE va_composite_id IS NOT NULL`);
+
+    // Payer-level Loop 2310A policy: required | situational | forbidden
+    await seederLog('column', 'payers', 'referring_provider_policy');
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS referring_provider_policy VARCHAR NOT NULL DEFAULT 'required'`);
+    // VA CCN / TriWest and Optum: situational per TriWest Claims Basics QRG (May 2023)
+    await pool.query(`UPDATE payers SET referring_provider_policy = 'situational' WHERE payer_id = 'TWVACCN' AND referring_provider_policy = 'required'`);
+    await pool.query(`UPDATE payers SET referring_provider_policy = 'situational' WHERE LOWER(name) LIKE '%optum%' AND referring_provider_policy = 'required'`);
+
+    // Audit trail: what was transmitted (or why omitted) for Loop 2310A per claim
+    await seederLog('column', 'claims', 'referring_provider_transmitted');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS referring_provider_transmitted JSONB`);
+
     // ── Payers: stedi_payer_id + supported_transactions + updated_at ──────────
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_payer_id VARCHAR`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS supported_transactions JSONB DEFAULT '[]'`);
@@ -4251,10 +4274,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       // DB-2: Force CLM05-3=7 and REF*F8=[payer_claim_number] on every resubmission
       // Fetch referring provider for Loop 2310A (NM1*DN)
-      let referringProv: { first_name: string; last_name: string; npi: string; provider_type?: string } | null = null;
+      let referringProv: { first_name: string; last_name: string; npi: string | null; provider_type?: string; va_composite_id?: string | null; verification_status?: string | null } | null = null;
       if (c.referring_provider_id) {
         const rpResult = await db.query(
-          "SELECT first_name, last_name, npi, provider_type FROM referring_providers WHERE id = $1",
+          "SELECT first_name, last_name, npi, provider_type, va_composite_id, verification_status FROM referring_providers WHERE id = $1",
           [c.referring_provider_id]
         );
         if (rpResult.rows.length) referringProv = rpResult.rows[0];
@@ -4265,7 +4288,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const useTestMode = !!(c.last_test_status) || isFrcpbPayer || !!(req.body?.testMode);
       const isa15 = useTestMode ? "T" : resolveISA15(false);
 
-      const ediString = generate837P({
+      const { edi: ediString, rpTransmitted: rpTransmittedResubmit } = generate837P({
         isa15,
         claim: {
           id: c.id,
@@ -4317,8 +4340,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           entity_type: prov.entity_type || null,
         },
         referringProvider: referringProv,
-        payer: payerInfo,
+        payer: { ...payerInfo, referringProviderPolicy: (payerInfo as any).referring_provider_policy || 'required' },
       });
+      await db.query(`UPDATE claims SET referring_provider_transmitted = $1 WHERE id = $2`, [JSON.stringify(rpTransmittedResubmit), c.id]).catch(() => {});
 
       // Submit — test path if the original was a test submission or FRCPB payer
       const result = useTestMode
@@ -6187,16 +6211,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
 
       // Fetch referring provider for Loop 2310A (NM1*DN)
-      let referringProvEdi: { first_name: string; last_name: string; npi: string; provider_type?: string } | null = null;
+      let referringProvEdi: { first_name: string; last_name: string; npi: string | null; provider_type?: string; va_composite_id?: string | null; verification_status?: string | null } | null = null;
       if (c.referring_provider_id) {
         const rpResult = await db.query(
-          "SELECT first_name, last_name, npi, provider_type FROM referring_providers WHERE id = $1",
+          "SELECT first_name, last_name, npi, provider_type, va_composite_id, verification_status FROM referring_providers WHERE id = $1",
           [c.referring_provider_id]
         );
         if (rpResult.rows.length) referringProvEdi = rpResult.rows[0];
       }
 
-      const edi = generate837P({
+      const { edi, rpTransmitted: rpTransmittedEdi } = generate837P({
         claim: {
           id: c.id,
           patient_id: c.patient_id,
@@ -6248,8 +6272,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         },
         ordering_provider: orderingProv,
         referringProvider: referringProvEdi,
-        payer: payerInfo,
+        payer: { ...payerInfo, referringProviderPolicy: (payerInfo as any).referring_provider_policy || 'required' },
       });
+      await db.query(`UPDATE claims SET referring_provider_transmitted = $1 WHERE id = $2`, [JSON.stringify(rpTransmittedEdi), c.id]).catch(() => {});
 
       await db.query(
         `INSERT INTO claim_events (id, claim_id, type, notes, timestamp) VALUES ($1, $2, $3, $4, NOW())`,
@@ -6629,17 +6654,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
 
       // Fetch referring provider for Loop 2310A (NM1*DN)
-      let referringProvSubmit: { first_name: string; last_name: string; npi: string; provider_type?: string } | null = null;
+      let referringProvSubmit: { first_name: string; last_name: string; npi: string | null; provider_type?: string; va_composite_id?: string | null; verification_status?: string | null } | null = null;
       if (c.referring_provider_id) {
         const rpResult = await db.query(
-          "SELECT first_name, last_name, npi, provider_type FROM referring_providers WHERE id = $1",
+          "SELECT first_name, last_name, npi, provider_type, va_composite_id, verification_status FROM referring_providers WHERE id = $1",
           [c.referring_provider_id]
         );
         if (rpResult.rows.length) referringProvSubmit = rpResult.rows[0];
       }
 
       const { generate837P } = await import("./services/edi-generator");
-      const ediString = generate837P({
+      const { edi: ediString, rpTransmitted: rpTransmittedSubmit } = generate837P({
         isa15,
         claim: {
           id: c.id,
@@ -6691,8 +6716,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           entity_type: prov.entity_type || null,
         },
         referringProvider: referringProvSubmit,
-        payer: payerInfo,
+        payer: { ...payerInfo, referringProviderPolicy: (payerInfo as any).referring_provider_policy || 'required' },
       });
+      await db.query(`UPDATE claims SET referring_provider_transmitted = $1 WHERE id = $2`, [JSON.stringify(rpTransmittedSubmit), c.id]).catch(() => {});
 
       const result = await stediSubmitClaim({ ediContent: ediString, claimId: c.id, hasUserSession: true, userAgent: req.headers["user-agent"] });
 
@@ -6865,17 +6891,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
 
       // Fetch referring provider for Loop 2310A (NM1*DN)
-      let referringProvTest: { first_name: string; last_name: string; npi: string; provider_type?: string } | null = null;
+      let referringProvTest: { first_name: string; last_name: string; npi: string | null; provider_type?: string; va_composite_id?: string | null; verification_status?: string | null } | null = null;
       if (c.referring_provider_id) {
         const rpResult = await db.query(
-          "SELECT first_name, last_name, npi, provider_type FROM referring_providers WHERE id = $1",
+          "SELECT first_name, last_name, npi, provider_type, va_composite_id, verification_status FROM referring_providers WHERE id = $1",
           [c.referring_provider_id]
         );
         if (rpResult.rows.length) referringProvTest = rpResult.rows[0];
       }
 
       const { generate837P } = await import("./services/edi-generator");
-      const ediString = generate837P({
+      const { edi: ediString, rpTransmitted: rpTransmittedTest } = generate837P({
         isa15: "T", // testClaim always forces ISA15=T; explicit for audit clarity
         claim: {
           id: c.id,
@@ -6927,8 +6953,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           entity_type: prov.entity_type || null,
         },
         referringProvider: referringProvTest,
-        payer: payerInfo,
+        payer: { ...payerInfo, referringProviderPolicy: (payerInfo as any).referring_provider_policy || 'required' },
       });
+      await db.query(`UPDATE claims SET referring_provider_transmitted = $1 WHERE id = $2`, [JSON.stringify(rpTransmittedTest), c.id]).catch(() => {});
 
       const isFrcpbTestPayer = (payerInfo as any).payer_id === "FRCPB";
       console.log(
@@ -9832,16 +9859,20 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const db = await import("./db").then(m => m.pool);
       const orgId = getOrgId(req);
       if (!orgId) return res.status(400).json({ error: "Organization context required" });
-      const { first_name, last_name, npi, provider_type, notes } = req.body;
+      const { first_name, last_name, npi, va_composite_id, verification_status, provider_type, notes } = req.body;
       if (!first_name?.trim()) return res.status(400).json({ error: "first_name is required" });
       if (!last_name?.trim()) return res.status(400).json({ error: "last_name is required" });
-      if (!npi) return res.status(400).json({ error: "npi is required" });
-      const { validateNpiOrThrow } = await import("../shared/npi-validation");
-      try { validateNpiOrThrow(npi); } catch (e: any) { return res.status(400).json({ error: e.message }); }
+      const isPending = !npi && !!va_composite_id;
+      if (!npi && !va_composite_id) return res.status(400).json({ error: "Either a valid NPI or a VA composite ID is required." });
+      if (npi) {
+        const { validateNpiOrThrow } = await import("../shared/npi-validation");
+        try { validateNpiOrThrow(npi); } catch (e: any) { return res.status(400).json({ error: e.message }); }
+      }
+      const resolvedStatus = isPending ? 'pending' : (verification_status || 'verified');
       const { rows } = await db.query(
-        `INSERT INTO referring_providers (tenant_id, first_name, last_name, npi, provider_type, notes)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [orgId, first_name.trim(), last_name.trim(), npi, provider_type || '1', notes || null]
+        `INSERT INTO referring_providers (tenant_id, first_name, last_name, npi, va_composite_id, verification_status, provider_type, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+        [orgId, first_name.trim(), last_name.trim(), npi || null, va_composite_id || null, resolvedStatus, provider_type || '1', notes || null]
       );
       res.status(201).json(rows[0]);
     } catch (err: any) {
@@ -9849,6 +9880,44 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
+
+  // NPPES live-lookup proxy with per-request IIFE closure for 24h cache
+  const _nppes = (() => {
+    const cache = new Map<string, { ts: number; data: unknown }>();
+    const TTL = 24 * 60 * 60 * 1000;
+    return async (req: any, res: any) => {
+      const { first_name = "", last_name = "", state = "", number = "" } = req.query as Record<string, string>;
+      const cacheKey = JSON.stringify({ first_name, last_name, state, number });
+      const hit = cache.get(cacheKey);
+      if (hit && Date.now() - hit.ts < TTL) return res.json(hit.data);
+      const params = new URLSearchParams({ version: "2.1", limit: "10" });
+      if (first_name) params.set("first_name", first_name);
+      if (last_name)  params.set("last_name", last_name);
+      if (state)      params.set("state", state);
+      if (number)     params.set("number", number);
+      try {
+        const resp = await fetch(`https://npiregistry.cms.hhs.gov/api/?${params}`, { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) return res.status(502).json({ error: "NPPES upstream error" });
+        const json: any = await resp.json();
+        const results = (json.results || []).map((r: any) => ({
+          npi:        r.number,
+          first_name: r.basic?.first_name || "",
+          last_name:  r.basic?.last_name  || "",
+          credential: r.basic?.credential || "",
+          taxonomy:   r.taxonomies?.find((t: any) => t.primary)?.desc || "",
+          city:       r.addresses?.[0]?.city  || "",
+          state:      r.addresses?.[0]?.state || "",
+        }));
+        const out = { results, result_count: results.length };
+        cache.set(cacheKey, { ts: Date.now(), data: out });
+        res.json(out);
+      } catch (e: any) {
+        console.error("[NPPES]", e.message);
+        res.status(502).json({ error: "NPPES lookup timed out or failed" });
+      }
+    };
+  })();
+  app.get("/api/billing/referring-providers/nppes-search", requireAuth, _nppes);
 
   app.patch("/api/billing/referring-providers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
@@ -9859,22 +9928,27 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         [req.params.id, orgId]
       );
       if (!ownerCheck.rows.length) return res.status(404).json({ error: "Referring provider not found" });
-      const { first_name, last_name, npi, provider_type, notes } = req.body;
+      const { first_name, last_name, npi, va_composite_id, verification_status, provider_type, notes } = req.body;
       if (npi) {
         const { validateNpiOrThrow } = await import("../shared/npi-validation");
         try { validateNpiOrThrow(npi); } catch (e: any) { return res.status(400).json({ error: e.message }); }
       }
+      // Auto-upgrade status to 'verified' when an NPI is now provided
+      const resolvedStatus = npi && !verification_status ? 'verified' : (verification_status || null);
       const { rows } = await db.query(
         `UPDATE referring_providers
-         SET first_name = COALESCE($1, first_name),
-             last_name  = COALESCE($2, last_name),
-             npi        = COALESCE($3, npi),
-             provider_type = COALESCE($4, provider_type),
-             notes      = $5,
-             updated_at = NOW()
-         WHERE id = $6 AND tenant_id = $7
+         SET first_name          = COALESCE($1, first_name),
+             last_name           = COALESCE($2, last_name),
+             npi                 = COALESCE($3, npi),
+             va_composite_id     = COALESCE($4, va_composite_id),
+             verification_status = COALESCE($5, verification_status),
+             provider_type       = COALESCE($6, provider_type),
+             notes               = $7,
+             updated_at          = NOW()
+         WHERE id = $8 AND tenant_id = $9
          RETURNING *`,
         [first_name?.trim() || null, last_name?.trim() || null, npi || null,
+         va_composite_id || null, resolvedStatus,
          provider_type || null, notes !== undefined ? (notes || null) : undefined,
          req.params.id, orgId]
       );
