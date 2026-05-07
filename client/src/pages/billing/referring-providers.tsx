@@ -242,13 +242,13 @@ export default function ReferringProvidersPage() {
   });
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold" data-testid="heading-referring-providers">
+          <h3 className="text-base font-semibold" data-testid="heading-referring-providers">
             Referring Providers
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          </h3>
+          <p className="text-sm text-muted-foreground mt-0.5">
             Reusable provider directory — link to prior auths for Loop 2310A (NM1*DN) in 837P claims.
           </p>
         </div>

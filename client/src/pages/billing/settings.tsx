@@ -52,7 +52,9 @@ import {
   Search,
   CheckCircle2,
   ExternalLink,
+  UserRound,
 } from "lucide-react";
+import ReferringProvidersTab from "@/pages/billing/referring-providers";
 
 import { CheckCircle, Send, Wifi, FileText, Zap, XCircle, Info, RefreshCw, CheckCheck, AlertCircle, ShieldCheck, HelpCircle, X as XIcon, ChevronDown, ChevronRight } from "lucide-react";
 import {
@@ -2809,7 +2811,7 @@ function ClearinghouseTab() {
 export default function BillingSettings() {
   const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const tabFromUrl = searchParams.get("tab");
-  const defaultTab = tabFromUrl && ["providers", "practice", "payers", "rates", "clearinghouse", "claim-defaults"].includes(tabFromUrl) ? tabFromUrl : "providers";
+  const defaultTab = tabFromUrl && ["providers", "practice", "payers", "rates", "clearinghouse", "claim-defaults", "referring-providers"].includes(tabFromUrl) ? tabFromUrl : "providers";
 
   return (
     <div className="p-6 space-y-6">
@@ -2844,6 +2846,10 @@ export default function BillingSettings() {
             <Wifi className="h-4 w-4 mr-2" />
             Clearinghouse
           </TabsTrigger>
+          <TabsTrigger value="referring-providers" data-testid="tab-referring-providers">
+            <UserRound className="h-4 w-4 mr-2" />
+            Referring Providers
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="providers">
@@ -2863,6 +2869,9 @@ export default function BillingSettings() {
         </TabsContent>
         <TabsContent value="clearinghouse">
           <ClearinghouseTab />
+        </TabsContent>
+        <TabsContent value="referring-providers">
+          <ReferringProvidersTab />
         </TabsContent>
       </Tabs>
     </div>
