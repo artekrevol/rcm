@@ -4250,6 +4250,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       }
 
       // DB-2: Force CLM05-3=7 and REF*F8=[payer_claim_number] on every resubmission
+      // Fetch referring provider for Loop 2310A (NM1*DN)
+      let referringProv: { first_name: string; last_name: string; npi: string; provider_type?: string } | null = null;
+      if (c.referring_provider_id) {
+        const rpResult = await db.query(
+          "SELECT first_name, last_name, npi, provider_type FROM referring_providers WHERE id = $1",
+          [c.referring_provider_id]
+        );
+        if (rpResult.rows.length) referringProv = rpResult.rows[0];
+      }
+
       const { generate837P } = await import("./services/edi-generator");
       const isFrcpbPayer = payerInfo.payer_id === "FRCPB";
       const useTestMode = !!(c.last_test_status) || isFrcpbPayer || !!(req.body?.testMode);
@@ -4306,6 +4316,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           license_number: prov.license_number || null,
           entity_type: prov.entity_type || null,
         },
+        referringProvider: referringProv,
         payer: payerInfo,
       });
 
@@ -6175,6 +6186,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         };
       }
 
+      // Fetch referring provider for Loop 2310A (NM1*DN)
+      let referringProvEdi: { first_name: string; last_name: string; npi: string; provider_type?: string } | null = null;
+      if (c.referring_provider_id) {
+        const rpResult = await db.query(
+          "SELECT first_name, last_name, npi, provider_type FROM referring_providers WHERE id = $1",
+          [c.referring_provider_id]
+        );
+        if (rpResult.rows.length) referringProvEdi = rpResult.rows[0];
+      }
+
       const edi = generate837P({
         claim: {
           id: c.id,
@@ -6226,6 +6247,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           entity_type: prov.entity_type || null,
         },
         ordering_provider: orderingProv,
+        referringProvider: referringProvEdi,
         payer: payerInfo,
       });
 
@@ -6606,6 +6628,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         }
       }
 
+      // Fetch referring provider for Loop 2310A (NM1*DN)
+      let referringProvSubmit: { first_name: string; last_name: string; npi: string; provider_type?: string } | null = null;
+      if (c.referring_provider_id) {
+        const rpResult = await db.query(
+          "SELECT first_name, last_name, npi, provider_type FROM referring_providers WHERE id = $1",
+          [c.referring_provider_id]
+        );
+        if (rpResult.rows.length) referringProvSubmit = rpResult.rows[0];
+      }
+
       const { generate837P } = await import("./services/edi-generator");
       const ediString = generate837P({
         isa15,
@@ -6658,6 +6690,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           license_number: prov.license_number || null,
           entity_type: prov.entity_type || null,
         },
+        referringProvider: referringProvSubmit,
         payer: payerInfo,
       });
 
@@ -6831,6 +6864,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         }
       }
 
+      // Fetch referring provider for Loop 2310A (NM1*DN)
+      let referringProvTest: { first_name: string; last_name: string; npi: string; provider_type?: string } | null = null;
+      if (c.referring_provider_id) {
+        const rpResult = await db.query(
+          "SELECT first_name, last_name, npi, provider_type FROM referring_providers WHERE id = $1",
+          [c.referring_provider_id]
+        );
+        if (rpResult.rows.length) referringProvTest = rpResult.rows[0];
+      }
+
       const { generate837P } = await import("./services/edi-generator");
       const ediString = generate837P({
         isa15: "T", // testClaim always forces ISA15=T; explicit for audit clarity
@@ -6883,6 +6926,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           license_number: prov.license_number || null,
           entity_type: prov.entity_type || null,
         },
+        referringProvider: referringProvTest,
         payer: payerInfo,
       });
 
