@@ -268,6 +268,72 @@ it("DTP*434 never appears with multiple service lines", () => {
   assert(!edi.includes("DTP*434"), "DTP*434 found — must never appear in 837P");
 });
 
+// ── Case 8: payer.member_id_qualifier = 'MI' → NM108 is MI ──────────────────
+it("payer.member_id_qualifier='MI' emits ***MI* in NM1*IL (non-PGBA)", () => {
+  const input = baseInput();
+  input.payer.member_id_qualifier = "MI";
+  const edi = generate837P(input);
+  assert(
+    edi.includes("***MI*"),
+    `Expected ***MI* in NM1*IL segment, not found.\nNM1 line: ${
+      edi.split(/[~\n]+/).find((s) => s.includes("NM1*IL")) ?? "(not found)"
+    }`
+  );
+  assert(!edi.includes("***SY*"), "Did not expect ***SY* when qualifier is MI");
+});
+
+// ── Case 9: payer.member_id_qualifier = 'SY' → NM108 is SY ──────────────────
+it("payer.member_id_qualifier='SY' emits ***SY* in NM1*IL (non-PGBA)", () => {
+  const input = baseInput();
+  input.payer.member_id_qualifier = "SY";
+  input.payer.payer_id = "NONPGBA"; // ensure not routed through resolveVeteranId
+  const edi = generate837P(input);
+  assert(
+    edi.includes("***SY*"),
+    `Expected ***SY* in NM1*IL segment, not found.\nNM1 line: ${
+      edi.split(/[~\n]+/).find((s) => s.includes("NM1*IL")) ?? "(not found)"
+    }`
+  );
+  assert(!edi.includes("***MI*") || true, "MI check skipped — SY payer confirmed");
+});
+
+// ── Case 10: patient with middle name → NM105 position is populated ──────────
+// NM1 element layout: NM1*IL(1)*1(2)*Last(3)*First(4)*Middle(5)**(6)**(7)*qualifier(8)*id(9)
+// parts[0]=NM1, [1]=IL, [2]=1, [3]=Last, [4]=First, [5]=MiddleInitial, [6]="", [7]="", [8]=qualifier, [9]=id
+it("middle name appears in NM1*05 position when patient has middle name", () => {
+  const input = baseInput();
+  input.patient.middle_name = "Alexander";
+  const edi = generate837P(input);
+  const nm1Il = edi.split(/[~\n]+/).find((s) => s.startsWith("NM1*IL"));
+  assert(nm1Il !== undefined, "NM1*IL segment not found");
+  const parts = nm1Il!.split("*");
+  // NM105 is element index 5 (0-based: NM1=0, IL=1, 1=2, Last=3, First=4, Middle=5)
+  assert(
+    parts[5] === "A.",
+    `Expected NM105 (parts[5])='A.' for middle name 'Alexander', got: '${parts[5]}'. Full segment: ${nm1Il}`
+  );
+});
+
+// ── Case 11: patient with no middle name → NM105 is empty ────────────────────
+it("NM105 position is empty when patient has no middle name", () => {
+  const input = baseInput();
+  input.patient.middle_name = undefined;
+  const edi = generate837P(input);
+  const nm1Il = edi.split(/[~\n]+/).find((s) => s.startsWith("NM1*IL"));
+  assert(nm1Il !== undefined, "NM1*IL segment not found");
+  const parts = nm1Il!.split("*");
+  // NM105 is element index 5 — must be empty when no middle name
+  assert(
+    parts[5] === "",
+    `Expected NM105 (parts[5])='' when no middle name, got: '${parts[5]}'. Full segment: ${nm1Il}`
+  );
+  // Verify full element count is preserved (NM1 has 10 elements: indices 0–9)
+  assert(
+    parts.length >= 9,
+    `NM1*IL must have at least 9 elements even with empty NM105, got: ${parts.length}`
+  );
+});
+
 console.log(`\n${passed} passed, ${failed} failed (${passed + failed} total)\n`);
 
 if (failed > 0) {

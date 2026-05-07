@@ -297,6 +297,16 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`UPDATE payers SET payer_classification='commercial' WHERE payer_classification='commercial_ppo'`);
     await pool.query(`UPDATE payers SET claim_filing_indicator='HM' WHERE payer_classification='medicare_advantage' AND claim_filing_indicator='16'`);
 
+    // member_id_qualifier: payer-driven NM108 qualifier for Loop 2010BA subscriber ID
+    // 'MI' = Member ID (default for most commercial payers and VA CCN)
+    // 'SY' = SSN, 'II' = Standard Unique Health ID, 'ZZ' = Mutually Defined
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS member_id_qualifier VARCHAR(2) NOT NULL DEFAULT 'MI'`);
+    await pool.query(`UPDATE payers SET member_id_qualifier = 'MI' WHERE payer_id = 'TWVACCN' AND member_id_qualifier != 'MI'`);
+
+    // Data fix: update Peter Mandler's member_id to his VA EDIPI (10-digit DoD ID)
+    await pool.query(`UPDATE patients SET member_id = '1636711604' WHERE LOWER(first_name) = 'peter' AND LOWER(last_name) = 'mandler' AND (member_id IS NULL OR member_id != '1636711604')`);
+
+
     // Class C: FK constraints for tenant-scoped tables (orphan-safe — verified 0 orphans in prod)
     await pool.query(`DO $$ BEGIN ALTER TABLE providers ADD CONSTRAINT providers_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
     await pool.query(`DO $$ BEGIN ALTER TABLE claims ADD CONSTRAINT claims_org_fk FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`);
@@ -4180,10 +4190,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo: any = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -5718,13 +5728,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const ps = settingsResult.rows[0];
 
       // Payer lookup — fetched early so payer_classification drives all downstream logic
-      let payerInfo: { name: string; payer_id: string; payer_classification: string | null; claim_filing_indicator: string | null } =
-        { name: c.payer || "Unknown", payer_id: "UNKNOWN", payer_classification: null, claim_filing_indicator: null };
+      let payerInfo: { name: string; payer_id: string; payer_classification: string | null; claim_filing_indicator: string | null; member_id_qualifier: string | null } =
+        { name: c.payer || "Unknown", payer_id: "UNKNOWN", payer_classification: null, claim_filing_indicator: null, member_id_qualifier: "MI" };
       if (c.payer_id) {
-        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator FROM payers WHERE id = $1", [c.payer_id]);
+        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator, member_id_qualifier FROM payers WHERE id = $1", [c.payer_id]);
         if (pr.rows.length) payerInfo = pr.rows[0];
       } else if (c.payer) {
-        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator, member_id_qualifier FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (pr.rows.length) payerInfo = pr.rows[0];
       }
 
@@ -6096,10 +6106,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -6277,10 +6287,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -6439,10 +6449,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -6740,10 +6750,10 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -7103,7 +7113,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.patch("/api/billing/payers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const { id } = req.params;
-      const { isActive, name, payerId, timelyFilingDays, authRequired, autoFollowupDays, eraAutoPostClean, eraAutoPostContractual, eraAutoPostSecondary, eraAutoPostRefunds, eraHoldIfMismatch, payerClassification, claimFilingIndicator, requiresVob, rateInputMode } = req.body;
+      const { isActive, name, payerId, timelyFilingDays, authRequired, autoFollowupDays, eraAutoPostClean, eraAutoPostContractual, eraAutoPostSecondary, eraAutoPostRefunds, eraHoldIfMismatch, payerClassification, claimFilingIndicator, requiresVob, rateInputMode, memberIdQualifier } = req.body;
       const db = await import("./db").then(m => m.pool);
       const fields: string[] = [];
       const values: any[] = [];
@@ -7123,6 +7133,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (claimFilingIndicator !== undefined) { fields.push(`claim_filing_indicator = $${idx++}`); values.push(claimFilingIndicator); }
       if (requiresVob !== undefined) { fields.push(`requires_vob = $${idx++}`); values.push(requiresVob); }
       if (rateInputMode !== undefined) { fields.push(`rate_input_mode = $${idx++}`); values.push(rateInputMode); }
+      if (memberIdQualifier !== undefined) { fields.push(`member_id_qualifier = $${idx++}`); values.push(memberIdQualifier); }
       if (fields.length === 0) return res.status(400).json({ error: "No fields to update" });
       values.push(id);
       const { rows } = await db.query(

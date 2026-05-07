@@ -211,6 +211,14 @@ export interface EDI837PInput {
     payer_id: string;
     claim_filing_indicator?: string | null;
     /**
+     * NM108 qualifier for the subscriber/patient identifier (Loop 2010BA).
+     * Payer-driven: MI = Member ID (most commercial payers), SY = SSN,
+     * II = Standard Unique Health ID (NPI), ZZ = Mutually Defined.
+     * Default 'MI' matches X12 5010 005010X222A1 most-common convention.
+     * For PGBA VA CCN, resolveVeteranId() overrides this automatically.
+     */
+    member_id_qualifier?: string | null;
+    /**
      * PGBA region for VA Community Care Network submissions.
      * 4 = Region 4 (Southeast/Gulf Coast) — receiver tax ID 841160004
      * 5 = Region 5 (Pacific/Northwest)    — receiver tax ID 841160005
@@ -515,11 +523,12 @@ export function generate837P(input: EDI837PInput): string {
 
   // ── Loop 2010BA: Subscriber (Insured/Patient) ─────────────────────────────
   // NM108/NM109: Patient identifier qualifier and value.
-  // For PGBA: use veteran_id_type to select qualifier (SY = SSN, MI = EDIPI/MVI ICN).
-  // NM1_QUALIFIER["IL"] = "MI" (default); PGBA resolveVeteranId may override to "SY".
+  // Qualifier is payer-driven (payer.member_id_qualifier), defaulting to "MI".
+  // For PGBA VA CCN, resolveVeteranId() overrides to MI or SY based on the
+  // actual veteran ID type/length (EDIPI=MI, MVI ICN=MI, SSN=SY).
   const { qualifier: patientIdQual, id: patientIdVal } = pgba
     ? resolveVeteranId(patient)
-    : { qualifier: NM1_QUALIFIER["IL"], id: patient.member_id };
+    : { qualifier: payer.member_id_qualifier || "MI", id: patient.member_id };
 
   const patientMiddleInitial = patient.middle_name ? patient.middle_name[0].toUpperCase() + "." : "";
   segments.push(

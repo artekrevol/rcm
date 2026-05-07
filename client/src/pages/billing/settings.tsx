@@ -1158,6 +1158,7 @@ function PayersTab() {
     claimFilingIndicator: "" as string,
     requiresVob: true as boolean,
     rateInputMode: "per_unit" as string,
+    memberIdQualifier: "MI" as string,
   });
   const [payerSearch, setPayerSearch] = useState("");
   const [payerDialogTab, setPayerDialogTab] = useState("settings");
@@ -1487,6 +1488,7 @@ function PayersTab() {
                           claimFilingIndicator: p.claim_filing_indicator || "",
                           requiresVob: p.requires_vob !== false,
                           rateInputMode: p.rate_input_mode || "per_unit",
+                          memberIdQualifier: p.member_id_qualifier || "MI",
                         });
                       }}
                       data-testid={`button-edit-payer-${p.id}`}
@@ -1639,6 +1641,21 @@ function PayersTab() {
                     </Select>
                     <p className="text-xs text-muted-foreground">Written into SBR09 of the 837P EDI transaction.</p>
                   </div>
+                  <div className="space-y-2">
+                    <Label>Default Member ID Qualifier (NM108)</Label>
+                    <Select value={editForm.memberIdQualifier || "MI"} onValueChange={(v) => setEditForm({ ...editForm, memberIdQualifier: v })}>
+                      <SelectTrigger data-testid="select-member-id-qualifier">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="MI">MI — Member ID (most payers)</SelectItem>
+                        <SelectItem value="SY">SY — Social Security Number</SelectItem>
+                        <SelectItem value="II">II — Standard Unique Health ID</SelectItem>
+                        <SelectItem value="ZZ">ZZ — Mutually Defined</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Controls the qualifier written into NM108 of the subscriber loop. Use MI for VA, Medicare, and commercial plans; SY only if the payer explicitly requires SSN as the identifier.</p>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -1749,6 +1766,7 @@ function PayersTab() {
                     claimFilingIndicator: editForm.claimFilingIndicator || null,
                     requiresVob: editForm.requiresVob,
                     rateInputMode: editForm.rateInputMode,
+                    memberIdQualifier: editForm.memberIdQualifier || "MI",
                   })}
                   disabled={updateMutation.isPending}
                   data-testid="button-save-edit-payer"

@@ -587,6 +587,7 @@ export const payers = pgTable("payers", {
   payerCategory: varchar("payer_category", { length: 32 }),
   rateInputMode: varchar("rate_input_mode", { length: 20 }).default("per_unit"),
   requiresVob: boolean("requires_vob").default(true),
+  memberIdQualifier: varchar("member_id_qualifier", { length: 2 }).default("MI"),
   organizationId: varchar("organization_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
