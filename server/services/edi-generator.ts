@@ -708,9 +708,9 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
   // pre-approved by VA and can be tracked in TriWest's system, this field is
   // not required" when REF*G1 (Prior Authorization Number) is populated.
   {
-    // policy=undefined → legacy behaviour: emit if present, silently skip if not (no throw).
-    // This preserves backward compatibility for callers that do not pass referringProviderPolicy.
-    const policy = payer.referringProviderPolicy; // undefined = legacy/no-op
+    // policy is required — callers MUST explicitly pass one of 'required'|'situational'|'forbidden'.
+    // All production routes inject it from the payer DB row (referring_provider_policy column).
+    const policy = payer.referringProviderPolicy;
     // A provider is "transmittable" only when it has a Luhn-valid NPI.
     const hasValidNpi = referringProvider?.npi && referringProvider.npi.trim() !== '';
     const hasAuthNumber = !!(claim.auth_number && claim.auth_number.trim());
@@ -734,15 +734,12 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
           'VALIDATION_ERROR: Referring provider NPI is required or a VA referral number must be present. ' +
           'Enter a valid referring provider or add the VA authorization number to continue.'
         );
-      } else if (policy === 'required') {
-        // Explicit required policy and no valid NPI → hard block.
+      } else {
+        // policy === 'required' (or any unknown value) and no valid NPI → hard block.
         throw new Error(
           'VALIDATION_ERROR: Referring provider with a valid NPI is required for this payer. ' +
           'Select a referring provider from the directory before generating the 837P.'
         );
-      } else {
-        // policy === undefined (legacy) — silently skip Loop 2310A, no throw.
-        rpTransmitted = { omitted: true, reason: 'no_policy_set; no_rp; legacy_skip' };
       }
     } else {
       // Happy path — valid NPI available, policy allows emission.

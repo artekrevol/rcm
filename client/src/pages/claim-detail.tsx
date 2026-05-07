@@ -53,6 +53,7 @@ import {
   BellOff,
   Archive,
   Trash2,
+  User2,
 } from "lucide-react";
 import { format, differenceInDays, formatDistanceToNow } from "date-fns";
 import type { Claim, ClaimEvent, RiskExplanation, Patient } from "@shared/schema";
@@ -887,6 +888,40 @@ export default function ClaimDetailPage() {
                   </div>
                 </div>
               )}
+              {(() => {
+                const rpt = (claim as any).referringProviderTransmitted as Record<string, any> | null | undefined;
+                if (!rpt) return null;
+                const emitted = rpt.emitted === true;
+                const omitted = rpt.omitted === true;
+                if (!emitted && !omitted) return null;
+                return (
+                  <div className="flex items-start gap-3" data-testid="panel-rp-transmitted">
+                    <User2 className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">Referring Provider (transmitted)</p>
+                      {emitted ? (
+                        <>
+                          <p className="text-sm font-medium" data-testid="text-rp-name">{rpt.name || "—"}</p>
+                          {rpt.npi && (
+                            <p className="text-xs font-mono text-muted-foreground mt-0.5" data-testid="text-rp-npi">NPI {rpt.npi}</p>
+                          )}
+                          <p className="text-xs text-green-700 dark:text-green-400 mt-0.5">Transmitted in Loop 2310A</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-xs text-muted-foreground mt-0.5 break-words" data-testid="text-rp-omit-reason">{rpt.reason}</p>
+                          {rpt.referral_number && (
+                            <p className="text-xs font-mono text-muted-foreground mt-0.5" data-testid="text-rp-referral-number">Referral: {rpt.referral_number}</p>
+                          )}
+                          {rpt.va_composite_id && (
+                            <p className="text-xs font-mono text-amber-600 dark:text-amber-400 mt-0.5" data-testid="text-rp-va-composite-id">VA ID: {rpt.va_composite_id}</p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
 

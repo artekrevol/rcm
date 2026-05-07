@@ -1136,7 +1136,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS referring_provider_policy VARCHAR NOT NULL DEFAULT 'required'`);
     // VA CCN / TriWest and Optum: situational per TriWest Claims Basics QRG (May 2023)
     await pool.query(`UPDATE payers SET referring_provider_policy = 'situational' WHERE payer_id = 'TWVACCN' AND referring_provider_policy = 'required'`);
-    await pool.query(`UPDATE payers SET referring_provider_policy = 'situational' WHERE LOWER(name) LIKE '%optum%' AND referring_provider_policy = 'required'`);
+    // Optum VA CCN only — Optum commercial plans still require the referring provider.
+    await pool.query(`UPDATE payers SET referring_provider_policy = 'situational' WHERE LOWER(name) LIKE '%optum%' AND payer_classification = 'va_community_care' AND referring_provider_policy = 'required'`);
 
     // Audit trail: what was transmitted (or why omitted) for Loop 2310A per claim
     await seederLog('column', 'claims', 'referring_provider_transmitted');

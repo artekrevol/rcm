@@ -106,7 +106,7 @@ describe("policy=forbidden", () => {
 // ─── Payer policy: situational ────────────────────────────────────────────────
 describe("policy=situational", () => {
   it("emits NM1*DN when referringProvider is supplied (no auth_number)", async () => {
-    const rp = { first_name: "John", last_name: "Smith", npi: "1234567890", provider_type: "1" };
+    const rp = { first_name: "John", last_name: "Smith", npi: "1184288680", provider_type: "1" };
     const { edi } = await gen({
       referringProvider: rp,
       claim: {
@@ -157,7 +157,7 @@ describe("policy=situational", () => {
 // ─── Payer policy: required ───────────────────────────────────────────────────
 describe("policy=required", () => {
   it("emits NM1*DN when referringProvider is supplied", async () => {
-    const rp = { first_name: "Mary", last_name: "Jones", npi: "1234567890", provider_type: "1" };
+    const rp = { first_name: "Mary", last_name: "Jones", npi: "1184288680", provider_type: "1" };
     const { edi } = await gen({ referringProvider: rp, payer: { name: "Required Payer", payer_id: "REQ01", address: "", city: "", state: "", zip: "", phone: "", pgba_trading_partner_id: null, referringProviderPolicy: "required" } });
     const segs = parseEdi(edi);
     const nm1 = segs.find(s => s[0] === "NM1" && s[1] === "DN");

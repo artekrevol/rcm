@@ -104,6 +104,7 @@ function baseInput(overrides: Partial<EDI837PInput["claim"]> = {}): EDI837PInput
     payer: {
       name: "Test Payer",
       payer_id: "12345",
+      referringProviderPolicy: "forbidden" as const,
     },
   };
 }
@@ -516,8 +517,8 @@ it("ISA: ISA15 usage indicator='T', ISA16=':'", () => {
 
 it("PGBA veteran (EDIPI): NM108='MI', NM105=full middle name, NM109=EDIPI", () => {
   const input = baseInput();
-  // Simulate PGBA payer + EDIPI patient
-  input.payer = { name: "PGBA VACCN", payer_id: "TWVACCN" };
+  // Simulate PGBA payer + EDIPI patient (no referring provider needed for this test)
+  input.payer = { name: "PGBA VACCN", payer_id: "TWVACCN", referringProviderPolicy: "forbidden" as const };
   input.patient.first_name = "PETER";
   input.patient.last_name = "Mandler";
   input.patient.middle_name = "COIT";
@@ -547,6 +548,7 @@ console.log("===============================================");
 
 it("NM1*DN present when referringProvider supplied — qualifier, name, NPI", () => {
   const input = baseInput();
+  input.payer = { ...input.payer, referringProviderPolicy: "required" as const };
   input.referringProvider = {
     first_name: "JANE",
     last_name: "SMITH",
@@ -584,6 +586,7 @@ it("NM1*DN absent when referringProvider is undefined (default)", () => {
 
 it("NM1*DN entity type qualifier = '2' when provider_type is '2' (org/facility)", () => {
   const input = baseInput();
+  input.payer = { ...input.payer, referringProviderPolicy: "required" as const };
   input.referringProvider = {
     first_name: "VA",
     last_name: "COMMUNITY CARE CENTER",
@@ -599,6 +602,7 @@ it("NM1*DN entity type qualifier = '2' when provider_type is '2' (org/facility)"
 
 it("NM1*DN appears AFTER HI and BEFORE NM1*82 (segment ordering)", () => {
   const input = baseInput();
+  input.payer = { ...input.payer, referringProviderPolicy: "required" as const };
   input.referringProvider = {
     first_name: "JOHN",
     last_name: "DOE",
@@ -621,6 +625,7 @@ it("NM1*DN appears AFTER HI and BEFORE NM1*82 (segment ordering)", () => {
 
 it("invalid NPI in referringProvider throws NPI validation error", () => {
   const input = baseInput();
+  input.payer = { ...input.payer, referringProviderPolicy: "required" as const };
   input.referringProvider = {
     first_name: "BAD",
     last_name: "NPI",

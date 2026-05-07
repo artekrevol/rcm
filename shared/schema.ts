@@ -157,6 +157,7 @@ export const claims = pgTable("claims", {
   followUpDate: date("follow_up_date"),
   followUpStatus: varchar("follow_up_status"),
   planProduct: text("plan_product"),
+  referringProviderTransmitted: jsonb("referring_provider_transmitted").$type<Record<string, any>>(),
 });
 
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });
