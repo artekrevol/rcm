@@ -1098,6 +1098,27 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS used_units INTEGER DEFAULT 0`);
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS service_type VARCHAR`);
 
+    // ── Referring Providers directory (Loop 2310A) ─────────────────────────────
+    await seederLog('table', 'referring_providers');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS referring_providers (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id VARCHAR NOT NULL,
+        first_name VARCHAR(50) NOT NULL,
+        last_name VARCHAR(50) NOT NULL,
+        npi VARCHAR(10) NOT NULL,
+        provider_type VARCHAR(1) NOT NULL DEFAULT '1',
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        UNIQUE(tenant_id, npi)
+      )
+    `);
+    await seederLog('column', 'prior_authorizations', 'referring_provider_id');
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS referring_provider_id UUID REFERENCES referring_providers(id) ON DELETE SET NULL`);
+    await seederLog('column', 'claims', 'referring_provider_id');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS referring_provider_id UUID REFERENCES referring_providers(id) ON DELETE SET NULL`);
+
     // ── Payers: stedi_payer_id + supported_transactions + updated_at ──────────
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_payer_id VARCHAR`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS supported_transactions JSONB DEFAULT '[]'`);
@@ -9706,6 +9727,133 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
     const auth = await storage.updatePriorAuth(req.params.id, req.body);
     res.json(auth);
+  });
+
+  // ============================================
+  // Referring Providers — CRUD + search
+  // ============================================
+
+  app.get("/api/billing/referring-providers", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(400).json({ error: "Organization context required" });
+      const { rows } = await db.query(
+        `SELECT * FROM referring_providers WHERE tenant_id = $1 ORDER BY last_name, first_name`,
+        [orgId]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  app.get("/api/billing/referring-providers/search", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const q = String(req.query.q || "").trim();
+      if (!orgId) return res.status(400).json({ error: "Organization context required" });
+      const { rows } = await db.query(
+        `SELECT * FROM referring_providers
+         WHERE tenant_id = $1
+           AND (first_name ILIKE $2 OR last_name ILIKE $2 OR npi ILIKE $2
+                OR (first_name || ' ' || last_name) ILIKE $2)
+         ORDER BY last_name, first_name LIMIT 20`,
+        [orgId, `%${q}%`]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  app.get("/api/billing/referring-providers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { rows } = await db.query(
+        `SELECT * FROM referring_providers WHERE id = $1 AND tenant_id = $2`,
+        [req.params.id, orgId]
+      );
+      if (!rows.length) return res.status(404).json({ error: "Referring provider not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  app.post("/api/billing/referring-providers", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(400).json({ error: "Organization context required" });
+      const { first_name, last_name, npi, provider_type, notes } = req.body;
+      if (!first_name?.trim()) return res.status(400).json({ error: "first_name is required" });
+      if (!last_name?.trim()) return res.status(400).json({ error: "last_name is required" });
+      if (!npi) return res.status(400).json({ error: "npi is required" });
+      const { validateNpiOrThrow } = await import("../shared/npi-validation");
+      try { validateNpiOrThrow(npi); } catch (e: any) { return res.status(400).json({ error: e.message }); }
+      const { rows } = await db.query(
+        `INSERT INTO referring_providers (tenant_id, first_name, last_name, npi, provider_type, notes)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [orgId, first_name.trim(), last_name.trim(), npi, provider_type || '1', notes || null]
+      );
+      res.status(201).json(rows[0]);
+    } catch (err: any) {
+      if (err.code === '23505') return res.status(409).json({ error: `NPI ${req.body.npi} is already in your referring providers directory.` });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  app.patch("/api/billing/referring-providers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const ownerCheck = await db.query(
+        `SELECT id FROM referring_providers WHERE id = $1 AND tenant_id = $2`,
+        [req.params.id, orgId]
+      );
+      if (!ownerCheck.rows.length) return res.status(404).json({ error: "Referring provider not found" });
+      const { first_name, last_name, npi, provider_type, notes } = req.body;
+      if (npi) {
+        const { validateNpiOrThrow } = await import("../shared/npi-validation");
+        try { validateNpiOrThrow(npi); } catch (e: any) { return res.status(400).json({ error: e.message }); }
+      }
+      const { rows } = await db.query(
+        `UPDATE referring_providers
+         SET first_name = COALESCE($1, first_name),
+             last_name  = COALESCE($2, last_name),
+             npi        = COALESCE($3, npi),
+             provider_type = COALESCE($4, provider_type),
+             notes      = $5,
+             updated_at = NOW()
+         WHERE id = $6 AND tenant_id = $7
+         RETURNING *`,
+        [first_name?.trim() || null, last_name?.trim() || null, npi || null,
+         provider_type || null, notes !== undefined ? (notes || null) : undefined,
+         req.params.id, orgId]
+      );
+      res.json(rows[0]);
+    } catch (err: any) {
+      if (err.code === '23505') return res.status(409).json({ error: `NPI ${req.body.npi} is already in your referring providers directory.` });
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
+  });
+
+  app.delete("/api/billing/referring-providers/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = getOrgId(req);
+      const { rowCount } = await db.query(
+        `DELETE FROM referring_providers WHERE id = $1 AND tenant_id = $2`,
+        [req.params.id, orgId]
+      );
+      if (!rowCount) return res.status(404).json({ error: "Referring provider not found" });
+      res.status(204).end();
+    } catch (err: any) {
+      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    }
   });
 
   // ============================================

@@ -19,6 +19,7 @@ import {
   ListChecks,
   Building2,
   AlarmClock,
+  UserSearch,
 } from "lucide-react";
 import {
   Sidebar,
@@ -53,6 +54,7 @@ const billingNavItems = [
   { title: "Compliance", url: "/billing/intelligence/reports", icon: ClipboardList, adminOnly: true },
   { title: "Rules", url: "/billing/rules", icon: Shield },
   { title: "Reports", url: "/billing/reports", icon: BarChart3 },
+  { title: "Referring Providers", url: "/billing/settings/referring-providers", icon: UserSearch, adminOnly: true },
   { title: "Settings", url: "/billing/settings", icon: Settings },
   { title: "User Management", url: "/billing/settings/users", icon: UserCog, adminOnly: true },
 ];

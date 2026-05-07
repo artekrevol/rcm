@@ -194,6 +194,18 @@ export interface EDI837PInput {
     license_number?: string | null;
     entity_type?: string | null;
   };
+  /**
+   * Resolved referring provider for Loop 2310A (NM1*DN).
+   * Caller is responsible for fetching from the referring_providers table.
+   * Resolve priority: claim.referring_provider_id → auth.referring_provider_id → null.
+   * When null, Loop 2310A is omitted (no error).
+   */
+  referringProvider?: {
+    first_name: string;
+    last_name: string;
+    npi: string;
+    provider_type?: string;
+  } | null;
   ordering_provider?: {
     first_name: string;
     last_name: string;
@@ -391,9 +403,10 @@ import {
   REF, CLM, HI, NTE, DTP, LX, SV1,
   SE, GE, IEA,
 } from './edi/segments';
+import { validateNpiOrThrow } from './validation/npi';
 
 export function generate837P(input: EDI837PInput): string {
-  const { claim, patient, practice, provider, ordering_provider, payer } = input;
+  const { claim, patient, practice, provider, ordering_provider, payer, referringProvider } = input;
   const freqCode = claim.claim_frequency_code || "1";
   const now = new Date();
   const date = now.toISOString().slice(0, 10).replace(/-/g, "");
@@ -671,6 +684,25 @@ export function generate837P(input: EDI837PInput): string {
       code: code.replace(/\./g, ""),
     }));
   segments.push(HI(diagCodes));
+
+  // ── Loop 2310A: Referring Provider (NM1*DN) ──────────────────────────────
+  // Emitted only when a referring provider is resolved by the caller.
+  // Per X12 5010 005010X222A1: NM101=DN (Referring Provider), NM108=XX (NPI).
+  // For VA CCN: TriWest uses this to link the claim to the authorizing VA provider.
+  // NOT emitted when referringProvider is null/undefined — never crashes, never
+  // emits an empty NM1 segment. Validation rule (VA CCN requires this field) lives
+  // in the auth save logic upstream, not here.
+  if (referringProvider) {
+    validateNpiOrThrow(referringProvider.npi);
+    segments.push(NM1({
+      entityIdCode: 'DN',
+      entityTypeQualifier: (referringProvider.provider_type === '2' ? '2' : '1') as '1' | '2',
+      lastOrOrgName: referringProvider.last_name,
+      firstName: referringProvider.provider_type === '2' ? undefined : referringProvider.first_name,
+      idQualifier: NM1_QUALIFIER['DN'],
+      idCode: referringProvider.npi,
+    }));
+  }
 
   // ── Loop 2310B: Rendering Provider ────────────────────────────────────────
   // A3 FIX: Omit this loop entirely when the provider has no NPI (agency worker,

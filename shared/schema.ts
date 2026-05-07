@@ -868,3 +868,26 @@ export const orgVoicePersonas = pgTable("org_voice_personas", {
   composeFromProfile: boolean("compose_from_profile").notNull().default(false),
 });
 export type OrgVoicePersona = typeof orgVoicePersonas.$inferSelect;
+
+// =========================================================================
+// Referring Providers — reusable provider directory for Loop 2310A (NM1*DN)
+// Added for VA CCN claim submission. Each tenant maintains their own list of
+// referring VA providers, linked to prior_authorizations and claims by FK.
+// =========================================================================
+export const referringProviders = pgTable("referring_providers", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id").notNull(),
+  firstName: varchar("first_name", { length: 50 }).notNull(),
+  lastName: varchar("last_name", { length: 50 }).notNull(),
+  npi: varchar("npi", { length: 10 }).notNull(),
+  providerType: varchar("provider_type", { length: 1 }).notNull().default("1"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const insertReferringProviderSchema = createInsertSchema(referringProviders).omit({
+  id: true, createdAt: true, updatedAt: true,
+});
+export type InsertReferringProvider = z.infer<typeof insertReferringProviderSchema>;
+export type ReferringProvider = typeof referringProviders.$inferSelect;

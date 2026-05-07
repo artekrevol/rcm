@@ -51,6 +51,7 @@ import ERAPage from "@/pages/billing/era";
 import FollowUpPage from "@/pages/billing/follow-up";
 import FilingAlertsPage from "@/pages/billing/filing-alerts";
 import CascadeDemo from "@/pages/cascade-demo";
+import ReferringProvidersPage from "@/pages/billing/referring-providers";
 
 function Router() {
   return (
@@ -270,6 +271,11 @@ function Router() {
       <Route path="/billing/settings/users">
         <AuthGuard allowedRoles={["admin"]}>
           <BillingLayout><UserManagement /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/settings/referring-providers">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><ReferringProvidersPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/settings">

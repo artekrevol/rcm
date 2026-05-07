@@ -539,6 +539,101 @@ it("PGBA veteran (EDIPI): NM108='MI', NM105=full middle name, NM109=EDIPI", () =
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Loop 2310A — NM1*DN (Referring Provider)
+// ─────────────────────────────────────────────────────────────────────────────
+
+console.log("\nLoop 2310A — NM1*DN (Referring Provider) tests");
+console.log("===============================================");
+
+it("NM1*DN present when referringProvider supplied — qualifier, name, NPI", () => {
+  const input = baseInput();
+  input.referringProvider = {
+    first_name: "JANE",
+    last_name: "SMITH",
+    npi: "1184288680",
+    provider_type: "1",
+  };
+  const edi = generate837P(input);
+  const segs = parseEdi(edi);
+  const nm1 = findSeg(segs, "NM1", "DN");
+  assert(nm1 !== undefined,               "NM1*DN not found");
+  assert(nm1!.elements[1] === "DN",       `NM101 qualifier: '${nm1!.elements[1]}'`);
+  assert(nm1!.elements[2] === "1",        `NM102 entity type: '${nm1!.elements[2]}'`);
+  assert(nm1!.elements[3] === "SMITH",    `NM103 last: '${nm1!.elements[3]}'`);
+  assert(nm1!.elements[4] === "JANE",     `NM104 first: '${nm1!.elements[4]}'`);
+  assert(nm1!.elements[8] === "XX",       `NM108 id qualifier: '${nm1!.elements[8]}'`);
+  assert(nm1!.elements[9] === "1184288680", `NM109 NPI: '${nm1!.elements[9]}'`);
+});
+
+it("NM1*DN absent when referringProvider is null", () => {
+  const input = baseInput();
+  input.referringProvider = null;
+  const edi = generate837P(input);
+  const segs = parseEdi(edi);
+  const nm1 = findSeg(segs, "NM1", "DN");
+  assert(nm1 === undefined, "NM1*DN should be absent when referringProvider is null");
+});
+
+it("NM1*DN absent when referringProvider is undefined (default)", () => {
+  const input = baseInput();
+  const edi = generate837P(input);
+  const segs = parseEdi(edi);
+  const nm1 = findSeg(segs, "NM1", "DN");
+  assert(nm1 === undefined, "NM1*DN should be absent when referringProvider is not set");
+});
+
+it("NM1*DN entity type qualifier = '2' when provider_type is '2' (org/facility)", () => {
+  const input = baseInput();
+  input.referringProvider = {
+    first_name: "VA",
+    last_name: "COMMUNITY CARE CENTER",
+    npi: "1184288680",
+    provider_type: "2",
+  };
+  const edi = generate837P(input);
+  const segs = parseEdi(edi);
+  const nm1 = findSeg(segs, "NM1", "DN");
+  assert(nm1 !== undefined,        "NM1*DN not found");
+  assert(nm1!.elements[2] === "2", `NM102 should be '2' for org: '${nm1!.elements[2]}'`);
+});
+
+it("NM1*DN appears AFTER HI and BEFORE NM1*82 (segment ordering)", () => {
+  const input = baseInput();
+  input.referringProvider = {
+    first_name: "JOHN",
+    last_name: "DOE",
+    npi: "1184288680",
+  };
+  const edi = generate837P(input);
+  const segs = parseEdi(edi);
+  const rawSegs = edi.split(/[~\n]+/).map(s => s.trim()).filter(Boolean);
+  const idxHI  = rawSegs.findIndex(s => s.startsWith("HI"));
+  const idxDN  = rawSegs.findIndex(s => s.startsWith("NM1*DN"));
+  const idx82  = rawSegs.findIndex(s => s.startsWith("NM1*82"));
+  assert(idxHI  !== -1, "HI segment not found");
+  assert(idxDN  !== -1, "NM1*DN segment not found");
+  // NM1*82 may be absent for agency-worker providers; only check order when present
+  assert(idxDN > idxHI, `NM1*DN (${idxDN}) must come after HI (${idxHI})`);
+  if (idx82 !== -1) {
+    assert(idxDN < idx82, `NM1*DN (${idxDN}) must come before NM1*82 (${idx82})`);
+  }
+});
+
+it("invalid NPI in referringProvider throws NPI validation error", () => {
+  const input = baseInput();
+  input.referringProvider = {
+    first_name: "BAD",
+    last_name: "NPI",
+    npi: "1234567890",
+  };
+  let threw = false;
+  let msg = "";
+  try { generate837P(input); } catch (e: any) { threw = true; msg = e?.message ?? ""; }
+  assert(threw,            "Expected generate837P to throw for invalid NPI");
+  assert(msg.length > 0,  `Error message should be non-empty: '${msg}'`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed (${passed + failed} total)\n`);
 

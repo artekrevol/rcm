@@ -9,3 +9,20 @@ export function validateNPI(npi: string): boolean {
   }
   return sum % 10 === 0;
 }
+
+export function validateNpiOrThrow(npi: string): void {
+  if (!npi || npi.trim() === '') {
+    throw new Error('NPI is required');
+  }
+  if (!/^\d{10}$/.test(npi)) {
+    throw new Error(
+      `NPI "${npi}" is invalid: must be exactly 10 numeric digits (got ${npi.length} char(s))`
+    );
+  }
+  if (!validateNPI(npi)) {
+    throw new Error(
+      `NPI "${npi}" fails the CMS Luhn check digit validation. ` +
+      `Verify the NPI at https://npiregistry.cms.hhs.gov/`
+    );
+  }
+}

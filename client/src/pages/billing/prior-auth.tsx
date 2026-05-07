@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,11 +10,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Shield, Clock, CheckCircle2, XCircle, AlertTriangle, Calendar, Plus, Loader2, FileText, Send } from "lucide-react";
+import { Shield, Clock, CheckCircle2, XCircle, AlertTriangle, Calendar, Plus, Loader2, FileText, Send, UserRound } from "lucide-react";
 import { format, isPast, differenceInDays, addDays } from "date-fns";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+
+interface ReferringProviderOption {
+  id: string;
+  first_name: string;
+  last_name: string;
+  npi: string;
+  provider_type: string;
+}
 
 interface PriorAuthRecord {
   id: string;
@@ -52,18 +60,129 @@ const modeConfig: Record<string, { label: string; color: string }> = {
   request: { label: "PA Request", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
 };
 
+function ReferringProviderPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (id: string, provider: ReferringProviderOption | null) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const { data: providers = [] } = useQuery<ReferringProviderOption[]>({
+    queryKey: ["/api/billing/referring-providers"],
+  });
+
+  const selected = providers.find(p => p.id === value) ?? null;
+
+  const filtered = search
+    ? providers.filter(p => {
+        const q = search.toLowerCase();
+        return (
+          p.first_name.toLowerCase().includes(q) ||
+          p.last_name.toLowerCase().includes(q) ||
+          p.npi.includes(q)
+        );
+      })
+    : providers;
+
+  return (
+    <div className="relative">
+      <div
+        className="flex items-center border rounded-md px-3 py-2 cursor-pointer bg-background hover:bg-accent/40 transition-colors"
+        onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 50); }}
+        data-testid="picker-referring-provider"
+      >
+        {selected ? (
+          <span className="flex-1 text-sm">
+            <UserRound className="h-3.5 w-3.5 inline mr-1.5 text-muted-foreground" />
+            {selected.first_name} {selected.last_name}
+            <span className="text-muted-foreground ml-2 text-xs font-mono">{selected.npi}</span>
+          </span>
+        ) : (
+          <span className="flex-1 text-sm text-muted-foreground">Search by name or NPI…</span>
+        )}
+        {selected && (
+          <button
+            className="ml-2 text-muted-foreground hover:text-foreground"
+            onClick={e => { e.stopPropagation(); onChange("", null); setSearch(""); }}
+            data-testid="button-clear-referring-provider"
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="absolute z-50 left-0 right-0 mt-1 bg-background border rounded-md shadow-lg">
+          <div className="p-2">
+            <Input
+              ref={inputRef}
+              placeholder="Search name or NPI…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              data-testid="input-referring-provider-search"
+            />
+          </div>
+          <div className="max-h-48 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-2 text-sm text-muted-foreground">
+                No referring providers found.{" "}
+                <a href="/billing/settings/referring-providers" className="underline" target="_blank">
+                  Add one
+                </a>
+              </div>
+            ) : (
+              filtered.map(p => (
+                <div
+                  key={p.id}
+                  className="px-3 py-2 text-sm cursor-pointer hover:bg-accent/60 flex items-center justify-between"
+                  onClick={() => { onChange(p.id, p); setOpen(false); setSearch(""); }}
+                  data-testid={`option-rp-${p.id}`}
+                >
+                  <span>{p.first_name} {p.last_name}</span>
+                  <span className="text-muted-foreground font-mono text-xs">{p.npi}</span>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="border-t p-2">
+            <button
+              className="text-xs text-primary underline"
+              onClick={() => { setOpen(false); window.open('/billing/settings/referring-providers', '_blank'); }}
+            >
+              + Manage referring providers
+            </button>
+          </div>
+        </div>
+      )}
+      {open && (
+        <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+      )}
+    </div>
+  );
+}
+
 function NewAuthDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const [mode, setMode] = useState<"received" | "request">("received");
   const { data: patients = [] } = useQuery<any[]>({ queryKey: ["/api/billing/patients"] });
   const { data: payers = [] } = useQuery<any[]>({ queryKey: ["/api/payers"] });
+  const [selectedPayerObj, setSelectedPayerObj] = useState<any>(null);
 
   const [form, setForm] = useState({
     patientId: "", payer: "", authNumber: "", serviceType: "", startDate: "", endDate: "",
-    authorizedUnits: "", referringProviderName: "", referringProviderNpi: "", notes: "", source: "Payer Portal",
+    authorizedUnits: "", referringProviderId: "", notes: "", source: "Payer Portal",
     requestSubmittedDate: "", requestMethod: "Portal", clinicalJustification: "",
     status: "pending", denialReason: "", approvedUnits: "",
   });
+
+  const isVaPayerSelected = selectedPayerObj
+    ? (selectedPayerObj.claim_filing_indicator === 'VA' ||
+       (selectedPayerObj.payer_id || '').toUpperCase() === 'TWVACCN' ||
+       (selectedPayerObj.name || '').toLowerCase().includes('va community'))
+    : false;
 
   const createMutation = useMutation({
     mutationFn: (data: any) => apiRequest("POST", "/api/prior-auth", data),
@@ -80,6 +199,10 @@ function NewAuthDialog({ open, onClose }: { open: boolean; onClose: () => void }
       toast({ title: "Patient, payer, and service type are required", variant: "destructive" });
       return;
     }
+    if (isVaPayerSelected && !form.referringProviderId) {
+      toast({ title: "Referring provider is required for VA Community Care authorizations", variant: "destructive" });
+      return;
+    }
     createMutation.mutate({
       patientId: form.patientId,
       payer: form.payer,
@@ -91,8 +214,7 @@ function NewAuthDialog({ open, onClose }: { open: boolean; onClose: () => void }
       status: mode === "received" ? (form.status || "approved") : form.status,
       mode,
       source: form.source,
-      referringProviderName: form.referringProviderName || null,
-      referringProviderNpi: form.referringProviderNpi || null,
+      referring_provider_id: form.referringProviderId || null,
       requestSubmittedDate: form.requestSubmittedDate || null,
       requestMethod: form.requestMethod || null,
       clinicalJustification: form.clinicalJustification || null,
@@ -140,7 +262,14 @@ function NewAuthDialog({ open, onClose }: { open: boolean; onClose: () => void }
               </div>
               <div className="space-y-1">
                 <Label>Payer *</Label>
-                <Select value={form.payer} onValueChange={f("payer")}>
+                <Select
+                  value={form.payer}
+                  onValueChange={(v) => {
+                    const obj = (payers as any[]).find(p => p.name === v) ?? null;
+                    setSelectedPayerObj(obj);
+                    f("payer")({ target: { value: v } });
+                  }}
+                >
                   <SelectTrigger data-testid="select-pa-payer"><SelectValue placeholder="Select payer…" /></SelectTrigger>
                   <SelectContent>
                     {payers.map((p: any) => <SelectItem key={p.payer_id || p.id} value={p.name}>{p.name}</SelectItem>)}
@@ -183,15 +312,20 @@ function NewAuthDialog({ open, onClose }: { open: boolean; onClose: () => void }
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <Label>Referring/Ordering Provider Name</Label>
-                <Input value={form.referringProviderName} onChange={f("referringProviderName")} placeholder="Dr. Jane Smith" data-testid="input-pa-referring-name" />
-              </div>
-              <div className="space-y-1">
-                <Label>Referring/Ordering NPI</Label>
-                <Input value={form.referringProviderNpi} onChange={f("referringProviderNpi")} placeholder="1234567890" data-testid="input-pa-referring-npi" />
-              </div>
+            <div className="space-y-1">
+              <Label>
+                Referring / Ordering Provider
+                {isVaPayerSelected && <span className="text-destructive ml-1">*</span>}
+              </Label>
+              <ReferringProviderPicker
+                value={form.referringProviderId}
+                onChange={(id) => setForm(prev => ({ ...prev, referringProviderId: id }))}
+              />
+              {isVaPayerSelected && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                  Required for VA Community Care — links to Loop 2310A (NM1*DN) in the 837P.
+                </p>
+              )}
             </div>
 
             <TabsContent value="request" className="mt-0 space-y-4 border-t pt-4">
