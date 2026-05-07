@@ -353,6 +353,7 @@ export default function ClaimDetailPage() {
   const [validationErrorsExpanded, setValidationErrorsExpanded] = useState(false);
   const [testingClaim, setTestingClaim] = useState(false);
   const [showArchiveClaimDialog, setShowArchiveClaimDialog] = useState(false);
+  const [showFinalizeDialog, setShowFinalizeDialog] = useState(false);
 
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
@@ -1165,7 +1166,7 @@ export default function ClaimDetailPage() {
               {claim.status === "draft" && (
                 <Button
                   className="w-full justify-start"
-                  onClick={() => markReadyMutation.mutate()}
+                  onClick={() => setShowFinalizeDialog(true)}
                   disabled={markReadyMutation.isPending}
                   data-testid="button-mark-ready"
                 >
@@ -1372,6 +1373,30 @@ export default function ClaimDetailPage() {
               }}
             >
               {ediDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Download className="h-4 w-4 mr-1" /> Download EDI</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Step 10: Finalize Draft confirmation dialog */}
+      <Dialog open={showFinalizeDialog} onOpenChange={setShowFinalizeDialog}>
+        <DialogContent className="max-w-sm" data-testid="dialog-finalize-draft">
+          <DialogHeader>
+            <DialogTitle>Finalize this draft?</DialogTitle>
+            <DialogDescription>
+              Finalizing marks this claim as ready for submission. You can still edit it afterward, but it will move out of Draft status.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 flex-col sm:flex-row">
+            <Button variant="outline" onClick={() => setShowFinalizeDialog(false)} data-testid="button-finalize-cancel">
+              Keep Editing
+            </Button>
+            <Button
+              onClick={() => { setShowFinalizeDialog(false); markReadyMutation.mutate(); }}
+              disabled={markReadyMutation.isPending}
+              data-testid="button-finalize-confirm"
+            >
+              {markReadyMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle className="h-4 w-4 mr-2" />}
+              Yes, Finalize
             </Button>
           </DialogFooter>
         </DialogContent>

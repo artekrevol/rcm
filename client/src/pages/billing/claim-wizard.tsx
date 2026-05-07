@@ -53,11 +53,13 @@ import {
   FlaskConical,
   Stethoscope,
   AlarmClock,
+  CalendarDays,
 } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { validateNPI } from "@shared/npi-validation";
 import { generateAndDownloadClaimPdf } from "@/lib/generate-claim-pdf";
+import { getModifierHint } from "@/lib/hcpcs-modifiers";
 
 // ── Rules Engine types (mirrored from server/services/rules-engine.ts) ──────
 type RuleType =
@@ -146,6 +148,7 @@ interface ServiceLine {
   isAverageRate: boolean;
   serviceDateFrom: string;
   serviceDateTo: string;
+  billingMode: 'hours' | 'units';
 }
 
 const CLAIM_FREQUENCY_CODES = [
@@ -202,6 +205,7 @@ function emptyLine(defaultDate = ""): ServiceLine {
     requiresModifier: false, manualEntry: false, vaRate: null,
     locationName: null, isAverageRate: false,
     serviceDateFrom: defaultDate, serviceDateTo: "",
+    billingMode: 'hours',
   };
 }
 
@@ -233,9 +237,10 @@ const PLAN_PRODUCT_OPTIONS = [
   { value: "unknown", label: "Unknown / Not specified" },
 ];
 
-function PatientSearch({ onSelect, selectedPatient }: {
+function PatientSearch({ onSelect, selectedPatient, hideCommercialPlanProduct }: {
   onSelect: (patient: any) => void;
   selectedPatient: any;
+  hideCommercialPlanProduct?: boolean;
 }) {
   const { toast } = useToast();
   const [search, setSearch] = useState("");
@@ -332,33 +337,35 @@ function PatientSearch({ onSelect, selectedPatient }: {
                 </Button>
               </div>
             </div>
-            <div className="mt-3 pt-3 border-t border-green-200 dark:border-green-800">
-              <div className="flex items-center gap-3">
-                <Label className="text-xs text-muted-foreground whitespace-nowrap">Plan Product</Label>
-                <Select
-                  value={effectivePlanProduct || "__none__"}
-                  onValueChange={(v) => handlePlanProductChange(v === "__none__" ? "unknown" : v)}
-                  disabled={savingPlan}
-                >
-                  <SelectTrigger className="h-7 text-xs w-48" data-testid="select-wizard-plan-product">
-                    <SelectValue placeholder="Select plan product…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Unknown / Not specified</SelectItem>
-                    {PLAN_PRODUCT_OPTIONS.filter(o => o.value !== "unknown").map((o) => (
-                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {savingPlan && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+            {!hideCommercialPlanProduct && (
+              <div className="mt-3 pt-3 border-t border-green-200 dark:border-green-800">
+                <div className="flex items-center gap-3">
+                  <Label className="text-xs text-muted-foreground whitespace-nowrap">Plan Product</Label>
+                  <Select
+                    value={effectivePlanProduct || "__none__"}
+                    onValueChange={(v) => handlePlanProductChange(v === "__none__" ? "unknown" : v)}
+                    disabled={savingPlan}
+                  >
+                    <SelectTrigger className="h-7 text-xs w-48" data-testid="select-wizard-plan-product">
+                      <SelectValue placeholder="Select plan product…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Unknown / Not specified</SelectItem>
+                      {PLAN_PRODUCT_OPTIONS.filter(o => o.value !== "unknown").map((o) => (
+                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {savingPlan && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Plan product affects which rules apply and will be recorded on the claim.
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Plan product affects which rules apply and will be recorded on the claim.
-              </p>
-            </div>
+            )}
           </CardContent>
         </Card>
-        {effectivePlanProduct === "HMO" && (
+        {!hideCommercialPlanProduct && effectivePlanProduct === "HMO" && (
           <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg" data-testid="banner-hmo-referral">
             <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
             <p className="text-sm text-blue-700 dark:text-blue-300">
@@ -546,7 +553,7 @@ function isVACode(code: string) {
   return /^(G02|G01|T10|S91)/.test(upper);
 }
 
-function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer, billingLocation, periodStart, periodEnd, rateInputMode }: {
+function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer, billingLocation, periodStart, periodEnd }: {
   line: ServiceLine; index: number;
   onChange: (index: number, updates: Partial<ServiceLine>) => void;
   onRemove: (index: number) => void;
@@ -555,7 +562,6 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
   billingLocation: string | null;
   periodStart?: string;
   periodEnd?: string;
-  rateInputMode?: string;
 }) {
   const [showCodeSearch, setShowCodeSearch] = useState(false);
   const { data: vaLocations = [] } = useQuery<string[]>({
@@ -650,23 +656,36 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
     setShowCodeSearch(false);
   }
 
-  const isPerHour = rateInputMode === "per_hour";
+  const billingMode: 'hours' | 'units' = line.billingMode || 'hours';
+
+  function handleBillingModeToggle(newMode: 'hours' | 'units') {
+    if (newMode === billingMode) return;
+    const interval = line.unitIntervalMinutes || 15;
+    const unitsPerHour = 60 / interval;
+    if (newMode === 'units') {
+      const h = parseFloat(line.hours) || 0;
+      const hr = parseFloat(line.hourlyRate) || 0;
+      const u = h > 0 ? Math.ceil(h * unitsPerHour) : (parseInt(line.units) || 1);
+      const ur = hr > 0 ? hr / unitsPerHour : (parseFloat(line.ratePerUnit) || 0);
+      onChange(index, { billingMode: 'units', units: String(u), ratePerUnit: ur > 0 ? ur.toFixed(4) : line.ratePerUnit });
+    } else {
+      const u = parseInt(line.units) || 0;
+      const ur = parseFloat(line.ratePerUnit) || 0;
+      const h = u > 0 ? u / unitsPerHour : (parseFloat(line.hours) || 0);
+      const hr = ur > 0 ? ur * unitsPerHour : (parseFloat(line.hourlyRate) || 0);
+      onChange(index, { billingMode: 'hours', hours: h > 0 ? String(h) : line.hours, hourlyRate: hr > 0 ? hr.toFixed(2) : line.hourlyRate });
+    }
+  }
 
   function handleHoursChange(hours: string) {
     const h = parseFloat(hours) || 0;
     const interval = line.unitIntervalMinutes || 15;
     const unitsPerHour = 60 / interval;
     const units = h > 0 ? Math.ceil(h * unitsPerHour) : 0;
-    if (isPerHour) {
-      const hourlyRateNum = parseFloat(line.hourlyRate) || 0;
-      const unitRate = unitsPerHour > 0 ? hourlyRateNum / unitsPerHour : 0;
-      const total = units * unitRate;
-      onChange(index, { hours, units: String(units), ratePerUnit: unitRate > 0 ? unitRate.toFixed(4) : "", totalCharge: total > 0 ? total.toFixed(2) : "", chargeOverridden: false });
-    } else {
-      const rate = parseFloat(line.ratePerUnit) || 0;
-      const total = units * rate;
-      onChange(index, { hours, units: String(units), totalCharge: total > 0 ? total.toFixed(2) : "", chargeOverridden: false });
-    }
+    const hourlyRateNum = parseFloat(line.hourlyRate) || 0;
+    const unitRate = unitsPerHour > 0 ? hourlyRateNum / unitsPerHour : 0;
+    const total = units * unitRate;
+    onChange(index, { hours, units: String(units), ratePerUnit: unitRate > 0 ? unitRate.toFixed(4) : "", totalCharge: total > 0 ? total.toFixed(2) : "", chargeOverridden: false });
   }
 
   function handleHourlyRateChange(hourlyRateStr: string) {
@@ -698,23 +717,57 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
     onChange(index, { totalCharge, chargeOverridden: true });
   }
 
-  const isTimeBased = line.unitType === "time_based";
   const unitsNum = parseInt(line.units) || 0;
   const rateNum = parseFloat(line.ratePerUnit) || 0;
   const hoursNum = parseFloat(line.hours) || 0;
   const interval = line.unitIntervalMinutes || 15;
 
+  const isTimeBased = line.unitType === "time_based";
+  const modifierHint = line.code ? getModifierHint(line.code) : null;
+
   return (
-    <Card className="p-4 space-y-3" data-testid={`card-service-line-${index}`}>
-      <div className="flex items-center justify-between">
+    <Card
+      className="p-4 space-y-3"
+      data-testid={`card-service-line-${index}`}
+      onKeyDown={(e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'd') { e.preventDefault(); onClone(index); }
+      }}
+    >
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <h4 className="text-sm font-medium">Service Line {index + 1}</h4>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={() => onClone(index)} data-testid={`button-clone-line-${index}`} title="Clone this line">
-            <Copy className="h-4 w-4 text-muted-foreground" />
-            <span className="text-xs ml-1">Clone</span>
-          </Button>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {isTimeBased && (
+            <div className="flex rounded-md border border-border overflow-hidden text-[11px] leading-none">
+              <button
+                type="button"
+                className={`px-2.5 py-1.5 flex items-center gap-1 transition-colors ${billingMode === 'hours' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
+                onClick={() => handleBillingModeToggle('hours')}
+                data-testid={`toggle-bill-hours-${index}`}
+              >
+                <Clock className="h-3 w-3" /> By Hours
+              </button>
+              <button
+                type="button"
+                className={`px-2.5 py-1.5 flex items-center gap-1 border-l transition-colors ${billingMode === 'units' ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}
+                onClick={() => handleBillingModeToggle('units')}
+                data-testid={`toggle-bill-units-${index}`}
+              >
+                # By Units
+              </button>
+            </div>
+          )}
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="sm" onClick={() => onClone(index)} data-testid={`button-clone-line-${index}`} className="h-7 text-xs gap-1">
+                  <Copy className="h-3.5 w-3.5" /> Clone <kbd className="text-[9px] text-muted-foreground bg-muted px-1 rounded ml-0.5">⌘D</kbd>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Clone this line — copies all fields, clears dates (⌘D / Ctrl+D)</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           {index > 0 && (
-            <Button variant="ghost" size="sm" onClick={() => onRemove(index)} data-testid={`button-remove-line-${index}`}>
+            <Button variant="ghost" size="sm" onClick={() => onRemove(index)} data-testid={`button-remove-line-${index}`} className="h-7 w-7 p-0">
               <Trash2 className="h-4 w-4 text-destructive" />
             </Button>
           )}
@@ -730,6 +783,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
             min={periodStart || undefined}
             max={periodEnd || new Date().toISOString().split("T")[0]}
             onChange={(e) => onChange(index, { serviceDateFrom: e.target.value })}
+            onBlur={(e) => { if (e.target.value && !line.serviceDateTo) onChange(index, { serviceDateTo: e.target.value }); }}
             className="h-7 text-xs w-36"
             data-testid={`input-line-date-from-${index}`}
           />
@@ -827,9 +881,12 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
             className="font-mono"
             data-testid={`input-line-modifier-${index}`}
           />
+          {modifierHint && (
+            <p className="text-[10px] text-blue-600 dark:text-blue-400 leading-snug" data-testid={`hint-modifier-${index}`}>{modifierHint}</p>
+          )}
         </div>
         <div className="space-y-1.5">
-          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd… L=11th secondary">ICD Diagnosis Pointer <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> <span className="text-xs text-muted-foreground">(A–L)</span></Label>
+          <Label title="Enter diagnosis pointer letters: A=primary, B=1st secondary, C=2nd… L=11th secondary">Dx Pointer <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
           <Input
             value={line.diagnosisPointers}
             onChange={(e) => onChange(index, { diagnosisPointers: e.target.value.toUpperCase().replace(/[^A-L]/g, "") })}
@@ -838,6 +895,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
             className="font-mono w-24"
             data-testid={`input-line-dx-pointers-${index}`}
           />
+          <p className="text-[10px] text-muted-foreground leading-snug">A = 1st ICD-10 below · B = 2nd · etc.</p>
         </div>
       </div>
 
@@ -846,54 +904,77 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
           {isTimeBased ? (
             <>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Service hours <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-                  <Input
-                    type="number"
-                    step="0.25"
-                    min="0"
-                    value={line.hours}
-                    onChange={(e) => handleHoursChange(e.target.value)}
-                    placeholder="e.g. 4.0"
-                    data-testid={`input-line-hours-${index}`}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-muted-foreground">Units ({interval} min each)</Label>
-                  <Input value={line.units} readOnly className="bg-muted" data-testid={`input-line-units-${index}`} />
-                </div>
-                {isPerHour ? (
-                  <div className="space-y-1.5">
-                    <Label>Hourly Rate ($/hr) <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-                    <div className="relative">
-                      <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                {billingMode === 'hours' ? (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label>Service hours <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
                       <Input
                         type="number"
-                        step="0.01"
-                        value={line.hourlyRate}
-                        onChange={(e) => handleHourlyRateChange(e.target.value)}
-                        placeholder="e.g. 57.00"
-                        className="pl-7"
-                        data-testid={`input-line-hourly-rate-${index}`}
+                        step="0.25"
+                        min="0"
+                        value={line.hours}
+                        onChange={(e) => handleHoursChange(e.target.value)}
+                        placeholder="e.g. 4.0"
+                        data-testid={`input-line-hours-${index}`}
                       />
                     </div>
-                  </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-muted-foreground">Units <span className="text-[10px]">(auto · {interval} min)</span></Label>
+                      <Input value={line.units} readOnly className="bg-muted" data-testid={`input-line-units-${index}`} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Hourly Rate ($/hr) <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={line.hourlyRate}
+                          onChange={(e) => handleHourlyRateChange(e.target.value)}
+                          placeholder="e.g. 57.00"
+                          className="pl-7"
+                          data-testid={`input-line-hourly-rate-${index}`}
+                        />
+                      </div>
+                    </div>
+                  </>
                 ) : (
-                  <div className="space-y-1.5">
-                    <Label>Rate / unit <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> {line.vaRate ? <span className="text-green-600 text-xs ml-1">Rate from VA fee schedule</span> : <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
-                    <div className="relative">
-                      <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <>
+                    <div className="space-y-1.5">
+                      <Label>Units <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
                       <Input
                         type="number"
-                        step="0.01"
-                        value={line.ratePerUnit}
-                        onChange={(e) => handleRateChange(e.target.value)}
-                        placeholder={line.vaRate ? "" : "Rate not on file"}
-                        className="pl-7"
-                        data-testid={`input-line-rate-${index}`}
+                        min="1"
+                        value={line.units}
+                        onChange={(e) => handleUnitsChange(e.target.value)}
+                        data-testid={`input-line-units-${index}`}
                       />
                     </div>
-                  </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-muted-foreground">Hours <span className="text-[10px]">(auto)</span></Label>
+                      <Input
+                        value={unitsNum > 0 ? (unitsNum / (60 / interval)).toFixed(2) : (line.hours || "")}
+                        readOnly
+                        className="bg-muted"
+                        data-testid={`input-line-hours-${index}`}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Rate / unit <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> {line.vaRate ? <span className="text-green-600 text-xs ml-1">VA schedule</span> : <span className="text-amber-600 text-xs">(enter manually)</span>}</Label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={line.ratePerUnit}
+                          onChange={(e) => handleRateChange(e.target.value)}
+                          placeholder={line.vaRate ? "" : "Rate not on file"}
+                          className="pl-7"
+                          data-testid={`input-line-rate-${index}`}
+                        />
+                      </div>
+                    </div>
+                  </>
                 )}
                 <div className="space-y-1.5">
                   <Label>Total charge <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span> {line.chargeOverridden && <Badge variant="outline" className="text-xs ml-1">Overridden</Badge>}</Label>
@@ -910,13 +991,12 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
                   </div>
                 </div>
               </div>
-              {hoursNum > 0 && unitsNum > 0 && (
+              {unitsNum > 0 && rateNum > 0 && (
                 <p className="text-sm text-muted-foreground bg-muted/50 rounded p-2 font-mono" data-testid={`text-calc-${index}`}>
-                  {isPerHour && parseFloat(line.hourlyRate) > 0 ? (
-                    `$${parseFloat(line.hourlyRate).toFixed(2)}/hr ÷ ${60 / interval} units/hr = $${rateNum.toFixed(4)}/unit · ${hoursNum} hrs × ${60 / interval} = ${unitsNum} units · ${unitsNum} × $${rateNum.toFixed(4)} = $${(unitsNum * rateNum).toFixed(2)}`
-                  ) : rateNum > 0 ? (
-                    `${hoursNum} hrs × ${60 / interval} units/hr = ${unitsNum} units × $${rateNum.toFixed(2)} = $${(unitsNum * rateNum).toFixed(2)}`
-                  ) : null}
+                  {billingMode === 'hours' && parseFloat(line.hourlyRate) > 0
+                    ? `$${parseFloat(line.hourlyRate).toFixed(2)}/hr ÷ ${60 / interval} = $${rateNum.toFixed(4)}/unit · ${unitsNum} units × $${rateNum.toFixed(4)} = $${(unitsNum * rateNum).toFixed(2)}`
+                    : `${unitsNum} units × $${rateNum.toFixed(4)} = $${(unitsNum * rateNum).toFixed(2)}`
+                  }
                 </p>
               )}
             </>
@@ -956,6 +1036,116 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
         </div>
       )}
     </Card>
+  );
+}
+
+function BulkAddModal({ open, onClose, onAdd, defaultDate, defaultCode }: {
+  open: boolean;
+  onClose: () => void;
+  onAdd: (lines: ServiceLine[]) => void;
+  defaultDate?: string;
+  defaultCode?: string;
+}) {
+  const [dateFrom, setDateFrom] = useState(defaultDate || "");
+  const [dateTo, setDateTo] = useState(defaultDate || "");
+  const [hoursPerDay, setHoursPerDay] = useState("4");
+  const [code, setCode] = useState(defaultCode || "G0156");
+  const [excludeWeekends, setExcludeWeekends] = useState(true);
+
+  function generateLines(): ServiceLine[] {
+    if (!dateFrom || !dateTo || !code) return [];
+    const start = new Date(dateFrom + "T12:00:00");
+    const end = new Date(dateTo + "T12:00:00");
+    if (end < start) return [];
+    const lines: ServiceLine[] = [];
+    const current = new Date(start);
+    while (current <= end) {
+      const dow = current.getDay();
+      if (!excludeWeekends || (dow !== 0 && dow !== 6)) {
+        const dateStr = current.toISOString().split("T")[0];
+        const h = parseFloat(hoursPerDay) || 0;
+        const units = Math.ceil(h * 4);
+        lines.push({
+          ...emptyLine(dateStr),
+          code: code.toUpperCase(),
+          description: code.toUpperCase() === "G0156" ? "Home health aide services (per 15 min)" : "",
+          unitType: "time_based",
+          unitIntervalMinutes: 15,
+          hours: String(h),
+          units: String(units),
+          billingMode: "hours",
+          diagnosisPointers: "A",
+          serviceDateFrom: dateStr,
+          serviceDateTo: dateStr,
+        });
+      }
+      current.setDate(current.getDate() + 1);
+    }
+    return lines;
+  }
+
+  const preview = generateLines();
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md" data-testid="dialog-bulk-add">
+        <DialogHeader>
+          <DialogTitle>Add Multiple Service Lines</DialogTitle>
+          <DialogDescription>Generate one line per service day in a date range.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>From Date</Label>
+              <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} data-testid="input-bulk-date-from" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>To Date</Label>
+              <Input type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setDateTo(e.target.value)} data-testid="input-bulk-date-to" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>HCPCS Code</Label>
+              <Input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="G0156" className="font-mono" data-testid="input-bulk-code" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Hours / Day</Label>
+              <Input type="number" step="0.25" min="0.25" max="24" value={hoursPerDay} onChange={(e) => setHoursPerDay(e.target.value)} data-testid="input-bulk-hours" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox checked={excludeWeekends} onCheckedChange={(v) => setExcludeWeekends(!!v)} id="bulk-excl-wknd" data-testid="checkbox-bulk-exclude-weekends" />
+            <label htmlFor="bulk-excl-wknd" className="text-sm cursor-pointer select-none">Exclude weekends</label>
+          </div>
+          {preview.length > 0 && (
+            <div className="border rounded-md p-3 bg-muted/30 max-h-36 overflow-y-auto space-y-1">
+              <p className="text-xs font-medium text-muted-foreground mb-2">{preview.length} line{preview.length !== 1 ? "s" : ""} will be added:</p>
+              {preview.slice(0, 10).map((l, i) => (
+                <div key={i} className="flex items-center justify-between text-xs">
+                  <span className="font-mono">{l.serviceDateFrom}</span>
+                  <span className="text-muted-foreground">{l.code} · {l.hours} hrs → {l.units} units</span>
+                </div>
+              ))}
+              {preview.length > 10 && <p className="text-xs text-muted-foreground">…and {preview.length - 10} more</p>}
+            </div>
+          )}
+          {dateFrom && dateTo && preview.length === 0 && (
+            <p className="text-sm text-muted-foreground">No service days in range. Check dates or weekend exclusion.</p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} data-testid="button-bulk-cancel">Cancel</Button>
+          <Button
+            onClick={() => { if (preview.length > 0) { onAdd(preview); onClose(); } }}
+            disabled={preview.length === 0}
+            data-testid="button-bulk-add"
+          >
+            Add {preview.length > 0 ? `${preview.length} Line${preview.length !== 1 ? "s" : ""}` : "Lines"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1127,6 +1317,11 @@ export default function ClaimWizard() {
   const [cms1500Loading, setCms1500Loading] = useState(false);
   const [cms1500Done, setCms1500Done] = useState(false);
   const [step2Errors, setStep2Errors] = useState<Record<string, string>>({});
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
+  const autoSaveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const vaDefaultsAppliedRef = useRef(false);
 
   const { data: wizardData } = useQuery<any>({
     queryKey: ["/api/billing/claims/wizard-data"],
@@ -1378,6 +1573,45 @@ export default function ClaimWizard() {
     }, 500);
     return () => { if (preflightTimerRef.current) clearTimeout(preflightTimerRef.current); };
   }, [step, serviceDate, icd10Primary, icd10Secondary, serviceLines, patient, claimId, placeOfService, payers]);
+
+  // ── Step 3: VA CCN auto-defaults ─────────────────────────────────────────
+  useEffect(() => {
+    if (!isVAPayer || resumeClaimId || vaDefaultsAppliedRef.current) return;
+    vaDefaultsAppliedRef.current = true;
+    setPlaceOfService("12");
+    setServiceLines((prev) => {
+      if (prev.length > 0 && !prev[0].code) {
+        return prev.map((l, i) =>
+          i === 0
+            ? { ...l, code: "G0156", description: "Home health aide services (per 15 min)", unitType: "time_based", unitIntervalMinutes: 15, diagnosisPointers: "A", billingMode: "hours" as const }
+            : l
+        );
+      }
+      return prev;
+    });
+  }, [isVAPayer, resumeClaimId]);
+
+  // Reset VA defaults guard when patient changes
+  useEffect(() => { vaDefaultsAppliedRef.current = false; }, [patient?.id]);
+
+  // ── Step 9: isDirty tracking + auto-save ─────────────────────────────────
+  useEffect(() => { setIsDirty(true); }, [serviceLines, serviceDate, providerId, placeOfService, icd10Primary, icd10Secondary, authNumber, statementPeriodEnd]);
+
+  useEffect(() => {
+    if (autoSaveIntervalRef.current) clearInterval(autoSaveIntervalRef.current);
+    if (step !== 1 || !claimId) return;
+    autoSaveIntervalRef.current = setInterval(async () => {
+      if (!isDirty) return;
+      try {
+        const payload = buildClaimPayload();
+        payload.status = "draft" as any;
+        await apiRequest("PATCH", `/api/billing/claims/${claimId}`, payload);
+        setLastSavedAt(new Date());
+        setIsDirty(false);
+      } catch { /* silent */ }
+    }, 10000);
+    return () => { if (autoSaveIntervalRef.current) clearInterval(autoSaveIntervalRef.current); };
+  }, [step, claimId, isDirty]);
 
   const draftMutation = useMutation({
     mutationFn: async (patientId: string) => {
@@ -1648,6 +1882,8 @@ export default function ClaimWizard() {
         await apiRequest("PATCH", `/api/billing/patients/${patient.id}`, { authorizationNumber: authNumber });
       }
       queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patient?.id] });
+      setLastSavedAt(new Date());
+      setIsDirty(false);
       toast({ title: "Draft saved successfully" });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -1736,7 +1972,7 @@ export default function ClaimWizard() {
               <CardTitle className="flex items-center gap-2"><User className="h-5 w-5" /> Select Patient</CardTitle>
             </CardHeader>
             <CardContent>
-              <PatientSearch onSelect={handlePatientSelect} selectedPatient={patient} />
+              <PatientSearch onSelect={handlePatientSelect} selectedPatient={patient} hideCommercialPlanProduct={isVAPayer} />
             </CardContent>
           </Card>
 
@@ -1858,13 +2094,21 @@ export default function ClaimWizard() {
       {step === 1 && (
         <div className="space-y-4">
           {patient && (
-            <div className="flex items-center gap-2 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-100 dark:border-blue-900" data-testid="banner-step2-patient">
-              <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">
-                Creating claim for: {patient.first_name} {patient.last_name}
-              </span>
-              {patient.insurance_carrier && (
-                <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">
-                  {patient.insurance_carrier}
+            <div className="flex items-center justify-between gap-2 p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-100 dark:border-blue-900 flex-wrap" data-testid="banner-step2-patient">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-blue-700 dark:text-blue-300 font-medium">
+                  Creating claim for: {patient.first_name} {patient.last_name}
+                </span>
+                {patient.insurance_carrier && (
+                  <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">
+                    {patient.insurance_carrier}
+                  </span>
+                )}
+              </div>
+              {lastSavedAt && (
+                <span className="text-xs text-green-700 dark:text-green-400 flex items-center gap-1 shrink-0" data-testid="text-autosave-indicator">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </span>
               )}
             </div>
@@ -1976,9 +2220,14 @@ export default function ClaimWizard() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 Service Lines
-                <Button variant="outline" size="sm" onClick={addServiceLine} disabled={serviceLines.length >= 30} data-testid="button-add-line">
-                  <Plus className="h-4 w-4 mr-1" /> Add Line
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setShowBulkModal(true)} data-testid="button-add-multiple-lines">
+                    <CalendarDays className="h-4 w-4 mr-1" /> Add Multiple Lines
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={addServiceLine} disabled={serviceLines.length >= 30} data-testid="button-add-line">
+                    <Plus className="h-4 w-4 mr-1" /> Add Line
+                  </Button>
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1995,7 +2244,6 @@ export default function ClaimWizard() {
                   billingLocation={wizardData?.practiceSettings?.default_va_locality || wizardData?.practiceSettings?.billing_location || null}
                   periodStart={serviceDate || undefined}
                   periodEnd={statementPeriodEnd || undefined}
-                  rateInputMode={matchedPayer?.rate_input_mode || "per_unit"}
                 />
               ))}
               <Separator />
@@ -3140,6 +3388,21 @@ export default function ClaimWizard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Step 7: Bulk service line modal */}
+      <BulkAddModal
+        open={showBulkModal}
+        onClose={() => setShowBulkModal(false)}
+        defaultDate={serviceDate}
+        defaultCode={isVAPayer ? "G0156" : undefined}
+        onAdd={(lines) => {
+          setServiceLines((prev) => {
+            const withoutEmpty = prev.filter((l) => l.code);
+            return [...withoutEmpty, ...lines].slice(0, 30);
+          });
+          toast({ title: `${lines.length} service line${lines.length !== 1 ? "s" : ""} added` });
+        }}
+      />
     </div>
   );
 }

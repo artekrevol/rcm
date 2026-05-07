@@ -2,7 +2,7 @@ import { BillingSidebar } from "@/components/billing-sidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
-import { Plus, UserCheck, X } from "lucide-react";
+import { Plus, UserCheck, X, FlaskConical } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -12,6 +12,24 @@ const style = {
   "--sidebar-width": "16rem",
   "--sidebar-width-icon": "3.5rem",
 };
+
+function EnvironmentBanner() {
+  const env = (import.meta as any).env;
+  const appEnv = env?.VITE_APP_ENV || env?.MODE || "production";
+  if (appEnv === "production") return null;
+  const isStaging = appEnv === "staging";
+  return (
+    <div
+      className={`flex items-center justify-center gap-2 px-4 py-1.5 text-xs font-semibold ${isStaging ? "bg-blue-600 text-white" : "bg-amber-500 text-white"}`}
+      data-testid="banner-environment"
+    >
+      <FlaskConical className="h-3.5 w-3.5 flex-shrink-0" />
+      <span>
+        {isStaging ? "STAGING ENVIRONMENT" : "DEVELOPMENT"} — Claims submitted here do not reach live payers
+      </span>
+    </div>
+  );
+}
 
 function ImpersonationBanner() {
   const { user } = useAuth();
@@ -62,6 +80,7 @@ export function BillingLayout({ children }: { children: React.ReactNode }) {
       <div className="flex h-screen w-full">
         <BillingSidebar />
         <div className="flex flex-col flex-1 min-w-0">
+          <EnvironmentBanner />
           <ImpersonationBanner />
           <header className="flex items-center justify-between gap-4 p-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
             <div className="flex items-center gap-3">
