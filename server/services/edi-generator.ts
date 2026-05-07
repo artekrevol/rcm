@@ -381,6 +381,17 @@ function validateForPGBA(input: EDI837PInput): void {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Typed segment helpers — every X12 segment emitted by this generator is
+// built via these helpers so element positions are enforced structurally.
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  ISA, GS, ST, BHT,
+  NM1, PER, HL, PRV, N3, N4, DMG, SBR,
+  REF, CLM, HI, NTE, DTP, LX, SV1,
+  SE, GE, IEA,
+} from './edi/segments';
+
 export function generate837P(input: EDI837PInput): string {
   const { claim, patient, practice, provider, ordering_provider, payer } = input;
   const freqCode = claim.claim_frequency_code || "1";
@@ -460,58 +471,96 @@ export function generate837P(input: EDI837PInput): string {
   //   Stedi's enrollment routing handles PGBA VA CCN relay internally.
   //   NPI in ISA06 is what Stedi expects per the validated Chajinel submission path.
   //   Per PGBA 837P CG v1.0 (March 2021), Table 2: ISA05=ZZ.
-  segments.push(
-    `ISA*03*          *00*          *ZZ*${practice.npi.padEnd(15)}*30*${isaReceiverId.padEnd(15)}*${date.slice(2)}*${time}*^*00501*${controlNumber}*0*${isa15}*:`
-  );
+  segments.push(ISA({
+    senderId: practice.npi,
+    receiverId: isaReceiverId,
+    date: date.slice(2),
+    time,
+    controlNumber,
+    usageIndicator: isa15,
+  }));
 
   // ── GS — Functional Group Header ───────────────────────────────────────────
   // GS03 must match ISA08 per PGBA 837P CG v1.0, Table 3.
   // GS02: application sender's code = practice NPI (same as ISA06).
-  segments.push(
-    `GS*HC*${practice.npi}*${gsReceiverId}*${date}*${time}*1*X*005010X222A1`
-  );
+  segments.push(GS({
+    functionalIdCode: 'HC',
+    applicationSenderId: practice.npi,
+    applicationReceiverId: gsReceiverId,
+    date,
+    time,
+    groupControlNumber: '1',
+  }));
 
-  segments.push(`ST*837*0001*005010X222A1`);
+  segments.push(ST({
+    transactionSetId: '837',
+    controlNumber: '0001',
+    implementationConvention: '005010X222A1',
+  }));
 
   // BHT06 = "CH" (chargeable) — required for all non-subrogation claims.
   // Per PGBA 837P CG v1.0, Table 6, page 15: BHT02="00" (original), BHT06="CH".
-  segments.push(`BHT*0019*00*${claimControlNumber}*${date}*${time}*CH`);
+  segments.push(BHT({
+    structureCode: '0019',
+    purposeCode: '00',
+    referenceId: claimControlNumber,
+    date,
+    time,
+    transactionType: 'CH',
+  }));
 
   // ── Loop 1000A: Submitter ─────────────────────────────────────────────────
   // NM1*41: NM108 = "46" (ETIN). NM109 = practice NPI.
   // Stedi routes to PGBA internally; NPI is what Stedi's enrollment expects here.
   // Per PGBA 837P CG v1.0, Table 6, page 15.
-  segments.push(
-    `NM1*41*2*${practice.name}*****${NM1_QUALIFIER["41"]}*${practice.npi}`
-  );
+  segments.push(NM1({
+    entityIdCode: '41',
+    entityTypeQualifier: '2',
+    lastOrOrgName: practice.name,
+    idQualifier: NM1_QUALIFIER["41"],
+    idCode: practice.npi,
+  }));
   const billingPhone = (practice.phone || "0000000000").replace(/\D/g, "");
-  segments.push(`PER*IC*Billing Contact*TE*${billingPhone}`);
+  segments.push(PER({
+    contactFunctionCode: 'IC',
+    name: 'Billing Contact',
+    commQualifier1: 'TE',
+    commNumber1: billingPhone,
+  }));
 
   // ── Loop 1000B: Receiver ─────────────────────────────────────────────────
   // NM1*40: NM108 = "46" (ETIN).
   // Per PGBA 837P CG v1.0, Table 6, page 15:
   //   NM103 = "PGBA VA CCN", NM108 = "46", NM109 = region-specific tax ID.
-  segments.push(
-    `NM1*40*2*${loop1000bName}*****${loop1000bQual}*${loop1000bId}`
-  );
+  segments.push(NM1({
+    entityIdCode: '40',
+    entityTypeQualifier: '2',
+    lastOrOrgName: loop1000bName,
+    idQualifier: loop1000bQual,
+    idCode: loop1000bId,
+  }));
 
   // ── Loop 2000A: Billing Provider HL ─────────────────────────────────────
-  segments.push(`HL*1**20*1`);
-  segments.push(`PRV*BI*PXC*${practice.taxonomy_code}`);
+  segments.push(HL({ idNumber: '1', levelCode: '20', childCode: '1' }));
+  segments.push(PRV({ providerCode: 'BI', referenceIdQualifier: 'PXC', referenceId: practice.taxonomy_code }));
 
   // ── Loop 2010AA: Billing Provider ────────────────────────────────────────
   // NM108 = "XX" (NPI) per NM1_QUALIFIER["85"]; NM109 = agency NPI.
   // Billing provider is always an organization (practice) → NM102 = 2.
   // REF*EI: federal tax ID.
-  segments.push(
-    `NM1*85*2*${practice.name}*****${NM1_QUALIFIER["85"]}*${practice.npi}`
-  );
-  segments.push(`N3*${street}`);
-  segments.push(`N4*${city}*${state}*${zip}`);
-  segments.push(`REF*EI*${practice.tax_id.replace("-", "")}`);
+  segments.push(NM1({
+    entityIdCode: '85',
+    entityTypeQualifier: '2',
+    lastOrOrgName: practice.name,
+    idQualifier: NM1_QUALIFIER["85"],
+    idCode: practice.npi,
+  }));
+  segments.push(N3({ addressLine1: street }));
+  segments.push(N4({ city, stateCode: state, postalCode: zip }));
+  segments.push(REF({ qualifier: 'EI', id: practice.tax_id.replace("-", "") }));
 
   // ── Loop 2000B: Subscriber HL ────────────────────────────────────────────
-  segments.push(`HL*2*1*22*0`);
+  segments.push(HL({ idNumber: '2', parentIdNumber: '1', levelCode: '22', childCode: '0' }));
 
   // SBR09: X12 5010 claim filing indicator. "CI" (Commercial Insurance) is the
   // explicit X12 spec default when a payer has no specific indicator configured.
@@ -519,7 +568,11 @@ export function generate837P(input: EDI837PInput): string {
   const filingIndicator = payer.claim_filing_indicator && payer.claim_filing_indicator.trim()
     ? payer.claim_filing_indicator.trim()
     : "CI";
-  segments.push(`SBR*P*18*******${filingIndicator}`);
+  segments.push(SBR({
+    payerResponsibilityCode: 'P',
+    relationshipCode: '18',
+    claimFilingIndicatorCode: filingIndicator,
+  }));
 
   // ── Loop 2010BA: Subscriber (Insured/Patient) ─────────────────────────────
   // NM108/NM109: Patient identifier qualifier and value.
@@ -530,26 +583,38 @@ export function generate837P(input: EDI837PInput): string {
     ? resolveVeteranId(patient)
     : { qualifier: payer.member_id_qualifier || "MI", id: patient.member_id };
 
-  const patientMiddleInitial = patient.middle_name ? patient.middle_name[0].toUpperCase() + "." : "";
-  segments.push(
-    `NM1*IL*1*${patient.last_name}*${patient.first_name}*${patientMiddleInitial}***${patientIdQual}*${patientIdVal}`
-  );
+  // NM105: Full middle name (verbatim from patient record, max 25 chars per X12).
+  // Both first initial+period and full middle name are valid X12; full name is
+  // preferred because it matches source documents and avoids abbreviation loss.
+  const patientMiddleName = patient.middle_name || undefined;
+
+  segments.push(NM1({
+    entityIdCode: 'IL',
+    entityTypeQualifier: '1',
+    lastOrOrgName: patient.last_name,
+    firstName: patient.first_name,
+    middleName: patientMiddleName,
+    idQualifier: patientIdQual,
+    idCode: patientIdVal,
+  }));
   const patientAddr = patient.address || street;
   const patientCity = patient.city || city;
   const patientState = patient.state || state;
   const patientZip = patient.zip || zip;
-  segments.push(`N3*${patientAddr}`);
-  segments.push(`N4*${patientCity}*${patientState}*${patientZip}`);
-  segments.push(
-    `DMG*D8*${formatDate8(patient.dob)}*${mapSex(patient.sex)}`
-  );
+  segments.push(N3({ addressLine1: patientAddr }));
+  segments.push(N4({ city: patientCity, stateCode: patientState, postalCode: patientZip }));
+  segments.push(DMG({ dob: formatDate8(patient.dob), genderCode: mapSex(patient.sex) }));
 
   // ── Loop 2010BB: Payer ────────────────────────────────────────────────────
   // NM1*PR: NM108 = "PI" per NM1_QUALIFIER["PR"].
   // PGBA: NM103 = "PGBA VACCN", NM108 = "PI", NM109 = "TWVACCN".
-  segments.push(
-    `NM1*PR*2*${loop2010bbName}*****${loop2010bbQual}*${loop2010bbId}`
-  );
+  segments.push(NM1({
+    entityIdCode: 'PR',
+    entityTypeQualifier: '2',
+    lastOrOrgName: loop2010bbName,
+    idQualifier: loop2010bbQual,
+    idCode: loop2010bbId,
+  }));
 
   // ── Loop 2300: Claim ─────────────────────────────────────────────────────
   const totalCharge = claim.service_lines.reduce(
@@ -557,10 +622,16 @@ export function generate837P(input: EDI837PInput): string {
     0
   );
   // CLM: CLM01=control#, CLM02=charge, CLM05=POS:B:freq, CLM06=provider sig, CLM07=assignment, CLM08=benefits, CLM09=release
-  segments.push(
+  segments.push(CLM({
+    patientControlNumber: claimControlNumber,
+    totalCharge: totalCharge.toFixed(2),
     // CLM09=Y: "provider has signed statement permitting release" — most payers including VA and Medicare expect Y not I
-  `CLM*${claimControlNumber}*${totalCharge.toFixed(2)}***${claim.place_of_service}:B:${freqCode}*Y*A*Y*Y`
-  );
+    placeOfServiceComposite: `${claim.place_of_service}:B:${freqCode}`,
+    providerSignatureCode: 'Y',
+    assignmentCode: 'A',
+    benefitsAssignmentCode: 'Y',
+    releaseInfoCode: 'Y',
+  }));
 
   // NOTE: 837P (005010X222A1) has NO claim-header billing-period DTP segment.
   // Valid Loop 2300 DTP qualifiers are 050/090/091/096/296/297/304/314/360/361/
@@ -571,33 +642,35 @@ export function generate837P(input: EDI837PInput): string {
 
   // REF*F8: Original claim ICN/TCN for replacement/void claims
   if ((freqCode === "7" || freqCode === "8") && claim.orig_claim_number) {
-    segments.push(`REF*F8*${claim.orig_claim_number}`);
+    segments.push(REF({ qualifier: 'F8', id: claim.orig_claim_number }));
   }
 
   // REF*G1: Prior Authorization number.
   // Qualifier "G1" confirmed via PGBA 837I CG v1.3, page 20 (sample EDI).
   // Per X12 5010, G1 = "Prior Authorization Number". Applies to both 837I and 837P.
   if (claim.auth_number) {
-    segments.push(`REF*G1*${claim.auth_number}`);
+    segments.push(REF({ qualifier: 'G1', id: claim.auth_number }));
   }
 
   // REF*4N: Reason for late filing — omit if empty/none (not a valid X12 qualifier)
   if (claim.delay_reason_code && claim.delay_reason_code !== "none") {
-    segments.push(`REF*4N*${claim.delay_reason_code}`);
+    segments.push(REF({ qualifier: '4N', id: claim.delay_reason_code }));
   }
 
   // NTE: Homebound indicator — only emit when explicitly true, not for "N" string
   if (claim.homebound_indicator === true) {
-    segments.push(`NTE*ADD*PATIENT IS HOMEBOUND`);
+    segments.push(NTE({ noteCode: 'ADD', description: 'PATIENT IS HOMEBOUND' }));
   }
 
   // ── HI: Diagnosis Codes ───────────────────────────────────────────────────
   // 837P allows max 12 ICD-10 codes in a single HI segment; cap to prevent rejection
   const diagCodes = claim.icd10_codes
     .slice(0, 12)
-    .map((code, i) => `${i === 0 ? "ABK" : "ABF"}:${code.replace(/\./g, "")}`)
-    .join("*");
-  segments.push(`HI*${diagCodes}`);
+    .map((code, i) => ({
+      qualifier: i === 0 ? "ABK" : "ABF",
+      code: code.replace(/\./g, ""),
+    }));
+  segments.push(HI(diagCodes));
 
   // ── Loop 2310B: Rendering Provider ────────────────────────────────────────
   // A3 FIX: Omit this loop entirely when the provider has no NPI (agency worker,
@@ -618,20 +691,29 @@ export function generate837P(input: EDI837PInput): string {
         .map((s) => (s || "").trim())
         .filter(Boolean)
         .join(" ");
-      segments.push(
-        `NM1*82*2*${orgName}*****${NM1_QUALIFIER["82"]}*${providerNpi}`
-      );
+      segments.push(NM1({
+        entityIdCode: '82',
+        entityTypeQualifier: '2',
+        lastOrOrgName: orgName,
+        idQualifier: NM1_QUALIFIER["82"],
+        idCode: providerNpi,
+      }));
     } else {
       // NM102 = 1 (individual); NM103 = last name; NM104 = first name.
-      segments.push(
-        `NM1*82*1*${provider.last_name}*${provider.first_name}****${NM1_QUALIFIER["82"]}*${providerNpi}`
-      );
+      segments.push(NM1({
+        entityIdCode: '82',
+        entityTypeQualifier: '1',
+        lastOrOrgName: provider.last_name,
+        firstName: provider.first_name,
+        idQualifier: NM1_QUALIFIER["82"],
+        idCode: providerNpi,
+      }));
     }
     const taxonomyCode = provider.taxonomy_code && provider.taxonomy_code !== "null"
       ? provider.taxonomy_code.trim()
       : null;
     if (taxonomyCode) {
-      segments.push(`PRV*PE*PXC*${taxonomyCode}`);
+      segments.push(PRV({ providerCode: 'PE', referenceIdQualifier: 'PXC', referenceId: taxonomyCode }));
     }
     // Secondary provider ID reference segment.
     // For PGBA claims: REF01 MUST = "G2" per PGBA 837P CG v1.0, Table 5 error code REF.
@@ -639,7 +721,7 @@ export function generate837P(input: EDI837PInput): string {
     // For non-PGBA: REF*1C (State License Number) is the standard qualifier.
     if (provider.license_number) {
       const refQual = pgba ? "G2" : "1C";
-      segments.push(`REF*${refQual}*${provider.license_number}`);
+      segments.push(REF({ qualifier: refQual, id: provider.license_number }));
     }
   }
 
@@ -648,13 +730,18 @@ export function generate837P(input: EDI837PInput): string {
   // Per PGBA 837P CG v1.0, Table 5 error code S04:
   //   "ORDERING 2420E|REF01 MUST = G2" — REF qualifier must be G2 for PGBA.
   if (ordering_provider && ordering_provider.npi && ordering_provider.npi !== providerNpi) {
-    segments.push(
-      `NM1*DK*1*${ordering_provider.last_name}*${ordering_provider.first_name}****${NM1_QUALIFIER["DK"]}*${ordering_provider.npi}`
-    );
+    segments.push(NM1({
+      entityIdCode: 'DK',
+      entityTypeQualifier: '1',
+      lastOrOrgName: ordering_provider.last_name,
+      firstName: ordering_provider.first_name,
+      idQualifier: NM1_QUALIFIER["DK"],
+      idCode: ordering_provider.npi,
+    }));
     // REF*G2: Ordering provider secondary ID — required for PGBA (error S04).
     // For non-PGBA payers, emit REF*G2 only if secondary_id is explicitly provided.
     if (ordering_provider.secondary_id) {
-      segments.push(`REF*G2*${ordering_provider.secondary_id}`);
+      segments.push(REF({ qualifier: 'G2', id: ordering_provider.secondary_id }));
     } else if (pgba) {
       // PGBA requires G2 — log a warning but do not throw (secondary ID may not be available yet).
       console.warn(
@@ -668,7 +755,7 @@ export function generate837P(input: EDI837PInput): string {
   // ── Loop 2400: Service Lines ──────────────────────────────────────────────
   claim.service_lines.forEach((line, index) => {
     const lineServiceDate = line.service_date || claim.service_date;
-    segments.push(`LX*${index + 1}`);
+    segments.push(LX(index + 1));
     // Build composite procedure identifier - components are ALWAYS colon-separated
     // per X12 spec. Never use * (element separator) inside a composite.
     // X12 modifiers must be exactly 2 characters. Filter out any longer values
@@ -681,28 +768,35 @@ export function generate837P(input: EDI837PInput): string {
     // Handles single chars ("A"→"1"), multi-char composites ("AB"→"1:2"),
     // already-numeric ("1", "1:2"), and colon-separated mixed forms.
     const diagPtr = serializeDiagnosisPointer(line.diagnosis_pointer);
-    segments.push(
-      `SV1*${composite}*${line.charge.toFixed(2)}*UN*${line.units}***${diagPtr}`
-    );
+    segments.push(SV1({
+      procedureComposite: composite,
+      charge: line.charge.toFixed(2),
+      serviceUnits: line.units,
+      diagnosisPointers: diagPtr,
+    }));
     // DTP*472: Date – Service. Use RD8 date range when service_date_to is present
     // (multi-visit lines spanning a range), otherwise D8 for a single date.
     if (line.service_date_to && line.service_date_to !== lineServiceDate) {
-      segments.push(
-        `DTP*472*RD8*${formatDate8(lineServiceDate)}-${formatDate8(line.service_date_to)}`
-      );
+      segments.push(DTP({
+        qualifier: '472',
+        formatQualifier: 'RD8',
+        dateValue: `${formatDate8(lineServiceDate)}-${formatDate8(line.service_date_to)}`,
+      }));
     } else {
-      segments.push(
-        `DTP*472*D8*${formatDate8(lineServiceDate)}`
-      );
+      segments.push(DTP({
+        qualifier: '472',
+        formatQualifier: 'D8',
+        dateValue: formatDate8(lineServiceDate),
+      }));
     }
   });
 
   const segCount = segments.length - 2 + 1;
-  segments.push(`SE*${segCount}*0001`);
+  segments.push(SE({ segmentCount: segCount, controlNumber: '0001' }));
 
-  segments.push(`GE*1*1`);
+  segments.push(GE({ transactionCount: 1, groupControlNumber: '1' }));
 
-  segments.push(`IEA*1*${controlNumber}`);
+  segments.push(IEA({ functionalGroupCount: 1, controlNumber }));
 
-  return segments.join("~\n") + "~";
+  return segments.join("\n");
 }

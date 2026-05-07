@@ -1,0 +1,289 @@
+TASK: Refactor 837P generator to use a typed segment builder — eliminate
+positional-asterisk bugs at the source
+
+CONTEXT
+The current generator emits X12 via raw string concatenation with
+manually-placed asterisks. A single off-by-one produces a structurally
+invalid segment that Stedi rejects — but every unit test still passes,
+because they assert via .includes() substring match.
+
+Recent example: NM1*IL emitted as
+  NM1*IL*1*Mandler*PETER*****MI*1636711604~
+Five asterisks between PETER and MI puts the qualifier at NM109 and the
+ID at NM110. Correct is four (NM105/06/07 empty, NM108=MI, NM109=ID).
+The test `expect(edi).toContain('***MI*')` matches both the broken
+5-asterisk version AND the correct 4-asterisk version, so the bug
+shipped.
+
+ROOT CAUSE
+- String concatenation with hardcoded asterisk counts
+- No segment schema — every emission is a hand-coded format string
+- No structural test coverage — substring matching can't catch
+  positional shifts
+- Empty middle elements aren't programmatically inserted; the developer
+  has to remember "5 asterisks before MI for empty middle name"
+
+This is a class of bug. Asterisk-count fixes are bandaids. The fix is
+to make the bug class unrepresentable.
+
+==== STEP 1: Build the segment utility ====
+
+Create server/services/edi/segment-builder.ts:
+
+  interface SegmentOptions {
+    elementSep?: string;   // default '*'
+    segmentTerm?: string;  // default '~'
+  }
+
+  /**
+   * Build an X12 segment from a segment ID and a sparse element map.
+   *
+   * - Element keys are 1-based positions (NM101, NM102, ... use keys 1, 2, ...)
+   * - Empty/missing elements between populated ones become empty strings
+   * - Trailing empty elements are omitted entirely (X12 standard)
+   * - Values are coerced via String(); null/undefined treated as empty
+   * - Throws if a value contains the element separator or segment
+   *   terminator — caller must escape (or strip) those characters first
+   */
+  export function buildSegment(
+    id: string,
+    elements: Record<number, string | number | null | undefined>,
+    opts?: SegmentOptions
+  ): string
+
+Required behavior, with tests:
+
+  buildSegment('NM1', {
+    1: 'IL', 2: '1', 3: 'Mandler', 4: 'PETER', 5: 'COIT',
+    8: 'MI', 9: '1636711604'
+  })
+  // "NM1*IL*1*Mandler*PETER*COIT***MI*1636711604~"
+
+  buildSegment('NM1', {
+    1: 'IL', 2: '1', 3: 'Mandler', 4: 'PETER',
+    8: 'MI', 9: '1636711604'
+  })
+  // "NM1*IL*1*Mandler*PETER****MI*1636711604~"
+  //   (NM105/06/07 empty, separators preserved before populated NM108)
+
+  buildSegment('SBR', { 1: 'P', 2: '18', 9: 'CH' })
+  // "SBR*P*18*******CH~"
+
+  buildSegment('HL', { 1: '1', 3: '20', 4: '1' })
+  // "HL*1**20*1~"   (NM102 empty BEFORE populated NM103)
+
+  buildSegment('SE', { 1: '82', 2: '0001' })
+  // "SE*82*0001~"
+
+  buildSegment('NM1', { 1: 'IL', 2: '1', 3: 'Mandler', 4: 'PETER' })
+  // "NM1*IL*1*Mandler*PETER~"   (no trailing empties)
+
+Edge case: if a value contains '*' or '~', throw with a descriptive
+error including the segment ID, element position, and offending value
+(truncated to 50 chars). Don't silently strip — that hides bugs.
+
+==== STEP 2: Typed segment helpers ====
+
+Plain buildSegment() solves the structural bug. Typed helpers eliminate
+the "which element index was middle name again?" cognitive load and
+make the generator self-documenting.
+
+Create server/services/edi/segments.ts:
+
+  import { buildSegment } from './segment-builder';
+
+  export const NM1 = (e: {
+    entityIdCode: string;         // 01 - required
+    entityTypeQualifier: '1' | '2'; // 02 - required (1=person, 2=org)
+    lastOrOrgName?: string;        // 03
+    firstName?: string;            // 04
+    middleName?: string;           // 05
+    namePrefix?: string;           // 06
+    nameSuffix?: string;           // 07
+    idQualifier?: string;          // 08
+    idCode?: string;               // 09
+  }) => buildSegment('NM1', {
+    1: e.entityIdCode,
+    2: e.entityTypeQualifier,
+    3: e.lastOrOrgName,
+    4: e.firstName,
+    5: e.middleName,
+    6: e.namePrefix,
+    7: e.nameSuffix,
+    8: e.idQualifier,
+    9: e.idCode,
+  });
+
+  export const SBR = (e: {
+    payerResponsibility: string;   // 01
+    relationship: string;           // 02
+    referenceId?: string;           // 03
+    name?: string;                  // 04
+    insuranceType?: string;         // 05
+    coordinationOfBenefits?: string;// 06
+    coverageType?: string;          // 07
+    employmentStatus?: string;      // 08
+    claimFilingIndicator?: string;  // 09
+  }) => buildSegment('SBR', {
+    1: e.payerResponsibility, 2: e.relationship,
+    3: e.referenceId, 4: e.name, 5: e.insuranceType,
+    6: e.coordinationOfBenefits, 7: e.coverageType,
+    8: e.employmentStatus, 9: e.claimFilingIndicator,
+  });
+
+  // ... and so on for: ISA, GS, ST, BHT, HL, PRV, N3, N4, DMG,
+  // PER, REF, DTP, CLM, HI, LX, SV1, SE, GE, IEA
+
+Every segment used in the generator gets a typed helper. The element
+positions are written ONCE (in the helper) and never again.
+
+==== STEP 3: Migrate generator ====
+
+In server/services/edi-generator.ts, replace EVERY raw-string segment
+emission with a typed helper call. No template literals with asterisks.
+
+Before:
+  edi += `NM1*IL*1*${last}*${first}****${qualifier}*${id}~`;
+
+After:
+  edi += NM1({
+    entityIdCode: 'IL',
+    entityTypeQualifier: '1',
+    lastOrOrgName: last,
+    firstName: first,
+    middleName: middle,
+    idQualifier: qualifier,
+    idCode: id,
+  });
+
+Migrate every segment, top to bottom:
+  ISA → IEA envelope
+  GS → GE envelope
+  ST → SE envelope
+  BHT
+  Loop 1000A: NM1*41 (Submitter), PER
+  Loop 1000B: NM1*40 (Receiver)
+  Loop 2000A: HL*1, PRV*BI
+  Loop 2010AA: NM1*85, N3, N4, REF*EI
+  Loop 2000B: HL*2, SBR
+  Loop 2010BA: NM1*IL, N3, N4, DMG
+  Loop 2010BB: NM1*PR
+  Loop 2300: CLM, DTP, REF*G1, HI
+  Loop 2310B: NM1*82, PRV*PE
+  Loop 2400: LX, SV1, DTP*472 (per service line)
+  Trailers: SE, GE, IEA
+
+Do NOT change segment ORDER, structure, or count. This is a refactor,
+not a feature change.
+
+==== STEP 4: Replace substring tests with structural tests ====
+
+Create server/services/edi/segment-parser.ts:
+
+  export function parseSegment(s: string): {
+    id: string;
+    elements: string[];   // 1-indexed; elements[0] is undefined or unused
+  }
+
+  export function parseEdi(edi: string): ParsedSegment[]
+
+Rewrite server/services/edi-generator.test.ts. Every assertion that
+was `.includes(...)` becomes element-index parsing.
+
+Before:
+  expect(edi).toContain('***MI*1636711604');
+
+After:
+  const segments = parseEdi(edi);
+  const nm1IL = segments.find(s => s.id === 'NM1' && s.elements[1] === 'IL');
+  expect(nm1IL).toBeDefined();
+  expect(nm1IL!.elements[3]).toBe('Mandler');     // NM103 last
+  expect(nm1IL!.elements[4]).toBe('PETER');       // NM104 first
+  expect(nm1IL!.elements[5]).toBe('COIT');        // NM105 middle (full name)
+  expect(nm1IL!.elements[8]).toBe('MI');          // NM108 qualifier
+  expect(nm1IL!.elements[9]).toBe('1636711604');  // NM109 ID
+  expect(nm1IL!.elements.length).toBe(10);        // no extra empty trailing
+
+This catches the asterisk-count bug because elements[8] would be ''
+(empty string) on the buggy 5-asterisk emission, not 'MI'.
+
+Add element-index assertions for every critical field in:
+  NM1*IL, NM1*85, NM1*82, NM1*PR, NM1*41, NM1*40, NM1*DN (when added)
+  SBR (especially SBR09 claim filing indicator)
+  CLM (CLM05 facility code, CLM02 total)
+  REF*G1 (auth number)
+  REF*EI (tax ID)
+  HI (diagnosis position and qualifier)
+  SV1 (service line procedure, charge, units, diagnosis pointer)
+  DTP (every variant: 472*D8, 472*RD8)
+
+==== STEP 5: Middle-name handling ====
+
+The current code emits middle initial + period (e.g., "C." for Coit).
+Change to emit the full middle name as stored in the patient record.
+
+Both are valid X12. Full middle name matches source documents (the VA
+referral shows "PETER COIT MANDLER" — emit "COIT", not "C.") and avoids
+abbreviation logic that can lose info.
+
+Truncate to NM105 max length (25 chars) if needed, but no other
+transformation. Pass through verbatim.
+
+==== VERIFICATION ====
+
+1. Run the new builder/parser unit tests in isolation. All pass.
+
+2. Regenerate EDI for claim 0860e41d-3933-4658-97cc-735f7566679a.
+   Compare segment-by-segment against the prior output:
+   - Segment count identical
+   - Segment order identical
+   - Each segment's element count and values identical
+     EXCEPT: NM1*IL element count and asterisk pattern corrected,
+     and middle name now full ("COIT" not "C.")
+
+3. Parse the regenerated EDI. Assert structurally on NM1*IL:
+   - elements.length === 10  (segment id + 9 elements)
+   - elements[5] === 'COIT'
+   - elements[8] === 'MI'
+   - elements[9] === '1636711604'
+
+4. Run the full test suite. Every test passes — and every test now
+   verifies structure, not substrings.
+
+5. Submit the regenerated EDI to Stedi inspector. The NM1 element-count
+   error class should be absent.
+
+==== OUT OF SCOPE ====
+
+- Do NOT add new segments (Referring Provider Loop 2310A is a separate
+  ticket).
+- Do NOT change the Claim Filing Indicator value (separate ticket).
+- Do NOT introduce a third-party EDI library (e.g., node-edi-x12).
+  The builder should be ~150 lines of plain TypeScript with zero
+  runtime dependencies.
+- Do NOT migrate any non-837P generators if they exist.
+- Do NOT change the resolveVeteranId() function — its qualifier-detection
+  logic stays exactly as-is, it just feeds into the new typed NM1()
+  helper now.
+
+==== COMMIT STRUCTURE ====
+
+Three commits, in this order, each independently reviewable:
+
+  1. feat(edi): add segment builder + parser with unit tests
+     (server/services/edi/segment-builder.ts,
+      server/services/edi/segment-parser.ts,
+      server/services/edi/segments.ts,
+      and their .test.ts files)
+
+  2. refactor(edi): migrate 837P generator to typed segment helpers
+     (server/services/edi-generator.ts only — no logic changes,
+      output should be byte-equivalent except for the asterisk-count
+      correction in NM1*IL and middle-name change from "C." to "COIT")
+
+  3. test(edi): replace substring assertions with structural assertions
+     (server/services/edi-generator.test.ts only)
+
+Reviewers should be able to confirm each commit's intent at a glance.
+Commit 2's diff should be clearly "replace string concat with typed
+builder" with no behavior changes — anything else means scope creep.
