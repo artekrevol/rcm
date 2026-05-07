@@ -132,8 +132,12 @@ it("DTP*434 never appears in output even with a statement period (home health)",
   );
 });
 
-// ── Case 3: DTP*472*RD8 appears immediately after CLM when statement period set ─
-it("DTP*472*RD8 appears immediately after CLM segment when statement period is provided", () => {
+// ── Case 3: NO DTP segment between CLM and first LX (Loop 2300 is DTP-free) ──
+// 837P (005010X222A1) has no billing-period DTP in Loop 2300. Valid Loop 2300
+// DTP qualifiers (050/090/091/096/296/297/304/314/360/361/431/435/439/444/
+// 453/454/455/471/484) do not include 472 or 434. The statement_period_start /
+// statement_period_end values are stored internally but must NOT appear in EDI.
+it("NO DTP segment appears between CLM and first LX (Loop 2300 must be DTP-free)", () => {
   const input = baseInput({
     statement_period_start: "2026-04-01",
     statement_period_end: "2026-04-30",
@@ -141,15 +145,15 @@ it("DTP*472*RD8 appears immediately after CLM segment when statement period is p
   const edi = generate837P(input);
   const segs = segments(edi);
   const clmIdx = segs.findIndex((s) => s.startsWith("CLM*"));
+  const lxIdx = segs.findIndex((s) => s.startsWith("LX*"));
   assert(clmIdx !== -1, "CLM segment not found in output");
-  const nextSeg = segs[clmIdx + 1];
+  assert(lxIdx !== -1, "LX segment not found in output");
+  const between = segs.slice(clmIdx + 1, lxIdx);
+  const dtpInLoop2300 = between.filter((s) => s.startsWith("DTP*"));
   assert(
-    nextSeg?.startsWith("DTP*472*RD8*"),
-    `Expected DTP*472*RD8* immediately after CLM, got: ${nextSeg}`
-  );
-  assert(
-    nextSeg === "DTP*472*RD8*20260401-20260430",
-    `Wrong date range in Loop 2300 DTP: expected DTP*472*RD8*20260401-20260430, got: ${nextSeg}`
+    dtpInLoop2300.length === 0,
+    `Found ${dtpInLoop2300.length} DTP segment(s) between CLM and LX — must be zero.\n` +
+      `Offending: ${JSON.stringify(dtpInLoop2300)}`
   );
 });
 
