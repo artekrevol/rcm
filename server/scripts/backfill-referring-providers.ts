@@ -18,6 +18,7 @@
  *   --org-id    Limit to a specific organization UUID
  */
 
+import { randomUUID } from "crypto";
 import { pool } from "../db";
 import { validateNPI } from "../../shared/npi-validation";
 import { writeFileSync } from "fs";
@@ -33,7 +34,7 @@ function csvRow(cells: (string | null | undefined)[]): string {
 
 interface PaRow {
   id: string;
-  tenant_id: string;
+  organization_id: string;
   referring_provider_name: string | null;
   referring_provider_npi: string | null;
 }
@@ -57,20 +58,20 @@ interface PendingEntry {
 async function main() {
   console.log(`[backfill] Starting${isDryRun ? " (DRY RUN)" : ""}${targetOrgId ? ` for org ${targetOrgId}` : " for all orgs"}`);
 
-  const orgFilter = targetOrgId ? `AND pa.tenant_id = '${targetOrgId}'` : "";
+  const orgFilter = targetOrgId ? `AND pa.organization_id = '${targetOrgId}'` : "";
 
   // Collect prior_auth rows with free-text referring provider data
   const { rows: paRows } = await pool.query<PaRow>(`
     SELECT
       pa.id,
-      pa.tenant_id,
+      pa.organization_id,
       pa.referring_provider_name,
       pa.referring_provider_npi
     FROM prior_authorizations pa
     WHERE (pa.referring_provider_name IS NOT NULL OR pa.referring_provider_npi IS NOT NULL)
       AND pa.referring_provider_id IS NULL
       ${orgFilter}
-    ORDER BY pa.tenant_id, pa.created_at
+    ORDER BY pa.organization_id, pa.submitted_at
   `);
 
   console.log(`[backfill] Found ${paRows.length} prior_auth rows with free-text referring provider data`);
@@ -78,14 +79,14 @@ async function main() {
   const resolved: ResolvedEntry[] = [];
   const pending: PendingEntry[] = [];
 
-  // Deduplicate by (tenant_id, npi or name)
+  // Deduplicate by (organization_id, npi or name)
   const processedKeys = new Set<string>();
-  const rpIdCache = new Map<string, string>(); // cache: `${tenant_id}:${npi}` → rp.id
+  const rpIdCache = new Map<string, string>(); // cache: `${org_id}:${npi_or_name}` → rp.id
 
   for (const pa of paRows) {
     const rawName = (pa.referring_provider_name || "").trim();
     const rawNpi = (pa.referring_provider_npi || "").replace(/\D/g, "").trim();
-    const dedupeKey = `${pa.tenant_id}:${rawNpi || rawName}`;
+    const dedupeKey = `${pa.organization_id}:${rawNpi || rawName}`;
 
     // Try to link to already-processed RP
     if (rpIdCache.has(dedupeKey)) {
@@ -101,15 +102,15 @@ async function main() {
     if (processedKeys.has(dedupeKey)) continue;
     processedKeys.add(dedupeKey);
 
-    // Check if an RP already exists for this tenant+NPI
+    // Check if an RP already exists for this org+NPI (idempotent)
     if (rawNpi) {
       const { rows: existing } = await pool.query(
         `SELECT id FROM referring_providers WHERE tenant_id = $1 AND npi = $2 LIMIT 1`,
-        [pa.tenant_id, rawNpi]
+        [pa.organization_id, rawNpi]
       );
       if (existing.length) {
         rpIdCache.set(dedupeKey, existing[0].id);
-        resolved.push({ org_id: pa.tenant_id, pa_id: pa.id, name: rawName, npi: rawNpi, rp_id: existing[0].id });
+        resolved.push({ org_id: pa.organization_id, pa_id: pa.id, name: rawName, npi: rawNpi, rp_id: existing[0].id });
         if (!isDryRun) {
           await pool.query(`UPDATE prior_authorizations SET referring_provider_id = $1 WHERE id = $2`, [existing[0].id, pa.id]).catch(() => {});
         }
@@ -124,32 +125,32 @@ async function main() {
     const lastName = nameParts.length >= 2 ? nameParts.slice(1).join(" ") : (rawName || "Provider");
 
     if (isValidNpi) {
-      const newId = crypto.randomUUID();
+      const newId = randomUUID();
       if (!isDryRun) {
         await pool.query(
           `INSERT INTO referring_providers (id, tenant_id, first_name, last_name, npi, verification_status, provider_type, notes)
            VALUES ($1,$2,$3,$4,$5,'verified','1',$6)
            ON CONFLICT DO NOTHING`,
-          [newId, pa.tenant_id, firstName, lastName, rawNpi, `Auto-backfilled from PA ${pa.id}`]
+          [newId, pa.organization_id, firstName, lastName, rawNpi, `Auto-backfilled from PA ${pa.id}`]
         );
         await pool.query(`UPDATE prior_authorizations SET referring_provider_id = $1 WHERE id = $2`, [newId, pa.id]).catch(() => {});
       }
       rpIdCache.set(dedupeKey, newId);
-      resolved.push({ org_id: pa.tenant_id, pa_id: pa.id, name: rawName, npi: rawNpi, rp_id: isDryRun ? null : newId });
+      resolved.push({ org_id: pa.organization_id, pa_id: pa.id, name: rawName, npi: rawNpi, rp_id: isDryRun ? null : newId });
     } else {
-      const newId = crypto.randomUUID();
+      const newId = randomUUID();
       if (!isDryRun) {
         await pool.query(
           `INSERT INTO referring_providers (id, tenant_id, first_name, last_name, npi, va_composite_id, verification_status, provider_type, notes)
            VALUES ($1,$2,$3,$4,NULL,$5,'pending','1',$6)
            ON CONFLICT DO NOTHING`,
-          [newId, pa.tenant_id, firstName, lastName,
+          [newId, pa.organization_id, firstName, lastName,
            /^\d{3}[_-]\d{6,8}$/.test(rawNpi) ? rawNpi : null,
            `Auto-backfilled from PA ${pa.id}; raw="${rawName}"; raw_npi="${rawNpi}"`]
         );
       }
       rpIdCache.set(dedupeKey, newId);
-      pending.push({ org_id: pa.tenant_id, pa_id: pa.id, raw_name: rawName, raw_npi: rawNpi, reason: !rawNpi ? "no NPI" : "invalid NPI" });
+      pending.push({ org_id: pa.organization_id, pa_id: pa.id, raw_name: rawName, raw_npi: rawNpi, reason: !rawNpi ? "no NPI" : "invalid NPI" });
     }
   }
 
