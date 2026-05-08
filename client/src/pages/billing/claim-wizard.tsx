@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type ComponentType } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, type ComponentType } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -129,6 +129,7 @@ const POS_OPTIONS = [
 ];
 
 interface ServiceLine {
+  id: string;
   code: string;
   description: string;
   modifier: string;
@@ -199,6 +200,7 @@ function mapValidationError(err: any): { plain: string; fix: string; code: strin
 
 function emptyLine(defaultDate = ""): ServiceLine {
   return {
+    id: crypto.randomUUID(),
     code: "", description: "", modifier: "", diagnosisPointers: "A", hourlyRate: "",
     unitType: "per_visit", unitIntervalMinutes: null, hours: "", units: "1",
     ratePerUnit: "", totalCharge: "", chargeOverridden: false,
@@ -1354,8 +1356,8 @@ export default function ClaimWizard() {
     queryKey: ["/api/billing/claims/wizard-data"],
   });
 
-  const providers = wizardData?.providers || [];
-  const payers = wizardData?.payers || [];
+  const providers = useMemo(() => wizardData?.providers || [], [wizardData]);
+  const payers = useMemo(() => wizardData?.payers || [], [wizardData]);
 
   // Resolve matched payer from patient's payer_id or insurance_carrier name.
   // Uses partial name matching so renamed payers (e.g. "VA Community Care (TriWest / TWVACCN)")
@@ -1432,6 +1434,8 @@ export default function ClaimWizard() {
   // Production submission confirmation modal
   const [showProdConfirmModal, setShowProdConfirmModal] = useState(false);
   const [confirmationText, setConfirmationText] = useState("");
+  // Test submission confirmation modal
+  const [showTestSubmitConfirm, setShowTestSubmitConfirm] = useState(false);
 
   // Effective test mode: override checkbox OR FRCPB payer auto-lock
   const effectiveTestMode = testModeOverride || isFrcpbPayer;
@@ -1753,7 +1757,7 @@ export default function ClaimWizard() {
 
   function cloneServiceLine(index: number) {
     setServiceLines((prev) => {
-      const clone: ServiceLine = { ...prev[index], serviceDateFrom: "", serviceDateTo: "" };
+      const clone: ServiceLine = { ...prev[index], id: crypto.randomUUID(), serviceDateFrom: "", serviceDateTo: "" };
       const next = [...prev];
       next.splice(index + 1, 0, clone);
       return next;
@@ -2285,7 +2289,7 @@ export default function ClaimWizard() {
               {step2Errors.serviceLines && <p className="text-sm text-red-500" data-testid="error-service-lines">{step2Errors.serviceLines}</p>}
               {serviceLines.map((line, i) => (
                 <ServiceLineRow
-                  key={i}
+                  key={line.id}
                   line={line}
                   index={i}
                   onChange={updateServiceLine}
@@ -3125,7 +3129,7 @@ export default function ClaimWizard() {
 
                   {/* ── Main submit button (Task 3a/3c) ─────────────────── */}
                   <Button
-                    onClick={async () => {
+                    onClick={() => {
                       if (!claimId) return;
                       if (isProductionMode) {
                         // Open production confirmation modal before submitting
@@ -3133,30 +3137,8 @@ export default function ClaimWizard() {
                         setShowProdConfirmModal(true);
                         return;
                       }
-                      // Test mode — submit directly
-                      setStediSubmitting(true);
-                      setStediResult(null);
-                      try {
-                        const res = await fetch(`/api/billing/claims/${claimId}/submit-stedi`, {
-                          method: "POST",
-                          credentials: "include",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ testMode: effectiveTestMode }),
-                        });
-                        const result = await res.json();
-                        setStediResult(result);
-                        if (result.success) {
-                          queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
-                          toast({ title: "Claim submitted via Stedi", description: `Transaction ID: ${result.transactionId || "N/A"}` });
-                        } else {
-                          toast({ title: "Stedi submission failed", description: result.error, variant: "destructive" });
-                        }
-                      } catch (err: any) {
-                        setStediResult({ success: false, error: err.message });
-                        toast({ title: "Submission error", description: err.message, variant: "destructive" });
-                      } finally {
-                        setStediSubmitting(false);
-                      }
+                      // Test mode — show confirmation dialog first
+                      setShowTestSubmitConfirm(true);
                     }}
                     disabled={validationErrors.length > 0 || (validationWarnings.length > 0 && !warningsAcknowledged) || stediSubmitting || stediResult?.success || (riskResult?.cciFactors?.some((cf) => cf.modifier_indicator === "0") ?? false)}
                     data-testid="button-submit-stedi"
@@ -3330,6 +3312,56 @@ export default function ClaimWizard() {
               }}
             >
               {stediSubmitting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Submitting...</> : "Confirm — Submit to Payer"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Test submission confirmation dialog ───────────────────────────── */}
+      <Dialog open={showTestSubmitConfirm} onOpenChange={setShowTestSubmitConfirm}>
+        <DialogContent className="max-w-md" data-testid="dialog-test-submit-confirm">
+          <DialogHeader>
+            <DialogTitle>Submit this claim?</DialogTitle>
+            <DialogDescription>
+              This will transmit the claim to the clearinghouse as a test submission (ISA15=T). The claim will be validated by Stedi but no payment will be processed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowTestSubmitConfirm(false)} data-testid="button-cancel-test-submit">
+              Cancel
+            </Button>
+            <Button
+              data-testid="button-confirm-test-submit"
+              disabled={stediSubmitting}
+              onClick={async () => {
+                if (!claimId) return;
+                setShowTestSubmitConfirm(false);
+                setStediSubmitting(true);
+                setStediResult(null);
+                try {
+                  const res = await fetch(`/api/billing/claims/${claimId}/submit-stedi`, {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ testMode: effectiveTestMode }),
+                  });
+                  const result = await res.json();
+                  setStediResult(result);
+                  if (result.success) {
+                    queryClient.invalidateQueries({ queryKey: ["/api/billing/claims"] });
+                    toast({ title: "Claim submitted via Stedi", description: `Transaction ID: ${result.transactionId || "N/A"}` });
+                  } else {
+                    toast({ title: "Stedi submission failed", description: result.error, variant: "destructive" });
+                  }
+                } catch (err: any) {
+                  setStediResult({ success: false, error: err.message });
+                  toast({ title: "Submission error", description: err.message, variant: "destructive" });
+                } finally {
+                  setStediSubmitting(false);
+                }
+              }}
+            >
+              {stediSubmitting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Submitting...</> : "Submit Claim (Test)"}
             </Button>
           </DialogFooter>
         </DialogContent>
