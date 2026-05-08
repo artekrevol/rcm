@@ -6130,6 +6130,36 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // ── Claim validation engine ────────────────────────────────────────────────
+  // GET /api/billing/claims/:id/validate
+  // Returns a ValidationResult JSON. Safe to call repeatedly — read-only.
+  // Optional ?packIds=x,y,z override for admin debugging.
+  app.get("/api/billing/claims/:id/validate", requireAuth, async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ error: "Organization context required" });
+
+      const packIds = req.query.packIds
+        ? String(req.query.packIds).split(',').map(s => s.trim()).filter(Boolean)
+        : undefined;
+
+      // Admin-only pack override
+      if (packIds) {
+        const user = (req as any).user;
+        if (!user || !['admin', 'rcm_manager'].includes(user.role)) {
+          return res.status(403).json({ error: "Pack ID override requires admin or rcm_manager role" });
+        }
+      }
+
+      const { runValidation } = await import("./services/validation/engine/runner.js");
+      const result = await runValidation(req.params.id, orgId, { packIds });
+      res.json(result);
+    } catch (err: any) {
+      console.error('[validation] Error running validation:', err);
+      res.status(500).json({ error: 'Validation engine error. Please try again.' });
+    }
+  });
+
   app.get("/api/billing/claims/:id/edi", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
