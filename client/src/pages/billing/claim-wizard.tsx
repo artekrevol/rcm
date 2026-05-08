@@ -569,6 +569,21 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
   periodEnd?: string;
 }) {
   const [showCodeSearch, setShowCodeSearch] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Capture-phase document listener for Cmd/Ctrl+D — fires before the browser's
+  // "Add to Bookmarks" native handler, guaranteeing preventDefault works.
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'd') return;
+      if (!cardRef.current?.contains(document.activeElement)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClone(index);
+    }
+    document.addEventListener('keydown', handleKey, true);
+    return () => document.removeEventListener('keydown', handleKey, true);
+  }, [index, onClone]);
   const { data: vaLocations = [] } = useQuery<string[]>({
     queryKey: ["/api/billing/va-locations"],
     queryFn: () => fetch("/api/billing/va-locations", { credentials: "include" }).then(r => r.json()),
@@ -732,11 +747,9 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
 
   return (
     <Card
+      ref={cardRef}
       className="p-4 space-y-3"
       data-testid={`card-service-line-${index}`}
-      onKeyDown={(e) => {
-        if ((e.metaKey || e.ctrlKey) && e.key === 'd') { e.preventDefault(); onClone(index); }
-      }}
     >
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <h4 className="text-sm font-medium">Service Line {index + 1}</h4>
@@ -1344,8 +1357,16 @@ export default function ClaimWizard() {
   const providers = wizardData?.providers || [];
   const payers = wizardData?.payers || [];
 
-  // Resolve matched payer from patient's payer_id or insurance_carrier name
-  const matchedPayer = payers.find((p: any) => p.id === patient?.payer_id || p.name === patient?.insurance_carrier) || null;
+  // Resolve matched payer from patient's payer_id or insurance_carrier name.
+  // Uses partial name matching so renamed payers (e.g. "VA Community Care (TriWest / TWVACCN)")
+  // still match when the patient stores the shorter legacy name "VA Community Care".
+  const matchedPayer = payers.find((p: any) => {
+    if (p.id === patient?.payer_id) return true;
+    if (!patient?.insurance_carrier) return false;
+    const ic = patient.insurance_carrier.toLowerCase().trim();
+    const pn = (p.name || "").toLowerCase().trim();
+    return pn === ic || pn.startsWith(ic) || pn.includes(ic);
+  }) || null;
   // When editing an existing claim, the claim may have a different payer than the patient's default.
   // claimMatchedPayer is the payer the 837P will actually route to.
   const claimMatchedPayer = claimPayerUuid
@@ -1353,6 +1374,7 @@ export default function ClaimWizard() {
     : matchedPayer;
   const isVAPayer = !!matchedPayer && (
     matchedPayer.payer_id === "VACCN" || matchedPayer.payer_id === "TWVACCN" || matchedPayer.payer_id === "TRWST" ||
+    matchedPayer.payer_classification === "va_community_care" ||
     (matchedPayer.name || "").toLowerCase().includes("va community care") ||
     (matchedPayer.name || "").toLowerCase().includes("triwest")
   );
