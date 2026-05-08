@@ -225,10 +225,11 @@ function ReferringProviderPicker({
 
           {isVaCompositeId ? (
             <div className="px-3 py-2 space-y-2">
-              <div className="flex items-start gap-2 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded p-2 text-sm">
-                <span className="text-blue-700 dark:text-blue-300 flex-1">
+              <div className="flex items-start gap-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded p-2 text-sm">
+                <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                <span className="text-amber-700 dark:text-amber-300 flex-1">
                   VA composite ID detected: <span className="font-mono font-medium">{search.trim()}</span>.{" "}
-                  NPI is optional when an approved VA referral number is provided.
+                  For VA Community Care, NPI is situational — it may be omitted when an approved VA referral number is present.
                 </span>
               </div>
               <div className="flex gap-2">
