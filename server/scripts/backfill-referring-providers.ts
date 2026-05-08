@@ -113,7 +113,7 @@ async function main() {
         await pool.query(
           `UPDATE prior_authorizations SET referring_provider_id = $1 WHERE id = $2`,
           [rpIdCache.get(dedupeKey), pa.id]
-        ).catch(() => {});
+        ).catch(e => console.warn(`[backfill] WARN: could not link PA ${pa.id} → RP ${rpIdCache.get(dedupeKey)}: ${e.message}`));
       }
       continue;
     }
@@ -136,7 +136,7 @@ async function main() {
           await pool.query(
             `UPDATE prior_authorizations SET referring_provider_id = $1 WHERE id = $2`,
             [existing[0].id, pa.id]
-          ).catch(() => {});
+          ).catch(e => console.warn(`[backfill] WARN: could not link PA ${pa.id} → RP ${existing[0].id}: ${e.message}`));
         }
         continue;
       }
@@ -153,7 +153,7 @@ async function main() {
           await pool.query(
             `UPDATE prior_authorizations SET referring_provider_id = $1 WHERE id = $2`,
             [existing[0].id, pa.id]
-          ).catch(() => {});
+          ).catch(e => console.warn(`[backfill] WARN: could not link PA ${pa.id} → RP ${existing[0].id}: ${e.message}`));
         }
         continue;
       }
@@ -174,7 +174,7 @@ async function main() {
             await pool.query(
               `UPDATE prior_authorizations SET referring_provider_id = $1 WHERE id = $2`,
               [existing[0].id, pa.id]
-            ).catch(() => {});
+            ).catch(e => console.warn(`[backfill] WARN: could not link PA ${pa.id} → RP ${existing[0].id}: ${e.message}`));
           }
           continue;
         }
@@ -200,7 +200,7 @@ async function main() {
         await pool.query(
           `UPDATE prior_authorizations SET referring_provider_id = $1 WHERE id = $2`,
           [newId, pa.id]
-        ).catch(() => {});
+        ).catch(e => console.warn(`[backfill] WARN: could not link PA ${pa.id} → RP ${newId}: ${e.message}`));
       }
       rpIdCache.set(dedupeKey, newId);
       resolved.push({ org_id: pa.organization_id, pa_id: pa.id, name: rawName, npi: normalizedNpi, rp_id: isDryRun ? null : newId });
@@ -218,7 +218,7 @@ async function main() {
         await pool.query(
           `UPDATE prior_authorizations SET referring_provider_id = $1 WHERE id = $2`,
           [newId, pa.id]
-        ).catch(() => {});
+        ).catch(e => console.warn(`[backfill] WARN: could not link PA ${pa.id} → RP ${newId}: ${e.message}`));
       }
       rpIdCache.set(dedupeKey, newId);
       pending.push({
@@ -256,6 +256,29 @@ async function main() {
   console.log(`  Auto-resolved (verified):  ${resolved.length}`);
   console.log(`  Needs review  (pending):   ${pending.length}`);
   console.log(`  CSVs written to: ${outDir}`);
+
+  // Post-run integrity check: count PAs still missing a referring_provider_id link
+  if (!isDryRun) {
+    const integrityParams: string[] = [];
+    let integrityFilter = "";
+    if (targetOrgId) {
+      integrityParams.push(targetOrgId);
+      integrityFilter = `AND organization_id = $${integrityParams.length}`;
+    }
+    const { rows: orphans } = await pool.query(
+      `SELECT COUNT(*)::int AS cnt FROM prior_authorizations
+       WHERE (referring_provider_name IS NOT NULL OR referring_provider_npi IS NOT NULL)
+         AND referring_provider_id IS NULL
+         ${integrityFilter}`,
+      integrityParams
+    );
+    const orphanCount = orphans[0]?.cnt ?? 0;
+    if (orphanCount > 0) {
+      console.warn(`[backfill] WARN: ${orphanCount} PA row(s) still have no referring_provider_id after backfill — check WARNs above`);
+    } else {
+      console.log(`[backfill] Integrity check: all PA rows with referring provider data are now linked`);
+    }
+  }
 
   await pool.end();
 }

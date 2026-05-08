@@ -36,3 +36,6 @@ docs/architecture/sprint1d-snapshots/
 
 # Phase 3 deploy preflight snapshots — local only, do not commit
 snapshots/
+
+# Backfill script generated output — do not commit
+server/scripts/backfill-output/
