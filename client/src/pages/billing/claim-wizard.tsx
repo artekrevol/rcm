@@ -337,6 +337,11 @@ function PatientSearch({ onSelect, selectedPatient, hideCommercialPlanProduct }:
                 </Button>
               </div>
             </div>
+            {hideCommercialPlanProduct && (
+              <p className="text-xs text-muted-foreground mt-2 pt-2 border-t border-green-200 dark:border-green-800" data-testid="text-va-plan-hidden">
+                VA Community Care payer — commercial plan type is not applicable
+              </p>
+            )}
             {!hideCommercialPlanProduct && (
               <div className="mt-3 pt-3 border-t border-green-200 dark:border-green-800">
                 <div className="flex items-center gap-3">
@@ -536,7 +541,7 @@ function InlineCodeSearch({ onSelect, initialQuery = "" }: { onSelect: (result: 
       {noResults && !showManual && (
         <div className="text-sm text-center py-2">
           <p className="text-muted-foreground">No results for "{dq}"</p>
-          <Button variant="link" size="sm" onClick={() => { setShowManual(true); setManualCode(dq.toUpperCase()); }} data-testid="button-manual-code-entry">
+          <Button variant="ghost" size="sm" className="text-primary hover:underline" onClick={() => { setShowManual(true); setManualCode(dq.toUpperCase()); }} data-testid="button-manual-code-entry">
             <Plus className="h-3 w-3 mr-1" /> Enter code manually
           </Button>
         </div>
@@ -789,7 +794,13 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">Date To <span className="text-muted-foreground/60">(optional)</span></Label>
+          <Label className="text-xs text-muted-foreground">
+            Date To{" "}
+            {line.serviceDateTo && line.serviceDateTo === line.serviceDateFrom
+              ? <span className="text-[9px] text-blue-500 font-medium">(auto-filled)</span>
+              : <span className="text-muted-foreground/60">(optional)</span>
+            }
+          </Label>
           <Input
             type="date"
             value={line.serviceDateTo}
@@ -882,7 +893,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
             data-testid={`input-line-modifier-${index}`}
           />
           {modifierHint && (
-            <p className="text-[10px] text-blue-600 dark:text-blue-400 leading-snug" data-testid={`hint-modifier-${index}`}>{modifierHint}</p>
+            <p className="text-[10px] text-blue-600 dark:text-blue-400 leading-snug" data-testid={`hint-modifier-${index}`}>{modifierHint.note}</p>
           )}
         </div>
         <div className="space-y-1.5">
@@ -895,7 +906,7 @@ function ServiceLineRow({ line, index, onChange, onRemove, onClone, patientPayer
             className="font-mono w-24"
             data-testid={`input-line-dx-pointers-${index}`}
           />
-          <p className="text-[10px] text-muted-foreground leading-snug">A = 1st ICD-10 below · B = 2nd · etc.</p>
+          <p className="text-[10px] text-muted-foreground leading-snug">A = primary diagnosis · B = 2nd · C = 3rd · Default: <span className="font-mono font-semibold">A</span></p>
         </div>
       </div>
 
@@ -1222,6 +1233,9 @@ function ICD10Search({ label, value, onChange, testId }: {
           />
           {showDropdown && (
             <div className="absolute z-50 w-full mt-1 bg-background border rounded-md shadow-lg max-h-48 overflow-y-auto">
+              {!q.trim() && (
+                <div className="px-3 pt-2 pb-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Common diagnoses</div>
+              )}
               {loading && <div className="px-3 py-2 text-sm text-muted-foreground">Searching...</div>}
               {filtered.map((d) => (
                 <button
@@ -1604,8 +1618,7 @@ export default function ClaimWizard() {
       if (!isDirty) return;
       try {
         const payload = buildClaimPayload();
-        payload.status = "draft" as any;
-        await apiRequest("PATCH", `/api/billing/claims/${claimId}`, payload);
+        await apiRequest("PATCH", `/api/billing/claims/${claimId}`, { ...payload, status: "draft" });
         setLastSavedAt(new Date());
         setIsDirty(false);
       } catch { /* silent */ }
@@ -1874,8 +1887,7 @@ export default function ClaimWizard() {
   }
 
   async function handleSaveDraft() {
-    const payload = buildClaimPayload();
-    payload.status = "draft" as any;
+    const payload = { ...buildClaimPayload(), status: "draft" as const };
     try {
       await saveMutation.mutateAsync(payload);
       if (saveAuthToPatient && authNumber && patient?.id) {
@@ -2114,6 +2126,16 @@ export default function ClaimWizard() {
             </div>
           )}
 
+          {/* Step 3: VA CCN auto-defaults applied banner */}
+          {isVAPayer && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-950/20" data-testid="banner-va-defaults">
+              <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />
+              <p className="text-xs text-blue-700 dark:text-blue-300">
+                <span className="font-semibold">VA CCN defaults applied:</span> Place of service set to 12 (Home). G0156 pre-loaded on the first service line if no code was entered.
+              </p>
+            </div>
+          )}
+
           {/* T5: Real-time preflight violations summary */}
           {preflightFactors.length > 0 && (
             <div className={`rounded-lg border px-4 py-3 space-y-1.5 text-sm ${
@@ -2221,9 +2243,16 @@ export default function ClaimWizard() {
               <CardTitle className="flex items-center justify-between">
                 Service Lines
                 <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setShowBulkModal(true)} data-testid="button-add-multiple-lines">
-                    <CalendarDays className="h-4 w-4 mr-1" /> Add Multiple Lines
-                  </Button>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button variant="outline" size="sm" onClick={() => setShowBulkModal(true)} data-testid="button-add-multiple-lines">
+                          <CalendarDays className="h-4 w-4 mr-1" /> Add Multiple Lines
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Generate one line per service day for a date range — great for daily home care visits</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <Button variant="outline" size="sm" onClick={addServiceLine} disabled={serviceLines.length >= 30} data-testid="button-add-line">
                     <Plus className="h-4 w-4 mr-1" /> Add Line
                   </Button>
@@ -2719,7 +2748,7 @@ export default function ClaimWizard() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 Patient
-                <Button variant="link" size="sm" onClick={() => setStep(0)} data-testid="button-edit-patient">Edit</Button>
+                <Button variant="ghost" size="sm" className="h-auto p-0 text-primary hover:underline" onClick={() => setStep(0)} data-testid="button-edit-patient">Edit</Button>
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -2743,7 +2772,7 @@ export default function ClaimWizard() {
             <CardHeader>
               <CardTitle className="flex items-center justify-between">
                 Service Details
-                <Button variant="link" size="sm" onClick={() => setStep(1)} data-testid="button-edit-service">Edit</Button>
+                <Button variant="ghost" size="sm" className="h-auto p-0 text-primary hover:underline" onClick={() => setStep(1)} data-testid="button-edit-service">Edit</Button>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
