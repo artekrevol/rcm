@@ -26,6 +26,10 @@ const resolvedDbUrl =
   useDevDb   ? (process.env.DEV_DATABASE_URL ?? process.env.DATABASE_URL) :
   process.env.DATABASE_URL;
 
+// Patch DATABASE_URL so the runner's internal Pool also targets the same DB.
+// Must happen before any import of the runner module.
+process.env.DATABASE_URL = resolvedDbUrl;
+
 function find(arr: string[], flag: string): number {
   const idx = arr.indexOf(flag);
   return idx === -1 ? arr.length : idx;
