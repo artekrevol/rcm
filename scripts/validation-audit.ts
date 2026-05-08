@@ -18,6 +18,13 @@ import * as fs from 'fs';
 const args = process.argv.slice(2);
 const tenantArg = args[find(args, '--tenant') + 1];
 const outputArg = args[find(args, '--output') + 1];
+// --db <url> overrides DATABASE_URL; --dev uses DEV_DATABASE_URL secret
+const dbUrlArg  = args[find(args, '--db') + 1];
+const useDevDb  = args.includes('--dev');
+const resolvedDbUrl =
+  dbUrlArg   ? dbUrlArg :
+  useDevDb   ? (process.env.DEV_DATABASE_URL ?? process.env.DATABASE_URL) :
+  process.env.DATABASE_URL;
 
 function find(arr: string[], flag: string): number {
   const idx = arr.indexOf(flag);
@@ -30,7 +37,7 @@ if (!tenantArg) {
 }
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({ connectionString: resolvedDbUrl, ssl: { rejectUnauthorized: false } });
 
 async function getOrgIds(tenant: string): Promise<string[]> {
   if (tenant === 'all') {
