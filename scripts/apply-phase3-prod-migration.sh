@@ -2,7 +2,7 @@
 # =============================================================================
 # Phase 3 Production Migration — Runner
 # =============================================================================
-# Applies scripts/phase3-prod-migration.sql against $PRODUCTION_DATABASE_URL,
+# Applies scripts/phase3-prod-migration.sql against $RAILWAY_PRODUCTION_DATABASE_URL,
 # then runs scripts/verify-phase3-prod-migration.sql to confirm post-state.
 #
 # This script is for documentation / convenience. It does NOT execute itself
