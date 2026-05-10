@@ -3,9 +3,12 @@
  * Iterates every claim in a tenant, runs the validation engine,
  * and writes a CSV report.
  *
- * Usage:
+ * Usage (Replit sandbox — safe, default):
  *   npx tsx scripts/validation-audit.ts --tenant chajinel > audit.csv
  *   npx tsx scripts/validation-audit.ts --tenant chajinel --output audit.csv
+ *
+ * Usage (Railway production — requires explicit opt-in):
+ *   npx tsx scripts/validation-audit.ts --tenant chajinel --prod --confirm-production
  *
  * The script prints a Markdown summary to stderr and the CSV to stdout
  * (or --output file) so both can be captured independently.
@@ -18,13 +21,30 @@ import * as fs from 'fs';
 const args = process.argv.slice(2);
 const tenantArg = args[find(args, '--tenant') + 1];
 const outputArg = args[find(args, '--output') + 1];
-// --db <url> overrides DATABASE_URL; --dev uses DEV_DATABASE_URL secret
-const dbUrlArg  = args[find(args, '--db') + 1];
-const useDevDb  = args.includes('--dev');
+// --db <url>  — explicit URL override
+// --prod      — targets RAILWAY_PRODUCTION_DATABASE_URL (requires --confirm-production)
+// (default)   — targets DATABASE_URL (Replit built-in, safe sandbox)
+const dbUrlArg   = args[find(args, '--db') + 1];
+const useProdDb  = args.includes('--prod');
 const resolvedDbUrl =
-  dbUrlArg   ? dbUrlArg :
-  useDevDb   ? (process.env.DEV_DATABASE_URL ?? process.env.DATABASE_URL) :
+  dbUrlArg    ? dbUrlArg :
+  useProdDb   ? process.env.RAILWAY_PRODUCTION_DATABASE_URL :
   process.env.DATABASE_URL;
+
+// ── Production guard ──────────────────────────────────────────────────────────
+// Refuse to run against Railway unless --confirm-production is explicitly passed.
+// Hard rule: no agent-driven scripts modify Railway production unattended.
+if (resolvedDbUrl && (resolvedDbUrl.includes('rlwy.net') || resolvedDbUrl.includes('railway.internal'))) {
+  if (!args.includes('--confirm-production')) {
+    console.error(
+      'ERROR: Resolved connection targets Railway production (hopper.proxy.rlwy.net).\n' +
+      'Re-run with --confirm-production to proceed.\n' +
+      'Hard rule: agent-driven scripts must not touch Railway production unattended.\n' +
+      'For production data changes, use the Railway database tab manually.'
+    );
+    process.exit(1);
+  }
+}
 
 // Patch DATABASE_URL so the runner's internal Pool also targets the same DB.
 // Must happen before any import of the runner module.

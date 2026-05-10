@@ -5,25 +5,42 @@
  * Idempotent: inserts only for (extraction_id, change_type) pairs that do
  * not already have a history row, so re-running is safe.
  *
- * Usage:
- *   PRODUCTION_DATABASE_URL=... npx tsx scripts/backfill-extraction-history.ts
+ * Usage (Replit sandbox — safe, default):
+ *   npx tsx scripts/backfill-extraction-history.ts
+ *
+ * Usage (Railway production — requires explicit opt-in):
+ *   DATABASE_URL=$RAILWAY_PRODUCTION_DATABASE_URL \
+ *     npx tsx scripts/backfill-extraction-history.ts --confirm-production
  */
 
 import { Pool } from "pg";
 
-const connStr = process.env.PRODUCTION_DATABASE_URL || process.env.DATABASE_URL;
+const connStr = process.env.DATABASE_URL;
 if (!connStr) {
-  console.error("ERROR: neither PRODUCTION_DATABASE_URL nor DATABASE_URL is set");
+  console.error("ERROR: DATABASE_URL is not set");
   process.exit(1);
+}
+
+// ── Production guard ──────────────────────────────────────────────────────────
+if (connStr.includes("rlwy.net") || connStr.includes("railway.internal")) {
+  if (!process.argv.includes("--confirm-production")) {
+    console.error(
+      "ERROR: DATABASE_URL targets Railway production (hopper.proxy.rlwy.net).\n" +
+      "Re-run with --confirm-production to proceed.\n" +
+      "Hard rule: agent-driven scripts must not touch Railway production unattended.\n" +
+      "For production data changes, use the Railway database tab manually."
+    );
+    process.exit(1);
+  }
 }
 
 const pool = new Pool({
   connectionString: connStr,
-  ssl: connStr.includes("railway") ? { rejectUnauthorized: false } : undefined,
+  ssl: connStr.includes("rlwy.net") ? { rejectUnauthorized: false } : undefined,
 });
 
 async function run() {
-  const targetDb = connStr!.includes("railway") ? "PRODUCTION (railway)" : "development";
+  const targetDb = connStr!.includes("rlwy.net") ? "RAILWAY (hopper)" : "Replit sandbox (heliumdb)";
   console.log(`\n[backfill-history] Connecting to ${targetDb}`);
 
   // Detect schema variant: production uses manual_id + payer_manuals;

@@ -6,10 +6,22 @@ Claim Shield Health is a multi-tenant Revenue Cycle Management (RCM) platform de
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
-## Database Setup (Railway — two separate instances)
-- **Development DB**: Railway PostgreSQL 17.9 at `hopper.proxy.rlwy.net:45126`, database `railway`. Secret name: `DEV_DATABASE_URL`. This is the instance to use for development, migrations, and audit scripts during active development. When running scripts against dev, pass `DATABASE_URL=$DEV_DATABASE_URL npx tsx ...`.
-- **Production DB**: Railway PostgreSQL 16.10 at `heliumdb` host. Secret name: `DATABASE_URL`. This is what the live app connects to. Scripts that read `process.env.DATABASE_URL` hit production by default.
-- Never confuse the two. Always confirm the host (hopper = dev, heliumdb = prod) before running any write operations.
+## Database Setup
+
+Three databases exist. Do not confuse them.
+
+| Secret | Host | DB name | Purpose |
+|--------|------|---------|---------|
+| `DATABASE_URL` | `helium` → 172.31.75.36 (Replit built-in) | `heliumdb` | Replit workspace sandbox. Safe for development. `server/db.ts` reads this. 152 claims, no real PHI. |
+| `RAILWAY_PRODUCTION_DATABASE_URL` | `hopper.proxy.rlwy.net:45126` | `railway` | Railway PostgreSQL — real patient data (Mandler, 107 claims). Scripts must pass `--confirm-production` to reach this. |
+| ~~`DEV_DATABASE_URL`~~ | same as above | same | **DEPRECATED** — delete this secret. It was a mislabeled alias for `RAILWAY_PRODUCTION_DATABASE_URL`. |
+| ~~`PRODUCTION_DATABASE_URL`~~ | same as above | same | **DEPRECATED** — delete this secret. Identical to `RAILWAY_PRODUCTION_DATABASE_URL`. |
+
+**Hard rules:**
+- `server/db.ts` always reads `DATABASE_URL` (Replit sandbox). Never change this.
+- Scripts default to `DATABASE_URL`. To reach Railway, you must explicitly set `DATABASE_URL=$RAILWAY_PRODUCTION_DATABASE_URL` AND pass `--confirm-production`.
+- No agent-driven script is permitted to write to Railway production. Human runs production data changes via the Railway dashboard database tab.
+- Before any Railway write, verify host with `SELECT inet_server_addr()` and confirm it returns `10.182.252.64/32`.
 
 ## System Architecture
 Claim Shield Health is built with a modern web stack. The frontend uses React 18 with TypeScript, Vite, Wouter for routing, and TanStack Query for server state management. UI components are developed with `shadcn/ui` and Radix UI, styled using Tailwind CSS, and incorporate Recharts for data visualization and Lucide for icons.

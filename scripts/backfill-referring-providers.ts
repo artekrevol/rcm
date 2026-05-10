@@ -12,13 +12,15 @@
  *
  * Outputs a CSV report to stdout: auto-resolved vs needs-review.
  *
- * Usage (dev):
- *   DATABASE_URL=$DEV_DATABASE_URL npx tsx scripts/backfill-referring-providers.ts [--dry-run]
- *
- * Usage (prod):
+ * Usage (Replit sandbox — safe, default):
  *   npx tsx scripts/backfill-referring-providers.ts [--dry-run]
  *
- * Add --dry-run to preview changes without writing to the database.
+ * Usage (Railway production — requires explicit opt-in):
+ *   RAILWAY_PRODUCTION_DATABASE_URL must be set; pass --confirm-production.
+ *   DATABASE_URL=$RAILWAY_PRODUCTION_DATABASE_URL \
+ *     npx tsx scripts/backfill-referring-providers.ts --dry-run --confirm-production
+ *
+ * Always run --dry-run first. Add --dry-run to preview changes without writing.
  */
 
 import { Pool } from "pg";
@@ -27,10 +29,24 @@ import { validateNPI } from "../shared/npi-validation.js";
 // ── CLI flags ──────────────────────────────────────────────────────────────────
 const DRY_RUN = process.argv.includes("--dry-run");
 
+// ── Production guard ──────────────────────────────────────────────────────────
+const _connStr = process.env.DATABASE_URL ?? "";
+if (_connStr.includes("rlwy.net") || _connStr.includes("railway.internal")) {
+  if (!process.argv.includes("--confirm-production")) {
+    console.error(
+      "ERROR: DATABASE_URL targets Railway production (hopper.proxy.rlwy.net).\n" +
+      "Re-run with --confirm-production to proceed.\n" +
+      "Hard rule: agent-driven scripts must not touch Railway production unattended.\n" +
+      "For production data changes, use the Railway database tab manually."
+    );
+    process.exit(1);
+  }
+}
+
 // ── DB pool ────────────────────────────────────────────────────────────────────
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes("localhost") ? false : { rejectUnauthorized: false },
+  connectionString: _connStr,
+  ssl: _connStr.includes("localhost") ? false : { rejectUnauthorized: false },
 });
 
 // ── Types ──────────────────────────────────────────────────────────────────────

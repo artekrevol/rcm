@@ -4,7 +4,21 @@ const { readFile, unlink } = require('fs/promises');
 const path = require('path');
 const os = require('os');
 
-const pool = new Pool({ connectionString: process.env.PRODUCTION_DATABASE_URL });
+const connStr = process.env.RAILWAY_PRODUCTION_DATABASE_URL;
+if (!connStr) {
+  console.error('ERROR: RAILWAY_PRODUCTION_DATABASE_URL is not set — refusing to run.\nSet this secret to the hopper.proxy.rlwy.net Railway database URL.');
+  process.exit(1);
+}
+if (!process.argv.includes('--confirm-production')) {
+  console.error(
+    'ERROR: This script writes to Railway production.\n' +
+    'Re-run with --confirm-production to proceed.\n' +
+    'Hard rule: agent-driven scripts must not touch Railway production unattended.\n' +
+    'For production data changes, use the Railway database tab manually.'
+  );
+  process.exit(1);
+}
+const pool = new Pool({ connectionString: connStr, ssl: { rejectUnauthorized: false } });
 const VERSION = '2026Q2';
 const FILES = [
   path.join(__dirname, '../attached_assets/ccioph-v320r0-f1_1777592939297.zip'),
