@@ -13,7 +13,7 @@ import { VALID_STATE_CODES } from '../data/usps-state-zip.js';
 
 const PACK_ID = 'x12-base-837p';
 
-const ICD10_REGEX = /^[A-TV-Z][0-9][A-Z0-9](\.[A-Z0-9]{1,4})?$/;
+const ICD10_REGEX = /^[A-TV-Z][0-9][A-Z0-9]{1,4}(\.[A-Z0-9]{1,4})?$/;
 
 /** Parse a raw diagnosis pointer string into a list of 1-based position indices. */
 function parseDiagnosisPointers(raw: string): number[] {

@@ -81,12 +81,21 @@ console.log('\n=== X12 Base 837P pack tests ===\n');
 
 // X12-DX-FORMAT-ICD10
 {
-  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['Z74.2'] })) === null, 'DX-FORMAT: passes Z74.2');
-  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['M54.5'] })) === null, 'DX-FORMAT: passes M54.5');
-  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['G0156'] })) !== null, 'DX-FORMAT: fails on HCPCS code in dx');
-  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['274.2'] })) !== null, 'DX-FORMAT: fails on legacy ICD-9 format');
-  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: [] })) === null, 'DX-FORMAT: passes on empty (no dx)');
-  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['U07.1'] })) !== null, 'DX-FORMAT: fails on U-prefix (provisional)');
+  // ── Valid formats (pass) ──────────────────────────────────────────────────
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['Z74.2'] })) === null,  'DX-FORMAT: passes Z74.2 (3+decimal)');
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['M54.5'] })) === null,  'DX-FORMAT: passes M54.5');
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['I10'] })) === null,    'DX-FORMAT: passes I10 (3-char, no decimal)');
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['F0390'] })) === null,  'DX-FORMAT: passes F0390 (5-char, no decimal — claim 4809034a)');
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['R269'] })) === null,   'DX-FORMAT: passes R269 (4-char, no decimal — claim 4809034a)');
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['Z51.11'] })) === null, 'DX-FORMAT: passes Z51.11 (decimal form — claim 4809034a)');
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: [] })) === null,         'DX-FORMAT: passes on empty (no dx)');
+
+  // ── Invalid formats (fail) ────────────────────────────────────────────────
+  // ICD-9 numeric codes — start with a digit, never valid ICD-10-CM
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['274.2'] })) !== null,  'DX-FORMAT: fails on legacy ICD-9 format (digit-first)');
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['27422'] })) !== null,  'DX-FORMAT: fails on digit-first code (ICD-9 style)');
+  // U-prefix reserved for provisional/emergency codes — excluded per X12 5010 TR3
+  assert(runRule('X12-DX-FORMAT-ICD10', makeClaim({ icd10Codes: ['U07.1'] })) !== null,  'DX-FORMAT: fails on U-prefix (provisional)');
 }
 
 // X12-DX-NO-DUPLICATES
