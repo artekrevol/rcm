@@ -105,8 +105,8 @@ export function setupAuth(app: Express) {
   const isProduction = process.env.NODE_ENV === "production";
   const sessionSecret = process.env.SESSION_SECRET;
 
-  if (!sessionSecret && isProduction) {
-    throw new Error("SESSION_SECRET environment variable is required in production");
+  if (!sessionSecret) {
+    throw new Error("SESSION_SECRET environment variable is required. Set it to a long random string before starting the server.");
   }
 
   if (isProduction) {
@@ -116,7 +116,7 @@ export function setupAuth(app: Express) {
   app.use(
     session({
       store: new PgSessionStore(),
-      secret: sessionSecret || "claimshield-dev-secret",
+      secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
       cookie: {
