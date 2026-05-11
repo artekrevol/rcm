@@ -1701,13 +1701,27 @@ export default function ClaimWizard() {
 
   function handlePatientSelect(p: any) {
     if (!p) { setPatient(null); setStep0PatientErrors([]); return; }
+
+    // If a different patient is selected while a draft already exists, abandon the old draft
+    // so the user starts fresh when they click Next (old draft stays in DB as a recoverable draft)
+    const patientChanged = !!patient?.id && p.id !== patient.id;
+    if (patientChanged && claimId) {
+      setClaimId(null);
+      setEncounterId(null);
+    }
+
     setPatient(p);
     setStep0PatientErrors([]);
     if (p.authorization_number) setAuthNumber(p.authorization_number);
     // Reset referral selections when patient changes
     setWizardReferralId(null);
     setWizardReferralAcknowledgedMissing(false);
-    if (preselectedPatientId) {
+
+    // Auto-create draft only for the original preselected patient and only when no draft exists.
+    // The p.id === preselectedPatientId guard prevents a new draft firing when:
+    //   - the user switches to a different patient (let them click Next instead)
+    //   - onSelect is called with the same patient for a plan-product update (claimId already set)
+    if (preselectedPatientId && p.id === preselectedPatientId && !claimId && !draftMutation.isPending) {
       draftMutation.mutate(p.id);
     }
   }
