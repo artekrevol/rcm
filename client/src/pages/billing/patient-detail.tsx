@@ -213,6 +213,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
 
     setErrors(e);
     if (Object.keys(e).length > 0) {
+      toast({ title: "Please fix the highlighted fields before saving", variant: "destructive" });
       return;
     }
 
