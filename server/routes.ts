@@ -296,6 +296,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`UPDATE payers SET payer_classification='medicaid' WHERE payer_classification='medicaid_state'`);
     await pool.query(`UPDATE payers SET payer_classification='commercial' WHERE payer_classification='commercial_ppo'`);
     await pool.query(`UPDATE payers SET claim_filing_indicator='HM' WHERE payer_classification='medicare_advantage' AND claim_filing_indicator='16'`);
+    // One-shot corrective: TWVACCN rows seeded before this fix had
+    // claim_filing_indicator='CH'; PGBA 837P CG (March 2021) requires 'VA'.
+    await pool.query(`
+      UPDATE payers
+      SET claim_filing_indicator='VA'
+      WHERE payer_id='TWVACCN' AND claim_filing_indicator='CH'
+    `);
 
     // member_id_qualifier: payer-driven NM108 qualifier for Loop 2010BA subscriber ID
     // 'MI' = Member ID (default for most commercial payers and VA CCN)
