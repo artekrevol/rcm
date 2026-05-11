@@ -639,6 +639,31 @@ it("invalid NPI in referringProvider throws NPI validation error", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// NM1*IL — patient middle name (NM105) integration
+// ═══════════════════════════════════════════════════════════════════════════════
+
+it("NM1*IL NM105 contains middle name when patient.middle_name is populated", () => {
+  const input = baseInput();
+  input.patient.middle_name = "Coit";
+  const segs = parseEdi(generate837P(input).edi);
+  const nm1il = segs.find(s => s.id === 'NM1' && s.elements[1] === 'IL');
+  assert(nm1il !== undefined,            "NM1*IL segment not found");
+  assert(nm1il!.elements[5] === 'Coit',
+    `NM1*IL NM105 (middle name): '${nm1il!.elements[5]}' — expected 'Coit'`);
+});
+
+it("NM1*IL NM105 is empty when patient.middle_name is undefined", () => {
+  const input = baseInput();
+  input.patient.middle_name = undefined;
+  const segs = parseEdi(generate837P(input).edi);
+  const nm1il = segs.find(s => s.id === 'NM1' && s.elements[1] === 'IL');
+  assert(nm1il !== undefined,            "NM1*IL segment not found");
+  const nm105 = nm1il!.elements[5];
+  assert(!nm105 || nm105 === '',
+    `NM1*IL NM105 should be empty when middle_name is absent, got: '${nm105}'`);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // DMG — DOB format regression (formatDate8)
 // ═══════════════════════════════════════════════════════════════════════════════
 
