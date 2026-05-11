@@ -30,3 +30,9 @@ id = "_VASmmBppQgaifeoFMFQ0"
 uri = "file://docs/PRODUCT_SCOPE.md"
 type = "text"
 title = "ClaimShield Health — Full Product Scope"
+
+[[outputs]]
+id = "9fdYGzG0Rcz5HQuZCR0VK"
+uri = "file://docs/audit/pre-demo-audit-2026-05-11.md"
+type = "text"
+title = "Pre-Demo Security & Stability Audit — May 11, 2026"
