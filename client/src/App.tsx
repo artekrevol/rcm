@@ -37,6 +37,8 @@ import PatientDetail from "@/pages/billing/patient-detail";
 import ArchivedPatients from "@/pages/billing/archived-patients";
 import BillingHcpcs from "@/pages/billing/hcpcs";
 import ClaimWizard from "@/pages/billing/claim-wizard";
+import SmartClaimPage from "@/pages/billing/smart-claim";
+import SmartClaimPreviewPage from "@/pages/billing/smart-claim-preview";
 import BillingSettings from "@/pages/billing/settings";
 import BillingReports from "@/pages/billing/reports";
 import PriorAuthPage from "@/pages/billing/prior-auth";
@@ -201,6 +203,16 @@ function Router() {
       <Route path="/billing/patients">
         <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
           <BillingLayout><PatientList /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/claims/smart-new/:draftId/preview">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><SmartClaimPreviewPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/claims/smart-new">
+        <AuthGuard allowedRoles={["admin", "rcm_manager"]}>
+          <BillingLayout><SmartClaimPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/claims/new">

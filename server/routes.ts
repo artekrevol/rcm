@@ -3291,10 +3291,542 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
     await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS engagement_halted BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
     await pool.query(`ALTER TABLE flow_runs ADD COLUMN IF NOT EXISTS halted_at TIMESTAMPTZ`).catch(() => {});
+
+    // ── Smart Claim tables ────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS smart_claim_drafts (
+        id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id          VARCHAR NOT NULL,
+        user_id                  VARCHAR NOT NULL,
+        status                   VARCHAR NOT NULL,
+        va_referral_s3_key       VARCHAR NOT NULL,
+        qb_invoice_s3_key        VARCHAR NOT NULL,
+        textract_va_job_id       VARCHAR,
+        textract_qb_job_id       VARCHAR,
+        raw_textract_va          JSONB,
+        raw_textract_qb          JSONB,
+        extracted_data           JSONB,
+        user_edits               JSONB DEFAULT '{}'::jsonb,
+        conflicts                JSONB DEFAULT '[]'::jsonb,
+        validation_result        JSONB,
+        confidence_log           JSONB,
+        error_message            TEXT,
+        created_claim_id         UUID,
+        created_at               TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at               TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_smart_claim_drafts_org_status ON smart_claim_drafts(organization_id, status)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_smart_claim_drafts_user ON smart_claim_drafts(user_id)`).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS patient_clinical_context (
+        patient_id                       VARCHAR PRIMARY KEY,
+        organization_id                  VARCHAR NOT NULL,
+        allergies                        JSONB DEFAULT '[]'::jsonb,
+        active_medications               JSONB DEFAULT '[]'::jsonb,
+        co_morbidities                   JSONB DEFAULT '[]'::jsonb,
+        is_pregnant                      BOOLEAN,
+        is_diabetic                      BOOLEAN,
+        has_mva_or_work_injury           BOOLEAN,
+        care_coordination_required       BOOLEAN,
+        history_of_trauma                TEXT,
+        recommended_treatment            TEXT,
+        pronouns                         TEXT,
+        preferred_name                   TEXT,
+        last_updated_from_referral_at    TIMESTAMP
+      )
+    `).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS va_referral_metadata (
+        authorization_id                 VARCHAR PRIMARY KEY,
+        organization_id                  VARCHAR NOT NULL,
+        va_facility_name                 TEXT,
+        va_station_number                VARCHAR,
+        va_facility_address              TEXT,
+        va_facility_phone                VARCHAR,
+        va_facility_fax                  VARCHAR,
+        unique_consult_no                VARCHAR,
+        program_authority                TEXT,
+        affiliation                      VARCHAR,
+        network                          VARCHAR,
+        requesting_provider_first_name   VARCHAR,
+        requesting_provider_last_name    VARCHAR,
+        requesting_provider_specialty    VARCHAR,
+        referring_provider_first_name    VARCHAR,
+        referring_provider_last_name     VARCHAR,
+        referring_provider_raw_npi       VARCHAR,
+        category_of_care                 VARCHAR,
+        service_requested_text           TEXT,
+        type_of_care                     VARCHAR,
+        rate_basis                       VARCHAR,
+        seoc_code                        VARCHAR,
+        recommended_treatment            TEXT,
+        care_coordination_required       BOOLEAN
+      )
+    `).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS authorized_services (
+        id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        authorization_id            VARCHAR NOT NULL,
+        organization_id             VARCHAR NOT NULL,
+        service_index               INT NOT NULL,
+        description                 TEXT NOT NULL,
+        billing_unit_type           VARCHAR NOT NULL,
+        max_units_per_period_text   VARCHAR,
+        max_units_per_visit         INT,
+        is_primary                  BOOLEAN DEFAULT FALSE
+      )
+    `).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_authorized_services_auth ON authorized_services(authorization_id)`).catch(() => {});
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS qb_invoice_metadata (
+        claim_id              UUID PRIMARY KEY,
+        organization_id       VARCHAR NOT NULL,
+        invoice_number        VARCHAR,
+        invoice_date          DATE,
+        payment_terms         TEXT,
+        caregiver_tips        NUMERIC(12,2),
+        source_s3_key         VARCHAR
+      )
+    `).catch(() => {});
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
   }
+
+  // ── Smart Claim routes ───────────────────────────────────────────────────
+
+  // POST /api/billing/smart-claims/upload-url  — get presigned PUT URLs for direct browser→S3 upload
+  app.post("/api/billing/smart-claims/upload-url", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+
+      const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+      const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
+      const { buildS3Key } = await import("./services/storage/s3-uploader.js");
+
+      const draftId = crypto.randomUUID();
+      const bucket = process.env.S3_BUCKET_NAME?.trim();
+      if (!bucket) return res.status(500).json({ error: "S3 not configured" });
+
+      const s3 = new S3Client({ region: process.env.AWS_REGION });
+
+      const vaKey = buildS3Key(orgId, draftId, "va-referral");
+      const qbKey = buildS3Key(orgId, draftId, "qb-invoice");
+
+      const [vaUrl, qbUrl] = await Promise.all([
+        getSignedUrl(s3, new PutObjectCommand({
+          Bucket: bucket,
+          Key: vaKey,
+          ContentType: "application/pdf",
+          ServerSideEncryption: "AES256",
+        }), { expiresIn: 300 }),
+        getSignedUrl(s3, new PutObjectCommand({
+          Bucket: bucket,
+          Key: qbKey,
+          ContentType: "application/pdf",
+          ServerSideEncryption: "AES256",
+        }), { expiresIn: 300 }),
+      ]);
+
+      res.json({ draftId, vaReferralUploadUrl: vaUrl, qbInvoiceUploadUrl: qbUrl, vaKey, qbKey });
+    } catch (err: any) {
+      console.error("[smart-claim] upload-url error:", err?.message);
+      res.status(500).json({ error: "Failed to generate upload URLs" });
+    }
+  });
+
+  // POST /api/billing/smart-claims — create draft and kick off worker
+  app.post("/api/billing/smart-claims", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const db = await import("./db").then(m => m.pool);
+
+      const { draftId, vaKey, qbKey } = req.body;
+      if (!draftId || !vaKey || !qbKey) {
+        return res.status(400).json({ error: "draftId, vaKey, and qbKey are required" });
+      }
+
+      const userId = (req.user as any)?.id?.toString() ?? "unknown";
+
+      const { rows } = await db.query(
+        `INSERT INTO smart_claim_drafts (id, organization_id, user_id, status, va_referral_s3_key, qb_invoice_s3_key, created_at, updated_at)
+         VALUES ($1, $2, $3, 'uploading', $4, $5, NOW(), NOW())
+         ON CONFLICT (id) DO UPDATE SET status = 'uploading', updated_at = NOW()
+         RETURNING *`,
+        [draftId, orgId, userId, vaKey, qbKey]
+      );
+
+      // Kick off the extraction worker asynchronously (fire-and-forget)
+      (async () => {
+        try {
+          const { runSmartClaimExtraction } = await import("./workers/smart-claim-extract.js");
+          await runSmartClaimExtraction(draftId, orgId);
+        } catch (workerErr: any) {
+          console.error("[smart-claim] worker error for field=draft_id:", workerErr?.message);
+        }
+      })();
+
+      res.status(201).json(rows[0]);
+    } catch (err: any) {
+      console.error("[smart-claim] create draft error:", err?.message);
+      res.status(500).json({ error: "Failed to create smart claim draft" });
+    }
+  });
+
+  // GET /api/billing/smart-claims/:id — poll status + fetch extracted data
+  app.get("/api/billing/smart-claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const db = await import("./db").then(m => m.pool);
+
+      const { rows } = await db.query(
+        `SELECT id, organization_id, user_id, status, extracted_data, user_edits, conflicts,
+                validation_result, confidence_log, error_message, created_claim_id, created_at, updated_at
+         FROM smart_claim_drafts WHERE id = $1 AND organization_id = $2`,
+        [req.params.id, orgId]
+      );
+
+      if (!rows.length) return res.status(404).json({ error: "Draft not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      console.error("[smart-claim] get draft error:", err?.message);
+      res.status(500).json({ error: "Failed to fetch smart claim draft" });
+    }
+  });
+
+  // PATCH /api/billing/smart-claims/:id — persist user edits during review
+  app.patch("/api/billing/smart-claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const db = await import("./db").then(m => m.pool);
+
+      const { user_edits, conflicts } = req.body;
+
+      const { rows } = await db.query(
+        `UPDATE smart_claim_drafts
+         SET user_edits = COALESCE($3::jsonb, user_edits),
+             conflicts  = COALESCE($4::jsonb, conflicts),
+             updated_at = NOW()
+         WHERE id = $1 AND organization_id = $2
+         RETURNING id, status, user_edits, conflicts`,
+        [req.params.id, orgId,
+         user_edits !== undefined ? JSON.stringify(user_edits) : null,
+         conflicts !== undefined ? JSON.stringify(conflicts) : null]
+      );
+
+      if (!rows.length) return res.status(404).json({ error: "Draft not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      console.error("[smart-claim] patch draft error:", err?.message);
+      res.status(500).json({ error: "Failed to update smart claim draft" });
+    }
+  });
+
+  // POST /api/billing/smart-claims/:id/confirm — materialize claim from draft
+  app.post("/api/billing/smart-claims/:id/confirm", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const db = await import("./db").then(m => m.pool);
+
+      const { rows: draftRows } = await db.query(
+        `SELECT * FROM smart_claim_drafts WHERE id = $1 AND organization_id = $2`,
+        [req.params.id, orgId]
+      );
+      if (!draftRows.length) return res.status(404).json({ error: "Draft not found" });
+      const draft = draftRows[0];
+
+      if (draft.status !== "ready") {
+        return res.status(409).json({ error: `Draft status is '${draft.status}', must be 'ready' to confirm` });
+      }
+
+      const extracted = draft.extracted_data as any;
+      const va = extracted?.va;
+      const qb = extracted?.qb;
+      const userEdits = draft.user_edits as any ?? {};
+
+      if (!va || !qb) return res.status(422).json({ error: "Extracted data is incomplete" });
+
+      // Check validation — block if error-severity violations
+      const valResult = draft.validation_result as any;
+      if (valResult?.violations) {
+        const errors = valResult.violations.filter((v: any) => v.severity === "error");
+        if (errors.length > 0) {
+          return res.status(422).json({ error: "Cannot confirm: validation errors present", violations: errors });
+        }
+      }
+
+      // Check conflicts — block if unresolved errors
+      const conflicts = (draft.conflicts as any[]) ?? [];
+      const unresolvedErrors = conflicts.filter(
+        (c) => c.severity === "error" && !userEdits.resolved_conflicts?.[c.type]
+      );
+      if (unresolvedErrors.length > 0) {
+        return res.status(422).json({ error: "Cannot confirm: unresolved error-severity conflicts", conflicts: unresolvedErrors });
+      }
+
+      // ── Database transaction ──────────────────────────────────────────────
+      const client = await db.connect();
+      let claimId: string;
+      try {
+        await client.query("BEGIN");
+
+        const now = new Date();
+        const patientData = { ...va.patient, ...(userEdits.patient ?? {}) };
+        const authData = { ...va.authorization, ...(userEdits.authorization ?? {}) };
+        const diagData = { ...va.diagnosis, ...(userEdits.diagnosis ?? {}) };
+        const qbData = { ...qb, ...(userEdits.qb ?? {}) };
+
+        // a) Upsert patient
+        let patientId = extracted.existing_patient_id;
+        if (!patientId) {
+          const { rows: patRows } = await client.query(
+            `INSERT INTO patients (id, first_name, middle_name, last_name, dob, sex, member_id, veteran_id_type,
+               insurance_carrier, payer_id, organization_id, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'EDIPI',$8,$9,$10,NOW(),NOW())
+             ON CONFLICT (id) DO UPDATE SET updated_at = NOW()
+             RETURNING id`,
+            [
+              crypto.randomUUID(),
+              patientData.first_name, patientData.middle_name ?? null, patientData.last_name,
+              patientData.dob, patientData.gender === "M" ? "Male" : "Female",
+              patientData.edipi,
+              "VA Community Care",
+              null,
+              orgId,
+            ]
+          );
+          patientId = patRows[0].id;
+        } else if (userEdits.resolved_conflicts?.patient_dob_differs === "update_existing") {
+          await client.query(
+            `UPDATE patients SET dob = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3`,
+            [patientData.dob, patientId, orgId]
+          );
+        }
+
+        // b) Upsert patient_clinical_context
+        await client.query(
+          `INSERT INTO patient_clinical_context (patient_id, organization_id, allergies, active_medications,
+             co_morbidities, is_pregnant, is_diabetic, has_mva_or_work_injury, care_coordination_required,
+             recommended_treatment, last_updated_from_referral_at)
+           VALUES ($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,NOW())
+           ON CONFLICT (patient_id) DO UPDATE SET
+             allergies = EXCLUDED.allergies, active_medications = EXCLUDED.active_medications,
+             co_morbidities = EXCLUDED.co_morbidities, is_pregnant = EXCLUDED.is_pregnant,
+             is_diabetic = EXCLUDED.is_diabetic, has_mva_or_work_injury = EXCLUDED.has_mva_or_work_injury,
+             care_coordination_required = EXCLUDED.care_coordination_required,
+             recommended_treatment = EXCLUDED.recommended_treatment,
+             last_updated_from_referral_at = NOW()`,
+          [
+            patientId, orgId,
+            JSON.stringify(va.clinical_context?.allergies ?? []),
+            JSON.stringify(va.clinical_context?.active_medications ?? []),
+            JSON.stringify(diagData.co_morbidities ?? []),
+            va.clinical_context?.is_pregnant ?? false,
+            va.clinical_context?.is_diabetic ?? false,
+            va.clinical_context?.has_mva_or_work_injury ?? false,
+            va.clinical_context?.care_coordination_required ?? false,
+            va.clinical_context?.recommended_treatment ?? null,
+          ]
+        );
+
+        // c) Upsert prior_authorization
+        let authDbId = extracted.existing_auth_id;
+        if (!authDbId) {
+          const { rows: authRows } = await client.query(
+            `INSERT INTO prior_authorizations
+               (organization_id, patient_id, payer, service_type, auth_number, expiration_date,
+                requested_date, status, mode, source, created_at, updated_at)
+             VALUES ($1,$2,'VA Community Care','Home Health',$3,$4,$5,'active','received','smart_claim',NOW(),NOW())
+             RETURNING id`,
+            [orgId, patientId, authData.auth_number, authData.expiration_date ?? null, authData.issue_date ?? null]
+          );
+          authDbId = authRows[0].id;
+        } else if (userEdits.resolved_conflicts?.auth_expiration_differs === "update_existing") {
+          await client.query(
+            `UPDATE prior_authorizations SET expiration_date = $1, updated_at = NOW() WHERE id = $2 AND organization_id = $3`,
+            [authData.expiration_date, authDbId, orgId]
+          );
+        }
+
+        // d) Insert va_referral_metadata (upsert by authorization_id)
+        if (authData.auth_number) {
+          await client.query(
+            `INSERT INTO va_referral_metadata (authorization_id, organization_id, va_facility_name, va_station_number,
+               va_facility_phone, va_facility_fax, unique_consult_no, program_authority, affiliation, network,
+               requesting_provider_first_name, requesting_provider_last_name, requesting_provider_specialty,
+               referring_provider_first_name, referring_provider_last_name, referring_provider_raw_npi,
+               category_of_care, type_of_care, rate_basis, seoc_code, recommended_treatment, care_coordination_required)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+             ON CONFLICT (authorization_id) DO NOTHING`,
+            [
+              authData.auth_number, orgId,
+              va.va_facility?.name ?? null, va.va_facility?.station_number ?? null,
+              va.va_facility?.phone ?? null, va.va_facility?.fax ?? null,
+              va.unique_consult_no ?? null, va.program_authority ?? null,
+              va.payer?.affiliation ?? null, va.payer?.network ?? null,
+              va.requesting_provider?.first_name ?? null, va.requesting_provider?.last_name ?? null,
+              va.requesting_provider?.specialty ?? null,
+              va.referring_provider?.first_name ?? null, va.referring_provider?.last_name ?? null,
+              va.referring_provider?.raw_npi ?? null,
+              va.category_of_care ?? null, va.type_of_care ?? null, va.rate_basis ?? null,
+              authData.seoc_code ?? null, va.clinical_context?.recommended_treatment ?? null,
+              va.clinical_context?.care_coordination_required ?? false,
+            ]
+          );
+        }
+
+        // e) Insert authorized_services rows
+        for (let i = 0; i < (authData.authorized_services ?? []).length; i++) {
+          const svc = authData.authorized_services[i];
+          await client.query(
+            `INSERT INTO authorized_services (id, authorization_id, organization_id, service_index, description,
+               billing_unit_type, max_units_per_period_text, max_units_per_visit, is_primary)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+             ON CONFLICT DO NOTHING`,
+            [
+              crypto.randomUUID(), authData.auth_number, orgId, i,
+              svc.description, svc.billing_unit_type, svc.max_units_per_period_text ?? null,
+              svc.max_units_per_visit ?? null, svc.is_primary ?? i === 0,
+            ]
+          );
+        }
+
+        // f) Find provider and payer
+        const { rows: provRows } = await client.query(
+          `SELECT id FROM providers WHERE organization_id = $1 ORDER BY created_at ASC LIMIT 1`, [orgId]
+        );
+        const { rows: payerRows } = await client.query(
+          `SELECT id FROM payers WHERE payer_id = 'TWVACCN' AND organization_id = $1 LIMIT 1`, [orgId]
+        );
+        const providerId = provRows[0]?.id ?? null;
+        const payerDbId = payerRows[0]?.id ?? null;
+
+        // g) Build service lines from QB line items
+        const hcpcs = va.suggested_hcpcs ?? "G0156";
+        const serviceLines = (qbData.line_items ?? []).map((li: any) => ({
+          code: hcpcs,
+          hcpcsCode: hcpcs,
+          units: Math.round((li.hours ?? 0) * 4),
+          charge: li.total ?? 0,
+          modifier: "",
+          description: li.description ?? "",
+          service_date: li.service_date,
+          service_date_from: li.service_date,
+          diagnosisPointers: "A",
+        }));
+
+        const totalAmount = serviceLines.reduce((s: number, l: any) => s + (l.charge ?? 0), 0);
+        const firstDos = serviceLines[0]?.service_date ?? now.toISOString().slice(0, 10);
+        const lastDos = serviceLines[serviceLines.length - 1]?.service_date ?? firstDos;
+
+        // h) Insert encounter
+        const encId = crypto.randomUUID();
+        await client.query(
+          `INSERT INTO encounters (id, patient_id, service_type, facility_type, admission_type,
+             expected_start_date, organization_id, created_at)
+           VALUES ($1,$2,'home_health','home','routine',$3,$4,NOW())`,
+          [encId, patientId, firstDos, orgId]
+        );
+
+        // i) Insert claim (status='draft')
+        claimId = crypto.randomUUID();
+        await client.query(
+          `INSERT INTO claims (id, organization_id, patient_id, encounter_id, payer, payer_id, provider_id,
+             service_date, statement_period_start, statement_period_end,
+             place_of_service, icd10_primary, icd10_secondary, authorization_number, amount, status,
+             risk_score, readiness_status, homebound_indicator, claim_frequency_code,
+             service_lines, cpt_codes, submission_method, created_by, created_at, updated_at)
+           VALUES ($1,$2,$3,$4,'VA Community Care',$5,$6,$7,$8,$9,'12',$10,$11::jsonb,$12,$13,
+                   'draft',0,'GREEN',true,'1',$14::jsonb,$15::jsonb,'stedi',$16,NOW(),NOW())`,
+          [
+            claimId, orgId, patientId, encId,
+            payerDbId, providerId,
+            firstDos, firstDos, lastDos,
+            diagData.primary_icd10_code ?? "",
+            JSON.stringify(diagData.co_morbidities?.slice(0, 3) ?? []),
+            authData.auth_number ?? null,
+            totalAmount,
+            JSON.stringify(serviceLines),
+            JSON.stringify([hcpcs]),
+            (req.user as any)?.email ?? null,
+          ]
+        );
+
+        // j) Insert qb_invoice_metadata
+        await client.query(
+          `INSERT INTO qb_invoice_metadata (claim_id, organization_id, invoice_number, invoice_date,
+             caregiver_tips, source_s3_key)
+           VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (claim_id) DO NOTHING`,
+          [
+            claimId, orgId,
+            qbData.invoice_number ?? null,
+            qbData.invoice_date ?? null,
+            qbData.caregiver_tips ?? null,
+            draft.qb_invoice_s3_key,
+          ]
+        );
+
+        // k) Claim event
+        await client.query(
+          `INSERT INTO claim_events (id, claim_id, type, timestamp, notes, organization_id)
+           VALUES ($1,$2,'smart_claim_created',NOW(),'Draft claim created via Smart Claim from VA referral + QuickBooks invoice',$3)`,
+          [crypto.randomUUID(), claimId, orgId]
+        );
+
+        // l) Mark draft confirmed
+        await client.query(
+          `UPDATE smart_claim_drafts SET status='confirmed', created_claim_id=$3, updated_at=NOW()
+           WHERE id=$1 AND organization_id=$2`,
+          [draft.id, orgId, claimId]
+        );
+
+        await client.query("COMMIT");
+      } catch (txErr) {
+        await client.query("ROLLBACK");
+        throw txErr;
+      } finally {
+        client.release();
+      }
+
+      res.status(201).json({ claimId, message: "Draft claim created" });
+    } catch (err: any) {
+      console.error("[smart-claim] confirm error:", err?.message);
+      res.status(500).json({ error: "Failed to confirm smart claim" });
+    }
+  });
+
+  // DELETE /api/billing/smart-claims/:id — discard draft
+  app.delete("/api/billing/smart-claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const db = await import("./db").then(m => m.pool);
+
+      const { rows } = await db.query(
+        `UPDATE smart_claim_drafts SET status='discarded', updated_at=NOW()
+         WHERE id=$1 AND organization_id=$2 AND status NOT IN ('confirmed','discarded')
+         RETURNING id`,
+        [req.params.id, orgId]
+      );
+
+      if (!rows.length) return res.status(404).json({ error: "Draft not found or already finalized" });
+      res.json({ message: "Draft discarded" });
+    } catch (err: any) {
+      console.error("[smart-claim] discard error:", err?.message);
+      res.status(500).json({ error: "Failed to discard smart claim draft" });
+    }
+  });
 
   // ── NPI Registry lookup (NPPES public API) ───────────────────────────────
   app.get("/api/npi-lookup", requireAuth, async (req, res) => {
