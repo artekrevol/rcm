@@ -244,10 +244,10 @@ export default function PatientCreate() {
       const res = await apiRequest("POST", "/api/billing/patients", data);
       return res.json();
     },
-    onSuccess: (data: any) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/billing/patients"] });
       toast({ title: "Patient created" });
-      navigate(`/billing/patients/${data.id}`);
+      navigate("/billing/patients");
     },
     onError: (err: any) => {
       toast({ title: "Error creating patient", description: err.message, variant: "destructive" });
@@ -257,12 +257,12 @@ export default function PatientCreate() {
   function handleSubmit() {
     const e: Record<string, string> = {};
 
-    if (!form.firstName.trim()) e.firstName = "Required";
-    if (!form.lastName.trim()) e.lastName = "Required";
+    if (!form.firstName.trim()) e.firstName = "Enter a first name";
+    if (!form.lastName.trim()) e.lastName = "Enter a last name";
 
     const dobTrimmed = form.dob.trim();
     if (!dobTrimmed) {
-      e.dob = "Required";
+      e.dob = "Enter a date of birth";
     } else if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dobTrimmed)) {
       e.dob = "Must be MM/DD/YYYY (e.g. 01/15/1980)";
     } else {
@@ -277,19 +277,19 @@ export default function PatientCreate() {
       }
     }
 
-    if (!form.sex) e.sex = "Required";
-    if (!form.payerId && !form.insuranceCarrier.trim()) e.insuranceCarrier = "Required";
-    if ((form.payerId || form.insuranceCarrier.trim()) && !form.memberId.trim()) e.memberId = "Required";
-    if (!form.relationshipToInsured) e.relationshipToInsured = "Required";
-    if (!form.street.trim()) e.street = "Required";
-    if (!form.city.trim()) e.city = "Required";
+    if (!form.sex) e.sex = "Select a sex";
+    if (!form.payerId && !form.insuranceCarrier.trim()) e.insuranceCarrier = "Select or enter an insurance carrier";
+    if ((form.payerId || form.insuranceCarrier.trim()) && !form.memberId.trim()) e.memberId = "Enter a member ID";
+    if (!form.relationshipToInsured) e.relationshipToInsured = "Select a relationship";
+    if (!form.street.trim()) e.street = "Enter a street address";
+    if (!form.city.trim()) e.city = "Enter a city";
     if (!form.state.trim()) {
-      e.state = "Required";
+      e.state = "Enter a state code";
     } else if (!/^[A-Za-z]{2}$/.test(form.state.trim())) {
       e.state = "Must be a 2-letter code (e.g. CA)";
     }
     if (!form.zip.trim()) {
-      e.zip = "Required";
+      e.zip = "Enter a ZIP code";
     } else if (!/^\d{5}(-\d{4})?$/.test(form.zip.trim())) {
       e.zip = "Must be 5 digits or ZIP+4 (e.g. 94080 or 94080-1234)";
     }
