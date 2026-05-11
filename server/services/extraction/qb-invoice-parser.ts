@@ -187,23 +187,28 @@ export function parseQbInvoice(result: TextractAnalysisResult): QbInvoiceExtract
   }
 
   // ── Totals ─────────────────────────────────────────────────────────────────────
+  const lineSum = Math.round(line_items.reduce((s, l) => s + l.total, 0) * 100) / 100;
+
   const subtotalEntry = kv(kvm, "subtotal", "services rendered", "services total", "total services");
-  const services_rendered_total = subtotalEntry
-    ? parseMoney(subtotalEntry.value)
-    : Math.round(line_items.reduce((s, l) => s + l.total, 0) * 100) / 100;
+  const subtotalRaw = subtotalEntry ? parseMoney(subtotalEntry.value) : 0;
+  // Prefer extracted subtotal only when it's non-zero and close to the line-item sum; otherwise use line sum.
+  const services_rendered_total = subtotalRaw > 0 && Math.abs(subtotalRaw - lineSum) < lineSum * 0.05
+    ? subtotalRaw
+    : lineSum;
 
   const tipsEntry = kv(kvm, "caregiver tips", "tips", "gratuity");
-  const caregiver_tips = tipsEntry ? parseMoney(tipsEntry.value) : null;
+  const tipsRaw = tipsEntry ? parseMoney(tipsEntry.value) : null;
+  const caregiver_tips = tipsRaw != null && tipsRaw > 0 ? tipsRaw : null;
 
   const totalEntry = kv(kvm, "total", "grand total", "amount due", "balance due", "invoice total");
-  const grand_total = totalEntry
-    ? parseMoney(totalEntry.value)
+  const totalRaw = totalEntry ? parseMoney(totalEntry.value) : 0;
+  const grand_total = totalRaw > 0
+    ? totalRaw
     : Math.round((services_rendered_total + (caregiver_tips ?? 0)) * 100) / 100;
 
   conf.grand_total = totalEntry?.confidence ?? 0.6;
 
   // ── Sanity check ──────────────────────────────────────────────────────────────
-  const lineSum = Math.round(line_items.reduce((s, l) => s + l.total, 0) * 100) / 100;
   if (line_items.length > 0 && Math.abs(lineSum - services_rendered_total) > 0.02) {
     console.warn(
       `[qb-parser] Line item sum mismatch: field=services_rendered_total expected=${lineSum}`
