@@ -140,6 +140,70 @@ function parseName(raw: string): { first: string; middle: string | null; last: s
   return { first: parts[0], middle: parts.slice(1, -1).join(" "), last: parts[parts.length - 1] };
 }
 
+// ─── State abbreviation lookup ────────────────────────────────────────────────
+
+const STATE_ABBREVS: Record<string, string> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
+  colorado: "CO", connecticut: "CT", delaware: "DE", florida: "FL", georgia: "GA",
+  hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA",
+  kansas: "KS", kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD",
+  massachusetts: "MA", michigan: "MI", minnesota: "MN", mississippi: "MS",
+  missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK",
+  oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT",
+  virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI", wyoming: "WY",
+};
+
+function toStateAbbrev(name: string): string {
+  const lower = name.toLowerCase().trim();
+  if (/^[A-Z]{2}$/.test(name.trim())) return name.trim().toUpperCase();
+  return STATE_ABBREVS[lower] ?? name.trim().slice(0, 2).toUpperCase();
+}
+
+/**
+ * Parse city / state / zip from a combined address line such as
+ * "572 37TH AVE SAN FRANCISCO, CALIFORNIA 941212812" or
+ * "RONALD W SEAWRIGHT 572 37TH AVE SAN FRANCISCO, CA 94121".
+ */
+function parseCityStateZipFromAddress(address: string): { city: string; state: string; zip: string } {
+  if (!address) return { city: "", state: "", zip: "" };
+  // Look for "CITY, STATE ZIP" pattern near the end (state is 2-letter abbrev or full name)
+  const m = address.match(/([A-Za-z][A-Za-z\s]{1,30}),\s*([A-Za-z]{2,20})\s+(\d{5})(?:\d{4})?\s*$/);
+  if (m) {
+    return {
+      city: m[1].trim().replace(/^\d+\s+(?:[A-Z0-9]+\s+)*/, "").trim() || m[1].trim(),
+      state: toStateAbbrev(m[2]),
+      zip: m[3],
+    };
+  }
+  // No comma format: "CITY STATE ZIP"
+  const m2 = address.match(/([A-Za-z][A-Za-z\s]{1,30})\s+([A-Z]{2})\s+(\d{5})(?:\d{4})?\s*$/);
+  if (m2) {
+    return { city: m2[1].trim(), state: m2[2], zip: m2[3] };
+  }
+  return { city: "", state: "", zip: "" };
+}
+
+/** Return true when a KV value looks like a city name (letters/spaces/hyphens, no long runs of digits) */
+function looksLikeCity(val: string): boolean {
+  if (!val) return false;
+  // Reject if it's mostly digits or very long (probably a phone/ID number)
+  if (/^\d+$/.test(val.trim())) return false;
+  if (val.trim().replace(/\D/g, "").length > 5) return false;
+  return true;
+}
+
+/** Return true when a KV value looks like a US state abbrev or name */
+function looksLikeState(val: string): boolean {
+  if (!val) return false;
+  const t = val.trim();
+  if (/^\d+$/.test(t)) return false;
+  if (t.replace(/\D/g, "").length > 4) return false;
+  return true;
+}
+
 // ─── KV lookup with aliases ───────────────────────────────────────────────────
 
 function kv(
@@ -150,9 +214,12 @@ function kv(
     const normalized = key.toLowerCase().replace(/[:\s]+$/g, "").trim();
     const entry = map.get(normalized);
     if (entry?.value) return entry;
-    // Fuzzy: search for partial key match
+    // Fuzzy: require both sides to be at least 4 chars long to avoid spurious short-key matches
     for (const [k, v] of Array.from(map.entries())) {
-      if (k.includes(normalized) || normalized.includes(k)) return v;
+      const kLong = k.length >= 4;
+      const nLong = normalized.length >= 4;
+      if (kLong && k.includes(normalized)) return v;
+      if (nLong && kLong && normalized.includes(k)) return v;
     }
   }
   return undefined;
@@ -209,10 +276,37 @@ export function parseVaReferral(result: TextractAnalysisResult): VaReferralExtra
   const gender: "M" | "F" = /^f/i.test(genderRaw) ? "F" : "M";
 
   const addr1Entry = kv(kvm, "address", "street address", "veteran address", "home address");
-  const cityEntry = kv(kvm, "city", "veteran city");
-  const stateEntry = kv(kvm, "state", "veteran state");
-  const zipEntry = kv(kvm, "zip", "zip code", "postal code", "veteran zip");
+  const rawCityEntry = kv(kvm, "city", "veteran city");
+  const rawStateEntry = kv(kvm, "state", "veteran state");
+  const rawZipEntry = kv(kvm, "zip", "zip code", "postal code", "veteran zip");
   conf.address = addr1Entry?.confidence ?? 0.5;
+
+  // Validate extracted city/state/zip; if they look like phone numbers or IDs,
+  // fall back to parsing them from the combined address line.
+  const addrLine = addr1Entry?.value?.trim() ?? "";
+  const parsedFromAddr = parseCityStateZipFromAddress(addrLine);
+
+  const cityVal = rawCityEntry?.value?.trim() ?? "";
+  const stateVal = rawStateEntry?.value?.trim() ?? "";
+  const zipVal = rawZipEntry?.value?.trim() ?? "";
+
+  const cityEntry = looksLikeCity(cityVal)
+    ? rawCityEntry
+    : parsedFromAddr.city
+      ? { value: parsedFromAddr.city, confidence: 0.7 }
+      : rawCityEntry;
+
+  const stateEntry = looksLikeState(stateVal)
+    ? rawStateEntry
+    : parsedFromAddr.state
+      ? { value: parsedFromAddr.state, confidence: 0.7 }
+      : rawStateEntry;
+
+  const zipEntry = /^\d{5}/.test(zipVal)
+    ? rawZipEntry
+    : parsedFromAddr.zip
+      ? { value: parsedFromAddr.zip, confidence: 0.7 }
+      : rawZipEntry;
 
   const phoneEntry = kv(kvm, "phone", "telephone", "veteran phone", "home phone");
   const emailEntry = kv(kvm, "email", "veteran email");
@@ -286,18 +380,34 @@ export function parseVaReferral(result: TextractAnalysisResult): VaReferralExtra
   const primary_description = dx1Raw.replace(icdMatch?.[0] ?? "", "").trim();
   conf.diagnosis = dx1Entry?.confidence ?? 0.5;
 
-  // Co-morbidities from lines near "co-morbid" heading
+  // Co-morbidities from lines near "co-morbid" heading.
+  // Strategy: collect only lines that look like ICD codes or short medical diagnoses.
+  // Stop on any VA form section header or after 15 items.
+  const CO_MORBID_STOP = /^(allergies|allerg|medication|treatment|authorization|veteran|patient|service|type of care|rate|category|referring|requesting|network|community|form|printed|approved|program|referral|contact|note|instruction|please|telephone|fax|billing|rendering|ordering|status|priority|section|page \d|scheduling|appointment|provider|facility|ordering|signature|date|prepared|authorization number|auth number|auth no|unique consult|issue date|expiration|diagnosis:|primary diagnosis|icd-10|hcpcs|suggested|care coordinator|from:|to:|subject:|dear|sincerely)/i;
   const co_morbidities: string[] = [];
   let inCoMorbid = false;
   for (const line of result.lines) {
     if (/co.?morbid/i.test(line.text)) { inCoMorbid = true; continue; }
-    if (inCoMorbid) {
-      if (/^(allergies|medications|treatment|authorization|veteran|patient)/i.test(line.text)) {
-        inCoMorbid = false; continue;
-      }
-      const item = line.text.trim();
-      if (item && item.length > 2) co_morbidities.push(item);
-    }
+    if (!inCoMorbid) continue;
+
+    const item = line.text.trim();
+    // Stop on section headers or boilerplate
+    if (CO_MORBID_STOP.test(item)) { inCoMorbid = false; continue; }
+    // Stop on blank / very short lines that suggest section breaks
+    if (item.length < 3) { inCoMorbid = false; continue; }
+    // Reject items that look like long sentences (form boilerplate)
+    if (item.length > 80) continue;
+    // Reject items that are pure numbers (page numbers, IDs)
+    if (/^\d+$/.test(item)) continue;
+    // Only accept items that look like a medical term or ICD code:
+    // – starts with a letter, may contain digits, dots, hyphens
+    // – OR looks like "F32.0", "M54.5", "Z87.39" etc.
+    const looksLikeDiag = /^[A-Za-z][A-Za-z0-9.\-\s]{1,60}$/.test(item);
+    if (!looksLikeDiag) continue;
+
+    co_morbidities.push(item);
+    // Cap to avoid runaway capture
+    if (co_morbidities.length >= 15) { inCoMorbid = false; break; }
   }
 
   // ── Payer / Network ──────────────────────────────────────────────────────────
