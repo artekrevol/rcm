@@ -6023,6 +6023,24 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // DELETE /api/billing/claims/:id — only allowed for draft claims
+  app.delete("/api/billing/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const orgId = requireOrgCtx(req, res);
+      if (!orgId) return;
+      const { rows } = await db.query(
+        `DELETE FROM claims WHERE id = $1 AND organization_id = $2 AND status = 'draft' RETURNING id`,
+        [req.params.id, orgId]
+      );
+      if (!rows.length) return res.status(404).json({ error: "Draft claim not found or cannot be deleted (only draft claims may be deleted)" });
+      res.json({ message: "Draft claim deleted" });
+    } catch (err: any) {
+      console.error("[API] delete claim error:", err?.message);
+      res.status(500).json({ error: "Failed to delete claim" });
+    }
+  });
+
   app.patch("/api/billing/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
