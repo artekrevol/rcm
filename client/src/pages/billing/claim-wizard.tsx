@@ -1346,6 +1346,7 @@ export default function ClaimWizard() {
   const [cms1500Loading, setCms1500Loading] = useState(false);
   const [cms1500Done, setCms1500Done] = useState(false);
   const [step2Errors, setStep2Errors] = useState<Record<string, string>>({});
+  const [step0PatientErrors, setStep0PatientErrors] = useState<string[]>([]);
   const [showBulkModal, setShowBulkModal] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isDirty, setIsDirty] = useState(false);
@@ -1699,8 +1700,9 @@ export default function ClaimWizard() {
   });
 
   function handlePatientSelect(p: any) {
-    if (!p) { setPatient(null); return; }
+    if (!p) { setPatient(null); setStep0PatientErrors([]); return; }
     setPatient(p);
+    setStep0PatientErrors([]);
     if (p.authorization_number) setAuthNumber(p.authorization_number);
     // Reset referral selections when patient changes
     setWizardReferralId(null);
@@ -1712,6 +1714,17 @@ export default function ClaimWizard() {
 
   function handleStep1Next() {
     if (!patient) { toast({ title: "Select a patient first", variant: "destructive" }); return; }
+    const missing: string[] = [];
+    if (!patient.first_name || !patient.last_name) missing.push("Patient full name is missing — update the patient record before billing");
+    if (!patient.dob) missing.push("Date of birth is missing");
+    if (!patient.insurance_carrier) missing.push("Insurance carrier / payer is missing");
+    if (!patient.member_id) missing.push("Member ID is missing");
+    if (missing.length > 0) {
+      setStep0PatientErrors(missing);
+      toast({ title: "Patient record is incomplete", description: "Fix the highlighted issues before creating this claim.", variant: "destructive" });
+      return;
+    }
+    setStep0PatientErrors([]);
     if (!claimId) {
       draftMutation.mutate(patient.id);
     } else {
@@ -1817,14 +1830,25 @@ export default function ClaimWizard() {
   }
 
   function validateStep2(): boolean {
+    const today = new Date().toISOString().split("T")[0];
     const errors: Record<string, string> = {};
     if (!providerId) errors.provider = "Rendering provider is required";
     if (!serviceDate) errors.serviceDate = "Billing period start date is required";
+    if (!placeOfService) errors.pos = "Place of service is required";
     const filledLines = serviceLines.filter(l => l.code);
-    if (filledLines.length === 0) errors.serviceLines = "At least one service line with a code is required";
-    filledLines.forEach((l, i) => {
-      if ((parseInt(l.units) || 0) <= 0) errors[`line_${i}_units`] = `Line ${i + 1}: units must be greater than zero`;
-    });
+    if (filledLines.length === 0) {
+      errors.serviceLines = "At least one service line with a code is required";
+    } else {
+      const lineErrors: string[] = [];
+      filledLines.forEach((l, i) => {
+        const n = i + 1;
+        if ((parseInt(l.units) || 0) <= 0) lineErrors.push(`Line ${n}: units must be greater than zero`);
+        if ((parseFloat(l.totalCharge) || 0) <= 0) lineErrors.push(`Line ${n}: total charge must be greater than zero`);
+        if (!l.serviceDateFrom) lineErrors.push(`Line ${n}: service date (From) is required`);
+        else if (l.serviceDateFrom > today) lineErrors.push(`Line ${n}: service date cannot be in the future`);
+      });
+      if (lineErrors.length > 0) errors.serviceLines = lineErrors.join(" · ");
+    }
     if (!icd10Primary.code) errors.icd10 = "At least one ICD-10 diagnosis code is required";
     setStep2Errors(errors);
     return Object.keys(errors).length === 0;
@@ -2118,6 +2142,25 @@ export default function ClaimWizard() {
             </Card>
           )}
 
+          {step0PatientErrors.length > 0 && (
+            <div className="rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-950/20 p-3 space-y-1.5" data-testid="banner-patient-data-errors">
+              <p className="text-sm font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                Patient record is incomplete — fix before continuing
+              </p>
+              <ul className="space-y-1">
+                {step0PatientErrors.map((e, i) => (
+                  <li key={i} className="text-sm text-red-600 dark:text-red-400 flex items-start gap-1.5">
+                    <span className="mt-0.5 shrink-0">•</span>{e}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-red-500 dark:text-red-400">
+                Go to the patient record, fill in the missing fields, then return here.
+              </p>
+            </div>
+          )}
+
           <div className="flex justify-end">
             <Button
               onClick={handleStep1Next}
@@ -2255,8 +2298,8 @@ export default function ClaimWizard() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Place of Service <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-                  <Select value={placeOfService} onValueChange={setPlaceOfService}>
-                    <SelectTrigger data-testid="select-pos">
+                  <Select value={placeOfService} onValueChange={(v) => { setPlaceOfService(v); setStep2Errors(prev => { const n = {...prev}; delete n.pos; return n; }); }}>
+                    <SelectTrigger data-testid="select-pos" className={step2Errors.pos ? "border-red-500" : ""}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -2265,6 +2308,7 @@ export default function ClaimWizard() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {step2Errors.pos && <p className="text-sm text-destructive flex items-center gap-1" data-testid="error-pos"><AlertCircle className="h-3 w-3" /> {step2Errors.pos}</p>}
                 </div>
               </div>
             </CardContent>

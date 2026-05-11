@@ -491,6 +491,12 @@ Zero modularization — every route, middleware helper, background cron, and see
 | B1 | 🔴 BLOCKER | ERA Posting | `era_claim_lines` vs `era_lines` table split — webhook ERAs invisible in UI | `stedi-webhooks.ts` | 240–295 |
 | B2 | ✅ FIXED | Auth | Session secret fallback `"claimshield-dev-secret"` removed — server throws on startup if `SESSION_SECRET` unset in any environment | `auth.ts` | 108–119 |
 | B3 | ✅ FIXED | Auth | Hardcoded super-admin password fallback `'Apps@1986N'` removed — account creation skipped with warning if `SUPER_ADMIN_PASSWORD` unset | `routes.ts` | 524–552 |
+| V1 | ✅ FIXED | Forms | Patient create form — 10+ required fields enforced with inline errors, DOB/phone/email/ZIP/state format validation, toast on failure, redirect on success | `patient-create.tsx` | — |
+| V2 | ✅ FIXED | Forms | Patient edit form (`ProfileTab`) — same validation as V1, authorizationNumber enforced, redirect on success | `patient-detail.tsx` | — |
+| V3 | ✅ FIXED | Forms | Backend `POST /api/billing/patients` — DOB format/range, email, phone, ZIP, state server-side validation | `routes.ts` | — |
+| V4 | ✅ FIXED | Forms | Claim wizard Step 0 — patient data quality gate blocks progression if name/DOB/insurance carrier/member ID missing; inline error card shown | `claim-wizard.tsx` | 1718–1735 |
+| V5 | ✅ FIXED | Forms | Claim wizard Step 1 — `validateStep2` now checks: POS required, totalCharge > 0 per line, serviceDateFrom required + not future per line; POS field gets inline error | `claim-wizard.tsx` | 1835–1858 |
+| V6 | ✅ FIXED | Backend | `PATCH /api/billing/claims/:id` — validates serviceDate (format + not future), amount (non-negative), placeOfService (1–2 digit), icd10Primary (ICD-10 format) | `routes.ts` | 6052–6080 |
 | H1 | 🟠 HIGH | Webhooks | Twilio SMS webhooks — no signature validation | `routes.ts` | 10752, 10826 |
 | H2 | 🟠 HIGH | Webhooks | Stedi webhook accepts all POSTs when secret unset | `routes.ts` | 13796–13807 |
 | H3 | 🟠 HIGH | Webhooks | Vapi webhook accepts all POSTs when secret unset | `routes.ts` | 10134–10137 |

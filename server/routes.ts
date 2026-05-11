@@ -6048,6 +6048,34 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.patch("/api/billing/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
+      // ── Input validation ──────────────────────────────────────────────────────
+      if (req.body.serviceDate !== undefined && req.body.serviceDate !== null && req.body.serviceDate !== "") {
+        const d = String(req.body.serviceDate);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(Date.parse(d))) {
+          return res.status(400).json({ error: "serviceDate must be a valid date in YYYY-MM-DD format" });
+        }
+        if (new Date(d) > new Date()) {
+          return res.status(400).json({ error: "serviceDate cannot be in the future" });
+        }
+      }
+      if (req.body.amount !== undefined && req.body.amount !== null) {
+        const amt = Number(req.body.amount);
+        if (isNaN(amt) || amt < 0) {
+          return res.status(400).json({ error: "amount must be a non-negative number" });
+        }
+      }
+      if (req.body.placeOfService !== undefined && req.body.placeOfService !== null && req.body.placeOfService !== "") {
+        if (!/^\d{1,2}$/.test(String(req.body.placeOfService))) {
+          return res.status(400).json({ error: "placeOfService must be a 1–2 digit numeric code" });
+        }
+      }
+      if (req.body.icd10Primary !== undefined && req.body.icd10Primary !== null && req.body.icd10Primary !== "") {
+        if (!/^[A-Z]\d{2}/.test(String(req.body.icd10Primary).toUpperCase())) {
+          return res.status(400).json({ error: "icd10Primary must be a valid ICD-10 code (e.g. Z89.512)" });
+        }
+      }
+      // ── End input validation ──────────────────────────────────────────────────
+
       const db = await import("./db").then(m => m.pool);
       const existing = await db.query("SELECT id, status, organization_id FROM claims WHERE id = $1", [req.params.id]);
       if (existing.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
