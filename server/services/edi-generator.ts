@@ -171,6 +171,9 @@ export interface EDI837PInput {
   };
   practice: {
     name: string;
+    /** NPPES-registered legal name. Used in NM1*41 (Submitter) and NM1*85 (Billing Provider).
+     *  Falls back to `name` when null so existing practices without legal_name still work. */
+    legal_name?: string | null;
     npi: string;
     tax_id: string;
     taxonomy_code: string;
@@ -556,10 +559,11 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
   // NM1*41: NM108 = "46" (ETIN). NM109 = practice NPI.
   // Stedi routes to PGBA internally; NPI is what Stedi's enrollment expects here.
   // Per PGBA 837P CG v1.0, Table 6, page 15.
+  // NM103 uses legal_name (NPPES-registered) with fallback to practice.name.
   segments.push(NM1({
     entityIdCode: '41',
     entityTypeQualifier: '2',
-    lastOrOrgName: practice.name,
+    lastOrOrgName: practice.legal_name || practice.name,
     idQualifier: NM1_QUALIFIER["41"],
     idCode: practice.npi,
   }));
@@ -591,10 +595,11 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
   // NM108 = "XX" (NPI) per NM1_QUALIFIER["85"]; NM109 = agency NPI.
   // Billing provider is always an organization (practice) → NM102 = 2.
   // REF*EI: federal tax ID.
+  // NM103 uses legal_name (NPPES-registered) with fallback to practice.name.
   segments.push(NM1({
     entityIdCode: '85',
     entityTypeQualifier: '2',
-    lastOrOrgName: practice.name,
+    lastOrOrgName: practice.legal_name || practice.name,
     idQualifier: NM1_QUALIFIER["85"],
     idCode: practice.npi,
   }));

@@ -270,6 +270,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS default_ordering_provider_id VARCHAR`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS homebound_default BOOLEAN DEFAULT true`);
     await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS exclude_facility BOOLEAN DEFAULT true`);
+    // legal_name: NPPES-registered entity name used in EDI NM1*41 and NM1*85.
+    // Separate from practice_name (user-facing branding) so EDI correctness is
+    // decoupled from what admins display in the UI.
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS legal_name VARCHAR`);
+    await pool.query(`COMMENT ON COLUMN practice_settings.legal_name IS 'NPPES-registered legal name for the entity. Used in EDI NM1*41 (Submitter) and NM1*85 (Billing Provider) segments. Separate from practice_name (used for user-facing branding).'`).catch(() => {});
     await pool.query(`ALTER TABLE providers ADD COLUMN IF NOT EXISTS entity_type VARCHAR DEFAULT 'individual'`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS auto_followup_days INTEGER DEFAULT 30`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS era_auto_post_clean BOOLEAN DEFAULT false`);
@@ -604,11 +609,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     {
       const CHAJINEL_ORG_ID = "chajinel-org-001";
 
-      // Practice settings — update with real NPI, tax ID, address, billing model
+      // Practice settings — update with real NPI, tax ID, address, billing model.
+      // practice_name guarded by IS NULL so manual admin edits are never clobbered on redeploy.
       await pool.query(`
         UPDATE practice_settings
         SET
-          practice_name   = 'Chajinel',
+          practice_name   = CASE WHEN practice_name IS NULL OR practice_name = '' THEN 'Chajinel' ELSE practice_name END,
           primary_npi     = '1184288680',
           tax_id          = '47-1075172',
           billing_model   = 'agency_billed',
@@ -619,6 +625,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           updated_at      = NOW()
         WHERE organization_id = $1
       `, [CHAJINEL_ORG_ID]).catch(() => {});
+
+      // Populate legal_name from NPPES for Chajinel. Idempotent — only writes when
+      // legal_name IS NULL so manual overrides in Railway are never reverted on redeploy.
+      await pool.query(`
+        UPDATE practice_settings
+        SET legal_name = 'CHAJINEL HOME CARE SERVICE LLC'
+        WHERE primary_npi = '1184288680' AND legal_name IS NULL
+      `).catch(() => {});
 
       // Payer 1 — VA Community Care (canonical payer for Chajinel, per_hour rate, no VOB requirement)
       const { rows: vacc } = await pool.query(
@@ -4900,6 +4914,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         },
         practice: {
           name: ps.practice_name || "Practice",
+          legal_name: ps.legal_name || null,
           npi: ps.primary_npi || "0000000000",
           tax_id: ps.tax_id || "000000000",
           taxonomy_code: ps.taxonomy_code || "163W00000X",
@@ -6862,6 +6877,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         },
         practice: {
           name: ps.practice_name || "Practice",
+          legal_name: ps.legal_name || null,
           npi: ps.primary_npi || "0000000000",
           tax_id: ps.tax_id || "000000000",
           taxonomy_code: ps.taxonomy_code || "163W00000X",
@@ -7032,6 +7048,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         },
         practice: {
           name: ps.practice_name || "Practice",
+          legal_name: ps.legal_name || null,
           npi: ps.primary_npi || "0000000000",
           tax_id: ps.tax_id || "000000000",
           taxonomy_code: ps.taxonomy_code || "163W00000X",
@@ -7308,6 +7325,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         },
         practice: {
           name: ps.practice_name || "Practice",
+          legal_name: ps.legal_name || null,
           npi: ps.primary_npi || "0000000000",
           tax_id: ps.tax_id || "000000000",
           taxonomy_code: ps.taxonomy_code || "163W00000X",
@@ -7546,6 +7564,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         },
         practice: {
           name: ps.practice_name || "Practice",
+          legal_name: ps.legal_name || null,
           npi: ps.primary_npi || "0000000000",
           tax_id: ps.tax_id || "000000000",
           taxonomy_code: ps.taxonomy_code || "163W00000X",

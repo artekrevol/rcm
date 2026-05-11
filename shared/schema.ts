@@ -532,6 +532,7 @@ export type Organization = typeof organizations.$inferSelect;
 export const practiceSettings = pgTable("practice_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   practiceName: varchar("practice_name").notNull().default(""),
+  legalName: varchar("legal_name"),
   primaryNpi: varchar("primary_npi"),
   taxId: varchar("tax_id"),
   taxonomyCode: varchar("taxonomy_code"),
