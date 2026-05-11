@@ -490,7 +490,7 @@ Zero modularization — every route, middleware helper, background cron, and see
 |---|----------|------|-------|------|-------|
 | B1 | 🔴 BLOCKER | ERA Posting | `era_claim_lines` vs `era_lines` table split — webhook ERAs invisible in UI | `stedi-webhooks.ts` | 240–295 |
 | B2 | 🔴 BLOCKER | Auth | Hardcoded session secret fallback `"claimshield-dev-secret"` | `auth.ts` | 119 |
-| B3 | 🔴 BLOCKER | Auth | Hardcoded super-admin password fallback `'Apps@1986N'` in source | `routes.ts` | 527 |
+| B3 | ✅ FIXED | Auth | Hardcoded super-admin password fallback `'Apps@1986N'` removed — account creation skipped with warning if `SUPER_ADMIN_PASSWORD` unset | `routes.ts` | 524–552 |
 | H1 | 🟠 HIGH | Webhooks | Twilio SMS webhooks — no signature validation | `routes.ts` | 10752, 10826 |
 | H2 | 🟠 HIGH | Webhooks | Stedi webhook accepts all POSTs when secret unset | `routes.ts` | 13796–13807 |
 | H3 | 🟠 HIGH | Webhooks | Vapi webhook accepts all POSTs when secret unset | `routes.ts` | 10134–10137 |

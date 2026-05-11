@@ -519,18 +519,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     console.log("Assigned existing data to demo organization");
 
     // ── Super Admin user seed ─────────────────────────────────────────────
+    // No fallback password. SUPER_ADMIN_PASSWORD must be explicitly set.
+    // If the account doesn't exist yet and the env var is missing, creation
+    // is skipped — the account is created exactly once when the env var is set.
     {
       const { hashPassword } = await import("./auth");
       const { rows: saCheck } = await pool.query("SELECT id FROM users WHERE email = 'abeer@tekrevol.com'");
       if (saCheck.length === 0) {
-        // First-time creation: use SUPER_ADMIN_PASSWORD env var or fallback default
-        const superPwd = process.env.SUPER_ADMIN_PASSWORD || 'Apps@1986N';
-        const hashed = await hashPassword(superPwd);
-        await pool.query(
-          "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, 'abeer@tekrevol.com', $1, 'super_admin', 'Abeer (Platform Admin)', NULL)",
-          [hashed]
-        );
-        console.log("Created super_admin user: abeer@tekrevol.com");
+        if (!process.env.SUPER_ADMIN_PASSWORD) {
+          console.warn("WARNING: SUPER_ADMIN_PASSWORD is not set — super_admin account not created. Set this env var and restart to create the account.");
+        } else {
+          const hashed = await hashPassword(process.env.SUPER_ADMIN_PASSWORD);
+          await pool.query(
+            "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, 'abeer@tekrevol.com', $1, 'super_admin', 'Abeer (Platform Admin)', NULL)",
+            [hashed]
+          );
+          console.log("Created super_admin user: abeer@tekrevol.com");
+        }
       } else if (process.env.SUPER_ADMIN_PASSWORD) {
         // Only reset password if explicitly configured via env var — never overwrite a manually-set password
         const hashed = await hashPassword(process.env.SUPER_ADMIN_PASSWORD);
