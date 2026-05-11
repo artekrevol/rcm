@@ -26,23 +26,55 @@ export interface QbInvoiceExtraction {
 
 // ─── Date normalizer ──────────────────────────────────────────────────────────
 
+const QB_MONTHS: Record<string, string> = {
+  january: "01", february: "02", march: "03", april: "04",
+  may: "05", june: "06", july: "07", august: "08",
+  september: "09", october: "10", november: "11", december: "12",
+  jan: "01", feb: "02", mar: "03", apr: "04",
+  jun: "06", jul: "07", aug: "08",
+  sep: "09", oct: "10", nov: "11", dec: "12",
+};
+
 function parseToIso(raw: string | undefined | null): string | null {
   if (!raw) return null;
   const s = raw.trim();
+  // MM/DD/YYYY
   const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (mdy) return `${mdy[3]}-${mdy[1].padStart(2, "0")}-${mdy[2].padStart(2, "0")}`;
+  // YYYY-MM-DD already
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const months: Record<string, string> = {
-    january: "01", february: "02", march: "03", april: "04",
-    may: "05", june: "06", july: "07", august: "08",
-    september: "09", october: "10", november: "11", december: "12",
-  };
-  const longDate = s.match(/^(\w+)\s+(\d{1,2}),?\s+(\d{4})$/i);
+  // DD-Mon-YYYY (e.g. "02-Apr-2026") — QuickBooks default export format
+  const dmy = s.match(/^(\d{1,2})-([A-Za-z]{3,9})-(\d{4})$/);
+  if (dmy) {
+    const m = QB_MONTHS[dmy[2].toLowerCase()];
+    if (m) return `${dmy[3]}-${m}-${dmy[1].padStart(2, "0")}`;
+  }
+  // Month DD, YYYY
+  const longDate = s.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/i);
   if (longDate) {
-    const m = months[longDate[1].toLowerCase()];
+    const m = QB_MONTHS[longDate[1].toLowerCase()];
     if (m) return `${longDate[3]}-${m}-${longDate[2].padStart(2, "0")}`;
   }
   return null;
+}
+
+/**
+ * Try to extract a date string embedded at the start of a description cell.
+ * QB sometimes merges date + description into one column.
+ */
+function extractDateFromDescription(desc: string): { date: string | null; cleanDesc: string } {
+  // "02-Apr-2026 Home Health Aide" or "02/04/2026 ..."
+  const prefixDmy = desc.match(/^(\d{1,2}-[A-Za-z]{3,9}-\d{4})\s+([\s\S]*)/);
+  if (prefixDmy) {
+    const date = parseToIso(prefixDmy[1]);
+    if (date) return { date, cleanDesc: prefixDmy[2].trim() };
+  }
+  const prefixMdy = desc.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s+([\s\S]*)/);
+  if (prefixMdy) {
+    const date = parseToIso(prefixMdy[1]);
+    if (date) return { date, cleanDesc: prefixMdy[2].trim() };
+  }
+  return { date: null, cleanDesc: desc };
 }
 
 // ─── KV lookup ────────────────────────────────────────────────────────────────
@@ -120,11 +152,24 @@ export function parseQbInvoice(result: TextractAnalysisResult): QbInvoiceExtract
 
     for (let i = 1; i < table.rows.length; i++) {
       const row = table.rows[i];
-      const description = row[descIdx]?.text?.trim() ?? "";
+      let description = row[descIdx]?.text?.trim() ?? "";
       if (!description) continue;
 
-      const rawDate = dateIdx >= 0 ? row[dateIdx]?.text : null;
-      const service_date = parseToIso(rawDate) ?? invoice_date;
+      // Primary date source: dedicated date column
+      let rawDate = dateIdx >= 0 ? row[dateIdx]?.text?.trim() : null;
+      let service_date = parseToIso(rawDate);
+
+      // Fallback: date may be embedded at the start of the description cell
+      if (!service_date) {
+        const extracted = extractDateFromDescription(description);
+        if (extracted.date) {
+          service_date = extracted.date;
+          description = extracted.cleanDesc || description;
+        }
+      }
+
+      // Last resort: use the invoice header date
+      service_date = service_date ?? invoice_date;
 
       const hoursRaw = qtyIdx >= 0 ? row[qtyIdx]?.text ?? "0" : "0";
       const hours = parseFloat(hoursRaw.replace(/[^\d.]/g, "")) || 0;
