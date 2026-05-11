@@ -727,6 +727,50 @@ it("SBR09 is 'CH' for TRICARE payer with claim_filing_indicator='CH' (boundary g
     `SBR09 should be 'CH' for TRICARE-style payer, got: '${sbr!.elements[9]}'`);
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// legal_name tests — NM1*41 (Submitter) and NM1*85 (Billing Provider)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+it("NM1*41 uses legal_name when present", () => {
+  const input = baseInput();
+  input.practice.legal_name = "CHAJINEL HOME CARE SERVICE LLC";
+  const segs = parseEdi(generate837P(input).edi);
+  const nm141 = segs.find(s => s.id === 'NM1' && s.elements[1] === '41');
+  assert(nm141 !== undefined, "NM1*41 not found");
+  assert(nm141!.elements[3] === 'CHAJINEL HOME CARE SERVICE LLC',
+    `NM1*41 NM103: '${nm141!.elements[3]}' — expected 'CHAJINEL HOME CARE SERVICE LLC'`);
+});
+
+it("NM1*41 falls back to practice.name when legal_name is null", () => {
+  const input = baseInput();
+  input.practice.legal_name = null;
+  const segs = parseEdi(generate837P(input).edi);
+  const nm141 = segs.find(s => s.id === 'NM1' && s.elements[1] === '41');
+  assert(nm141 !== undefined, "NM1*41 not found");
+  assert(nm141!.elements[3] === 'Test Clinic LLC',
+    `NM1*41 NM103: '${nm141!.elements[3]}' — expected 'Test Clinic LLC'`);
+});
+
+it("NM1*85 uses legal_name when present", () => {
+  const input = baseInput();
+  input.practice.legal_name = "CHAJINEL HOME CARE SERVICE LLC";
+  const segs = parseEdi(generate837P(input).edi);
+  const nm185 = segs.find(s => s.id === 'NM1' && s.elements[1] === '85');
+  assert(nm185 !== undefined, "NM1*85 not found");
+  assert(nm185!.elements[3] === 'CHAJINEL HOME CARE SERVICE LLC',
+    `NM1*85 NM103: '${nm185!.elements[3]}' — expected 'CHAJINEL HOME CARE SERVICE LLC'`);
+});
+
+it("NM1*85 falls back to practice.name when legal_name is null", () => {
+  const input = baseInput();
+  input.practice.legal_name = null;
+  const segs = parseEdi(generate837P(input).edi);
+  const nm185 = segs.find(s => s.id === 'NM1' && s.elements[1] === '85');
+  assert(nm185 !== undefined, "NM1*85 not found");
+  assert(nm185!.elements[3] === 'Test Clinic LLC',
+    `NM1*85 NM103: '${nm185!.elements[3]}' — expected 'Test Clinic LLC'`);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed (${passed + failed} total)\n`);
