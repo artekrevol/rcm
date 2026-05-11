@@ -103,6 +103,7 @@ export default function PatientCreate() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [npiError, setNpiError] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const [form, setForm] = useState({
     firstName: "", middleName: "", lastName: "", dob: "", sex: "",
@@ -254,14 +255,63 @@ export default function PatientCreate() {
   });
 
   function handleSubmit() {
-    if (!form.firstName.trim() || !form.lastName.trim() || !form.dob.trim()) {
-      toast({ title: "First name, last name, and date of birth are required", variant: "destructive" });
-      return;
+    const e: Record<string, string> = {};
+
+    if (!form.firstName.trim()) e.firstName = "Required";
+    if (!form.lastName.trim()) e.lastName = "Required";
+
+    const dobTrimmed = form.dob.trim();
+    if (!dobTrimmed) {
+      e.dob = "Required";
+    } else if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dobTrimmed)) {
+      e.dob = "Must be MM/DD/YYYY (e.g. 01/15/1980)";
+    } else {
+      const [mm, dd, yyyy] = dobTrimmed.split("/").map(Number);
+      const parsed = new Date(yyyy, mm - 1, dd);
+      if (isNaN(parsed.getTime()) || parsed.getMonth() !== mm - 1) {
+        e.dob = "Not a valid date";
+      } else if (parsed > new Date()) {
+        e.dob = "Cannot be in the future";
+      } else if (yyyy < 1900) {
+        e.dob = "Must be after 1900";
+      }
+    }
+
+    if (!form.sex) e.sex = "Required";
+    if (!form.payerId && !form.insuranceCarrier.trim()) e.insuranceCarrier = "Required";
+    if ((form.payerId || form.insuranceCarrier.trim()) && !form.memberId.trim()) e.memberId = "Required";
+    if (!form.relationshipToInsured) e.relationshipToInsured = "Required";
+    if (!form.street.trim()) e.street = "Required";
+    if (!form.city.trim()) e.city = "Required";
+    if (!form.state.trim()) {
+      e.state = "Required";
+    } else if (!/^[A-Za-z]{2}$/.test(form.state.trim())) {
+      e.state = "Must be a 2-letter code (e.g. CA)";
+    }
+    if (!form.zip.trim()) {
+      e.zip = "Required";
+    } else if (!/^\d{5}(-\d{4})?$/.test(form.zip.trim())) {
+      e.zip = "Must be 5 digits or ZIP+4 (e.g. 94080 or 94080-1234)";
+    }
+    if (form.phone.trim() && form.phone.replace(/\D/g, "").length < 10) {
+      e.phone = "Must contain at least 10 digits";
+    }
+    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      e.email = "Enter a valid email address";
     }
     if (form.referringProviderNpi && !validateNPI(form.referringProviderNpi)) {
+      e.referringProviderNpi = "Invalid NPI — must be 10 digits and pass checksum";
       setNpiError("Invalid NPI — must be 10 digits and pass checksum");
+    } else {
+      setNpiError("");
+    }
+
+    setErrors(e);
+    if (Object.keys(e).length > 0) {
+      toast({ title: "Please fix the highlighted fields before saving", variant: "destructive" });
       return;
     }
+
     const referralSource = form.referralSource === "Other" ? form.otherReferralSource : form.referralSource;
     createMutation.mutate({
       firstName: form.firstName.trim(),
@@ -303,7 +353,17 @@ export default function PatientCreate() {
   }
 
   const f = form;
-  const set = (updates: Partial<typeof form>) => setForm((prev) => ({ ...prev, ...updates }));
+  const set = (updates: Partial<typeof form>) => {
+    setForm((prev) => ({ ...prev, ...updates }));
+    const keys = Object.keys(updates);
+    if (keys.some((k) => errors[k])) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        keys.forEach((k) => delete next[k]);
+        return next;
+      });
+    }
+  };
 
   return (
     <div className="p-6 max-w-3xl space-y-6">
@@ -327,7 +387,8 @@ export default function PatientCreate() {
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>First Name <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={f.firstName} onChange={(e) => set({ firstName: e.target.value })} data-testid="input-first-name" />
+              <Input value={f.firstName} onChange={(e) => set({ firstName: e.target.value })} data-testid="input-first-name" className={errors.firstName ? "border-destructive" : ""} />
+              {errors.firstName && <p className="text-xs text-destructive">{errors.firstName}</p>}
             </div>
             <div className="space-y-2">
               <Label>Middle Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
@@ -335,52 +396,89 @@ export default function PatientCreate() {
             </div>
             <div className="space-y-2">
               <Label>Last Name <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={f.lastName} onChange={(e) => set({ lastName: e.target.value })} data-testid="input-last-name" />
+              <Input value={f.lastName} onChange={(e) => set({ lastName: e.target.value })} data-testid="input-last-name" className={errors.lastName ? "border-destructive" : ""} />
+              {errors.lastName && <p className="text-xs text-destructive">{errors.lastName}</p>}
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Date of Birth <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={f.dob} onChange={(e) => set({ dob: e.target.value })} placeholder="MM/DD/YYYY" data-testid="input-dob" />
+              <Input
+                value={f.dob}
+                onChange={(e) => {
+                  let v = e.target.value.replace(/\D/g, "").slice(0, 8);
+                  if (v.length >= 5) v = v.slice(0, 2) + "/" + v.slice(2, 4) + "/" + v.slice(4);
+                  else if (v.length >= 3) v = v.slice(0, 2) + "/" + v.slice(2);
+                  set({ dob: v });
+                }}
+                placeholder="MM/DD/YYYY"
+                data-testid="input-dob"
+                className={errors.dob ? "border-destructive" : ""}
+              />
+              {errors.dob && <p className="text-xs text-destructive">{errors.dob}</p>}
             </div>
             <div className="space-y-2">
               <Label>Sex <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Select value={f.sex} onValueChange={(v) => set({ sex: v })}>
-                <SelectTrigger data-testid="select-sex"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectTrigger data-testid="select-sex" className={errors.sex ? "border-destructive" : ""}><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
                   {SEX_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {errors.sex && <p className="text-xs text-destructive">{errors.sex}</p>}
             </div>
             <div className="space-y-2">
               <Label>Phone <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
-              <Input value={f.phone} onChange={(e) => set({ phone: e.target.value })} data-testid="input-phone" />
+              <Input value={f.phone} onChange={(e) => set({ phone: e.target.value })} data-testid="input-phone" className={errors.phone ? "border-destructive" : ""} />
+              {errors.phone && <p className="text-xs text-destructive">{errors.phone}</p>}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2 col-span-2">
               <Label>Street Address <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span> <span className="text-muted-foreground text-xs font-normal">(used in EDI — CMS-1500 Box 5)</span></Label>
-              <Input value={f.street} onChange={(e) => set({ street: e.target.value })} placeholder="208 Cypress Avenue" data-testid="input-street" />
+              <Input value={f.street} onChange={(e) => set({ street: e.target.value })} placeholder="208 Cypress Avenue" data-testid="input-street" className={errors.street ? "border-destructive" : ""} />
+              {errors.street && <p className="text-xs text-destructive">{errors.street}</p>}
             </div>
           </div>
           <div className="grid grid-cols-4 gap-4">
             <div className="space-y-2 col-span-2">
               <Label>City <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={f.city} onChange={(e) => set({ city: e.target.value })} placeholder="South San Francisco" data-testid="input-city" />
+              <Input value={f.city} onChange={(e) => set({ city: e.target.value })} placeholder="South San Francisco" data-testid="input-city" className={errors.city ? "border-destructive" : ""} />
+              {errors.city && <p className="text-xs text-destructive">{errors.city}</p>}
             </div>
             <div className="space-y-2">
               <Label>State <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={f.state} onChange={(e) => set({ state: e.target.value })} maxLength={2} placeholder="CA" data-testid="input-state" />
+              <Input
+                value={f.state}
+                onChange={(e) => set({ state: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 2) })}
+                maxLength={2}
+                placeholder="CA"
+                data-testid="input-state"
+                className={errors.state ? "border-destructive" : ""}
+              />
+              {errors.state && <p className="text-xs text-destructive">{errors.state}</p>}
             </div>
             <div className="space-y-2">
               <Label>ZIP <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={f.zip} onChange={(e) => set({ zip: e.target.value })} maxLength={10} placeholder="94080" data-testid="input-zip" />
+              <Input
+                value={f.zip}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/[^\d-]/g, "").slice(0, 10);
+                  set({ zip: v });
+                }}
+                maxLength={10}
+                placeholder="94080"
+                data-testid="input-zip"
+                className={errors.zip ? "border-destructive" : ""}
+              />
+              {errors.zip && <p className="text-xs text-destructive">{errors.zip}</p>}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Email <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
-              <Input value={f.email} onChange={(e) => set({ email: e.target.value })} type="email" data-testid="input-email" />
+              <Input value={f.email} onChange={(e) => set({ email: e.target.value })} data-testid="input-email" className={errors.email ? "border-destructive" : ""} />
+              {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
             </div>
           </div>
         </CardContent>
@@ -404,7 +502,7 @@ export default function PatientCreate() {
                 value={f.payerId || "__custom__"}
                 onValueChange={handlePayerChange}
               >
-                <SelectTrigger data-testid="select-insurance-carrier">
+                <SelectTrigger data-testid="select-insurance-carrier" className={errors.insuranceCarrier ? "border-destructive" : ""}>
                   <SelectValue placeholder="Select payer..." />
                 </SelectTrigger>
                 <SelectContent>
@@ -420,12 +518,15 @@ export default function PatientCreate() {
                   onChange={(e) => set({ insuranceCarrier: e.target.value })}
                   placeholder="Enter carrier name"
                   data-testid="input-insurance-carrier"
+                  className={errors.insuranceCarrier ? "border-destructive" : ""}
                 />
               )}
+              {errors.insuranceCarrier && <p className="text-xs text-destructive">{errors.insuranceCarrier}</p>}
             </div>
             <div className="space-y-2">
               <Label>Member ID <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={f.memberId} onChange={(e) => set({ memberId: e.target.value })} data-testid="input-member-id" />
+              <Input value={f.memberId} onChange={(e) => set({ memberId: e.target.value })} data-testid="input-member-id" className={errors.memberId ? "border-destructive" : ""} />
+              {errors.memberId && <p className="text-xs text-destructive">{errors.memberId}</p>}
             </div>
           </div>
 
@@ -547,11 +648,12 @@ export default function PatientCreate() {
             <div className="space-y-2">
               <Label>Relationship to Insured <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Select value={f.relationshipToInsured} onValueChange={(v) => set({ relationshipToInsured: v })}>
-                <SelectTrigger data-testid="select-relationship"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectTrigger data-testid="select-relationship" className={errors.relationshipToInsured ? "border-destructive" : ""}><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
                   {RELATIONSHIP_OPTIONS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {errors.relationshipToInsured && <p className="text-xs text-destructive">{errors.relationshipToInsured}</p>}
             </div>
           </div>
           <div className="space-y-2">

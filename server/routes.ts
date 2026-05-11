@@ -8449,6 +8449,34 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           return res.status(400).json({ error: "Invalid referring provider NPI" });
         }
       }
+      if (dob) {
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dob.trim())) {
+          return res.status(400).json({ error: "dob must be in MM/DD/YYYY format" });
+        }
+        const [mm, dd, yyyy] = dob.trim().split("/").map(Number);
+        const parsed = new Date(yyyy, mm - 1, dd);
+        if (isNaN(parsed.getTime()) || parsed.getMonth() !== mm - 1) {
+          return res.status(400).json({ error: "dob is not a valid date" });
+        }
+        if (parsed > new Date()) {
+          return res.status(400).json({ error: "dob cannot be in the future" });
+        }
+        if (yyyy < 1900) {
+          return res.status(400).json({ error: "dob must be after 1900" });
+        }
+      }
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: "Invalid email address format" });
+      }
+      if (phone && phone.replace(/\D/g, "").length < 10) {
+        return res.status(400).json({ error: "Phone number must contain at least 10 digits" });
+      }
+      if (address?.zip && !/^\d{5}(-\d{4})?$/.test(address.zip.trim())) {
+        return res.status(400).json({ error: "ZIP code must be 5 digits or ZIP+4 format (e.g. 94080 or 94080-1234)" });
+      }
+      if (state && !/^[A-Za-z]{2}$/.test(state.trim())) {
+        return res.status(400).json({ error: "State must be a 2-letter code (e.g. CA)" });
+      }
       const db = await import("./db").then(m => m.pool);
       const { rows } = await db.query(
         `INSERT INTO patients (
