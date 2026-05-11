@@ -6,6 +6,7 @@ import { setupAuth, ensureSessionTable } from "./auth";
 import { tenantContextMiddleware } from "./middleware/tenant-context";
 import { startOrchestrator } from "./jobs/flow-orchestrator";
 import { seedCaritasFlow } from "./seeds/caritas-flow";
+import { configureS3Cors } from "./lib/configure-s3-cors";
 import { startCciCron } from "./jobs/cci-cron";
 import { startTimelyFilingCron } from "./jobs/timely-filing-cron";
 import { startScraperCron } from "./jobs/scraper-cron";
@@ -29,6 +30,7 @@ declare module "http" {
 
 app.use(
   express.json({
+    limit: "20mb", // raised to support base64-encoded PDF uploads via /api/billing/smart-claims/upload
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
@@ -117,6 +119,9 @@ app.use((req, res, next) => {
       // Start flow orchestrator and seed demo data after server is up
       seedCaritasFlow().catch((err) =>
         console.error("[startup] seedCaritasFlow error:", err)
+      );
+      configureS3Cors().catch((err) =>
+        console.warn("[startup] S3 CORS configuration skipped:", err?.message)
       );
       startOrchestrator();
       startCciCron();
