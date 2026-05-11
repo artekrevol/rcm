@@ -2620,9 +2620,15 @@ export default function ClaimWizard() {
                 </div>
                 {/* T6: grouped violations by severity */}
                 {riskResult.factors.length > 0 && (() => {
-                  const blocks = riskResult.factors.filter(f => f.severity === "block");
-                  const warns  = riskResult.factors.filter(f => f.severity === "warn");
-                  const infos  = riskResult.factors.filter(f => f.severity === "info");
+                  const seenRisk = new Set<string>();
+                  const dedupedFactors = riskResult.factors.filter((f: RuleViolation) => {
+                    if (seenRisk.has(f.message)) return false;
+                    seenRisk.add(f.message);
+                    return true;
+                  });
+                  const blocks = dedupedFactors.filter(f => f.severity === "block");
+                  const warns  = dedupedFactors.filter(f => f.severity === "warn");
+                  const infos  = dedupedFactors.filter(f => f.severity === "info");
                   const Section = ({ items, icon: Icon, colorClass, label }: {
                     items: RuleViolation[];
                     icon: ComponentType<{ className?: string }>;

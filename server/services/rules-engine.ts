@@ -640,7 +640,14 @@ export async function evaluateClaim(
     }
   }
 
-  return violations;
+  // Deduplicate by message so that N identical service lines (e.g. 20×G0156)
+  // never produce N identical violation entries.
+  const seenMessages = new Set<string>();
+  return violations.filter((v) => {
+    if (seenMessages.has(v.message)) return false;
+    seenMessages.add(v.message);
+    return true;
+  });
 }
 
 // ── PCP Referral evaluator (Prompt 05 T4) ────────────────────────────────
