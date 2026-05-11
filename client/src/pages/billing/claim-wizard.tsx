@@ -1835,20 +1835,29 @@ export default function ClaimWizard() {
     if (!providerId) errors.provider = "Rendering provider is required";
     if (!serviceDate) errors.serviceDate = "Billing period start date is required";
     if (!placeOfService) errors.pos = "Place of service is required";
-    const filledLines = serviceLines.filter(l => l.code);
-    if (filledLines.length === 0) {
+
+    const codedLines = serviceLines.filter(l => l.code);
+    if (codedLines.length === 0) {
       errors.serviceLines = "At least one service line with a code is required";
     } else {
       const lineErrors: string[] = [];
-      filledLines.forEach((l, i) => {
+      // Iterate ALL lines using the real index so "Line N" matches what the user sees
+      serviceLines.forEach((l, i) => {
         const n = i + 1;
-        if ((parseInt(l.units) || 0) <= 0) lineErrors.push(`Line ${n}: units must be greater than zero`);
-        if ((parseFloat(l.totalCharge) || 0) <= 0) lineErrors.push(`Line ${n}: total charge must be greater than zero`);
-        if (!l.serviceDateFrom) lineErrors.push(`Line ${n}: service date (From) is required`);
-        else if (l.serviceDateFrom > today) lineErrors.push(`Line ${n}: service date cannot be in the future`);
+        if (l.code) {
+          // Fully validate coded lines
+          if ((parseInt(l.units) || 0) <= 0) lineErrors.push(`Line ${n}: units must be greater than zero`);
+          if ((parseFloat(l.totalCharge) || 0) <= 0) lineErrors.push(`Line ${n}: total charge must be greater than zero`);
+          if (!l.serviceDateFrom) lineErrors.push(`Line ${n}: service date (From) is required`);
+          else if (l.serviceDateFrom > today) lineErrors.push(`Line ${n}: service date cannot be in the future`);
+        } else if (l.serviceDateFrom && l.serviceDateFrom > today) {
+          // Even on uncoded lines, a future date is always wrong
+          lineErrors.push(`Line ${n}: service date cannot be in the future`);
+        }
       });
       if (lineErrors.length > 0) errors.serviceLines = lineErrors.join(" · ");
     }
+
     if (!icd10Primary.code) errors.icd10 = "At least one ICD-10 diagnosis code is required";
     setStep2Errors(errors);
     return Object.keys(errors).length === 0;
