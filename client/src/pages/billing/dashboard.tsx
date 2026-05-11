@@ -20,9 +20,11 @@ import {
   X,
   CheckCircle2,
   Circle,
+  Trash2,
 } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { MetricCard } from "@/components/metric-card";
 import { Link, useLocation } from "wouter";
@@ -176,6 +178,63 @@ function ReadinessBanner() {
         </button>
       </div>
     </div>
+  );
+}
+
+function DeleteDraftButton({ claimId }: { claimId: string }) {
+  const { toast } = useToast();
+  const [confirming, setConfirming] = useState(false);
+
+  const deleteMutation = useMutation({
+    mutationFn: () => apiRequest("DELETE", `/api/billing/claims/${claimId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/dashboard/stats"] });
+      toast({ title: "Draft deleted" });
+      setConfirming(false);
+    },
+    onError: () => {
+      toast({ title: "Could not delete", description: "Only draft claims can be deleted.", variant: "destructive" });
+      setConfirming(false);
+    },
+  });
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1">
+        <Button
+          size="sm"
+          variant="destructive"
+          className="h-6 text-xs px-2"
+          onClick={() => deleteMutation.mutate()}
+          disabled={deleteMutation.isPending}
+          data-testid={`button-confirm-delete-${claimId}`}
+        >
+          Delete
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 text-xs px-2"
+          onClick={() => setConfirming(false)}
+          data-testid={`button-cancel-delete-${claimId}`}
+        >
+          Cancel
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+      onClick={(e) => { e.stopPropagation(); setConfirming(true); }}
+      data-testid={`button-delete-draft-${claimId}`}
+      title="Delete draft"
+    >
+      <Trash2 className="h-3.5 w-3.5" />
+    </Button>
   );
 }
 
@@ -429,6 +488,7 @@ export default function BillingDashboard() {
                     <th className="text-right p-3 font-medium text-muted-foreground">Amount</th>
                     <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
                     <th className="text-left p-3 font-medium text-muted-foreground">Created</th>
+                    <th className="p-3 w-10" />
                   </tr>
                 </thead>
                 <tbody>
@@ -446,10 +506,13 @@ export default function BillingDashboard() {
                       <td className="p-3 text-muted-foreground">
                         {c.created_at ? format(new Date(c.created_at), "MMM d, yyyy") : "—"}
                       </td>
+                      <td className="p-3" onClick={(e) => e.stopPropagation()}>
+                        {c.status === "draft" && <DeleteDraftButton claimId={c.id} />}
+                      </td>
                     </tr>
                   ))}
                   {recentClaims.length === 0 && (
-                    <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No claims yet. Create your first claim to get started.</td></tr>
+                    <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">No claims yet. Create your first claim to get started.</td></tr>
                   )}
                 </tbody>
               </table>
