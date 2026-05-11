@@ -285,7 +285,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS payer_classification VARCHAR(32)`);
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS claim_filing_indicator VARCHAR(2)`);
     // Backfill: explicit payer_id first (most reliable), then name-based one-time migration
-    await pool.query(`UPDATE payers SET payer_classification='va_community_care', claim_filing_indicator='CH' WHERE payer_id='TWVACCN' AND payer_classification IS NULL`);
+    await pool.query(`UPDATE payers SET payer_classification='va_community_care', claim_filing_indicator='VA' WHERE payer_id='TWVACCN' AND payer_classification IS NULL`);
     await pool.query(`UPDATE payers SET payer_classification='tricare', claim_filing_indicator='CH' WHERE (LOWER(name) LIKE '%tricare%' OR LOWER(name) LIKE '%champva%') AND payer_classification IS NULL`);
     await pool.query(`UPDATE payers SET payer_classification='medicare_advantage', claim_filing_indicator='HM' WHERE (LOWER(name) LIKE '%medicare advantage%' OR LOWER(name) LIKE '%aarp medicare%' OR LOWER(name) LIKE '%medicare complete%') AND payer_classification IS NULL`);
     await pool.query(`UPDATE payers SET payer_classification='medicare_part_b', claim_filing_indicator='MB' WHERE LOWER(name) LIKE '%medicare%' AND payer_classification IS NULL`);
@@ -622,7 +622,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (vacc.length === 0) {
         const { rows: vaccNew } = await pool.query(`
           INSERT INTO payers (id, name, payer_id, payer_category, payer_classification, claim_filing_indicator, timely_filing_days, auth_required, billing_type, is_active, is_custom, rate_input_mode, requires_vob, organization_id, created_at)
-          VALUES (gen_random_uuid()::text, 'VA Community Care (TriWest / TWVACCN)', 'TWVACCN', 'va_community_care', 'va_community_care', 'CH', 365, true, 'professional', true, true, 'per_hour', false, $1, NOW())
+          VALUES (gen_random_uuid()::text, 'VA Community Care (TriWest / TWVACCN)', 'TWVACCN', 'va_community_care', 'va_community_care', 'VA', 365, true, 'professional', true, true, 'per_hour', false, $1, NOW())
           RETURNING id
         `, [CHAJINEL_ORG_ID]);
         vaccId = vaccNew[0].id;

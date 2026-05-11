@@ -254,20 +254,29 @@ export interface EDI837PInput {
   };
 }
 
-function formatDate8(dateStr: string): string {
+function formatDate8(dateStr: string | Date | null | undefined): string {
   if (!dateStr) return "19000101";
+  // Handle Date objects returned by node-postgres for date/timestamp columns
+  if (dateStr instanceof Date) {
+    return dateStr.toISOString().slice(0, 10).replace(/-/g, "");
+  }
+  const s = String(dateStr).trim();
   // Handle MM/DD/YYYY → YYYYMMDD
-  const mdy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (mdy) return `${mdy[3]}${mdy[1].padStart(2, "0")}${mdy[2].padStart(2, "0")}`;
   // Handle MM/DD/YY → YYYYMMDD (century cutoff: 00-30 → 2000s, 31-99 → 1900s)
-  const mdyShort = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  const mdyShort = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
   if (mdyShort) {
     const yy = parseInt(mdyShort[3], 10);
     const century = yy <= 30 ? "20" : "19";
     return `${century}${mdyShort[3]}${mdyShort[1].padStart(2, "0")}${mdyShort[2].padStart(2, "0")}`;
   }
-  // Handle YYYY-MM-DD or YYYYMMDD
-  return dateStr.replace(/-/g, "").slice(0, 8);
+  // Handle MMDDYYYY (8 digits, month-first, no separators) → YYYYMMDD
+  // Example: "03161948" (stored legacy format) → "19480316"
+  const mmddyyyy = s.match(/^(0[1-9]|1[0-2])(\d{2})((?:19|20)\d{2})$/);
+  if (mmddyyyy) return `${mmddyyyy[3]}${mmddyyyy[1]}${mmddyyyy[2]}`;
+  // Handle YYYY-MM-DD or YYYYMMDD (already correct format — strip dashes)
+  return s.replace(/-/g, "").slice(0, 8);
 }
 
 function mapSex(sex?: string): string {
@@ -842,7 +851,15 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
   }
 
   // ── Loop 2400: Service Lines ──────────────────────────────────────────────
-  claim.service_lines.forEach((line, index) => {
+  // Sort by service_date ascending before emitting so lines are chronological.
+  // PGBA doesn't reject out-of-order lines but it's cleaner and avoids
+  // payer-side data-quality flags.
+  const sortedServiceLines = [...claim.service_lines].sort((a, b) => {
+    const da = a.service_date || claim.service_date || "";
+    const db_ = b.service_date || claim.service_date || "";
+    return da < db_ ? -1 : da > db_ ? 1 : 0;
+  });
+  sortedServiceLines.forEach((line, index) => {
     const lineServiceDate = line.service_date || claim.service_date;
     segments.push(LX(index + 1));
     // Build composite procedure identifier - components are ALWAYS colon-separated
