@@ -185,6 +185,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
     if (!form.insuranceCarrier?.trim()) e.insuranceCarrier = "Enter an insurance carrier";
     if (form.insuranceCarrier?.trim() && !form.memberId?.trim()) e.memberId = "Enter a member ID";
     if (!form.relationshipToInsured) e.relationshipToInsured = "Select a relationship";
+    if (!form.authorizationNumber?.trim()) e.authorizationNumber = "Enter an authorization number";
     if (!form.streetAddress?.trim()) e.streetAddress = "Enter a street address";
     if (!form.city?.trim()) e.city = "Enter a city";
     if (!form.state?.trim()) {
@@ -443,7 +444,8 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
           </div>
           <div className="space-y-2">
             <Label>Authorization Number <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-            <Input value={form.authorizationNumber} onChange={(e) => set({ authorizationNumber: e.target.value })} data-testid="input-edit-auth-number" />
+            <Input value={form.authorizationNumber} onChange={(e) => set({ authorizationNumber: e.target.value })} data-testid="input-edit-auth-number" className={errors.authorizationNumber ? "border-destructive" : ""} />
+            {errors.authorizationNumber && <p className="text-xs text-destructive">{errors.authorizationNumber}</p>}
           </div>
         </CardContent>
       </Card>
