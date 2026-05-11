@@ -1380,7 +1380,7 @@ export default function ClaimWizard() {
     (matchedPayer.name || "").toLowerCase().includes("va community care") ||
     (matchedPayer.name || "").toLowerCase().includes("triwest")
   );
-  const activeCodes = serviceLines.filter((l) => l.code).map((l) => l.code);
+  const activeCodes = Array.from(new Set(serviceLines.filter((l) => l.code).map((l) => l.code)));
   const paCodesParam = activeCodes.join(",");
 
   const { data: paCheckResult = {} } = useQuery<Record<string, any>>({
@@ -1949,7 +1949,13 @@ export default function ClaimWizard() {
   [preflightFactors]);
 
   function FieldViolationHint({ types }: { types: RuleType[] }) {
-    const violations = preflightViolationsFor(types);
+    const raw = preflightViolationsFor(types);
+    const seen = new Set<string>();
+    const violations = raw.filter((v) => {
+      if (seen.has(v.message)) return false;
+      seen.add(v.message);
+      return true;
+    });
     if (violations.length === 0) return null;
     const topSeverity = violations.some(v => v.severity === "block") ? "block"
       : violations.some(v => v.severity === "warn") ? "warn" : "info";
@@ -2313,7 +2319,6 @@ export default function ClaimWizard() {
             <CardContent className="space-y-3">
               {step2Errors.icd10 && <p className="text-sm text-red-500" data-testid="error-icd10">{step2Errors.icd10}</p>}
               <ICD10Search label="ICD-10 Diagnosis Code (required)" value={icd10Primary} onChange={(val) => { setIcd10Primary(val); setStep2Errors(prev => { const n = {...prev}; delete n.icd10; return n; }); }} testId="icd10-primary" />
-              <FieldViolationHint types={["data_quality"]} />
               {icd10Secondary.map((d, i) => (
                 <div key={i} className="flex items-end gap-2">
                   <div className="flex-1">
