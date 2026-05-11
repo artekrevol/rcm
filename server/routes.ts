@@ -3432,13 +3432,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           Bucket: bucket,
           Key: vaKey,
           ContentType: "application/pdf",
-          ServerSideEncryption: "AES256",
+          // ServerSideEncryption omitted — bucket default encryption handles this.
+          // Including SSE here adds x-amz-server-side-encryption as a signed header,
+          // which requires an extra CORS AllowedHeader and caused browser PUT failures.
         }), { expiresIn: 300 }),
         getSignedUrl(s3, new PutObjectCommand({
           Bucket: bucket,
           Key: qbKey,
           ContentType: "application/pdf",
-          ServerSideEncryption: "AES256",
         }), { expiresIn: 300 }),
       ]);
 
@@ -3446,6 +3447,41 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     } catch (err: any) {
       console.error("[smart-claim] upload-url error:", err?.message);
       res.status(500).json({ error: "Failed to generate upload URLs" });
+    }
+  });
+
+  // POST /api/billing/smart-claims/upload — server-side upload proxy (avoids S3 CORS)
+  // Accepts base64-encoded PDFs in JSON body, uploads both files to S3, returns keys.
+  // This sidesteps the browser→S3 direct PUT which requires a bucket CORS policy.
+  app.post("/api/billing/smart-claims/upload", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+
+      const { vaReferralBase64, qbInvoiceBase64 } = req.body;
+      if (!vaReferralBase64 || !qbInvoiceBase64) {
+        return res.status(400).json({ error: "Both vaReferralBase64 and qbInvoiceBase64 are required" });
+      }
+
+      const vaBuffer = Buffer.from(vaReferralBase64, "base64");
+      const qbBuffer = Buffer.from(qbInvoiceBase64, "base64");
+
+      if (vaBuffer.length < 4 || qbBuffer.length < 4) {
+        return res.status(400).json({ error: "Uploaded files appear to be empty or corrupt" });
+      }
+
+      const { uploadPdfToS3, buildS3Key } = await import("./services/storage/s3-uploader.js");
+      const draftId = crypto.randomUUID();
+
+      const [vaKey, qbKey] = await Promise.all([
+        uploadPdfToS3(vaBuffer, orgId, draftId, "va-referral"),
+        uploadPdfToS3(qbBuffer, orgId, draftId, "qb-invoice"),
+      ]);
+
+      res.json({ draftId, vaKey, qbKey });
+    } catch (err: any) {
+      console.error("[smart-claim] upload error:", err?.message);
+      res.status(500).json({ error: "Failed to upload documents" });
     }
   });
 

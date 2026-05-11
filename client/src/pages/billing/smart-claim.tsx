@@ -8,14 +8,6 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Sparkles, Upload, FileText, CheckCircle2, AlertCircle, Loader2, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-interface PresignedUrlResponse {
-  draftId: string;
-  vaReferralUploadUrl: string;
-  qbInvoiceUploadUrl: string;
-  vaKey: string;
-  qbKey: string;
-}
-
 interface DroppedFile {
   file: File;
   status: "pending" | "uploading" | "done" | "error";
@@ -152,31 +144,37 @@ export default function SmartClaimPage() {
     mutationFn: async () => {
       if (!vaFile || !qbFile) throw new Error("Both files required");
 
-      // 1. Get presigned URLs + draft ID
-      const urlRes = await apiRequest("POST", "/api/billing/smart-claims/upload-url");
-      if (!urlRes.ok) throw new Error("Failed to get upload URLs");
-      const { draftId, vaReferralUploadUrl, qbInvoiceUploadUrl, vaKey, qbKey }: PresignedUrlResponse =
-        await urlRes.json();
+      // 1. Read both files as base64 in parallel
+      const toBase64 = (file: File): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            // strip "data:application/pdf;base64," prefix
+            resolve(result.split(",")[1] ?? result);
+          };
+          reader.onerror = () => reject(new Error("Failed to read file"));
+          reader.readAsDataURL(file);
+        });
 
-      // 2. Upload directly to S3
       setVaFile((f) => f ? { ...f, status: "uploading" } : f);
       setQbFile((f) => f ? { ...f, status: "uploading" } : f);
 
-      const [vaRes, qbRes] = await Promise.all([
-        fetch(vaReferralUploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": "application/pdf" },
-          body: vaFile.file,
-        }),
-        fetch(qbInvoiceUploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": "application/pdf" },
-          body: qbFile.file,
-        }),
+      const [vaReferralBase64, qbInvoiceBase64] = await Promise.all([
+        toBase64(vaFile.file),
+        toBase64(qbFile.file),
       ]);
 
-      if (!vaRes.ok) throw new Error("VA referral upload failed");
-      if (!qbRes.ok) throw new Error("QuickBooks invoice upload failed");
+      // 2. Upload via backend proxy (avoids S3 CORS requirement)
+      const uploadRes = await apiRequest("POST", "/api/billing/smart-claims/upload", {
+        vaReferralBase64,
+        qbInvoiceBase64,
+      });
+      if (!uploadRes.ok) {
+        const body = await uploadRes.json().catch(() => ({}));
+        throw new Error((body as any).error ?? "Document upload failed");
+      }
+      const { draftId, vaKey, qbKey } = await uploadRes.json();
 
       setVaFile((f) => f ? { ...f, status: "done" } : f);
       setQbFile((f) => f ? { ...f, status: "done" } : f);
