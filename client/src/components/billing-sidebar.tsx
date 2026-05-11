@@ -19,6 +19,7 @@ import {
   ListChecks,
   Building2,
   AlarmClock,
+  Sparkles,
 } from "lucide-react";
 import {
   Sidebar,
@@ -42,6 +43,7 @@ const billingNavItems = [
   { title: "My Practice", url: "/billing/clinic", icon: Building2, adminOnly: true },
   { title: "Patients", url: "/billing/patients", icon: Users },
   { title: "Claims", url: "/billing/claims", icon: FileText },
+  { title: "Smart Claim", url: "/billing/claims/smart-new", icon: Sparkles },
   { title: "Claim Tracker", url: "/billing/claim-tracker", icon: Radar },
   { title: "Follow-Up Queue", url: "/billing/follow-up", icon: ListChecks },
   { title: "Filing Alerts", url: "/billing/filing-alerts", icon: AlarmClock, badge: true },

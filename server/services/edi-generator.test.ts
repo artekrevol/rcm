@@ -638,6 +638,70 @@ it("invalid NPI in referringProvider throws NPI validation error", () => {
   assert(msg.length > 0,  `Error message should be non-empty: '${msg}'`);
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// DMG — DOB format regression (formatDate8)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+it("formatDate8 (DMG): MM-DD-YYYY hyphen format → CCYYMMDD (was producing MMDDYYYY)", () => {
+  const input = baseInput();
+  input.patient.dob = "03-16-1948";
+  const segs = parseEdi(generate837P(input).edi);
+  const dmg = segs.find(s => s.id === 'DMG');
+  assert(dmg !== undefined,              "DMG segment not found");
+  assert(dmg!.elements[1] === 'D8',      `DMG01 format qualifier: '${dmg!.elements[1]}'`);
+  assert(dmg!.elements[2] === '19480316',
+    `DMG02 DOB: '${dmg!.elements[2]}' — expected CCYYMMDD 19480316, not MMDDYYYY 03161948`);
+});
+
+it("formatDate8 (DMG): ISO YYYY-MM-DD → CCYYMMDD (regression guard)", () => {
+  const input = baseInput();
+  input.patient.dob = "1948-03-16";
+  const segs = parseEdi(generate837P(input).edi);
+  const dmg = segs.find(s => s.id === 'DMG');
+  assert(dmg !== undefined,              "DMG segment not found");
+  assert(dmg!.elements[2] === '19480316',
+    `DMG02 DOB: '${dmg!.elements[2]}' — expected 19480316`);
+});
+
+it("formatDate8 (DMG): MM/DD/YYYY slash format → CCYYMMDD (regression guard)", () => {
+  const input = baseInput();
+  input.patient.dob = "03/16/1948";
+  const segs = parseEdi(generate837P(input).edi);
+  const dmg = segs.find(s => s.id === 'DMG');
+  assert(dmg !== undefined,              "DMG segment not found");
+  assert(dmg!.elements[2] === '19480316',
+    `DMG02 DOB: '${dmg!.elements[2]}' — expected 19480316`);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SBR09 boundary tests — claim filing indicator
+// ═══════════════════════════════════════════════════════════════════════════════
+
+it("SBR09 is 'VA' for TWVACCN payer with claim_filing_indicator='VA'", () => {
+  const input = baseInput();
+  input.payer = {
+    name: "VA Community Care (TriWest / TWVACCN)",
+    payer_id: "TWVACCN",
+    referringProviderPolicy: "forbidden" as const,
+    claim_filing_indicator: "VA",
+  };
+  const segs = parseEdi(generate837P(input).edi);
+  const sbr = segs.find(s => s.id === 'SBR');
+  assert(sbr !== undefined,         "SBR not found");
+  assert(sbr!.elements[9] === 'VA',
+    `SBR09 should be 'VA' for TWVACCN, got: '${sbr!.elements[9]}'`);
+});
+
+it("SBR09 is 'CH' for TRICARE payer with claim_filing_indicator='CH' (boundary guard)", () => {
+  const input = baseInput();
+  input.payer.claim_filing_indicator = "CH";
+  const segs = parseEdi(generate837P(input).edi);
+  const sbr = segs.find(s => s.id === 'SBR');
+  assert(sbr !== undefined,         "SBR not found");
+  assert(sbr!.elements[9] === 'CH',
+    `SBR09 should be 'CH' for TRICARE-style payer, got: '${sbr!.elements[9]}'`);
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed (${passed + failed} total)\n`);

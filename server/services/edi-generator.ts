@@ -275,6 +275,11 @@ function formatDate8(dateStr: string | Date | null | undefined): string {
   // Example: "03161948" (stored legacy format) → "19480316"
   const mmddyyyy = s.match(/^(0[1-9]|1[0-2])(\d{2})((?:19|20)\d{2})$/);
   if (mmddyyyy) return `${mmddyyyy[3]}${mmddyyyy[1]}${mmddyyyy[2]}`;
+  // Handle MM-DD-YYYY hyphenated US format → YYYYMMDD
+  const mdyHyphen = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (mdyHyphen) {
+    return `${mdyHyphen[3]}${mdyHyphen[1].padStart(2, "0")}${mdyHyphen[2].padStart(2, "0")}`;
+  }
   // Handle YYYY-MM-DD or YYYYMMDD (already correct format — strip dashes)
   return s.replace(/-/g, "").slice(0, 8);
 }
