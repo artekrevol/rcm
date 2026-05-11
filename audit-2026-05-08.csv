@@ -1,0 +1,5 @@
+claim_id,status,payer_id,packs_applied,error_count,warning_count,error_codes,summary
+chajinel-claim-mv-001,appeal_needed,87726,x12-base-837p,0,0,,0 warning(s) — ready
+db715c18-0ce1-4a8f-a197-e3a173e0c555,draft,TWVACCN,x12-base-837p;pgba-va-ccn-837p,4,0,X12-DX-POINTER-VALID;H68;PGBA-DX-POINTER;PGBA-AUTH-PRESENT,4 error(s): X12-DX-POINTER-VALID;H68;PGBA-DX-POINTER;PGBA-AUTH-PRESENT
+ca852024-bf9a-475e-9a10-ecc12c88ad1f,draft,TWVACCN,x12-base-837p;pgba-va-ccn-837p,6,0,X12-DX-POINTER-VALID;H68;PGBA-DX-POINTER;PGBA-AUTH-PRESENT,6 error(s): X12-DX-POINTER-VALID;H68;PGBA-DX-POINTER;PGBA-AUTH-PRESENT
+6e9c5677-b6c2-4fdb-8978-4ce7cfe1cb84,draft,TWVACCN,x12-base-837p;pgba-va-ccn-837p,1,0,H68,1 error(s): H68
