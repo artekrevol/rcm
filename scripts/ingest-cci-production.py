@@ -5,7 +5,17 @@ import os, sys, zipfile, io
 import psycopg2, psycopg2.extras
 from datetime import datetime
 
-PROD_URL = os.environ["PRODUCTION_DATABASE_URL"]
+PROD_URL = os.environ.get("RAILWAY_PRODUCTION_DATABASE_URL")
+if not PROD_URL:
+    print("ERROR: RAILWAY_PRODUCTION_DATABASE_URL is not set — refusing to run.", file=sys.stderr)
+    print("Set this secret to the hopper.proxy.rlwy.net Railway database URL.", file=sys.stderr)
+    sys.exit(1)
+if "--confirm-production" not in sys.argv:
+    print("ERROR: This script writes to Railway production.", file=sys.stderr)
+    print("Re-run with --confirm-production to proceed.", file=sys.stderr)
+    print("Hard rule: agent-driven scripts must not touch Railway production unattended.", file=sys.stderr)
+    print("For production data changes, use the Railway database tab manually.", file=sys.stderr)
+    sys.exit(1)
 VERSION  = "2026Q2"
 FILES    = [
     "attached_assets/ccioph-v320r0-f1_1777592939297.zip",

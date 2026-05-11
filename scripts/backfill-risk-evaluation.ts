@@ -4,25 +4,40 @@
  * Idempotent: safe to re-run. Claims already evaluated (last_risk_evaluation_at IS NOT NULL)
  * are still re-evaluated so stale data gets refreshed.
  *
- * Usage:
- *   PRODUCTION_DATABASE_URL=... npx tsx scripts/backfill-risk-evaluation.ts
- *   # or against dev DB:
+ * Usage (Replit sandbox — safe, default):
  *   npx tsx scripts/backfill-risk-evaluation.ts
+ *
+ * Usage (Railway production — requires explicit opt-in):
+ *   DATABASE_URL=$RAILWAY_PRODUCTION_DATABASE_URL \
+ *     npx tsx scripts/backfill-risk-evaluation.ts --confirm-production
  */
 
 import { Pool } from "pg";
 import { evaluateClaim, scoreViolations } from "../server/services/rules-engine";
 
-const connStr = process.env.PRODUCTION_DATABASE_URL || process.env.DATABASE_URL;
+const connStr = process.env.DATABASE_URL;
 if (!connStr) {
-  console.error("ERROR: neither PRODUCTION_DATABASE_URL nor DATABASE_URL is set");
+  console.error("ERROR: DATABASE_URL is not set");
   process.exit(1);
 }
 
-const pool = new Pool({ connectionString: connStr, ssl: connStr.includes("railway") ? { rejectUnauthorized: false } : undefined });
+// ── Production guard ──────────────────────────────────────────────────────────
+if (connStr.includes("rlwy.net") || connStr.includes("railway.internal")) {
+  if (!process.argv.includes("--confirm-production")) {
+    console.error(
+      "ERROR: DATABASE_URL targets Railway production (hopper.proxy.rlwy.net).\n" +
+      "Re-run with --confirm-production to proceed.\n" +
+      "Hard rule: agent-driven scripts must not touch Railway production unattended.\n" +
+      "For production data changes, use the Railway database tab manually."
+    );
+    process.exit(1);
+  }
+}
+
+const pool = new Pool({ connectionString: connStr, ssl: connStr.includes("rlwy.net") ? { rejectUnauthorized: false } : undefined });
 
 async function run() {
-  const targetDb = connStr!.includes("railway") ? "PRODUCTION (railway)" : "development";
+  const targetDb = connStr!.includes("rlwy.net") ? "RAILWAY (hopper)" : "Replit sandbox (heliumdb)";
   console.log(`\n[backfill] Connecting to ${targetDb}`);
 
   // Fetch all claims with their patients

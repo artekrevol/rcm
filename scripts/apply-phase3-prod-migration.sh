@@ -2,14 +2,14 @@
 # =============================================================================
 # Phase 3 Production Migration — Runner
 # =============================================================================
-# Applies scripts/phase3-prod-migration.sql against $PRODUCTION_DATABASE_URL,
+# Applies scripts/phase3-prod-migration.sql against $RAILWAY_PRODUCTION_DATABASE_URL,
 # then runs scripts/verify-phase3-prod-migration.sql to confirm post-state.
 #
 # This script is for documentation / convenience. It does NOT execute itself
 # automatically — must be invoked explicitly by an authorized operator.
 #
 # Pre-requisites:
-#   - $PRODUCTION_DATABASE_URL set in env
+#   - $RAILWAY_PRODUCTION_DATABASE_URL set in env
 #   - Snapshot taken (see docs/architecture/phase3-deploy-preflight.md §5)
 #   - Snapshot downloaded to local durable storage
 #   - Gate 3 sign-off received
@@ -21,16 +21,22 @@
 # =============================================================================
 set -euo pipefail
 
-if [[ -z "${PRODUCTION_DATABASE_URL:-}" ]]; then
-  echo "ERROR: PRODUCTION_DATABASE_URL not set — refusing to run." >&2
-  echo "       Set this env var to the Railway production database URL." >&2
+if [[ -z "${RAILWAY_PRODUCTION_DATABASE_URL:-}" ]]; then
+  echo "ERROR: RAILWAY_PRODUCTION_DATABASE_URL not set — refusing to run." >&2
+  echo "       Set this secret to the hopper.proxy.rlwy.net Railway database URL." >&2
   exit 1
 fi
 
-if [[ -n "${DATABASE_URL:-}" && "${PRODUCTION_DATABASE_URL}" == "${DATABASE_URL}" ]]; then
-  echo "ERROR: PRODUCTION_DATABASE_URL is identical to DATABASE_URL — refusing to run." >&2
-  echo "       This script must NEVER be executed against the dev database." >&2
+if [[ -n "${DATABASE_URL:-}" && "${RAILWAY_PRODUCTION_DATABASE_URL}" == "${DATABASE_URL}" ]]; then
+  echo "ERROR: RAILWAY_PRODUCTION_DATABASE_URL is identical to DATABASE_URL — refusing to run." >&2
   echo "       Verify env var values and re-run with two distinct URLs." >&2
+  exit 1
+fi
+
+# Hard rule: must pass --confirm-production flag in addition to interactive prompt.
+if [[ ! " $* " =~ " --confirm-production " ]]; then
+  echo "ERROR: --confirm-production flag required to run against Railway production." >&2
+  echo "       Re-run: $0 --confirm-production" >&2
   exit 1
 fi
 
@@ -61,7 +67,7 @@ echo "================================================================="
 echo "Phase 3 Production Migration — applying"
 echo "  migration:    $MIGRATION_SQL"
 echo "  verification: $VERIFY_SQL"
-echo "  target:       PRODUCTION_DATABASE_URL"
+echo "  target:       RAILWAY_PRODUCTION_DATABASE_URL (hopper.proxy.rlwy.net)"
 echo "  start:        $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "================================================================="
 echo
@@ -74,11 +80,11 @@ fi
 
 echo
 echo "--- Applying migration ---"
-"$PSQL17" "$PRODUCTION_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$MIGRATION_SQL"
+"$PSQL17" "$RAILWAY_PRODUCTION_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$MIGRATION_SQL"
 
 echo
 echo "--- Running post-deploy verification ---"
-"$PSQL17" "$PRODUCTION_DATABASE_URL" -X -f "$VERIFY_SQL"
+"$PSQL17" "$RAILWAY_PRODUCTION_DATABASE_URL" -X -f "$VERIFY_SQL"
 
 echo
 echo "================================================================="

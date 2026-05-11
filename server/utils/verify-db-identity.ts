@@ -77,7 +77,7 @@ export async function verifyDatabaseIdentity(
 }
 
 async function main() {
-  const target = process.argv[2] || "PRODUCTION_DATABASE_URL";
+  const target = process.argv[2] || "RAILWAY_PRODUCTION_DATABASE_URL";
   const url = process.env[target];
 
   if (!url) {

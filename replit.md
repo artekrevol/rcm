@@ -6,10 +6,25 @@ Claim Shield Health is a multi-tenant Revenue Cycle Management (RCM) platform de
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
-## Database Setup (Railway — two separate instances)
-- **Development DB**: Railway PostgreSQL 17.9 at `hopper.proxy.rlwy.net:45126`, database `railway`. Secret name: `DEV_DATABASE_URL`. This is the instance to use for development, migrations, and audit scripts during active development. When running scripts against dev, pass `DATABASE_URL=$DEV_DATABASE_URL npx tsx ...`.
-- **Production DB**: Railway PostgreSQL 16.10 at `heliumdb` host. Secret name: `DATABASE_URL`. This is what the live app connects to. Scripts that read `process.env.DATABASE_URL` hit production by default.
-- Never confuse the two. Always confirm the host (hopper = dev, heliumdb = prod) before running any write operations.
+## Database Setup
+
+This workspace has credentials for **one database only**:
+
+| Secret | Host | DB name | Purpose |
+|--------|------|---------|---------|
+| `DATABASE_URL` | `helium` → 172.31.75.36 (Replit built-in) | `heliumdb` | Development sandbox. `server/db.ts` reads this. No real PHI. |
+
+The Railway production database (`hopper.proxy.rlwy.net:45126`, database `railway`, ~107 claims, real patient data) has **no credentials stored in this workspace**. This is intentional.
+
+**How production database changes work:**
+- Schema migrations → commit code, deploy via Railway, Railway runs migrations on its own DB.
+- One-off data fixes → use Railway's dashboard → database tab → query interface directly.
+- Never from this workspace. Never via scripts run from this Replit environment.
+
+**Hard rules:**
+- `server/db.ts` always reads `DATABASE_URL`. Never change this line.
+- No Railway database URL is stored as a Replit secret. If a script requires one, that script is intended to be run from Railway's environment, not here.
+- No agent may add a Railway database credential to this workspace's secrets.
 
 ## System Architecture
 Claim Shield Health is built with a modern web stack. The frontend uses React 18 with TypeScript, Vite, Wouter for routing, and TanStack Query for server state management. UI components are developed with `shadcn/ui` and Radix UI, styled using Tailwind CSS, and incorporate Recharts for data visualization and Lucide for icons.
