@@ -79,6 +79,7 @@ const RELATIONSHIP_OPTIONS = ["Self", "Spouse", "Child", "Other"];
 function ProfileTab({ patient, providers, payers }: { patient: any; providers: any[]; payers: any[] }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
   const [form, setForm] = useState<any>({});
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [npiError, setNpiError] = useState("");
@@ -152,6 +153,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patient.id] });
       toast({ title: "Patient updated" });
+      navigate("/billing/patients");
     },
     onError: (err: any) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
