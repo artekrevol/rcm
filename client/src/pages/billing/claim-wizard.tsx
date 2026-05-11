@@ -1841,7 +1841,7 @@ export default function ClaimWizard() {
       errors.serviceLines = "At least one service line with a code is required";
     } else {
       const lineErrors: string[] = [];
-      // Iterate ALL lines using the real index so "Line N" matches what the user sees
+      // Iterate ALL lines using the real index so "Line N" matches the UI
       serviceLines.forEach((l, i) => {
         const n = i + 1;
         if (l.code) {
@@ -1850,9 +1850,12 @@ export default function ClaimWizard() {
           if ((parseFloat(l.totalCharge) || 0) <= 0) lineErrors.push(`Line ${n}: total charge must be greater than zero`);
           if (!l.serviceDateFrom) lineErrors.push(`Line ${n}: service date (From) is required`);
           else if (l.serviceDateFrom > today) lineErrors.push(`Line ${n}: service date cannot be in the future`);
-        } else if (l.serviceDateFrom && l.serviceDateFrom > today) {
-          // Even on uncoded lines, a future date is always wrong
-          lineErrors.push(`Line ${n}: service date cannot be in the future`);
+        } else {
+          // Every uncoded line must be filled in or removed — no silent pass-through
+          lineErrors.push(`Line ${n}: enter a CPT/HCPCS code or remove this line`);
+          if (l.serviceDateFrom && l.serviceDateFrom > today) {
+            lineErrors.push(`Line ${n}: service date cannot be in the future`);
+          }
         }
       });
       if (lineErrors.length > 0) errors.serviceLines = lineErrors.join(" · ");
