@@ -4,15 +4,11 @@
  * Pure side-effect: updates smart_claim_drafts row, never touches claims/patients tables.
  */
 
-import { Pool } from "pg";
+import { pool } from "../db.js";
 import { startVaReferralExtraction, pollVaReferralExtraction, extractQbInvoice, parseBlocks } from "../services/extraction/textract-extractor.js";
 import { parseVaReferral } from "../services/extraction/va-referral-parser.js";
 import { parseQbInvoice } from "../services/extraction/qb-invoice-parser.js";
 import { getPdfFromS3 } from "../services/storage/s3-uploader.js";
-
-function getPool(): Pool {
-  return new Pool({ connectionString: process.env.DATABASE_URL });
-}
 
 // ─── Backoff schedule (ms) ───────────────────────────────────────────────────
 const POLL_BACKOFF_MS = [5000, 5000, 10000, 10000, 15000, 30000, 60000];
@@ -155,7 +151,6 @@ function levenshteinSimilarity(a: string, b: string): number {
 // ─── DB helpers ───────────────────────────────────────────────────────────────
 
 async function setDraftStatus(
-  pool: Pool,
   draftId: string,
   orgId: string,
   status: string,
@@ -179,8 +174,6 @@ async function setDraftStatus(
 // ─── Main worker function ─────────────────────────────────────────────────────
 
 export async function runSmartClaimExtraction(draftId: string, orgId: string): Promise<void> {
-  const pool = getPool();
-
   try {
     // Load draft
     const { rows } = await pool.query(
@@ -190,13 +183,13 @@ export async function runSmartClaimExtraction(draftId: string, orgId: string): P
     if (!rows.length) throw new Error(`Draft not found: field=draft_id`);
     const draft = rows[0];
 
-    await setDraftStatus(pool, draftId, orgId, "processing");
+    await setDraftStatus(draftId, orgId, "processing");
 
     // ── Step 1: Start Textract async for VA referral ──────────────────────────
     let vaJobId = draft.textract_va_job_id as string | null;
     if (!vaJobId) {
       vaJobId = await startVaReferralExtraction(draft.va_referral_s3_key);
-      await setDraftStatus(pool, draftId, orgId, "processing", {
+      await setDraftStatus(draftId, orgId, "processing", {
         textract_va_job_id: vaJobId,
       });
     }
@@ -335,7 +328,7 @@ export async function runSmartClaimExtraction(draftId: string, orgId: string): P
       qb: qbExtraction.confidence,
     };
 
-    await setDraftStatus(pool, draftId, orgId, "ready", {
+    await setDraftStatus(draftId, orgId, "ready", {
       raw_textract_va: vaResult,
       raw_textract_qb: qbTextract,
       extracted_data: extractedData,
@@ -345,13 +338,9 @@ export async function runSmartClaimExtraction(draftId: string, orgId: string): P
     });
   } catch (err: any) {
     console.error(`[smart-claim-worker] Extraction failed for field=draft_id:`, err?.message ?? err);
-    const pool2 = getPool();
-    await setDraftStatus(pool2, draftId, orgId, "error", {
+    await setDraftStatus(draftId, orgId, "error", {
       error_message: err?.message ?? "Unknown error",
     }).catch(() => {});
-    await pool2.end().catch(() => {});
     throw err;
-  } finally {
-    await pool.end().catch(() => {});
   }
 }
