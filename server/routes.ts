@@ -9802,7 +9802,36 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!claim || !verifyOrg(claim, req)) {
       return res.status(404).json({ error: "Claim not found" });
     }
-    res.json(claim);
+    // Augment the Drizzle result with columns added via raw SQL migrations that
+    // are not present in the Drizzle schema definition.
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const extra = await db.query(
+        `SELECT
+           statement_period_start, statement_period_end,
+           external_ordering_provider_name, external_ordering_provider_npi,
+           ordering_provider_first_name, ordering_provider_last_name,
+           ordering_provider_npi, ordering_provider_org
+         FROM claims WHERE id = $1`,
+        [claim.id]
+      );
+      const row = extra.rows[0] || {};
+      const fmt = (d: any) => d ? new Date(d).toISOString().slice(0, 10) : null;
+      return res.json({
+        ...claim,
+        statementPeriodStart: fmt(row.statement_period_start),
+        statementPeriodEnd: fmt(row.statement_period_end),
+        externalOrderingProviderName: row.external_ordering_provider_name || null,
+        externalOrderingProviderNpi: row.external_ordering_provider_npi || null,
+        orderingProviderFirstName: row.ordering_provider_first_name || null,
+        orderingProviderLastName: row.ordering_provider_last_name || null,
+        orderingProviderNpi: row.ordering_provider_npi || null,
+        orderingProviderOrg: row.ordering_provider_org || null,
+      });
+    } catch {
+      // If the extra columns don't exist yet, return what we have
+      return res.json(claim);
+    }
   });
 
   app.get("/api/claims/:id/events", requireRole("admin", "rcm_manager"), async (req, res) => {

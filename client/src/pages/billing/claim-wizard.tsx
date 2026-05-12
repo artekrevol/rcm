@@ -1473,7 +1473,10 @@ export default function ClaimWizard() {
     if (claim.payer_id || claim.payerId) setClaimPayerUuid(claim.payer_id || claim.payerId);
     if (claim.encounterId) setEncounterId(claim.encounterId);
     if (claim.providerId) setProviderId(claim.providerId);
-    if (claim.serviceDate) setServiceDate(claim.serviceDate);
+    // Billing period start: prefer statementPeriodStart (from augmented GET response),
+    // fall back to serviceDate (earliest line date stored in service_date column)
+    const billingStart = claim.statementPeriodStart || claim.serviceDate;
+    if (billingStart) setServiceDate(billingStart);
     if (claim.placeOfService) setPlaceOfService(claim.placeOfService);
     if (claim.authorizationNumber) setAuthNumber(claim.authorizationNumber);
     if (claim.icd10Primary) setIcd10Primary({ code: claim.icd10Primary, desc: "" });
@@ -1483,6 +1486,29 @@ export default function ClaimWizard() {
       setIcd10Secondary(sec);
     }
     if (claim.statementPeriodEnd) setStatementPeriodEnd(claim.statementPeriodEnd);
+    // Fields in Drizzle schema that were previously not restored on edit
+    if (claim.claimFrequencyCode) setClaimFrequencyCode(claim.claimFrequencyCode);
+    if (claim.origClaimNumber) setOrigClaimNumber(claim.origClaimNumber);
+    // homeboundIndicator is stored as varchar 'true'/'false' or boolean
+    if (claim.homeboundIndicator !== undefined && claim.homeboundIndicator !== null) {
+      setHomeboundIndicator(
+        claim.homeboundIndicator === true ||
+        claim.homeboundIndicator === "true" ||
+        claim.homeboundIndicator === "Y"
+      );
+    }
+    if (claim.orderingProviderId) setOrderingProviderId(claim.orderingProviderId);
+    if (claim.delayReasonCode) setDelayReasonCode(claim.delayReasonCode);
+    // External ordering provider fields (from augmented GET response)
+    if (!claim.orderingProviderId && (claim.orderingProviderFirstName || claim.externalOrderingProviderName)) {
+      setOrderingProviderId("__external__");
+      const extName = claim.externalOrderingProviderName || "";
+      const parts = extName.split(" ");
+      setExternalOrderingFirstName(claim.orderingProviderFirstName || parts[0] || "");
+      setExternalOrderingLastName(claim.orderingProviderLastName || parts.slice(1).join(" ") || "");
+      setExternalOrderingNpi(claim.orderingProviderNpi || claim.externalOrderingProviderNpi || "");
+      setExternalOrderingOrg(claim.orderingProviderOrg || "");
+    }
     if (claim.serviceLines && Array.isArray(claim.serviceLines) && claim.serviceLines.length > 0) {
       setServiceLines(claim.serviceLines.map((sl: any) => ({
         ...emptyLine(),
