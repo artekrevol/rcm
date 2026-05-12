@@ -1548,7 +1548,8 @@ export default function ClaimWizard() {
           if (p && p.id) {
             setPatient(p);
             if (p.authorization_number) setAuthNumber(p.authorization_number);
-            draftMutation.mutate(p.id);
+            // Draft is created only when the user clicks "Next: Service Details",
+            // not on page load — prevents orphan drafts from abandoned wizard sessions.
           }
         })
         .catch(() => {});
