@@ -1717,14 +1717,8 @@ export default function ClaimWizard() {
     // Reset referral selections when patient changes
     setWizardReferralId(null);
     setWizardReferralAcknowledgedMissing(false);
-
-    // Auto-create draft only for the original preselected patient and only when no draft exists.
-    // The p.id === preselectedPatientId guard prevents a new draft firing when:
-    //   - the user switches to a different patient (let them click Next instead)
-    //   - onSelect is called with the same patient for a plan-product update (claimId already set)
-    if (preselectedPatientId && p.id === preselectedPatientId && !claimId && !draftMutation.isPending) {
-      draftMutation.mutate(p.id);
-    }
+    // Draft is created solely in handleStep1Next when the user clicks "Next".
+    // No auto-draft here — prevents accidental step advance on plan-product changes.
   }
 
   function handleStep1Next() {
