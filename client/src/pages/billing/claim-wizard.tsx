@@ -1510,21 +1510,28 @@ export default function ClaimWizard() {
       setExternalOrderingOrg(claim.orderingProviderOrg || "");
     }
     if (claim.serviceLines && Array.isArray(claim.serviceLines) && claim.serviceLines.length > 0) {
-      setServiceLines(claim.serviceLines.map((sl: any) => ({
-        ...emptyLine(),
-        code: sl.code || sl.hcpcs_code || "",
-        description: sl.description || "",
-        modifier: sl.modifier || "",
-        units: sl.units != null ? String(sl.units) : "1",
-        ratePerUnit: sl.ratePerUnit != null ? String(sl.ratePerUnit) : (sl.rate_per_unit != null ? String(sl.rate_per_unit) : ""),
-        totalCharge: sl.totalCharge != null ? String(sl.totalCharge) : (sl.total_charge != null ? String(sl.total_charge) : ""),
-        unitType: sl.unitType || sl.unit_type || "per_visit",
-        unitIntervalMinutes: sl.unitIntervalMinutes || sl.unit_interval_minutes || null,
-        diagnosisPointers: sl.diagnosisPointers || sl.diagnosis_pointer || "A",
-        manualEntry: true,
-        serviceDateFrom: sl.service_date_from || sl.serviceDateFrom || "",
-        serviceDateTo: sl.service_date_to || sl.serviceDateTo || "",
-      })));
+      setServiceLines(claim.serviceLines.map((sl: any) => {
+        const resolvedUnitType = sl.unitType || sl.unit_type || "per_visit";
+        const inferredBillingMode: 'hours' | 'units' =
+          sl.billing_mode || sl.billingMode ||
+          (resolvedUnitType === 'time_based' ? 'hours' : 'units');
+        return {
+          ...emptyLine(),
+          code: sl.code || sl.hcpcs_code || "",
+          description: sl.description || "",
+          modifier: sl.modifier || "",
+          units: sl.units != null ? String(sl.units) : "1",
+          ratePerUnit: sl.ratePerUnit != null ? String(sl.ratePerUnit) : (sl.rate_per_unit != null ? String(sl.rate_per_unit) : ""),
+          totalCharge: sl.totalCharge != null ? String(sl.totalCharge) : (sl.total_charge != null ? String(sl.total_charge) : ""),
+          unitType: resolvedUnitType,
+          unitIntervalMinutes: sl.unitIntervalMinutes || sl.unit_interval_minutes || null,
+          diagnosisPointers: sl.diagnosisPointers || sl.diagnosis_pointer || "A",
+          manualEntry: true,
+          billingMode: inferredBillingMode,
+          serviceDateFrom: sl.service_date_from || sl.serviceDateFrom || "",
+          serviceDateTo: sl.service_date_to || sl.serviceDateTo || "",
+        };
+      }));
     }
     setStep(1);
   };
@@ -1822,6 +1829,7 @@ export default function ClaimWizard() {
       diagnosis_pointer: l.diagnosisPointers || "A",
       unit_type: l.unitType,
       unit_interval_minutes: l.unitIntervalMinutes,
+      billing_mode: l.billingMode || 'units',
       units: parseInt(l.units) || 0,
       rate_per_unit: parseFloat(l.ratePerUnit) || 0,
       total_charge: parseFloat(l.totalCharge) || 0,
