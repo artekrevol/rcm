@@ -8756,10 +8756,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/stedi/status", requireRole("admin", "rcm_manager"), async (_req, res) => {
     const { isStediConfigured } = await import("./services/stedi-eligibility");
     const { ISA15_INDICATOR, STEDI_ENV } = await import("./lib/environment");
+    const rawKey = process.env.STEDI_API_KEY;
+    const keyDiag = rawKey ? `${rawKey.substring(0,6)}...${rawKey.slice(-4)} (len=${rawKey.length})` : "NOT SET";
     res.json({
       configured: isStediConfigured(),
       ediMode: ISA15_INDICATOR,
       stediEnv: STEDI_ENV,
+      keyDiag,
     });
   });
 

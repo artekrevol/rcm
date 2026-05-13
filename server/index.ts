@@ -126,6 +126,9 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      const rawKey = process.env.STEDI_API_KEY;
+      const keyDiag = rawKey ? `${rawKey.substring(0,6)}...${rawKey.slice(-4)} (len=${rawKey.length})` : "NOT SET";
+      log(`[STEDI_KEY_DIAG] process.env.STEDI_API_KEY at startup = ${keyDiag}`);
       // Start flow orchestrator and seed demo data after server is up
       seedCaritasFlow().catch((err) =>
         console.error("[startup] seedCaritasFlow error:", err)
