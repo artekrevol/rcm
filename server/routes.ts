@@ -3420,6 +3420,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       )
     `).catch(() => {});
 
+    // ── stedi_payer_id on payers ─────────────────────────────────────────────
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_payer_id VARCHAR`).catch(() => {});
+    // Seed known Stedi payer IDs for common payers
+    await pool.query(`
+      UPDATE payers SET stedi_payer_id = '87726'
+      WHERE payer_id = '87726C' AND (stedi_payer_id IS NULL OR stedi_payer_id = '')
+    `).catch(() => {});
+    await pool.query(`
+      UPDATE payers SET stedi_payer_id = '87726'
+      WHERE payer_id = '87726' AND (stedi_payer_id IS NULL OR stedi_payer_id = '')
+    `).catch(() => {});
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -6835,12 +6847,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN", stedi_payer_id: null as string | null };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -7030,12 +7042,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN", stedi_payer_id: null as string | null };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -7193,12 +7205,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN", stedi_payer_id: null as string | null };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -7519,12 +7531,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN", stedi_payer_id: null as string | null };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 

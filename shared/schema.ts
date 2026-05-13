@@ -587,6 +587,7 @@ export const payers = pgTable("payers", {
   payerClassification: varchar("payer_classification", { length: 32 }),
   claimFilingIndicator: varchar("claim_filing_indicator", { length: 2 }),
   payerCategory: varchar("payer_category", { length: 32 }),
+  stediPayerId: varchar("stedi_payer_id"),
   rateInputMode: varchar("rate_input_mode", { length: 20 }).default("per_unit"),
   requiresVob: boolean("requires_vob").default(true),
   memberIdQualifier: varchar("member_id_qualifier", { length: 2 }).default("MI"),

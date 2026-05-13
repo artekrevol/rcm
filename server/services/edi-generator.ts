@@ -227,6 +227,8 @@ export interface EDI837PInput {
   payer: {
     name: string;
     payer_id: string;
+    /** Stedi-specific payer ID — overrides payer_id for ISA08/Loop 1000B/2010BB when set. */
+    stedi_payer_id?: string | null;
     claim_filing_indicator?: string | null;
     /**
      * NM108 qualifier for the subscriber/patient identifier (Loop 2010BA).
@@ -480,25 +482,29 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
   // ISA08: Receiver ID — PGBA federal tax ID (region-aware) for PGBA payers,
   //        payer_id for all others. Must be 15 chars (padded).
   // Per PGBA 837P CG v1.0, Table 2: ISA07=30, ISA08=PGBA federal tax ID.
-  const isaReceiverId = pgba ? pgbaReceiverId : payer.payer_id;
+  // Use stedi_payer_id when set — it maps our internal payer_id to Stedi's network payer ID.
+  // Falls back to payer_id for payers without a Stedi-specific mapping.
+  const effectivePayerId = payer.stedi_payer_id || payer.payer_id;
+
+  const isaReceiverId = pgba ? pgbaReceiverId : effectivePayerId;
 
   // GS03: Receiver application ID — must match ISA08 per X12 5010 rules.
   // Per PGBA 837P CG v1.0, Table 3: GS03 = same as ISA08.
-  const gsReceiverId = pgba ? pgbaReceiverId : payer.payer_id;
+  const gsReceiverId = pgba ? pgbaReceiverId : effectivePayerId;
 
   // Loop 1000B NM1*40: Receiver identification in transaction set header.
   // Per PGBA 837P CG v1.0, Table 6, page 15:
   //   NM103 = "PGBA VA CCN", NM108 = "46", NM109 = region-specific tax ID.
   const loop1000bName = pgba ? PGBA_RECEIVER_NAME : payer.name;
   const loop1000bQual = pgba ? PGBA_RECEIVER_ID_QUALIFIER : NM1_QUALIFIER["40"];
-  const loop1000bId   = pgba ? pgbaReceiverId : payer.payer_id;
+  const loop1000bId   = pgba ? pgbaReceiverId : effectivePayerId;
 
   // Loop 2010BB NM1*PR: Payer identification at claim level.
   // Per PGBA 837P CG v1.0, Table 6, page 16:
   //   NM103 = "PGBA VA CCN", NM108 = "PI", NM109 = "TWVACCN" (both regions).
   const loop2010bbName = pgba ? PGBA_RECEIVER_NAME : payer.name;
   const loop2010bbQual = pgba ? PGBA_PAYER_ID_QUALIFIER : NM1_QUALIFIER["PR"] ?? "PI";
-  const loop2010bbId   = pgba ? PGBA_PAYER_ID : payer.payer_id;
+  const loop2010bbId   = pgba ? PGBA_PAYER_ID : effectivePayerId;
 
   const segments: string[] = [];
 
