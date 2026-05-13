@@ -7491,6 +7491,111 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // ── Simulate Stedi webhook (test-mode only) ────────────────────────────────
+  // Directly invokes process277CA / process835ERA with synthetic data so the full
+  // DB-side claim-status → ERA flow can be exercised without waiting for real payer responses.
+  // Blocked in production (STEDI_ENV !== 'test').
+  app.post("/api/billing/claims/:id/simulate-webhook", requireRole("admin", "rcm_manager", "super_admin"), async (req, res) => {
+    try {
+      const { STEDI_ENV } = await import("./lib/environment");
+      if (STEDI_ENV !== "test") {
+        return res.status(403).json({ success: false, error: "Webhook simulation is only available in test mode (STEDI_ENV=test)." });
+      }
+
+      const db = await import("./db").then(m => m.pool);
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (!claimResult.rows.length) return res.status(404).json({ success: false, error: "Claim not found" });
+      const c = claimResult.rows[0];
+      if (!verifyOrg(c, req)) return res.status(404).json({ success: false, error: "Claim not found" });
+
+      const scenario: string = req.body?.scenario || "277-accepted";
+      const txId = `SIM-${Date.now()}`;
+
+      // Ensure claim is in 'submitted' state so 277CA handler does not skip it
+      await db.query(
+        `UPDATE claims SET status = 'submitted', submission_method = COALESCE(submission_method, 'stedi'), updated_at = NOW() WHERE id = $1 AND status NOT IN ('submitted')`,
+        [c.id]
+      );
+
+      const { process277CA, process835ERA } = await import("./services/stedi-webhooks");
+
+      if (scenario === "277-accepted" || scenario === "277-rejected") {
+        const categoryCode = scenario === "277-accepted" ? "A1" : "A2";
+        const synth277 = {
+          payer: { name: c.payer || "Simulated Payer" },
+          claimStatuses: [{
+            claimReference: {
+              patientControlNumber: c.id,
+              payerClaimControlNumber: `SIM-PCN-${Date.now()}`,
+            },
+            statusInformation: [{ statusCategoryCode: categoryCode, statusCode: scenario === "277-accepted" ? "P1" : "A8" }],
+          }],
+        };
+        await process277CA(synth277, txId, db);
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+           VALUES ($1,$2,$3,$4,NOW(),$5)`,
+          [crypto.randomUUID(), c.id, "Simulation", `Simulated ${scenario} webhook fired (txId: ${txId})`, c.organization_id]
+        );
+        return res.json({ success: true, scenario, transactionId: txId });
+      }
+
+      if (scenario === "835-paid" || scenario === "835-partial" || scenario === "835-denied") {
+        const billedAmount = Number(c.amount) || 100;
+        const paidAmount = scenario === "835-paid"
+          ? billedAmount
+          : scenario === "835-partial"
+          ? Math.round(billedAmount * 0.6 * 100) / 100
+          : 0;
+
+        const adjustments: any[] = [];
+        if (scenario === "835-paid") {
+          adjustments.push({ claimAdjustmentGroupCode: "CO", claimAdjustmentReasonCode: "45", claimAdjustmentAmount: billedAmount - paidAmount });
+        } else if (scenario === "835-partial") {
+          adjustments.push({ claimAdjustmentGroupCode: "PR", claimAdjustmentReasonCode: "2", claimAdjustmentAmount: Math.round((billedAmount - paidAmount) * 100) / 100 });
+        } else {
+          adjustments.push({ claimAdjustmentGroupCode: "CO", claimAdjustmentReasonCode: "50", claimAdjustmentAmount: billedAmount });
+        }
+
+        // Ensure claim is in acknowledged state for ERA processing (realistic flow)
+        await db.query(
+          `UPDATE claims SET status = 'acknowledged', updated_at = NOW() WHERE id = $1 AND status = 'submitted'`,
+          [c.id]
+        );
+
+        const synth835 = {
+          payer: { name: c.payer || "Simulated Payer" },
+          financialInformation: {
+            checkNumber: `SIM-CHK-${Date.now()}`,
+            checkDate: new Date().toISOString().slice(0, 10),
+            totalActualProviderPaymentAmount: String(paidAmount),
+          },
+          claimPaymentInformation: [{
+            claimPaymentInfo: {
+              patientControlNumber: c.id,
+              totalClaimChargeAmount: String(billedAmount),
+              claimPaymentAmount: String(paidAmount),
+            },
+            patient: { firstName: "Test", lastName: "Patient" },
+            claimAdjustments: adjustments,
+          }],
+        };
+        await process835ERA(synth835, txId, db);
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+           VALUES ($1,$2,$3,$4,NOW(),$5)`,
+          [crypto.randomUUID(), c.id, "Simulation", `Simulated ${scenario} webhook fired (txId: ${txId}). Billed: $${billedAmount}, Paid: $${paidAmount}`, c.organization_id]
+        );
+        return res.json({ success: true, scenario, transactionId: txId, paidAmount, billedAmount });
+      }
+
+      return res.status(400).json({ success: false, error: `Unknown scenario: ${scenario}` });
+    } catch (err: any) {
+      console.error("[SimulateWebhook] Error:", err);
+      res.status(500).json({ success: false, error: err.message || "Simulation failed" });
+    }
+  });
+
   // ── Stedi Test Validation (ISA15='T', no payer transmission) ───────────────
   app.post("/api/billing/claims/:id/test-stedi", requireRole("admin", "rcm_manager", "super_admin"), async (req, res) => {
     try {
