@@ -7340,6 +7340,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         );
         if (rpResult.rows.length) referringProvSubmit = rpResult.rows[0];
       }
+      // Fall back to patient's inline referring provider fields (set via patient profile or claim wizard)
+      if (!referringProvSubmit && pat.referring_provider_name) {
+        const nameParts = (pat.referring_provider_name as string).trim().split(/\s+/);
+        referringProvSubmit = {
+          first_name: nameParts.length > 1 ? nameParts[0] : "",
+          last_name: nameParts.length > 1 ? nameParts.slice(1).join(" ") : nameParts[0],
+          npi: (pat.referring_provider_npi as string) || null,
+          provider_type: "1",
+          verification_status: "verified",
+        };
+      }
 
       const { generate837P } = await import("./services/edi-generator");
       const { edi: ediString, rpTransmitted: rpTransmittedSubmit } = generate837P({

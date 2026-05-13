@@ -1314,6 +1314,7 @@ export default function ClaimWizard() {
   const [externalOrderingOrg, setExternalOrderingOrg] = useState("");
   const [externalOrderingNpi, setExternalOrderingNpi] = useState("");
   const [delayReasonCode, setDelayReasonCode] = useState("none");
+  const [referringNpi, setReferringNpi] = useState("");
 
   // PCP Referral check (Prompt 05) — for HMO/POS plans
   const [wizardReferralId, setWizardReferralId] = useState<string | null>(null);
@@ -1535,6 +1536,13 @@ export default function ClaimWizard() {
     }
     setStep(1);
   };
+
+  // Sync referringNpi from patient whenever patient is first loaded
+  useEffect(() => {
+    if (patient?.referring_provider_npi && !referringNpi) {
+      setReferringNpi(patient.referring_provider_npi);
+    }
+  }, [patient?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (resumeClaimId && preselectedPatientId && !patient) {
@@ -1917,6 +1925,11 @@ export default function ClaimWizard() {
     const payload = buildClaimPayload();
     try {
       await saveMutation.mutateAsync(payload);
+      // Save referring NPI back to patient record so submit-stedi can pick it up
+      if (patient?.id && referringNpi && referringNpi !== patient?.referring_provider_npi) {
+        await apiRequest("PATCH", `/api/billing/patients/${patient.id}`, { referringProviderNpi: referringNpi });
+        setPatient((prev: any) => ({ ...prev, referring_provider_npi: referringNpi }));
+      }
       runValidation();
       await riskMutation.mutateAsync();
       setStep(2);
@@ -2660,6 +2673,43 @@ export default function ClaimWizard() {
                   </div>
                 )}
               </div>
+              {/* Referring Provider — shown when payer requires it or patient has one on file */}
+              {(claimMatchedPayer?.referring_provider_policy === 'required' || patient?.referring_provider_name) && (
+                <div className="space-y-1.5">
+                  <Label>
+                    Referring Provider{" "}
+                    {claimMatchedPayer?.referring_provider_policy === 'required' ? (
+                      <span className="ml-1 text-[10px] font-semibold bg-destructive/10 text-destructive px-1.5 py-0.5 rounded">Required by payer</span>
+                    ) : (
+                      <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span>
+                    )}
+                    <span className="text-xs text-muted-foreground ml-1">(CMS-1500 Box 17 — NM1*DN)</span>
+                  </Label>
+                  <div className="grid grid-cols-2 gap-2 p-3 border rounded-md bg-muted/30">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Provider Name</Label>
+                      <div className="text-sm py-2 px-3 rounded-md border bg-background">
+                        {patient?.referring_provider_name || <span className="text-muted-foreground italic">Not set on patient profile</span>}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">
+                        NPI{claimMatchedPayer?.referring_provider_policy === 'required' && <span className="text-destructive ml-0.5">*</span>}
+                      </Label>
+                      <Input
+                        value={referringNpi}
+                        onChange={(e) => setReferringNpi(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                        placeholder="1234567890"
+                        maxLength={10}
+                        data-testid="input-referring-npi"
+                      />
+                      {!referringNpi && claimMatchedPayer?.referring_provider_policy === 'required' && (
+                        <p className="text-xs text-destructive">NPI required — enter the referring provider's 10-digit NPI</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/30">
                 <Checkbox
                   checked={homeboundIndicator}
