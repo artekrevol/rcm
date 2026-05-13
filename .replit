@@ -49,6 +49,10 @@ VAPI_ASSISTANT_ID = "20f87e19-f86e-4055-b9fd-aa18e5eb1c9f"
 VAPI_PHONE_NUMBER_ID = "20617765-2d18-4206-91dc-5212a67c59f9"
 
 [userenv.development]
+STEDI_ENV = "production"
+
+[userenv.production]
+STEDI_ENV = "production"
 
 [postMerge]
 path = "scripts/post-merge.sh"
