@@ -118,12 +118,9 @@ export async function submitClaim(
     };
   }
 
-  const keyPreview = STEDI_API_KEY
-    ? `${STEDI_API_KEY.substring(0, 6)}...${STEDI_API_KEY.slice(-4)} (len=${STEDI_API_KEY.length})`
-    : "NOT SET";
   console.log(
     `[Stedi] submitClaim claimId=${params.claimId} ISA15=${isa15} ` +
-    `session=${params.hasUserSession ? "human" : "automated"} key=${keyPreview}`
+    `session=${params.hasUserSession ? "human" : "automated"}`
   );
 
   const response = await fetch(STEDI_CLAIMS_URL, {
