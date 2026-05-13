@@ -519,6 +519,8 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
               <Input
                 value={form.referringProviderNpi}
                 maxLength={10}
+                inputMode="numeric"
+                placeholder="10-digit NPI (digits only)"
                 onChange={(e) => {
                   const v = e.target.value.replace(/\D/g, "").slice(0, 10);
                   set({ referringProviderNpi: v });
