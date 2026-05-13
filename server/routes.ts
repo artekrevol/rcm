@@ -7451,6 +7451,32 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
           [crypto.randomUUID(), c.id, "Submitted via Stedi", `837P submitted to Stedi. Transaction ID: ${result.transactionId || "N/A"}. Status: ${result.status || "Accepted"}`, c.organization_id]
         );
+
+        // ── Auto-process inline 277CA from Stedi's synchronous response ────────
+        // In ISA15=T (test mode) Stedi never routes to the payer, so no webhook
+        // fires. Stedi returns a 277CA acknowledgment inline in the API response.
+        // Parse it here so the claim immediately moves to 'acknowledged'.
+        const raw = result.rawResponse as any;
+        if (raw?.status === "SUCCESS" && raw?.claimReference?.patientControlNumber) {
+          try {
+            const { process277CA } = await import("./services/stedi-webhooks");
+            const payerClaimNumber = raw.claimReference?.rhclaimNumber || raw.claimReference?.correlationId || null;
+            const synth277 = {
+              payer: { name: raw.payer?.payerName || payerInfo.name || "Stedi Clearinghouse" },
+              claimStatuses: [{
+                claimReference: {
+                  patientControlNumber: c.id,
+                  payerClaimControlNumber: payerClaimNumber,
+                },
+                statusInformation: [{ statusCategoryCode: "A1", statusCode: "20" }],
+              }],
+            };
+            await process277CA(synth277, result.transactionId || "inline", db);
+            console.log(`[submit-stedi] Inline 277CA processed for claim ${c.id} → acknowledged`);
+          } catch (err277: any) {
+            console.warn("[submit-stedi] Inline 277CA processing failed (non-fatal):", err277.message);
+          }
+        }
         if (followUpDate) {
           await db.query(
             `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,

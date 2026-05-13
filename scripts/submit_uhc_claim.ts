@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 import { generate837P } from '../server/services/edi-generator';
 import { submitClaim } from '../server/services/stedi-claims';
+import { process277CA } from '../server/services/stedi-webhooks';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -99,7 +100,25 @@ async function run() {
       "UPDATE claims SET status='submitted', stedi_transaction_id=$1, submission_method='stedi', updated_at=NOW() WHERE id=$2",
       [result.transactionId, CLAIM_ID]
     );
-    console.log('[Script] ✓ Claim set to submitted. Watch webhook logs now!');
+    console.log('[Script] ✓ Claim set to submitted.');
+
+    // Auto-process inline 277CA (ISA15=T: no payer routing, no webhook fires)
+    const raw = result.rawResponse as any;
+    if (raw?.status === 'SUCCESS' && raw?.claimReference?.patientControlNumber) {
+      const payerClaimNumber = raw.claimReference?.rhclaimNumber || raw.claimReference?.correlationId || null;
+      const synth277 = {
+        payer: { name: raw.payer?.payerName || 'UnitedHealthcare (Commercial)' },
+        claimStatuses: [{
+          claimReference: {
+            patientControlNumber: CLAIM_ID,
+            payerClaimControlNumber: payerClaimNumber,
+          },
+          statusInformation: [{ statusCategoryCode: 'A1', statusCode: '20' }],
+        }],
+      };
+      await process277CA(synth277, result.transactionId || 'inline', pool as any);
+      console.log('[Script] ✓ Inline 277CA processed — claim should now be acknowledged.');
+    }
   }
 
   await pool.end();
