@@ -5487,7 +5487,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       let clearinghouseConnected = false;
       try {
         // Passes if either Stedi API key is present OR Office Ally is connected
-        const stediConfigured = !!process.env.STEDI_API_KEY;
+        const stediConfigured = !!(process.env.STEDI_KEY || process.env.STEDI_API_KEY);
         if (!stediConfigured && ps) {
           const { rows: psRows } = orgId
             ? await db.query(`SELECT oa_connected, oa_sftp_username FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
@@ -7937,7 +7937,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   async function fetchStediPayerNetwork(): Promise<any[]> {
     const now = Date.now();
     if (_stediPayerCache && now - _stediPayerCache.ts < 60 * 60 * 1000) return _stediPayerCache.payers;
-    const apiKey = process.env.STEDI_API_KEY;
+    const apiKey = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
     if (!apiKey) return [];
     const res = await fetch("https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/payers", {
       headers: { Authorization: `Key ${apiKey}` },
@@ -7971,7 +7971,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // POST /api/billing/payers/sync-stedi
   app.post("/api/billing/payers/sync-stedi", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const apiKey = process.env.STEDI_API_KEY;
+      const apiKey = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
       if (!apiKey) return res.status(400).json({ error: "STEDI_API_KEY is not configured" });
       const stediPayers = await fetchStediPayerNetwork();
       if (stediPayers.length === 0) return res.status(502).json({ error: "Stedi returned an empty payer list — check API key and connectivity" });
@@ -8756,13 +8756,15 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.get("/api/billing/stedi/status", requireRole("admin", "rcm_manager"), async (_req, res) => {
     const { isStediConfigured } = await import("./services/stedi-eligibility");
     const { ISA15_INDICATOR, STEDI_ENV } = await import("./lib/environment");
-    const rawKey = process.env.STEDI_API_KEY;
+    const rawKey = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
     const keyDiag = rawKey ? `${rawKey.substring(0,6)}...${rawKey.slice(-4)} (len=${rawKey.length})` : "NOT SET";
+    const keySrc = process.env.STEDI_KEY ? "STEDI_KEY" : (process.env.STEDI_API_KEY ? "STEDI_API_KEY" : "none");
     res.json({
       configured: isStediConfigured(),
       ediMode: ISA15_INDICATOR,
       stediEnv: STEDI_ENV,
       keyDiag,
+      keySrc,
     });
   });
 
@@ -12840,7 +12842,7 @@ Warmly,
         users: users.rows,
         providerCount: providers.rows[0]?.cnt || 0,
         payerCount: payers.rows[0]?.cnt || 0,
-        stediConfigured: !!process.env.STEDI_API_KEY,
+        stediConfigured: !!(process.env.STEDI_KEY || process.env.STEDI_API_KEY),
         featureUsage: {
           claimsCreated: claimsCreated.rows[0]?.cnt || 0,
           claimsSubmitted: claimsSubmitted.rows[0]?.cnt || 0,
@@ -13877,7 +13879,7 @@ Warmly,
 
   // ── Section 11: /api/billing/stedi-status ──────────────────────────────────
   app.get("/api/billing/stedi-status", requireRole("admin", "rcm_manager"), async (_req, res) => {
-    const isConfigured = !!process.env.STEDI_API_KEY;
+    const isConfigured = !!(process.env.STEDI_KEY || process.env.STEDI_API_KEY);
     const { STEDI_ENV, ISA15_INDICATOR } = await import("./lib/environment");
     const ediMode = ISA15_INDICATOR; // 'P' = production payer forwarding, 'T' = test (no forwarding)
     res.json({

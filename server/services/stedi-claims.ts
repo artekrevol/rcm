@@ -1,6 +1,6 @@
 import { resolveISA15, isAutomatedContext } from "../lib/environment";
 
-const STEDI_API_KEY = process.env.STEDI_API_KEY;
+const STEDI_API_KEY = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
 // Raw X12 endpoint — accepts a single { x12: "ISA*..." } body field.
 // The structured-JSON /v3/submission endpoint does NOT accept raw EDI and
 // rejects the 'x12' key with HTTP 500 "unknown field 'x12'".

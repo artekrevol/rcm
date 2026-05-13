@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-const STEDI_API_KEY = process.env.STEDI_API_KEY;
+const STEDI_API_KEY = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
 
 export async function fetchStediTransaction(
   transactionId: string,
