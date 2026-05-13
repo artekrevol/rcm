@@ -14040,7 +14040,10 @@ Warmly,
     const webhookSecret = process.env.STEDI_WEBHOOK_SECRET;
     const authHeader = req.headers['authorization'];
     if (webhookSecret) {
-      if (authHeader !== `Key ${webhookSecret}`) {
+      // Stedi sends the key as a bare token: Authorization: <secret>
+      // (NOT the "Key <secret>" format used by Stedi's own API calls)
+      const authOk = authHeader === webhookSecret || authHeader === `Key ${webhookSecret}`;
+      if (!authOk) {
         console.warn(
           `[Webhook] REJECTED — bad or missing auth. IP: ${req.ip} ` +
           `Header: ${String(authHeader || '').slice(0, 30)}`
