@@ -128,7 +128,7 @@ export async function submitClaim(
     headers: {
       Authorization: `Key ${STEDI_API_KEY}`,
       "Content-Type": "application/json",
-      "Idempotency-Key": params.claimId,
+      "Idempotency-Key": `${params.claimId}-${Date.now()}`,
     },
     body: JSON.stringify({ x12: params.ediContent }),
   });
