@@ -138,6 +138,7 @@ export async function submitClaim(
   try { data = JSON.parse(rawText); } catch { data = { message: rawText || `Stedi API error: ${response.status}` }; }
 
   if (!response.ok) {
+    console.error(`[Stedi] submitClaim HTTP ${response.status} — full body: ${rawText}`);
     return {
       success: false,
       blockedBy: "stedi",
