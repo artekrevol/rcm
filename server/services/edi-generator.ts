@@ -633,9 +633,17 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
   // Qualifier is payer-driven (payer.member_id_qualifier), defaulting to "MI".
   // For PGBA VA CCN, resolveVeteranId() overrides to MI or SY based on the
   // actual veteran ID type/length (EDIPI=MI, MVI ICN=MI, SSN=SY).
+  // For all other payers Stedi only accepts "II" or "MI" — sanitize anything
+  // else (e.g. "SY" set on a legacy payer record) back to "MI".
+  const STEDI_VALID_NM108 = new Set(["II", "MI"]);
   const { qualifier: patientIdQual, id: patientIdVal } = pgba
     ? resolveVeteranId(patient)
-    : { qualifier: payer.member_id_qualifier || "MI", id: patient.member_id };
+    : {
+        qualifier: STEDI_VALID_NM108.has(payer.member_id_qualifier || "")
+          ? payer.member_id_qualifier!
+          : "MI",
+        id: patient.member_id,
+      };
 
   // NM105: Full middle name (verbatim from patient record, max 25 chars per X12).
   // Both first initial+period and full middle name are valid X12; full name is
