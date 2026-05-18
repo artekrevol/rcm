@@ -313,7 +313,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // 'MI' = Member ID (default for most commercial payers and VA CCN)
     // 'SY' = SSN, 'II' = Standard Unique Health ID, 'ZZ' = Mutually Defined
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS member_id_qualifier VARCHAR(2) NOT NULL DEFAULT 'MI'`);
-    await pool.query(`UPDATE payers SET member_id_qualifier = 'MI' WHERE payer_id = 'TWVACCN' AND member_id_qualifier != 'MI'`);
+    await pool.query(`UPDATE payers SET member_id_qualifier = 'MI' WHERE payer_id IN ('TWVACCN', 'CDCA1') AND member_id_qualifier != 'MI'`);
 
     // Data fix: update Peter Mandler's member_id to his VA EDIPI (10-digit DoD ID)
     await pool.query(`UPDATE patients SET member_id = '1636711604' WHERE LOWER(first_name) = 'peter' AND LOWER(last_name) = 'mandler' AND (member_id IS NULL OR member_id != '1636711604')`);
@@ -8766,7 +8766,28 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         values
       );
       if (rows.length === 0) return res.status(404).json({ error: "Patient not found" });
-      res.json(rows[0]);
+      const savedPatient = rows[0];
+
+      // Soft warning: VA CCN payers (TWVACCN = Medical, CDCA1 = Dental) require
+      // an EDIPI (10 digits) as the member ID, not an SSN (9 digits).
+      // Only check when memberId or payerId was part of this update.
+      const warnings: string[] = [];
+      if (req.body.memberId !== undefined || req.body.payerId !== undefined) {
+        const rawMemberId = (savedPatient.member_id || "").replace(/[-\s]/g, "");
+        if (/^\d{9}$/.test(rawMemberId) && savedPatient.payer_id) {
+          const { rows: payerRows } = await db.query(
+            `SELECT payer_id FROM payers WHERE id = $1 AND payer_id IN ('TWVACCN', 'CDCA1') LIMIT 1`,
+            [savedPatient.payer_id]
+          );
+          if (payerRows.length > 0) {
+            warnings.push(
+              "Value looks like an SSN (9 digits). VA CCN requires EDIPI (10 digits). Confirm before submitting a claim."
+            );
+          }
+        }
+      }
+
+      res.json(warnings.length ? { ...savedPatient, _warnings: warnings } : savedPatient);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
