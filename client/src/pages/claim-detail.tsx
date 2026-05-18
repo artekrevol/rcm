@@ -479,7 +479,7 @@ export default function ClaimDetailPage() {
     : 0;
 
   const isBlocked = claim.readinessStatus === "RED";
-  const canSubmit = stediConfigured && claim.readinessStatus === "GREEN" && ["created", "ready"].includes(claim.status);
+  const canSubmit = stediConfigured && claim.readinessStatus === "GREEN" && ["created", "ready", "exported"].includes(claim.status);
 
   return (
     <div className="p-6 space-y-6">
