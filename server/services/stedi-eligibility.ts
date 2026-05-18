@@ -1,4 +1,4 @@
-const STEDI_API_KEY = process.env.STEDI_API_KEY;
+const STEDI_API_KEY = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
 const STEDI_ELIGIBILITY_URL =
   "https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/eligibility/v3";
 

@@ -581,7 +581,7 @@ export default function SmartClaimPreviewPage() {
                       ${qb.services_rendered_total?.toFixed(2) ?? "0.00"}
                     </span>
                   </div>
-                  {qb.caregiver_tips && (
+                  {qb.caregiver_tips != null && qb.caregiver_tips > 0 && (
                     <div className="flex justify-between text-sm px-2 text-muted-foreground">
                       <span>Caregiver Tips</span>
                       <span>${qb.caregiver_tips?.toFixed(2)}</span>

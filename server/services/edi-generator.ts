@@ -227,6 +227,8 @@ export interface EDI837PInput {
   payer: {
     name: string;
     payer_id: string;
+    /** Stedi-specific payer ID — overrides payer_id for ISA08/Loop 1000B/2010BB when set. */
+    stedi_payer_id?: string | null;
     claim_filing_indicator?: string | null;
     /**
      * NM108 qualifier for the subscriber/patient identifier (Loop 2010BA).
@@ -297,15 +299,18 @@ function mapSex(sex?: string): string {
 
 /**
  * Detect PGBA VA Community Care payer.
- * Covers: TriWest Healthcare Alliance, PGBA VA CCN, OptumVA, VA Community Care.
- * Per PGBA 837P CG v1.0 (March 2021): payer_id "TWVACCN" is the canonical
- * routing ID for both Region 4 and Region 5 PGBA submissions.
+ * Covers: TriWest Healthcare Alliance (Medical + Dental), PGBA VA CCN, VA Community Care.
+ * Canonical VA CCN payer IDs per PGBA 837P CG v1.0 (March 2021):
+ *   TWVACCN — VA CCN Medical (Region 4 and Region 5)
+ *   CDCA1   — VA CCN Dental
+ * Both always emit NM108 = "MI" — SY has no emission path in this generator.
  */
 function isPGBAPayer(payer: { name: string; payer_id: string }): boolean {
   const nameLc = (payer.name || "").toLowerCase();
   const id = (payer.payer_id || "").toUpperCase();
   return (
-    id === "TWVACCN" ||
+    id === "TWVACCN" ||              // VA CCN Medical
+    id === "CDCA1"   ||              // VA CCN Dental
     id === PGBA_RECEIVER_TAX_ID ||
     nameLc.includes("triwest") ||
     nameLc.includes("pgba") ||
@@ -316,28 +321,19 @@ function isPGBAPayer(payer: { name: string; payer_id: string }): boolean {
 }
 
 /**
- * Resolve patient NM108 qualifier and NM109 value for PGBA submissions.
- * Per PGBA 837P CG v1.0 (March 2021), Table 5 error codes SSC/SSE:
+ * Resolve patient NM108 qualifier and NM109 value for VA CCN (PGBA) submissions.
+ * "SY" (SSN) is deprecated in HIPAA 5010 and not accepted by Stedi — removed entirely.
+ * All VA CCN payer IDs (TWVACCN, CDCA1) always emit NM108 = "MI":
  *   EDIPI (10-byte DoD ID)  → qualifier "MI"
  *   MVI ICN (17-byte VA ID) → qualifier "MI"
- *   SSN (9-byte)            → qualifier "SY"
- * Preference: EDIPI > MVI ICN > SSN.
- * Falls back to length heuristic when veteran_id_type not explicitly set.
+ *   Any other value         → qualifier "MI"
+ * If member_id looks like a 9-digit SSN, it is a data-entry error. The biller
+ * receives a soft warning on patient save (see PATCH /api/billing/patients/:id).
+ * Claim still emits MI to avoid Stedi rejection while the data is corrected.
  */
 function resolveVeteranId(patient: EDI837PInput["patient"]): { qualifier: string; id: string } {
   const id = (patient.member_id || "").replace(/[-\s]/g, "");
-  const explicitType = patient.veteran_id_type;
-
-  if (explicitType === "ssn") return { qualifier: "SY", id };
-  if (explicitType === "edipi" || explicitType === "mvi_icn") return { qualifier: "MI", id };
-
-  // Heuristic fallback when type not set — length-based per PGBA format rules
-  if (id.length === 9 && /^\d{9}$/.test(id)) return { qualifier: "SY", id };  // SSN
-  if (id.length === 10) return { qualifier: "MI", id };  // EDIPI
-  if (id.length === 17) return { qualifier: "MI", id };  // MVI ICN
-
-  // Default: MI (most common for VA)
-  return { qualifier: "MI", id: patient.member_id };
+  return { qualifier: "MI", id: id || patient.member_id || "" };
 }
 
 /**
@@ -412,15 +408,6 @@ function validateForPGBA(input: EDI837PInput): void {
     }
   });
 
-  // Subscriber ID format validation (errors SSC/SSE).
-  // Per PGBA 837P CG v1.0, Table 5.
-  const rawId = (input.patient.member_id || "").replace(/[-\s]/g, "");
-  if (input.patient.veteran_id_type === "ssn" && !/^\d{9}$/.test(rawId)) {
-    throw new Error(
-      `[PGBA SSC/SSE] Subscriber ID declared as SSN but is not 9 digits. ` +
-      `Got "${rawId}" (${rawId.length} chars). SSN must be exactly 9 digits.`
-    );
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -480,25 +467,29 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
   // ISA08: Receiver ID — PGBA federal tax ID (region-aware) for PGBA payers,
   //        payer_id for all others. Must be 15 chars (padded).
   // Per PGBA 837P CG v1.0, Table 2: ISA07=30, ISA08=PGBA federal tax ID.
-  const isaReceiverId = pgba ? pgbaReceiverId : payer.payer_id;
+  // Use stedi_payer_id when set — it maps our internal payer_id to Stedi's network payer ID.
+  // Falls back to payer_id for payers without a Stedi-specific mapping.
+  const effectivePayerId = payer.stedi_payer_id || payer.payer_id;
+
+  const isaReceiverId = pgba ? pgbaReceiverId : effectivePayerId;
 
   // GS03: Receiver application ID — must match ISA08 per X12 5010 rules.
   // Per PGBA 837P CG v1.0, Table 3: GS03 = same as ISA08.
-  const gsReceiverId = pgba ? pgbaReceiverId : payer.payer_id;
+  const gsReceiverId = pgba ? pgbaReceiverId : effectivePayerId;
 
   // Loop 1000B NM1*40: Receiver identification in transaction set header.
   // Per PGBA 837P CG v1.0, Table 6, page 15:
   //   NM103 = "PGBA VA CCN", NM108 = "46", NM109 = region-specific tax ID.
   const loop1000bName = pgba ? PGBA_RECEIVER_NAME : payer.name;
   const loop1000bQual = pgba ? PGBA_RECEIVER_ID_QUALIFIER : NM1_QUALIFIER["40"];
-  const loop1000bId   = pgba ? pgbaReceiverId : payer.payer_id;
+  const loop1000bId   = pgba ? pgbaReceiverId : effectivePayerId;
 
   // Loop 2010BB NM1*PR: Payer identification at claim level.
   // Per PGBA 837P CG v1.0, Table 6, page 16:
   //   NM103 = "PGBA VA CCN", NM108 = "PI", NM109 = "TWVACCN" (both regions).
   const loop2010bbName = pgba ? PGBA_RECEIVER_NAME : payer.name;
   const loop2010bbQual = pgba ? PGBA_PAYER_ID_QUALIFIER : NM1_QUALIFIER["PR"] ?? "PI";
-  const loop2010bbId   = pgba ? PGBA_PAYER_ID : payer.payer_id;
+  const loop2010bbId   = pgba ? PGBA_PAYER_ID : effectivePayerId;
 
   const segments: string[] = [];
 
@@ -625,8 +616,9 @@ export function generate837P(input: EDI837PInput): Generate837PResult {
   // ── Loop 2010BA: Subscriber (Insured/Patient) ─────────────────────────────
   // NM108/NM109: Patient identifier qualifier and value.
   // Qualifier is payer-driven (payer.member_id_qualifier), defaulting to "MI".
-  // For PGBA VA CCN, resolveVeteranId() overrides to MI or SY based on the
-  // actual veteran ID type/length (EDIPI=MI, MVI ICN=MI, SSN=SY).
+  // For VA CCN payers (TWVACCN, CDCA1) resolveVeteranId() always returns "MI" —
+  // SY has no emission path in this generator (deprecated in HIPAA 5010).
+  // For all other payers, payer.member_id_qualifier drives NM108 (default "MI").
   const { qualifier: patientIdQual, id: patientIdVal } = pgba
     ? resolveVeteranId(patient)
     : { qualifier: payer.member_id_qualifier || "MI", id: patient.member_id };

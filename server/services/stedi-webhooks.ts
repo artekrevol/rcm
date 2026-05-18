@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-const STEDI_API_KEY = process.env.STEDI_API_KEY;
+const STEDI_API_KEY = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
 
 export async function fetchStediTransaction(
   transactionId: string,
@@ -239,8 +239,8 @@ export async function process835ERA(
   const eraId = crypto.randomUUID();
   await db.query(
     `INSERT INTO era_batches 
-     (id, organization_id, payer_name, check_number,
-      check_date, total_amount, status, stedi_era_id,
+     (id, org_id, payer_name, check_number,
+      payment_date, total_amount, status, stedi_era_id,
       raw_data, source, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,'unposted',$7,$8,'stedi_webhook',NOW())`,
     [eraId, orgId, payerName, checkNumber, checkDate,

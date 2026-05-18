@@ -79,9 +79,11 @@ const RELATIONSHIP_OPTIONS = ["Self", "Spouse", "Child", "Other"];
 function ProfileTab({ patient, providers, payers }: { patient: any; providers: any[]; payers: any[] }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
   const [form, setForm] = useState<any>({});
   const [loadedId, setLoadedId] = useState<string | null>(null);
   const [npiError, setNpiError] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const { data: enrollments = [] } = useQuery<any[]>({
     queryKey: ["/api/practice/payer-enrollments"],
@@ -151,6 +153,7 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/billing/patients", patient.id] });
       toast({ title: "Patient updated" });
+      navigate("/billing/patients");
     },
     onError: (err: any) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -158,10 +161,64 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
   });
 
   function handleSave() {
+    const e: Record<string, string> = {};
+
+    if (!form.firstName?.trim()) e.firstName = "Enter a first name";
+    if (!form.lastName?.trim()) e.lastName = "Enter a last name";
+
+    const dobTrimmed = (form.dob || "").trim();
+    if (!dobTrimmed) {
+      e.dob = "Enter a date of birth";
+    } else if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dobTrimmed)) {
+      e.dob = "Must be MM/DD/YYYY (e.g. 01/15/1980)";
+    } else {
+      const [mm, dd, yyyy] = dobTrimmed.split("/").map(Number);
+      const parsed = new Date(yyyy, mm - 1, dd);
+      if (isNaN(parsed.getTime()) || parsed.getMonth() !== mm - 1) {
+        e.dob = "Not a valid date";
+      } else if (parsed > new Date()) {
+        e.dob = "Cannot be in the future";
+      } else if (yyyy < 1900) {
+        e.dob = "Must be after 1900";
+      }
+    }
+
+    if (!form.sex) e.sex = "Select a sex";
+    if (!form.insuranceCarrier?.trim()) e.insuranceCarrier = "Enter an insurance carrier";
+    if (form.insuranceCarrier?.trim() && !form.memberId?.trim()) e.memberId = "Enter a member ID";
+    if (!form.relationshipToInsured) e.relationshipToInsured = "Select a relationship";
+    if (!form.authorizationNumber?.trim()) e.authorizationNumber = "Enter an authorization number";
+    if (!form.streetAddress?.trim()) e.streetAddress = "Enter a street address";
+    if (!form.city?.trim()) e.city = "Enter a city";
+    if (!form.state?.trim()) {
+      e.state = "Enter a state code";
+    } else if (!/^[A-Za-z]{2}$/.test(form.state.trim())) {
+      e.state = "Must be a 2-letter code (e.g. CA)";
+    }
+    if (!form.zipCode?.trim()) {
+      e.zipCode = "Enter a ZIP code";
+    } else if (!/^\d{5}(-\d{4})?$/.test(form.zipCode.trim())) {
+      e.zipCode = "Must be 5 digits or ZIP+4 (e.g. 94080 or 94080-1234)";
+    }
+    if (form.phone?.trim() && form.phone.replace(/\D/g, "").length < 10) {
+      e.phone = "Must contain at least 10 digits";
+    }
+    if (form.email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      e.email = "Enter a valid email address";
+    }
     if (form.referringProviderNpi && !validateNPI(form.referringProviderNpi)) {
-      setNpiError("Invalid NPI");
+      e.referringProviderNpi = "Invalid NPI — must be 10 digits and pass checksum";
+      setNpiError("Invalid NPI — must be 10 digits and pass checksum");
+    } else {
+      setNpiError("");
+    }
+
+    setErrors(e);
+    if (Object.keys(e).length > 0) {
+      toast({ title: "Please fix the highlighted fields before saving", variant: "destructive" });
       return;
     }
+
     saveMutation.mutate({
       firstName: form.firstName || null,
       middleName: form.middleName || null,
@@ -197,7 +254,17 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
   }
 
   if (!loadedId) return null;
-  const set = (updates: any) => setForm({ ...form, ...updates });
+  const set = (updates: any) => {
+    setForm({ ...form, ...updates });
+    const keys = Object.keys(updates);
+    if (keys.some((k) => errors[k])) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        keys.forEach((k) => delete next[k]);
+        return next;
+      });
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -221,7 +288,8 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
           <div className="grid grid-cols-4 gap-4">
             <div className="space-y-2">
               <Label>First Name <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.firstName} onChange={(e) => set({ firstName: e.target.value })} data-testid="input-edit-first-name" />
+              <Input value={form.firstName} onChange={(e) => set({ firstName: e.target.value })} data-testid="input-edit-first-name" className={errors.firstName ? "border-destructive" : ""} />
+              {errors.firstName && <p className="text-xs text-destructive">{errors.firstName}</p>}
             </div>
             <div className="space-y-2">
               <Label>Middle Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
@@ -229,7 +297,8 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
             </div>
             <div className="space-y-2">
               <Label>Last Name <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.lastName} onChange={(e) => set({ lastName: e.target.value })} data-testid="input-edit-last-name" />
+              <Input value={form.lastName} onChange={(e) => set({ lastName: e.target.value })} data-testid="input-edit-last-name" className={errors.lastName ? "border-destructive" : ""} />
+              {errors.lastName && <p className="text-xs text-destructive">{errors.lastName}</p>}
             </div>
             <div className="space-y-2">
               <Label>Preferred Name <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
@@ -239,44 +308,76 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
           <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Date of Birth <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.dob} onChange={(e) => set({ dob: e.target.value })} data-testid="input-edit-dob" />
+              <Input
+                value={form.dob}
+                onChange={(e) => {
+                  let v = e.target.value.replace(/\D/g, "").slice(0, 8);
+                  if (v.length >= 5) v = v.slice(0, 2) + "/" + v.slice(2, 4) + "/" + v.slice(4);
+                  else if (v.length >= 3) v = v.slice(0, 2) + "/" + v.slice(2);
+                  set({ dob: v });
+                }}
+                placeholder="MM/DD/YYYY"
+                data-testid="input-edit-dob"
+                className={errors.dob ? "border-destructive" : ""}
+              />
+              {errors.dob && <p className="text-xs text-destructive">{errors.dob}</p>}
             </div>
             <div className="space-y-2">
               <Label>Sex <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Select value={form.sex} onValueChange={(v) => set({ sex: v })}>
-                <SelectTrigger data-testid="select-edit-sex"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectTrigger data-testid="select-edit-sex" className={errors.sex ? "border-destructive" : ""}><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
                   {SEX_OPTIONS.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {errors.sex && <p className="text-xs text-destructive">{errors.sex}</p>}
             </div>
             <div className="space-y-2">
               <Label>State <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.state} onChange={(e) => set({ state: e.target.value })} maxLength={2} data-testid="input-edit-state" />
+              <Input
+                value={form.state}
+                onChange={(e) => set({ state: e.target.value.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 2) })}
+                maxLength={2}
+                data-testid="input-edit-state"
+                className={errors.state ? "border-destructive" : ""}
+              />
+              {errors.state && <p className="text-xs text-destructive">{errors.state}</p>}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Phone <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
-              <Input value={form.phone} onChange={(e) => set({ phone: e.target.value })} data-testid="input-edit-phone" />
+              <Input value={form.phone} onChange={(e) => set({ phone: e.target.value })} data-testid="input-edit-phone" className={errors.phone ? "border-destructive" : ""} />
+              {errors.phone && <p className="text-xs text-destructive">{errors.phone}</p>}
             </div>
             <div className="space-y-2">
               <Label>Email <span className="ml-1 text-[10px] font-semibold bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Optional</span></Label>
-              <Input value={form.email} onChange={(e) => set({ email: e.target.value })} data-testid="input-edit-email" />
+              <Input value={form.email} onChange={(e) => set({ email: e.target.value })} data-testid="input-edit-email" className={errors.email ? "border-destructive" : ""} />
+              {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
             </div>
           </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="col-span-3 space-y-2">
               <Label>Street Address <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.streetAddress} onChange={(e) => set({ streetAddress: e.target.value })} placeholder="123 Main St" data-testid="input-edit-street-address" />
+              <Input value={form.streetAddress} onChange={(e) => set({ streetAddress: e.target.value })} placeholder="123 Main St" data-testid="input-edit-street-address" className={errors.streetAddress ? "border-destructive" : ""} />
+              {errors.streetAddress && <p className="text-xs text-destructive">{errors.streetAddress}</p>}
             </div>
             <div className="col-span-2 space-y-2">
               <Label>City <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.city} onChange={(e) => set({ city: e.target.value })} placeholder="City" data-testid="input-edit-city" />
+              <Input value={form.city} onChange={(e) => set({ city: e.target.value })} placeholder="City" data-testid="input-edit-city" className={errors.city ? "border-destructive" : ""} />
+              {errors.city && <p className="text-xs text-destructive">{errors.city}</p>}
             </div>
             <div className="space-y-2">
               <Label>ZIP Code <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.zipCode} onChange={(e) => set({ zipCode: e.target.value })} maxLength={10} placeholder="12345" data-testid="input-edit-zip-code" />
+              <Input
+                value={form.zipCode}
+                onChange={(e) => set({ zipCode: e.target.value.replace(/[^\d-]/g, "").slice(0, 10) })}
+                maxLength={10}
+                placeholder="12345"
+                data-testid="input-edit-zip-code"
+                className={errors.zipCode ? "border-destructive" : ""}
+              />
+              {errors.zipCode && <p className="text-xs text-destructive">{errors.zipCode}</p>}
             </div>
           </div>
         </CardContent>
@@ -288,16 +389,18 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Insurance Carrier <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.insuranceCarrier} onChange={(e) => set({ insuranceCarrier: e.target.value })} list="payer-edit-list" data-testid="input-edit-insurance" />
+              <Input value={form.insuranceCarrier} onChange={(e) => set({ insuranceCarrier: e.target.value })} list="payer-edit-list" data-testid="input-edit-insurance" className={errors.insuranceCarrier ? "border-destructive" : ""} />
               <datalist id="payer-edit-list">
                 {enrolledPayers.map((p: any) => (
                   <option key={p.id} value={p.name} />
                 ))}
               </datalist>
+              {errors.insuranceCarrier && <p className="text-xs text-destructive">{errors.insuranceCarrier}</p>}
             </div>
             <div className="space-y-2">
               <Label>Member ID <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-              <Input value={form.memberId} onChange={(e) => set({ memberId: e.target.value })} data-testid="input-edit-member-id" />
+              <Input value={form.memberId} onChange={(e) => set({ memberId: e.target.value })} data-testid="input-edit-member-id" className={errors.memberId ? "border-destructive" : ""} />
+              {errors.memberId && <p className="text-xs text-destructive">{errors.memberId}</p>}
             </div>
           </div>
           <div className="space-y-2">
@@ -334,16 +437,18 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
             <div className="space-y-2">
               <Label>Relationship <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
               <Select value={form.relationshipToInsured} onValueChange={(v) => set({ relationshipToInsured: v })}>
-                <SelectTrigger data-testid="select-edit-relationship"><SelectValue placeholder="Select" /></SelectTrigger>
+                <SelectTrigger data-testid="select-edit-relationship" className={errors.relationshipToInsured ? "border-destructive" : ""}><SelectValue placeholder="Select" /></SelectTrigger>
                 <SelectContent>
                   {RELATIONSHIP_OPTIONS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {errors.relationshipToInsured && <p className="text-xs text-destructive">{errors.relationshipToInsured}</p>}
             </div>
           </div>
           <div className="space-y-2">
             <Label>Authorization Number <span className="ml-1 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded">Required</span></Label>
-            <Input value={form.authorizationNumber} onChange={(e) => set({ authorizationNumber: e.target.value })} data-testid="input-edit-auth-number" />
+            <Input value={form.authorizationNumber} onChange={(e) => set({ authorizationNumber: e.target.value })} data-testid="input-edit-auth-number" className={errors.authorizationNumber ? "border-destructive" : ""} />
+            {errors.authorizationNumber && <p className="text-xs text-destructive">{errors.authorizationNumber}</p>}
           </div>
         </CardContent>
       </Card>
@@ -414,6 +519,8 @@ function ProfileTab({ patient, providers, payers }: { patient: any; providers: a
               <Input
                 value={form.referringProviderNpi}
                 maxLength={10}
+                inputMode="numeric"
+                placeholder="10-digit NPI (digits only)"
                 onChange={(e) => {
                   const v = e.target.value.replace(/\D/g, "").slice(0, 10);
                   set({ referringProviderNpi: v });

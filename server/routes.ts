@@ -313,7 +313,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // 'MI' = Member ID (default for most commercial payers and VA CCN)
     // 'SY' = SSN, 'II' = Standard Unique Health ID, 'ZZ' = Mutually Defined
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS member_id_qualifier VARCHAR(2) NOT NULL DEFAULT 'MI'`);
-    await pool.query(`UPDATE payers SET member_id_qualifier = 'MI' WHERE payer_id = 'TWVACCN' AND member_id_qualifier != 'MI'`);
+    await pool.query(`UPDATE payers SET member_id_qualifier = 'MI' WHERE payer_id IN ('TWVACCN', 'CDCA1') AND member_id_qualifier != 'MI'`);
 
     // Data fix: update Peter Mandler's member_id to his VA EDIPI (10-digit DoD ID)
     await pool.query(`UPDATE patients SET member_id = '1636711604' WHERE LOWER(first_name) = 'peter' AND LOWER(last_name) = 'mandler' AND (member_id IS NULL OR member_id != '1636711604')`);
@@ -519,18 +519,23 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     console.log("Assigned existing data to demo organization");
 
     // ── Super Admin user seed ─────────────────────────────────────────────
+    // No fallback password. SUPER_ADMIN_PASSWORD must be explicitly set.
+    // If the account doesn't exist yet and the env var is missing, creation
+    // is skipped — the account is created exactly once when the env var is set.
     {
       const { hashPassword } = await import("./auth");
       const { rows: saCheck } = await pool.query("SELECT id FROM users WHERE email = 'abeer@tekrevol.com'");
       if (saCheck.length === 0) {
-        // First-time creation: use SUPER_ADMIN_PASSWORD env var or fallback default
-        const superPwd = process.env.SUPER_ADMIN_PASSWORD || 'Apps@1986N';
-        const hashed = await hashPassword(superPwd);
-        await pool.query(
-          "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, 'abeer@tekrevol.com', $1, 'super_admin', 'Abeer (Platform Admin)', NULL)",
-          [hashed]
-        );
-        console.log("Created super_admin user: abeer@tekrevol.com");
+        if (!process.env.SUPER_ADMIN_PASSWORD) {
+          console.warn("WARNING: SUPER_ADMIN_PASSWORD is not set — super_admin account not created. Set this env var and restart to create the account.");
+        } else {
+          const hashed = await hashPassword(process.env.SUPER_ADMIN_PASSWORD);
+          await pool.query(
+            "INSERT INTO users (id, email, password, role, name, organization_id) VALUES (gen_random_uuid()::text, 'abeer@tekrevol.com', $1, 'super_admin', 'Abeer (Platform Admin)', NULL)",
+            [hashed]
+          );
+          console.log("Created super_admin user: abeer@tekrevol.com");
+        }
       } else if (process.env.SUPER_ADMIN_PASSWORD) {
         // Only reset password if explicitly configured via env var — never overwrite a manually-set password
         const hashed = await hashPassword(process.env.SUPER_ADMIN_PASSWORD);
@@ -3415,6 +3420,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       )
     `).catch(() => {});
 
+    // ── stedi_payer_id on payers ─────────────────────────────────────────────
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS stedi_payer_id VARCHAR`).catch(() => {});
+    // Seed known Stedi payer IDs for common payers
+    await pool.query(`
+      UPDATE payers SET stedi_payer_id = '87726'
+      WHERE payer_id = '87726C' AND (stedi_payer_id IS NULL OR stedi_payer_id = '')
+    `).catch(() => {});
+    await pool.query(`
+      UPDATE payers SET stedi_payer_id = '87726'
+      WHERE payer_id = '87726' AND (stedi_payer_id IS NULL OR stedi_payer_id = '')
+    `).catch(() => {});
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -5482,7 +5499,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       let clearinghouseConnected = false;
       try {
         // Passes if either Stedi API key is present OR Office Ally is connected
-        const stediConfigured = !!process.env.STEDI_API_KEY;
+        const stediConfigured = !!(process.env.STEDI_KEY || process.env.STEDI_API_KEY);
         if (!stediConfigured && ps) {
           const { rows: psRows } = orgId
             ? await db.query(`SELECT oa_connected, oa_sftp_username FROM practice_settings WHERE organization_id = $1 LIMIT 1`, [orgId])
@@ -6043,6 +6060,34 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
   app.patch("/api/billing/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
+      // ── Input validation ──────────────────────────────────────────────────────
+      if (req.body.serviceDate !== undefined && req.body.serviceDate !== null && req.body.serviceDate !== "") {
+        const d = String(req.body.serviceDate);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(Date.parse(d))) {
+          return res.status(400).json({ error: "serviceDate must be a valid date in YYYY-MM-DD format" });
+        }
+        if (new Date(d) > new Date()) {
+          return res.status(400).json({ error: "serviceDate cannot be in the future" });
+        }
+      }
+      if (req.body.amount !== undefined && req.body.amount !== null) {
+        const amt = Number(req.body.amount);
+        if (isNaN(amt) || amt < 0) {
+          return res.status(400).json({ error: "amount must be a non-negative number" });
+        }
+      }
+      if (req.body.placeOfService !== undefined && req.body.placeOfService !== null && req.body.placeOfService !== "") {
+        if (!/^\d{1,2}$/.test(String(req.body.placeOfService))) {
+          return res.status(400).json({ error: "placeOfService must be a 1–2 digit numeric code" });
+        }
+      }
+      if (req.body.icd10Primary !== undefined && req.body.icd10Primary !== null && req.body.icd10Primary !== "") {
+        if (!/^[A-Z]\d{2}/.test(String(req.body.icd10Primary).toUpperCase())) {
+          return res.status(400).json({ error: "icd10Primary must be a valid ICD-10 code (e.g. Z89.512)" });
+        }
+      }
+      // ── End input validation ──────────────────────────────────────────────────
+
       const db = await import("./db").then(m => m.pool);
       const existing = await db.query("SELECT id, status, organization_id FROM claims WHERE id = $1", [req.params.id]);
       if (existing.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
@@ -6802,12 +6847,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN", stedi_payer_id: null as string | null };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -6997,12 +7042,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN", stedi_payer_id: null as string | null };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -7160,12 +7205,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN", stedi_payer_id: null as string | null };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -7307,6 +7352,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         );
         if (rpResult.rows.length) referringProvSubmit = rpResult.rows[0];
       }
+      // Fall back to patient's inline referring provider fields (set via patient profile or claim wizard)
+      if (!referringProvSubmit && pat.referring_provider_name) {
+        const nameParts = (pat.referring_provider_name as string).trim().split(/\s+/);
+        referringProvSubmit = {
+          first_name: nameParts.length > 1 ? nameParts[0] : "",
+          last_name: nameParts.length > 1 ? nameParts.slice(1).join(" ") : nameParts[0],
+          npi: (pat.referring_provider_npi as string) || null,
+          provider_type: "1",
+          verification_status: "verified",
+        };
+      }
 
       const { generate837P } = await import("./services/edi-generator");
       const { edi: ediString, rpTransmitted: rpTransmittedSubmit } = generate837P({
@@ -7395,6 +7451,32 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
           [crypto.randomUUID(), c.id, "Submitted via Stedi", `837P submitted to Stedi. Transaction ID: ${result.transactionId || "N/A"}. Status: ${result.status || "Accepted"}`, c.organization_id]
         );
+
+        // ── Auto-process inline 277CA from Stedi's synchronous response ────────
+        // In ISA15=T (test mode) Stedi never routes to the payer, so no webhook
+        // fires. Stedi returns a 277CA acknowledgment inline in the API response.
+        // Parse it here so the claim immediately moves to 'acknowledged'.
+        const raw = result.rawResponse as any;
+        if (raw?.status === "SUCCESS" && raw?.claimReference?.patientControlNumber) {
+          try {
+            const { process277CA } = await import("./services/stedi-webhooks");
+            const payerClaimNumber = raw.claimReference?.rhclaimNumber || raw.claimReference?.correlationId || null;
+            const synth277 = {
+              payer: { name: raw.payer?.payerName || payerInfo.name || "Stedi Clearinghouse" },
+              claimStatuses: [{
+                claimReference: {
+                  patientControlNumber: c.id,
+                  payerClaimControlNumber: payerClaimNumber,
+                },
+                statusInformation: [{ statusCategoryCode: "A1", statusCode: "20" }],
+              }],
+            };
+            await process277CA(synth277, result.transactionId || "inline", db);
+            console.log(`[submit-stedi] Inline 277CA processed for claim ${c.id} → acknowledged`);
+          } catch (err277: any) {
+            console.warn("[submit-stedi] Inline 277CA processing failed (non-fatal):", err277.message);
+          }
+        }
         if (followUpDate) {
           await db.query(
             `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
@@ -7432,6 +7514,111 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           ? "Automated submission blocked — a human session is required to submit claims to a real payer."
           : "An unexpected error occurred during submission. The claim was not sent.",
       });
+    }
+  });
+
+  // ── Simulate Stedi webhook (test-mode only) ────────────────────────────────
+  // Directly invokes process277CA / process835ERA with synthetic data so the full
+  // DB-side claim-status → ERA flow can be exercised without waiting for real payer responses.
+  // Blocked in production (STEDI_ENV !== 'test').
+  app.post("/api/billing/claims/:id/simulate-webhook", requireRole("admin", "rcm_manager", "super_admin"), async (req, res) => {
+    try {
+      const { STEDI_ENV } = await import("./lib/environment");
+      if (STEDI_ENV !== "test") {
+        return res.status(403).json({ success: false, error: "Webhook simulation is only available in test mode (STEDI_ENV=test)." });
+      }
+
+      const db = await import("./db").then(m => m.pool);
+      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      if (!claimResult.rows.length) return res.status(404).json({ success: false, error: "Claim not found" });
+      const c = claimResult.rows[0];
+      if (!verifyOrg(c, req)) return res.status(404).json({ success: false, error: "Claim not found" });
+
+      const scenario: string = req.body?.scenario || "277-accepted";
+      const txId = `SIM-${Date.now()}`;
+
+      // Ensure claim is in 'submitted' state so 277CA handler does not skip it
+      await db.query(
+        `UPDATE claims SET status = 'submitted', submission_method = COALESCE(submission_method, 'stedi'), updated_at = NOW() WHERE id = $1 AND status NOT IN ('submitted')`,
+        [c.id]
+      );
+
+      const { process277CA, process835ERA } = await import("./services/stedi-webhooks");
+
+      if (scenario === "277-accepted" || scenario === "277-rejected") {
+        const categoryCode = scenario === "277-accepted" ? "A1" : "A2";
+        const synth277 = {
+          payer: { name: c.payer || "Simulated Payer" },
+          claimStatuses: [{
+            claimReference: {
+              patientControlNumber: c.id,
+              payerClaimControlNumber: `SIM-PCN-${Date.now()}`,
+            },
+            statusInformation: [{ statusCategoryCode: categoryCode, statusCode: scenario === "277-accepted" ? "P1" : "A8" }],
+          }],
+        };
+        await process277CA(synth277, txId, db);
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+           VALUES ($1,$2,$3,$4,NOW(),$5)`,
+          [crypto.randomUUID(), c.id, "Simulation", `Simulated ${scenario} webhook fired (txId: ${txId})`, c.organization_id]
+        );
+        return res.json({ success: true, scenario, transactionId: txId });
+      }
+
+      if (scenario === "835-paid" || scenario === "835-partial" || scenario === "835-denied") {
+        const billedAmount = Number(c.amount) || 100;
+        const paidAmount = scenario === "835-paid"
+          ? billedAmount
+          : scenario === "835-partial"
+          ? Math.round(billedAmount * 0.6 * 100) / 100
+          : 0;
+
+        const adjustments: any[] = [];
+        if (scenario === "835-paid") {
+          adjustments.push({ claimAdjustmentGroupCode: "CO", claimAdjustmentReasonCode: "45", claimAdjustmentAmount: billedAmount - paidAmount });
+        } else if (scenario === "835-partial") {
+          adjustments.push({ claimAdjustmentGroupCode: "PR", claimAdjustmentReasonCode: "2", claimAdjustmentAmount: Math.round((billedAmount - paidAmount) * 100) / 100 });
+        } else {
+          adjustments.push({ claimAdjustmentGroupCode: "CO", claimAdjustmentReasonCode: "50", claimAdjustmentAmount: billedAmount });
+        }
+
+        // Ensure claim is in acknowledged state for ERA processing (realistic flow)
+        await db.query(
+          `UPDATE claims SET status = 'acknowledged', updated_at = NOW() WHERE id = $1 AND status = 'submitted'`,
+          [c.id]
+        );
+
+        const synth835 = {
+          payer: { name: c.payer || "Simulated Payer" },
+          financialInformation: {
+            checkNumber: `SIM-CHK-${Date.now()}`,
+            checkDate: new Date().toISOString().slice(0, 10),
+            totalActualProviderPaymentAmount: String(paidAmount),
+          },
+          claimPaymentInformation: [{
+            claimPaymentInfo: {
+              patientControlNumber: c.id,
+              totalClaimChargeAmount: String(billedAmount),
+              claimPaymentAmount: String(paidAmount),
+            },
+            patient: { firstName: "Test", lastName: "Patient" },
+            claimAdjustments: adjustments,
+          }],
+        };
+        await process835ERA(synth835, txId, db);
+        await db.query(
+          `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+           VALUES ($1,$2,$3,$4,NOW(),$5)`,
+          [crypto.randomUUID(), c.id, "Simulation", `Simulated ${scenario} webhook fired (txId: ${txId}). Billed: $${billedAmount}, Paid: $${paidAmount}`, c.organization_id]
+        );
+        return res.json({ success: true, scenario, transactionId: txId, paidAmount, billedAmount });
+      }
+
+      return res.status(400).json({ success: false, error: `Unknown scenario: ${scenario}` });
+    } catch (err: any) {
+      console.error("[SimulateWebhook] Error:", err);
+      res.status(500).json({ success: false, error: err.message || "Simulation failed" });
     }
   });
 
@@ -7475,12 +7662,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (provResult.rows.length) prov = provResult.rows[0];
       }
 
-      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN" };
+      let payerInfo = { name: c.payer || "Unknown", payer_id: "UNKNOWN", stedi_payer_id: null as string | null };
       if (c.payer_id) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       } else if (c.payer) {
-        const payerResult = await db.query("SELECT name, payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const payerResult = await db.query("SELECT name, payer_id, stedi_payer_id, claim_filing_indicator, payer_classification, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (payerResult.rows.length) payerInfo = payerResult.rows[0];
       }
 
@@ -7893,7 +8080,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   async function fetchStediPayerNetwork(): Promise<any[]> {
     const now = Date.now();
     if (_stediPayerCache && now - _stediPayerCache.ts < 60 * 60 * 1000) return _stediPayerCache.payers;
-    const apiKey = process.env.STEDI_API_KEY;
+    const apiKey = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
     if (!apiKey) return [];
     const res = await fetch("https://healthcare.us.stedi.com/2024-04-01/change/medicalnetwork/payers", {
       headers: { Authorization: `Key ${apiKey}` },
@@ -7927,7 +8114,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   // POST /api/billing/payers/sync-stedi
   app.post("/api/billing/payers/sync-stedi", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
-      const apiKey = process.env.STEDI_API_KEY;
+      const apiKey = process.env.STEDI_KEY || process.env.STEDI_API_KEY;
       if (!apiKey) return res.status(400).json({ error: "STEDI_API_KEY is not configured" });
       const stediPayers = await fetchStediPayerNetwork();
       if (stediPayers.length === 0) return res.status(502).json({ error: "Stedi returned an empty payer list — check API key and connectivity" });
@@ -8444,6 +8631,34 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           return res.status(400).json({ error: "Invalid referring provider NPI" });
         }
       }
+      if (dob) {
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dob.trim())) {
+          return res.status(400).json({ error: "dob must be in MM/DD/YYYY format" });
+        }
+        const [mm, dd, yyyy] = dob.trim().split("/").map(Number);
+        const parsed = new Date(yyyy, mm - 1, dd);
+        if (isNaN(parsed.getTime()) || parsed.getMonth() !== mm - 1) {
+          return res.status(400).json({ error: "dob is not a valid date" });
+        }
+        if (parsed > new Date()) {
+          return res.status(400).json({ error: "dob cannot be in the future" });
+        }
+        if (yyyy < 1900) {
+          return res.status(400).json({ error: "dob must be after 1900" });
+        }
+      }
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: "Invalid email address format" });
+      }
+      if (phone && phone.replace(/\D/g, "").length < 10) {
+        return res.status(400).json({ error: "Phone number must contain at least 10 digits" });
+      }
+      if (address?.zip && !/^\d{5}(-\d{4})?$/.test(address.zip.trim())) {
+        return res.status(400).json({ error: "ZIP code must be 5 digits or ZIP+4 format (e.g. 94080 or 94080-1234)" });
+      }
+      if (state && !/^[A-Za-z]{2}$/.test(state.trim())) {
+        return res.status(400).json({ error: "State must be a 2-letter code (e.g. CA)" });
+      }
       const db = await import("./db").then(m => m.pool);
       const { rows } = await db.query(
         `INSERT INTO patients (
@@ -8551,7 +8766,28 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         values
       );
       if (rows.length === 0) return res.status(404).json({ error: "Patient not found" });
-      res.json(rows[0]);
+      const savedPatient = rows[0];
+
+      // Soft warning: VA CCN payers (TWVACCN = Medical, CDCA1 = Dental) require
+      // an EDIPI (10 digits) as the member ID, not an SSN (9 digits).
+      // Only check when memberId or payerId was part of this update.
+      const warnings: string[] = [];
+      if (req.body.memberId !== undefined || req.body.payerId !== undefined) {
+        const rawMemberId = (savedPatient.member_id || "").replace(/[-\s]/g, "");
+        if (/^\d{9}$/.test(rawMemberId) && savedPatient.payer_id) {
+          const { rows: payerRows } = await db.query(
+            `SELECT payer_id FROM payers WHERE id = $1 AND payer_id IN ('TWVACCN', 'CDCA1') LIMIT 1`,
+            [savedPatient.payer_id]
+          );
+          if (payerRows.length > 0) {
+            warnings.push(
+              "Value looks like an SSN (9 digits). VA CCN requires EDIPI (10 digits). Confirm before submitting a claim."
+            );
+          }
+        }
+      }
+
+      res.json(warnings.length ? { ...savedPatient, _warnings: warnings } : savedPatient);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
@@ -9741,7 +9977,36 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!claim || !verifyOrg(claim, req)) {
       return res.status(404).json({ error: "Claim not found" });
     }
-    res.json(claim);
+    // Augment the Drizzle result with columns added via raw SQL migrations that
+    // are not present in the Drizzle schema definition.
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const extra = await db.query(
+        `SELECT
+           statement_period_start, statement_period_end,
+           external_ordering_provider_name, external_ordering_provider_npi,
+           ordering_provider_first_name, ordering_provider_last_name,
+           ordering_provider_npi, ordering_provider_org
+         FROM claims WHERE id = $1`,
+        [claim.id]
+      );
+      const row = extra.rows[0] || {};
+      const fmt = (d: any) => d ? new Date(d).toISOString().slice(0, 10) : null;
+      return res.json({
+        ...claim,
+        statementPeriodStart: fmt(row.statement_period_start),
+        statementPeriodEnd: fmt(row.statement_period_end),
+        externalOrderingProviderName: row.external_ordering_provider_name || null,
+        externalOrderingProviderNpi: row.external_ordering_provider_npi || null,
+        orderingProviderFirstName: row.ordering_provider_first_name || null,
+        orderingProviderLastName: row.ordering_provider_last_name || null,
+        orderingProviderNpi: row.ordering_provider_npi || null,
+        orderingProviderOrg: row.ordering_provider_org || null,
+      });
+    } catch {
+      // If the extra columns don't exist yet, return what we have
+      return res.json(claim);
+    }
   });
 
   app.get("/api/claims/:id/events", requireRole("admin", "rcm_manager"), async (req, res) => {
@@ -12736,7 +13001,7 @@ Warmly,
         users: users.rows,
         providerCount: providers.rows[0]?.cnt || 0,
         payerCount: payers.rows[0]?.cnt || 0,
-        stediConfigured: !!process.env.STEDI_API_KEY,
+        stediConfigured: !!(process.env.STEDI_KEY || process.env.STEDI_API_KEY),
         featureUsage: {
           claimsCreated: claimsCreated.rows[0]?.cnt || 0,
           claimsSubmitted: claimsSubmitted.rows[0]?.cnt || 0,
@@ -13773,7 +14038,7 @@ Warmly,
 
   // ── Section 11: /api/billing/stedi-status ──────────────────────────────────
   app.get("/api/billing/stedi-status", requireRole("admin", "rcm_manager"), async (_req, res) => {
-    const isConfigured = !!process.env.STEDI_API_KEY;
+    const isConfigured = !!(process.env.STEDI_KEY || process.env.STEDI_API_KEY);
     const { STEDI_ENV, ISA15_INDICATOR } = await import("./lib/environment");
     const ediMode = ISA15_INDICATOR; // 'P' = production payer forwarding, 'T' = test (no forwarding)
     res.json({
@@ -13796,7 +14061,10 @@ Warmly,
     const webhookSecret = process.env.STEDI_WEBHOOK_SECRET;
     const authHeader = req.headers['authorization'];
     if (webhookSecret) {
-      if (authHeader !== `Key ${webhookSecret}`) {
+      // Stedi sends the key as a bare token: Authorization: <secret>
+      // (NOT the "Key <secret>" format used by Stedi's own API calls)
+      const authOk = authHeader === webhookSecret || authHeader === `Key ${webhookSecret}`;
+      if (!authOk) {
         console.warn(
           `[Webhook] REJECTED — bad or missing auth. IP: ${req.ip} ` +
           `Header: ${String(authHeader || '').slice(0, 30)}`

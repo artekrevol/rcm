@@ -313,7 +313,13 @@ export function parseVaReferral(result: TextractAnalysisResult): VaReferralExtra
 
   // ── Authorization ─────────────────────────────────────────────────────────────
   const authEntry = kv(kvm, "authorization number", "auth number", "auth no", "authorization no");
-  const auth_number = authEntry?.value?.trim() ?? "";
+  // Validate: auth numbers are alphanumeric codes, not phone numbers or long text blobs
+  const rawAuth = authEntry?.value?.trim() ?? "";
+  const authLooksValid = rawAuth.length > 0
+    && rawAuth.length <= 30
+    && !/\(\d{3}\)|\d{3}-\d{4}/.test(rawAuth)   // reject phone patterns
+    && !/phone|email|fax/i.test(rawAuth);          // reject contact fields
+  const auth_number = authLooksValid ? rawAuth : "";
   conf.authorization = authEntry?.confidence ?? 0.5;
 
   const priorityEntry = kv(kvm, "priority", "type", "request type");
@@ -383,7 +389,7 @@ export function parseVaReferral(result: TextractAnalysisResult): VaReferralExtra
   // Co-morbidities from lines near "co-morbid" heading.
   // Strategy: collect only lines that look like ICD codes or short medical diagnoses.
   // Stop on any VA form section header or after 15 items.
-  const CO_MORBID_STOP = /^(allergies|allerg|medication|treatment|authorization|veteran|patient|service|type of care|rate|category|referring|requesting|network|community|form|printed|approved|program|referral|contact|note|instruction|please|telephone|fax|billing|rendering|ordering|status|priority|section|page \d|scheduling|appointment|provider|facility|ordering|signature|date|prepared|authorization number|auth number|auth no|unique consult|issue date|expiration|diagnosis:|primary diagnosis|icd-10|hcpcs|suggested|care coordinator|from:|to:|subject:|dear|sincerely)/i;
+  const CO_MORBID_STOP = /^(allergies|allerg|medication|treatment|authorization|veteran|patient|service|type of care|rate|category|referring|requesting|network|community|form|va form|printed|approved|program|referral|contact|note|instruction|please|telephone|fax|billing|rendering|ordering|status|priority|section|page \d|scheduling|appointment|provider|facility|ordering|signature|date|prepared|authorization number|auth number|auth no|unique consult|issue date|expiration|diagnosis:|primary diagnosis|icd-10|hcpcs|suggested|care coordinator|from:|to:|subject:|dear|sincerely|approved referral|referral request)/i;
   const co_morbidities: string[] = [];
   let inCoMorbid = false;
   for (const line of result.lines) {
@@ -404,6 +410,8 @@ export function parseVaReferral(result: TextractAnalysisResult): VaReferralExtra
     // – OR looks like "F32.0", "M54.5", "Z87.39" etc.
     const looksLikeDiag = /^[A-Za-z][A-Za-z0-9.\-\s]{1,60}$/.test(item);
     if (!looksLikeDiag) continue;
+    // Reject obvious form boilerplate (contains "Form", "VA", "Referral", "Approved")
+    if (/\bform\b|\bVA\b|\breferral\b|\bapproved\b|\bmedical care\b/i.test(item)) continue;
 
     co_morbidities.push(item);
     // Cap to avoid runaway capture

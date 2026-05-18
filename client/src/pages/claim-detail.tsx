@@ -354,11 +354,12 @@ export default function ClaimDetailPage() {
   const [testingClaim, setTestingClaim] = useState(false);
   const [showArchiveClaimDialog, setShowArchiveClaimDialog] = useState(false);
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false);
+  const [simulatingWebhook, setSimulatingWebhook] = useState(false);
 
   const { data: practiceSettings } = useQuery<any>({
     queryKey: ["/api/billing/practice-settings"],
   });
-  const { data: stediStatus } = useQuery<{ configured: boolean }>({
+  const { data: stediStatus } = useQuery<{ configured: boolean; stediEnv?: string; ediMode?: string }>({
     queryKey: ["/api/billing/stedi/status"],
     queryFn: async () => {
       const res = await fetch("/api/billing/stedi/status");
@@ -367,6 +368,7 @@ export default function ClaimDetailPage() {
     },
   });
   const stediConfigured = stediStatus?.configured ?? false;
+  const stediIsTestMode = stediStatus?.stediEnv === "test" || stediStatus?.ediMode === "T";
 
   const { data: claim, isLoading: claimLoading } = useQuery<Claim>({
     queryKey: ["/api/claims", id],
@@ -477,7 +479,7 @@ export default function ClaimDetailPage() {
     : 0;
 
   const isBlocked = claim.readinessStatus === "RED";
-  const canSubmit = stediConfigured && claim.readinessStatus === "GREEN" && ["created", "ready"].includes(claim.status);
+  const canSubmit = stediConfigured && claim.readinessStatus === "GREEN" && ["created", "ready", "exported"].includes(claim.status);
 
   return (
     <div className="p-6 space-y-6">
@@ -1024,6 +1026,66 @@ export default function ClaimDetailPage() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Simulate Payer Response — test mode only */}
+          {stediConfigured && stediIsTestMode && ["submitted", "acknowledged"].includes(claim.status) && (
+            <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-simulate-webhook">
+              <CardContent className="p-3 space-y-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <FlaskConical className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                  <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">Simulate Payer Response</p>
+                  <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-400 text-amber-700 dark:text-amber-400 ml-auto">TEST MODE</Badge>
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  Fire a synthetic webhook to test the full status-change and payment flow without waiting for a real payer.
+                </p>
+                <div className="grid grid-cols-1 gap-1.5 pt-1">
+                  {[
+                    { scenario: "277-accepted", label: "Acknowledge (277 Accepted)", icon: <CheckCircle2 className="h-3 w-3" />, color: "text-green-700 dark:text-green-400 border-green-300 dark:border-green-700 hover:bg-green-50 dark:hover:bg-green-950/30" },
+                    { scenario: "277-rejected", label: "Reject (277 Rejected)", icon: <XCircle className="h-3 w-3" />, color: "text-red-700 dark:text-red-400 border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-950/30" },
+                    { scenario: "835-paid", label: "Pay in Full (835 ERA)", icon: <DollarSign className="h-3 w-3" />, color: "text-green-700 dark:text-green-400 border-green-300 dark:border-green-700 hover:bg-green-50 dark:hover:bg-green-950/30" },
+                    { scenario: "835-partial", label: "Partial Payment 60% (835)", icon: <DollarSign className="h-3 w-3" />, color: "text-yellow-700 dark:text-yellow-400 border-yellow-300 dark:border-yellow-700 hover:bg-yellow-50 dark:hover:bg-yellow-950/30" },
+                    { scenario: "835-denied", label: "Deny Claim (835 ERA)", icon: <AlertTriangle className="h-3 w-3" />, color: "text-red-700 dark:text-red-400 border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-950/30" },
+                  ].map(({ scenario, label, icon, color }) => (
+                    <button
+                      key={scenario}
+                      disabled={simulatingWebhook}
+                      data-testid={`button-simulate-${scenario}`}
+                      className={`flex items-center gap-2 w-full text-left text-xs px-2.5 py-1.5 rounded border bg-white dark:bg-transparent font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${color}`}
+                      onClick={async () => {
+                        setSimulatingWebhook(true);
+                        try {
+                          const res = await fetch(`/api/billing/claims/${id}/simulate-webhook`, {
+                            method: "POST",
+                            credentials: "include",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ scenario }),
+                          });
+                          const data = await res.json();
+                          if (!res.ok || !data.success) throw new Error(data.error || "Simulation failed");
+                          toast({
+                            title: `Simulation: ${scenario}`,
+                            description: data.paidAmount !== undefined
+                              ? `ERA processed — paid $${data.paidAmount} of $${data.billedAmount}. Status updated.`
+                              : `277CA processed — status updated. See timeline below.`,
+                          });
+                          queryClient.invalidateQueries({ queryKey: ["/api/claims", id] });
+                          queryClient.invalidateQueries({ queryKey: ["/api/claims", id, "events"] });
+                        } catch (err: any) {
+                          toast({ title: "Simulation failed", description: err.message, variant: "destructive" });
+                        } finally {
+                          setSimulatingWebhook(false);
+                        }
+                      }}
+                    >
+                      {simulatingWebhook ? <Loader2 className="h-3 w-3 animate-spin" /> : icon}
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           )}
 
           {patient && (
