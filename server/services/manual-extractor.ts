@@ -368,7 +368,12 @@ async function callClaudeWithPdfBuffer(apiKey: string, buffer: Buffer): Promise<
  * pdf-lib is only used for the splitting step, never for page counting.
  */
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
-  const pdfParse = (await import("pdf-parse")).default;
+  // pdf-parse is a CommonJS module. Dynamic import().default is unreliable in
+  // compiled Node.js contexts — require() is the correct interop path for CJS.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const _pdfParseModule = require("pdf-parse");
+  const pdfParse: (buf: Buffer) => Promise<{ numpages: number; text: string }> =
+    typeof _pdfParseModule === "function" ? _pdfParseModule : _pdfParseModule.default;
 
   let numpages = 0;
   try {
