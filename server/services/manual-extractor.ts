@@ -291,44 +291,9 @@ function extractTextFromHtml(html: string): string {
   return bodyText.replace(/\t/g, " ").replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-const PDF_VISION_MAX_BYTES = 5 * 1024 * 1024;
+const PDF_CHUNK_PAGES = 90; // Stay safely under Claude's 100-page hard limit
 
-async function extractPdfWithClaudeVision(buffer: Buffer): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set — cannot use Claude PDF vision");
-
-  if (buffer.length > PDF_VISION_MAX_BYTES) {
-    buffer = buffer.subarray(0, PDF_VISION_MAX_BYTES);
-  }
-
-  const base64 = buffer.toString("base64");
-
-  const visionController = new AbortController();
-  const visionTimeout = setTimeout(() => visionController.abort(), 120000);
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    signal: visionController.signal,
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "document",
-              source: { type: "base64", media_type: "application/pdf", data: base64 },
-            },
-            {
-              type: "text",
-              text: `Extract all text content from this payer billing manual PDF, preserving section headings and structure.
+const CLAUDE_PDF_PROMPT = `Extract all text content from this payer billing manual PDF, preserving section headings and structure.
 Pay special attention to sections about:
 1. Timely filing requirements (how many days to submit claims)
 2. Prior authorization requirements and CPT code lists
@@ -345,30 +310,80 @@ Pay special attention to sections about:
 13. Provider-to-payer notification event requirements
 14. Provider-to-member notice requirements (ABN, NOMNC, IDN)
 
-Return the extracted text in plain text format with section headings preserved. Do not summarize — return the actual text.`,
-            },
+Return the extracted text in plain text format with section headings preserved. Do not summarize — return the actual text.`;
+
+async function callClaudeWithPdfBuffer(apiKey: string, buffer: Buffer): Promise<string> {
+  const base64 = buffer.toString("base64");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180000);
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    signal: controller.signal,
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-beta": "pdfs-2024-09-25",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 4096,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+            { type: "text", text: CLAUDE_PDF_PROMPT },
           ],
         },
       ],
     }),
   });
 
-  clearTimeout(visionTimeout);
+  clearTimeout(timeout);
 
   if (!res.ok) {
     const errBody = await res.text();
-    if (errBody.includes("maximum of 100 PDF pages")) {
-      throw new Error(
-        "PDF exceeds 100-page Claude limit. Upload a shorter document or split into chapter-level files before ingesting."
-      );
-    }
     throw new Error(`Claude PDF vision API error ${res.status}: ${errBody.slice(0, 300)}`);
   }
 
   const data = (await res.json()) as any;
   const text = data.content?.[0]?.text || "";
-  if (!text.trim()) throw new Error("Claude PDF vision returned empty text");
+  if (!text.trim()) throw new Error("Claude PDF vision returned empty text for chunk");
   return text.replace(/\s{3,}/g, "\n\n").trim();
+}
+
+async function extractPdfWithClaudeVision(buffer: Buffer): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set — cannot use Claude PDF vision");
+
+  const { PDFDocument } = await import("pdf-lib");
+  const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  const totalPages = pdfDoc.getPageCount();
+
+  if (totalPages <= PDF_CHUNK_PAGES) {
+    return callClaudeWithPdfBuffer(apiKey, buffer);
+  }
+
+  // PDF exceeds 90 pages — split into chunks and process each sequentially
+  console.log(`[manual-extractor] PDF has ${totalPages} pages — splitting into ${Math.ceil(totalPages / PDF_CHUNK_PAGES)} chunks of ${PDF_CHUNK_PAGES}`);
+  const chunks: string[] = [];
+
+  for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
+    const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
+    const chunkDoc = await PDFDocument.create();
+    const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
+    const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
+    copiedPages.forEach(p => chunkDoc.addPage(p));
+    const chunkBytes = await chunkDoc.save();
+    const chunkBuffer = Buffer.from(chunkBytes);
+    console.log(`[manual-extractor] Processing pages ${start + 1}–${end} (chunk ${Math.floor(start / PDF_CHUNK_PAGES) + 1})`);
+    const chunkText = await callClaudeWithPdfBuffer(apiKey, chunkBuffer);
+    chunks.push(chunkText);
+  }
+
+  return chunks.join("\n\n").replace(/\s{3,}/g, "\n\n").trim();
 }
 
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
