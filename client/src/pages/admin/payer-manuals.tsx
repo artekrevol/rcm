@@ -97,6 +97,7 @@ function statusBadge(status: string) {
   const map: Record<string, { label: string; cls: string }> = {
     pending: { label: "Pending", cls: "bg-muted text-muted-foreground" },
     processing: { label: "Processing…", cls: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" },
+    text_extracted: { label: "Analyzing…", cls: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200" },
     ready_for_review: { label: "Ready for Review", cls: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" },
     completed: { label: "Completed", cls: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" },
     failed: { label: "Failed", cls: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" },
@@ -359,6 +360,21 @@ interface ExtractionItem {
   applied_rule_id: string | null;
   notes: string | null;
   applies_to_plan_products: string[] | null;
+  chunk_id: string | null;
+}
+
+interface DocumentChunk {
+  id: string;
+  chunk_index: number;
+  page_start: number | null;
+  page_end: number | null;
+  char_count: number;
+  extraction_method: string;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+  processed_at: string | null;
+  raw_text_preview: string;
 }
 
 const PLAN_PRODUCT_OPTIONS = ["HMO", "PPO", "POS", "EPO", "Indemnity"] as const;
@@ -817,6 +833,7 @@ export default function PayerManualsPage() {
   const [filterSection, setFilterSection] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDocType, setFilterDocType] = useState<string>("all");
+  const [showChunks, setShowChunks] = useState(false);
 
   const { data: manuals = [], isLoading } = useQuery<PayerManual[]>({
     queryKey: ["/api/admin/payer-manuals"],
@@ -839,6 +856,17 @@ export default function PayerManualsPage() {
       return res.json();
     },
     enabled: !!selectedManualId,
+  });
+
+  const { data: chunks = [], isLoading: chunksLoading } = useQuery<DocumentChunk[]>({
+    queryKey: ["/api/admin/payer-manuals", selectedManualId, "chunks"],
+    queryFn: async () => {
+      if (!selectedManualId) return [];
+      const res = await fetch(`/api/admin/payer-manuals/${selectedManualId}/chunks`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!selectedManualId && showChunks,
   });
 
   const { data: cciStats = [], refetch: refetchCciStats } = useQuery<any[]>({
@@ -1135,10 +1163,12 @@ export default function PayerManualsPage() {
                           p.manual_status === "completed" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" :
                           p.manual_status === "ready_for_review" ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200" :
                           p.manual_status === "processing" ? "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" :
+                          p.manual_status === "text_extracted" ? "bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200" :
                           "bg-muted text-muted-foreground"
                         }`}>
                           {p.manual_status === "completed" ? "Ingested" :
                            p.manual_status === "ready_for_review" ? "Review" :
+                           p.manual_status === "text_extracted" ? "Analyzing" :
                            p.manual_status === "processing" ? "Processing" : p.manual_status || "Pending"}
                         </span>
                       ) : (
@@ -1280,6 +1310,10 @@ export default function PayerManualsPage() {
                           ) : src.manual_status === "ready_for_review" ? (
                             <Badge variant="outline" className="text-xs text-blue-700 border-blue-200 bg-blue-50 dark:bg-blue-950 dark:border-blue-800">
                               <Clock className="h-3 w-3 mr-1" /> In Review
+                            </Badge>
+                          ) : src.manual_status === "text_extracted" ? (
+                            <Badge variant="outline" className="text-xs text-cyan-700 border-cyan-200 bg-cyan-50 dark:bg-cyan-950 dark:border-cyan-800">
+                              <Clock className="h-3 w-3 mr-1" /> Analyzing
                             </Badge>
                           ) : (
                             <Badge variant="outline" className="text-xs text-yellow-700 border-yellow-200 bg-yellow-50 dark:bg-yellow-950 dark:border-yellow-800">
@@ -1492,7 +1526,7 @@ export default function PayerManualsPage() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       {statusBadge(selectedManual.status)}
-                      {["pending", "failed", "ready_for_review"].includes(selectedManual.status) && (
+                      {["pending", "failed", "ready_for_review", "text_extracted"].includes(selectedManual.status) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1504,7 +1538,7 @@ export default function PayerManualsPage() {
                           {selectedManual.status === "processing" ? "Processing…" : "Run Extraction"}
                         </Button>
                       )}
-                      {selectedManual.status === "processing" && (
+                      {["processing", "text_extracted"].includes(selectedManual.status) && (
                         <Button size="sm" variant="outline" onClick={() => queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals"] })}>
                           <RefreshCw className="h-4 w-4 mr-1" /> Refresh
                         </Button>
@@ -1569,6 +1603,66 @@ export default function PayerManualsPage() {
                 <span className="text-xs text-muted-foreground ml-auto">{filteredItems.length} items</span>
               </div>
 
+              {/* Raw Chunks Audit Trail */}
+              {chunks.length > 0 || showChunks ? (
+                <div className="space-y-2">
+                  <button
+                    className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground w-full text-left"
+                    onClick={() => setShowChunks(!showChunks)}
+                    data-testid="button-toggle-chunks"
+                  >
+                    {showChunks ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    Raw Text Chunks ({chunks.length || "…"})
+                  </button>
+                  {showChunks && (
+                    chunksLoading ? (
+                      <div className="text-xs text-muted-foreground py-2">Loading chunks…</div>
+                    ) : chunks.length === 0 ? (
+                      <div className="text-xs text-muted-foreground py-2">No chunks stored yet — run extraction first.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {chunks.map((chunk) => (
+                          <div key={chunk.id} className="rounded-md border bg-muted/30 p-3 text-xs" data-testid={`card-chunk-${chunk.id}`}>
+                            <div className="flex items-center gap-3 flex-wrap mb-1.5">
+                              <span className="font-semibold">Chunk {chunk.chunk_index + 1}</span>
+                              {chunk.page_start != null && (
+                                <span className="text-muted-foreground">
+                                  Pages {chunk.page_start}–{chunk.page_end ?? chunk.page_start}
+                                </span>
+                              )}
+                              <span className="text-muted-foreground">{chunk.char_count.toLocaleString()} chars</span>
+                              <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">{chunk.extraction_method}</span>
+                              <span className={`px-1.5 py-0.5 rounded font-medium ${
+                                chunk.status === "completed" ? "bg-green-50 text-green-700" :
+                                chunk.status === "failed" ? "bg-red-50 text-red-700" :
+                                chunk.status === "processing" ? "bg-yellow-50 text-yellow-700" :
+                                "bg-muted text-muted-foreground"
+                              }`}>{chunk.status}</span>
+                            </div>
+                            {chunk.error_message && (
+                              <p className="text-red-500 mb-1">{chunk.error_message}</p>
+                            )}
+                            <p className="text-muted-foreground font-mono whitespace-pre-wrap break-words leading-relaxed">
+                              {chunk.raw_text_preview}
+                              {chunk.char_count > 500 && <span className="text-muted-foreground/60"> …({chunk.char_count - 500} more chars)</span>}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                </div>
+              ) : (
+                <button
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowChunks(true)}
+                  data-testid="button-show-chunks"
+                >
+                  <ChevronRight className="h-3 w-3" />
+                  Show raw text chunks
+                </button>
+              )}
+
               {/* Items */}
               {itemsLoading ? (
                 <div className="py-10 text-center text-sm text-muted-foreground">Loading items…</div>
@@ -1578,6 +1672,10 @@ export default function PayerManualsPage() {
                     <p className="text-sm text-muted-foreground">
                       {selectedManual.status === "pending"
                         ? "Click 'Run Extraction' to extract rules from this manual using AI."
+                        : selectedManual.status === "processing"
+                        ? "Phase 1: Extracting raw text from document…"
+                        : selectedManual.status === "text_extracted"
+                        ? "Phase 2: AI is analyzing the extracted text. Refresh to check progress."
                         : "No items match the current filters."}
                     </p>
                   </CardContent>
