@@ -358,32 +358,43 @@ async function extractPdfWithClaudeVision(buffer: Buffer): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set — cannot use Claude PDF vision");
 
-  const { PDFDocument } = await import("pdf-lib");
-  const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-  const totalPages = pdfDoc.getPageCount();
+  // Attempt page-count check and chunking via pdf-lib.
+  // Some PDFs use non-standard cross-reference streams that cause pdf-lib to throw
+  // an internal "r is not iterable" parse error — fall back to a direct single call
+  // in that case (Claude itself handles most of those PDFs fine).
+  let totalPages = 0;
+  try {
+    const { PDFDocument } = await import("pdf-lib");
+    const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    totalPages = pdfDoc.getPageCount();
 
-  if (totalPages <= PDF_CHUNK_PAGES) {
-    return callClaudeWithPdfBuffer(apiKey, buffer);
+    if (totalPages > PDF_CHUNK_PAGES) {
+      console.log(`[manual-extractor] PDF has ${totalPages} pages — splitting into ${Math.ceil(totalPages / PDF_CHUNK_PAGES)} chunks of ${PDF_CHUNK_PAGES}`);
+      const chunks: string[] = [];
+
+      for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
+        const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
+        const chunkDoc = await PDFDocument.create();
+        const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
+        const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
+        copiedPages.forEach(p => chunkDoc.addPage(p));
+        const chunkBytes = await chunkDoc.save();
+        const chunkBuffer = Buffer.from(chunkBytes);
+        console.log(`[manual-extractor] Processing pages ${start + 1}–${end} (chunk ${Math.floor(start / PDF_CHUNK_PAGES) + 1})`);
+        const chunkText = await callClaudeWithPdfBuffer(apiKey, chunkBuffer);
+        chunks.push(chunkText);
+      }
+
+      return chunks.join("\n\n").replace(/\s{3,}/g, "\n\n").trim();
+    }
+  } catch (pdfLibErr: any) {
+    console.warn(`[manual-extractor] pdf-lib parse failed (${pdfLibErr.message}) — falling back to direct Claude call`);
+    // Fall through to single-shot Claude call below
   }
 
-  // PDF exceeds 90 pages — split into chunks and process each sequentially
-  console.log(`[manual-extractor] PDF has ${totalPages} pages — splitting into ${Math.ceil(totalPages / PDF_CHUNK_PAGES)} chunks of ${PDF_CHUNK_PAGES}`);
-  const chunks: string[] = [];
-
-  for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
-    const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
-    const chunkDoc = await PDFDocument.create();
-    const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
-    const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
-    copiedPages.forEach(p => chunkDoc.addPage(p));
-    const chunkBytes = await chunkDoc.save();
-    const chunkBuffer = Buffer.from(chunkBytes);
-    console.log(`[manual-extractor] Processing pages ${start + 1}–${end} (chunk ${Math.floor(start / PDF_CHUNK_PAGES) + 1})`);
-    const chunkText = await callClaudeWithPdfBuffer(apiKey, chunkBuffer);
-    chunks.push(chunkText);
-  }
-
-  return chunks.join("\n\n").replace(/\s{3,}/g, "\n\n").trim();
+  // Single-shot path: either pdf-lib confirmed ≤90 pages, or pdf-lib failed to parse
+  // (in which case Claude handles the raw buffer directly — it's more tolerant).
+  return callClaudeWithPdfBuffer(apiKey, buffer);
 }
 
 async function extractTextFromPdf(buffer: Buffer): Promise<string> {
