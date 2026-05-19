@@ -224,6 +224,15 @@ export interface ManualText {
   sections: ExtractedSection[];
 }
 
+export interface RawChunk {
+  chunkIndex: number;
+  pageStart: number | null;
+  pageEnd: number | null;
+  rawText: string;
+  charCount: number;
+  extractionMethod: 'pdf_parse' | 'claude_vision' | 'html' | 'url';
+}
+
 function splitIntoChunks(text: string, maxChars = MAX_CHUNK_CHARS): string[] {
   const chunks: string[] = [];
   const paragraphs = text.split(/\n{2,}/);
@@ -355,21 +364,18 @@ async function callClaudeWithPdfBuffer(apiKey: string, buffer: Buffer): Promise<
 }
 
 /**
- * Core PDF extraction pipeline — handles all document types deterministically:
+ * Core PDF extraction pipeline. Returns one RawChunk per logical page-range
+ * so callers can store each chunk's raw text before running structured AI analysis.
  *
- *  1. pdf-parse  → text-based PDFs of any size (no Claude, no page limit)
- *  2. pdf-parse  → also provides numpages (reliable even when text extraction fails)
- *  3. Claude Vision (single call) → image-based PDFs ≤ PDF_CHUNK_PAGES pages
- *  4. pdf-lib + Claude Vision (chunked) → image-based PDFs > PDF_CHUNK_PAGES pages
- *  5. Claude Vision direct → pdf-lib can't parse but page count is ≤ PDF_CHUNK_PAGES
- *  6. Clear actionable error → pdf-lib can't parse AND page count > PDF_CHUNK_PAGES
- *
- * Page-count authority is always pdf-parse (most tolerant parser).
- * pdf-lib is only used for the splitting step, never for page counting.
+ * Routing order:
+ *  1. pdf-parse      → text-based PDFs (fast, no Claude, no page limit)
+ *  2. Claude Vision  → image-based PDFs ≤ PDF_CHUNK_PAGES pages (single call)
+ *  3. pdf-lib split + Claude Vision per slice → large image PDFs
+ *  4. Claude direct  → pdf-lib can't split but page count is within limit
+ *  5. Hard error     → pdf-lib can't split AND page count exceeds limit
  */
-async function extractTextFromPdf(buffer: Buffer): Promise<string> {
-  // pdf-parse is a CommonJS module. Dynamic import().default is unreliable in
-  // compiled Node.js contexts — require() is the correct interop path for CJS.
+async function extractChunksFromPdf(buffer: Buffer): Promise<RawChunk[]> {
+  // pdf-parse is CommonJS — require() is the correct interop, not import().default.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const _pdfParseModule = require("pdf-parse");
   const pdfParse: (buf: Buffer) => Promise<{ numpages: number; text: string }> =
@@ -382,13 +388,16 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
     const text = data.text.replace(/\s{3,}/g, "\n\n").trim();
     if (text.length > 200) {
       console.log(`[manual-extractor] pdf-parse extracted text from ${numpages}-page PDF`);
-      return text; // Text-based PDF — no Claude needed, no page limit
+      return [{
+        chunkIndex: 0, pageStart: 1, pageEnd: numpages,
+        rawText: text, charCount: text.length, extractionMethod: 'pdf_parse',
+      }];
     }
   } catch (err: any) {
     console.warn(`[manual-extractor] pdf-parse failed: ${err.message}`);
   }
 
-  // Image-based PDF (or pdf-parse failed) — Claude Vision required
+  // Image-based PDF (or pdf-parse returned no text) — Claude Vision required
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("PDF text extraction failed — file may be image-only (ANTHROPIC_API_KEY required for OCR)");
   }
@@ -398,11 +407,14 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 
   // Fast path: pdf-parse confirmed within Claude's limit
   if (numpages > 0 && numpages <= PDF_CHUNK_PAGES) {
-    return callClaudeWithPdfBuffer(apiKey, buffer);
+    const text = await callClaudeWithPdfBuffer(apiKey, buffer);
+    return [{
+      chunkIndex: 0, pageStart: 1, pageEnd: numpages,
+      rawText: text, charCount: text.length, extractionMethod: 'claude_vision',
+    }];
   }
 
-  // Need to chunk (numpages > PDF_CHUNK_PAGES) or page count unknown (numpages === 0)
-  // Use pdf-lib for page-accurate splitting — it handles 99% of PDFs
+  // Use pdf-lib for page-accurate splitting — handles 99% of PDFs
   try {
     const { PDFDocument } = await import("pdf-lib");
     const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
@@ -410,12 +422,16 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 
     if (totalPages <= PDF_CHUNK_PAGES) {
       console.log(`[manual-extractor] pdf-lib reports ${totalPages} pages — single Claude call`);
-      return callClaudeWithPdfBuffer(apiKey, buffer);
+      const text = await callClaudeWithPdfBuffer(apiKey, buffer);
+      return [{
+        chunkIndex: 0, pageStart: 1, pageEnd: totalPages,
+        rawText: text, charCount: text.length, extractionMethod: 'claude_vision',
+      }];
     }
 
     const numChunks = Math.ceil(totalPages / PDF_CHUNK_PAGES);
     console.log(`[manual-extractor] Splitting ${totalPages}-page PDF into ${numChunks} chunks of ≤${PDF_CHUNK_PAGES} pages`);
-    const chunks: string[] = [];
+    const rawChunks: RawChunk[] = [];
 
     for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
       const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
@@ -424,25 +440,29 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
       const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
       copiedPages.forEach(p => chunkDoc.addPage(p));
       const chunkBytes = await chunkDoc.save();
-      console.log(`[manual-extractor] Processing pages ${start + 1}–${end} (chunk ${Math.floor(start / PDF_CHUNK_PAGES) + 1}/${numChunks})`);
-      chunks.push(await callClaudeWithPdfBuffer(apiKey, Buffer.from(chunkBytes)));
+      const chunkIndex = Math.floor(start / PDF_CHUNK_PAGES);
+      console.log(`[manual-extractor] Processing pages ${start + 1}–${end} (chunk ${chunkIndex + 1}/${numChunks})`);
+      const text = await callClaudeWithPdfBuffer(apiKey, Buffer.from(chunkBytes));
+      rawChunks.push({
+        chunkIndex, pageStart: start + 1, pageEnd: end,
+        rawText: text, charCount: text.length, extractionMethod: 'claude_vision',
+      });
     }
 
-    return chunks.join("\n\n").replace(/\s{3,}/g, "\n\n").trim();
+    return rawChunks;
 
   } catch (pdfLibErr: any) {
     console.warn(`[manual-extractor] pdf-lib failed: ${pdfLibErr.message}`);
 
-    // pdf-lib can't split this PDF. Route based on what pdf-parse told us:
     if (numpages === 0 || numpages <= PDF_CHUNK_PAGES) {
-      // Page count is unknown or within Claude's limit — try Claude directly.
-      // Claude's own PDF parser is more tolerant than pdf-lib for non-standard files.
       console.log(`[manual-extractor] pdf-lib failed — attempting direct Claude call (${numpages || "unknown"} pages)`);
-      return callClaudeWithPdfBuffer(apiKey, buffer);
+      const text = await callClaudeWithPdfBuffer(apiKey, buffer);
+      return [{
+        chunkIndex: 0, pageStart: 1, pageEnd: numpages || null,
+        rawText: text, charCount: text.length, extractionMethod: 'claude_vision',
+      }];
     }
 
-    // We know from pdf-parse that the document exceeds Claude's limit AND pdf-lib
-    // cannot split it. Surface a clear, actionable error instead of silently failing.
     throw new Error(
       `PDF has ${numpages} pages and uses a non-standard structure that cannot be split automatically. ` +
       `Please use a PDF tool (e.g., Adobe Acrobat, PDF24, Smallpdf) to split it into files of ` +
@@ -473,31 +493,75 @@ export const FALLBACK_ACTIVE_SECTION_TYPES: SectionType[] = [
   "member_notice",
 ];
 
-export async function extractManualSections(
-  input: { url?: string; buffer?: Buffer; fileName?: string; activeSectionTypes?: SectionType[] }
-): Promise<ManualText> {
-  let fullText: string;
+/**
+ * Extract raw text chunks from any source (PDF, HTML buffer, or URL).
+ * Each chunk carries its page range and extraction method for storage and audit.
+ * Callers should persist these chunks before running structured AI analysis.
+ */
+export async function extractRawChunks(
+  input: { url?: string; buffer?: Buffer; fileName?: string }
+): Promise<RawChunk[]> {
   if (input.buffer) {
     const name = (input.fileName || "").toLowerCase();
     if (name.endsWith(".pdf")) {
-      fullText = await extractTextFromPdf(input.buffer);
-    } else {
-      fullText = input.buffer.toString("utf-8");
-      if (fullText.trim().startsWith("<")) {
-        fullText = extractTextFromHtml(fullText);
-      }
+      return extractChunksFromPdf(input.buffer);
     }
-  } else if (input.url) {
-    fullText = await extractTextFromUrl(input.url);
-  } else {
-    throw new Error("Must provide either url or buffer");
+    let text = input.buffer.toString("utf-8");
+    if (text.trim().startsWith("<")) {
+      text = extractTextFromHtml(text);
+    }
+    return [{
+      chunkIndex: 0, pageStart: null, pageEnd: null,
+      rawText: text, charCount: text.length, extractionMethod: 'html',
+    }];
   }
+  if (input.url) {
+    const text = await extractTextFromUrl(input.url);
+    return [{
+      chunkIndex: 0, pageStart: null, pageEnd: null,
+      rawText: text, charCount: text.length, extractionMethod: 'url',
+    }];
+  }
+  throw new Error("Must provide either url or buffer");
+}
 
-  const activeTypes = input.activeSectionTypes ?? FALLBACK_ACTIVE_SECTION_TYPES;
-  const sections: ExtractedSection[] = activeTypes.map((st) => ({
+/**
+ * Given already-extracted full text, find semantically relevant passages per
+ * section type. This is Phase 2 of the pipeline — call this after chunks are
+ * stored in the DB to avoid re-running OCR/PDF extraction.
+ */
+export function analyzeFullText(
+  fullText: string,
+  activeSectionTypes: SectionType[]
+): ExtractedSection[] {
+  return activeSectionTypes.map((st) => ({
     sectionType: st,
     chunks: findRelevantChunks(fullText, st),
   }));
+}
 
-  return { fullText, sections };
+/**
+ * Find which stored DB chunk a given text snippet most likely came from.
+ * Used to set chunk_id on manual_extraction_items for auditability.
+ */
+export function findSourceChunkId(
+  snippet: string,
+  savedChunks: Array<{ id: string; raw_text: string }>
+): string | null {
+  if (savedChunks.length === 0) return null;
+  if (savedChunks.length === 1) return savedChunks[0].id;
+  const probe = snippet.slice(0, 120).toLowerCase();
+  for (const chunk of savedChunks) {
+    if (chunk.raw_text.toLowerCase().includes(probe)) return chunk.id;
+  }
+  return savedChunks[0].id;
+}
+
+export async function extractManualSections(
+  input: { url?: string; buffer?: Buffer; fileName?: string; activeSectionTypes?: SectionType[] }
+): Promise<ManualText> {
+  const rawChunks = await extractRawChunks(input);
+  const fullText = rawChunks.map(c => c.rawText).join("\n\n").replace(/\s{3,}/g, "\n\n").trim();
+  const activeTypes = input.activeSectionTypes ?? FALLBACK_ACTIVE_SECTION_TYPES;
+  return { fullText, sections: analyzeFullText(fullText, activeTypes) };
 }

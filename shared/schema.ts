@@ -712,6 +712,26 @@ export const insertManualExtractionItemSchema = createInsertSchema(manualExtract
 export type InsertManualExtractionItem = z.infer<typeof insertManualExtractionItemSchema>;
 export type ManualExtractionItem = typeof manualExtractionItems.$inferSelect;
 
+export const payerDocumentChunks = pgTable("payer_document_chunks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  sourceDocumentId: varchar("source_document_id").notNull(),
+  chunkIndex: integer("chunk_index").notNull(),
+  pageStart: integer("page_start"),
+  pageEnd: integer("page_end"),
+  rawText: text("raw_text").notNull(),
+  charCount: integer("char_count").notNull().default(0),
+  extractionMethod: varchar("extraction_method").notNull().default("pdf_parse"),
+  status: varchar("status").notNull().default("pending"),
+  errorMessage: text("error_message"),
+  organizationId: varchar("organization_id"),
+  createdAt: timestamp("created_at").defaultNow(),
+  processedAt: timestamp("processed_at"),
+});
+
+export type PayerDocumentChunk = typeof payerDocumentChunks.$inferSelect;
+export const insertPayerDocumentChunkSchema = createInsertSchema(payerDocumentChunks).omit({ id: true, createdAt: true });
+export type InsertPayerDocumentChunk = z.infer<typeof insertPayerDocumentChunkSchema>;
+
 export const payerManualSources = pgTable("payer_manual_sources", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   payerName: varchar("payer_name").notNull(),
