@@ -1770,6 +1770,30 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       )
     `);
 
+    if (!(await seederLog('table', 'payer_document_chunks'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS payer_document_chunks (
+          id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+          source_document_id VARCHAR NOT NULL REFERENCES payer_source_documents(id) ON DELETE CASCADE,
+          chunk_index INTEGER NOT NULL,
+          page_start INTEGER,
+          page_end INTEGER,
+          raw_text TEXT NOT NULL,
+          char_count INTEGER NOT NULL DEFAULT 0,
+          extraction_method VARCHAR NOT NULL DEFAULT 'pdf_parse',
+          status VARCHAR NOT NULL DEFAULT 'pending',
+          error_message TEXT,
+          organization_id VARCHAR,
+          created_at TIMESTAMP DEFAULT NOW(),
+          processed_at TIMESTAMP
+        )
+      `);
+    }
+
+    if (!(await seederLog('column', 'manual_extraction_items', 'chunk_id'))) {
+      await pool.query(`ALTER TABLE manual_extraction_items ADD COLUMN IF NOT EXISTS chunk_id VARCHAR REFERENCES payer_document_chunks(id) ON DELETE SET NULL`);
+    }
+
     // ── Prompt A: one-time migration payer_manuals → payer_source_documents ───
     // Runs only if payer_manuals still exists (i.e., upgrading from pre-Prompt-A schema).
     // On a fresh database this block is a no-op because payer_manuals is never created.
@@ -13193,6 +13217,39 @@ Warmly,
     }
   });
 
+  // Raw text chunks audit trail for a document
+  app.get("/api/admin/payer-manuals/:id/chunks", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT id, chunk_index, page_start, page_end, char_count,
+               extraction_method, status, error_message, created_at, processed_at,
+               LEFT(raw_text, 500) AS raw_text_preview
+        FROM payer_document_chunks
+        WHERE source_document_id = $1
+        ORDER BY chunk_index
+      `, [req.params.id]);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Full raw text for a single chunk (for audit/debug use)
+  app.get("/api/admin/payer-manuals/:id/chunks/:chunkId", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { rows } = await db.query(`
+        SELECT * FROM payer_document_chunks
+        WHERE id = $1 AND source_document_id = $2
+      `, [req.params.chunkId, req.params.id]);
+      if (!rows.length) return res.status(404).json({ error: "Chunk not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Trigger extraction processing for a manual
   app.post("/api/admin/payer-manuals/:id/process", requireSuperAdmin, async (req, res) => {
     const { pool: db } = await import("./db");
@@ -13212,34 +13269,71 @@ Warmly,
         }
       }
 
-      // Idempotent reprocessing: remove all non-approved items so we start clean.
-      // Rejected items are also cleared so reprocessing gives a fresh extraction pass.
+      // Idempotent reprocessing: clear non-approved items and all prior raw chunks.
       await db.query(`DELETE FROM manual_extraction_items WHERE source_document_id = $1 AND review_status IN ('pending','not_found','rejected')`, [manualId]);
+      await db.query(`DELETE FROM payer_document_chunks WHERE source_document_id = $1`, [manualId]);
 
-      // Mark as processing
-      await db.query("UPDATE payer_source_documents SET status = 'processing', updated_at = NOW() WHERE id = $1", [manualId]);
+      await db.query("UPDATE payer_source_documents SET status = 'processing', error_message = NULL, updated_at = NOW() WHERE id = $1", [manualId]);
       res.json({ status: "processing", message: "Extraction started" });
 
-      // Run async extraction
       setImmediate(async () => {
         try {
-          const { extractManualSections, FALLBACK_ACTIVE_SECTION_TYPES } = await import("./services/manual-extractor");
+          const {
+            extractRawChunks,
+            analyzeFullText,
+            findSourceChunkId,
+            FALLBACK_ACTIVE_SECTION_TYPES,
+          } = await import("./services/manual-extractor");
           const { extractSection } = await import("./services/claude-extractor");
 
-          // Read active section kinds from rule_kinds table so that Phase 3 activation
-          // (e.g. risk_adjustment_hcc) requires only a seeder change, not a code change.
+          // ── Phase 1: raw text extraction ─────────────────────────────────────
+          // Extract text from the source (pdf-parse fast path, Claude Vision OCR,
+          // or URL/HTML scrape). Each chunk maps to a page range and is saved to
+          // payer_document_chunks BEFORE any structured AI analysis runs.
+          const extractInput = manual.file_content
+            ? { buffer: Buffer.from(manual.file_content), fileName: manual.file_name || "upload.pdf" }
+            : { url: manual.source_url };
+
+          const rawChunks = await extractRawChunks(extractInput);
+
+          for (const chunk of rawChunks) {
+            await db.query(`
+              INSERT INTO payer_document_chunks
+                (source_document_id, chunk_index, page_start, page_end,
+                 raw_text, char_count, extraction_method, status, organization_id)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
+            `, [
+              manualId, chunk.chunkIndex, chunk.pageStart, chunk.pageEnd,
+              chunk.rawText, chunk.charCount, chunk.extractionMethod,
+              manual.organization_id ?? null,
+            ]);
+          }
+
+          const totalChunks = rawChunks.length;
+          const totalChars = rawChunks.reduce((n, c) => n + c.charCount, 0);
+          console.log(`[manual-extractor] Phase 1 complete: ${totalChunks} chunk(s), ${totalChars} chars stored for document ${manualId}`);
+          await db.query("UPDATE payer_source_documents SET status = 'text_extracted', updated_at = NOW() WHERE id = $1", [manualId]);
+
+          // ── Phase 2: structured AI analysis ──────────────────────────────────
+          // Load the active section types from rule_kinds, then run semantic
+          // relevance scoring + Claude structured extraction on the stored text.
           const { rows: kindRows } = await db.query(
             `SELECT code FROM rule_kinds WHERE active_in_extraction = TRUE ORDER BY sort_order`
           );
-          const sectionTypes = kindRows.length > 0
+          const sectionTypes: string[] = kindRows.length > 0
             ? kindRows.map((r: any) => r.code as string)
             : FALLBACK_ACTIVE_SECTION_TYPES;
 
-          // Use file buffer if uploaded, otherwise fetch from URL
-          const extractInput = manual.file_content
-            ? { buffer: Buffer.from(manual.file_content), fileName: manual.file_name || "upload.pdf", activeSectionTypes: sectionTypes as any }
-            : { url: manual.source_url, activeSectionTypes: sectionTypes as any };
-          const { sections } = await extractManualSections(extractInput);
+          // Re-read chunks from DB so we work from persisted data.
+          const { rows: dbChunks } = await db.query(
+            `SELECT id, raw_text FROM payer_document_chunks WHERE source_document_id = $1 ORDER BY chunk_index`,
+            [manualId]
+          );
+          const fullText = dbChunks.map((c: any) => c.raw_text).join("\n\n");
+          const sections = analyzeFullText(fullText, sectionTypes as any);
+
+          // Mark all chunks as processing
+          await db.query(`UPDATE payer_document_chunks SET status = 'processing' WHERE source_document_id = $1`, [manualId]);
 
           for (const section of sections) {
             if (section.chunks.length === 0) {
@@ -13249,29 +13343,29 @@ Warmly,
               `, [manualId, section.sectionType]);
               continue;
             }
-            for (const chunk of section.chunks.slice(0, 2)) {
-              const output = await extractSection(section.sectionType, chunk);
+            for (const textChunk of section.chunks.slice(0, 2)) {
+              const chunkId = findSourceChunkId(textChunk, dbChunks);
+              const output = await extractSection(section.sectionType, textChunk);
               if (output.skipped) {
                 await db.query(`
-                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, review_status, notes)
-                  VALUES ($1, $2, $3, 'pending', 'ANTHROPIC_API_KEY not configured — manual review required')
-                `, [manualId, section.sectionType, chunk.slice(0, 2000)]);
+                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, review_status, notes, chunk_id)
+                  VALUES ($1, $2, $3, 'pending', 'ANTHROPIC_API_KEY not configured — manual review required', $4)
+                `, [manualId, section.sectionType, textChunk.slice(0, 2000), chunkId]);
               } else if (output.error || !output.result) {
                 await db.query(`
-                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, review_status, notes)
-                  VALUES ($1, $2, $3, 'pending', $4)
-                `, [manualId, section.sectionType, chunk.slice(0, 2000), `Extraction error: ${output.error || 'No result'}`]);
+                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, review_status, notes, chunk_id)
+                  VALUES ($1, $2, $3, 'pending', $4, $5)
+                `, [manualId, section.sectionType, textChunk.slice(0, 2000), `Extraction error: ${output.error || 'No result'}`, chunkId]);
               } else {
                 await db.query(`
-                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, extracted_json, confidence, review_status)
-                  VALUES ($1, $2, $3, $4, $5, 'pending')
-                `, [manualId, section.sectionType, chunk.slice(0, 2000), JSON.stringify(output.result), output.confidence]);
+                  INSERT INTO manual_extraction_items (source_document_id, section_type, raw_snippet, extracted_json, confidence, review_status, chunk_id)
+                  VALUES ($1, $2, $3, $4, $5, 'pending', $6)
+                `, [manualId, section.sectionType, textChunk.slice(0, 2000), JSON.stringify(output.result), output.confidence, chunkId]);
               }
             }
           }
-          // Ensure all section types have at least one extraction item
-          // (creates pending placeholders for sections not extracted from the document;
-          //  reviewers must explicitly mark missing sections as not_found via the review UI)
+
+          // Ensure every active section type has at least one item (placeholder if absent)
           for (const st of sectionTypes) {
             const { rows: existing } = await db.query(
               `SELECT id FROM manual_extraction_items WHERE source_document_id = $1 AND section_type = $2 LIMIT 1`,
@@ -13284,9 +13378,14 @@ Warmly,
               `, [manualId, st]);
             }
           }
+
+          await db.query(`UPDATE payer_document_chunks SET status = 'completed', processed_at = NOW() WHERE source_document_id = $1`, [manualId]);
           await db.query("UPDATE payer_source_documents SET status = 'ready_for_review', updated_at = NOW() WHERE id = $1", [manualId]);
+          console.log(`[manual-extractor] Phase 2 complete: structured extraction done for document ${manualId}`);
         } catch (err: any) {
+          console.error(`[manual-extractor] Extraction failed for document ${manualId}: ${err.message}`);
           await db.query("UPDATE payer_source_documents SET status = 'failed', error_message = $2, updated_at = NOW() WHERE id = $1", [manualId, err.message]);
+          await db.query(`UPDATE payer_document_chunks SET status = 'failed', error_message = $2 WHERE source_document_id = $1 AND status NOT IN ('completed')`, [manualId, err.message]).catch(() => {});
         }
       });
     } catch (err: any) {
