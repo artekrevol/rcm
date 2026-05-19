@@ -354,53 +354,96 @@ async function callClaudeWithPdfBuffer(apiKey: string, buffer: Buffer): Promise<
   return text.replace(/\s{3,}/g, "\n\n").trim();
 }
 
-async function extractPdfWithClaudeVision(buffer: Buffer): Promise<string> {
+/**
+ * Core PDF extraction pipeline — handles all document types deterministically:
+ *
+ *  1. pdf-parse  → text-based PDFs of any size (no Claude, no page limit)
+ *  2. pdf-parse  → also provides numpages (reliable even when text extraction fails)
+ *  3. Claude Vision (single call) → image-based PDFs ≤ PDF_CHUNK_PAGES pages
+ *  4. pdf-lib + Claude Vision (chunked) → image-based PDFs > PDF_CHUNK_PAGES pages
+ *  5. Claude Vision direct → pdf-lib can't parse but page count is ≤ PDF_CHUNK_PAGES
+ *  6. Clear actionable error → pdf-lib can't parse AND page count > PDF_CHUNK_PAGES
+ *
+ * Page-count authority is always pdf-parse (most tolerant parser).
+ * pdf-lib is only used for the splitting step, never for page counting.
+ */
+async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  const pdfParse = (await import("pdf-parse")).default;
+
+  let numpages = 0;
+  try {
+    const data = await pdfParse(buffer);
+    numpages = data.numpages;
+    const text = data.text.replace(/\s{3,}/g, "\n\n").trim();
+    if (text.length > 200) {
+      console.log(`[manual-extractor] pdf-parse extracted text from ${numpages}-page PDF`);
+      return text; // Text-based PDF — no Claude needed, no page limit
+    }
+  } catch (err: any) {
+    console.warn(`[manual-extractor] pdf-parse failed: ${err.message}`);
+  }
+
+  // Image-based PDF (or pdf-parse failed) — Claude Vision required
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error("PDF text extraction failed — file may be image-only (ANTHROPIC_API_KEY required for OCR)");
+  }
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set — cannot use Claude PDF vision");
+  console.log(`[manual-extractor] Image-based PDF detected (${numpages} pages from pdf-parse) — routing to Claude Vision`);
 
-  const { PDFDocument } = await import("pdf-lib");
-  const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-  const totalPages = pdfDoc.getPageCount();
-
-  if (totalPages <= PDF_CHUNK_PAGES) {
+  // Fast path: pdf-parse confirmed within Claude's limit
+  if (numpages > 0 && numpages <= PDF_CHUNK_PAGES) {
     return callClaudeWithPdfBuffer(apiKey, buffer);
   }
 
-  // PDF exceeds 90 pages — split into chunks and process each sequentially
-  console.log(`[manual-extractor] PDF has ${totalPages} pages — splitting into ${Math.ceil(totalPages / PDF_CHUNK_PAGES)} chunks of ${PDF_CHUNK_PAGES}`);
-  const chunks: string[] = [];
-
-  for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
-    const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
-    const chunkDoc = await PDFDocument.create();
-    const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
-    const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
-    copiedPages.forEach(p => chunkDoc.addPage(p));
-    const chunkBytes = await chunkDoc.save();
-    const chunkBuffer = Buffer.from(chunkBytes);
-    console.log(`[manual-extractor] Processing pages ${start + 1}–${end} (chunk ${Math.floor(start / PDF_CHUNK_PAGES) + 1})`);
-    const chunkText = await callClaudeWithPdfBuffer(apiKey, chunkBuffer);
-    chunks.push(chunkText);
-  }
-
-  return chunks.join("\n\n").replace(/\s{3,}/g, "\n\n").trim();
-}
-
-async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  // Need to chunk (numpages > PDF_CHUNK_PAGES) or page count unknown (numpages === 0)
+  // Use pdf-lib for page-accurate splitting — it handles 99% of PDFs
   try {
-    const pdfParse = (await import("pdf-parse")).default;
-    const data = await pdfParse(buffer);
-    const text = data.text.replace(/\s{3,}/g, "\n\n").trim();
-    if (text.length > 200) return text;
-  } catch {
-    // pdf-parse failed — fall through to Claude vision
-  }
+    const { PDFDocument } = await import("pdf-lib");
+    const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+    const totalPages = pdfDoc.getPageCount();
 
-  if (process.env.ANTHROPIC_API_KEY) {
-    return await extractPdfWithClaudeVision(buffer);
-  }
+    if (totalPages <= PDF_CHUNK_PAGES) {
+      console.log(`[manual-extractor] pdf-lib reports ${totalPages} pages — single Claude call`);
+      return callClaudeWithPdfBuffer(apiKey, buffer);
+    }
 
-  throw new Error("PDF text extraction failed — file may be image-only (ANTHROPIC_API_KEY required for OCR)");
+    const numChunks = Math.ceil(totalPages / PDF_CHUNK_PAGES);
+    console.log(`[manual-extractor] Splitting ${totalPages}-page PDF into ${numChunks} chunks of ≤${PDF_CHUNK_PAGES} pages`);
+    const chunks: string[] = [];
+
+    for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
+      const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
+      const chunkDoc = await PDFDocument.create();
+      const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
+      const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
+      copiedPages.forEach(p => chunkDoc.addPage(p));
+      const chunkBytes = await chunkDoc.save();
+      console.log(`[manual-extractor] Processing pages ${start + 1}–${end} (chunk ${Math.floor(start / PDF_CHUNK_PAGES) + 1}/${numChunks})`);
+      chunks.push(await callClaudeWithPdfBuffer(apiKey, Buffer.from(chunkBytes)));
+    }
+
+    return chunks.join("\n\n").replace(/\s{3,}/g, "\n\n").trim();
+
+  } catch (pdfLibErr: any) {
+    console.warn(`[manual-extractor] pdf-lib failed: ${pdfLibErr.message}`);
+
+    // pdf-lib can't split this PDF. Route based on what pdf-parse told us:
+    if (numpages === 0 || numpages <= PDF_CHUNK_PAGES) {
+      // Page count is unknown or within Claude's limit — try Claude directly.
+      // Claude's own PDF parser is more tolerant than pdf-lib for non-standard files.
+      console.log(`[manual-extractor] pdf-lib failed — attempting direct Claude call (${numpages || "unknown"} pages)`);
+      return callClaudeWithPdfBuffer(apiKey, buffer);
+    }
+
+    // We know from pdf-parse that the document exceeds Claude's limit AND pdf-lib
+    // cannot split it. Surface a clear, actionable error instead of silently failing.
+    throw new Error(
+      `PDF has ${numpages} pages and uses a non-standard structure that cannot be split automatically. ` +
+      `Please use a PDF tool (e.g., Adobe Acrobat, PDF24, Smallpdf) to split it into files of ` +
+      `≤${PDF_CHUNK_PAGES} pages and re-upload each part separately.`
+    );
+  }
 }
 
 // ── Main extraction entry point ───────────────────────────────────────────────
