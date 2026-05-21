@@ -252,7 +252,8 @@ function splitIntoChunks(text: string, maxChars = MAX_CHUNK_CHARS): string[] {
 }
 
 function findRelevantChunks(fullText: string, sectionType: SectionType): string[] {
-  const keywords = SECTION_KEYWORDS[sectionType];
+  const keywords = SECTION_KEYWORDS[sectionType as keyof typeof SECTION_KEYWORDS];
+  if (!keywords || keywords.length === 0) return [];
   const allChunks = splitIntoChunks(fullText);
   const relevant: Array<{ chunk: string; score: number }> = [];
   for (const chunk of allChunks) {
