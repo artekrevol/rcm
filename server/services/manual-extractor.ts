@@ -230,7 +230,9 @@ export interface RawChunk {
   pageEnd: number | null;
   rawText: string;
   charCount: number;
-  extractionMethod: 'pdf_parse' | 'claude_vision' | 'html' | 'url';
+  // 'pdf_parse' kept for backward-compat with existing DB rows only.
+  // New documents will only produce 'pdfjs', 'textract', 'html', or 'url'.
+  extractionMethod: 'pdf_parse' | 'pdfjs' | 'textract' | 'html' | 'url';
 }
 
 function splitIntoChunks(text: string, maxChars = MAX_CHUNK_CHARS): string[] {
@@ -284,7 +286,9 @@ async function extractTextFromUrl(url: string): Promise<string> {
     }
     if (contentType.includes("application/pdf") || url.toLowerCase().endsWith(".pdf")) {
       const buf = await res.arrayBuffer();
-      return await extractTextFromPdf(Buffer.from(buf));
+      const { extractPdfToChunks } = await import("./pdf-extractor.js");
+      const chunks = await extractPdfToChunks(Buffer.from(buf));
+      return chunks.map((c) => c.rawText).join("\n\n");
     }
     const text = await res.text();
     return text.replace(/\s+/g, " ").trim();
@@ -300,212 +304,14 @@ function extractTextFromHtml(html: string): string {
   return bodyText.replace(/\t/g, " ").replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// 40 pages per chunk stays safely under both Claude's 100-page hard limit
-// and its 200 000-token soft limit (dense policy PDFs can hit ~2 200 tokens/page).
-const PDF_CHUNK_PAGES = 40;
-
-const CLAUDE_PDF_PROMPT = `Extract all text content from this payer billing manual PDF, preserving section headings and structure.
-Pay special attention to sections about:
-1. Timely filing requirements (how many days to submit claims)
-2. Prior authorization requirements and CPT code lists
-3. Billing modifier requirements and liability assignment (GA, GZ, GY, Mod 25, 59, 26, TC)
-4. Claims appeal and reconsideration process
-5. Referral requirements by plan product
-6. Coordination of benefits and Medicare Secondary Payer rules
-7. Smart Edits and payer-specific clearinghouse edit rules
-8. EDI field-level construction requirements (837 format, NDC, segment specs)
-9. Place of service rules and telehealth POS requirements
-10. Advance submission deadlines (PA prior notice, home health, DME)
-11. Payer decision turnaround timeframes
-12. Medical records and documentation submission deadlines
-13. Provider-to-payer notification event requirements
-14. Provider-to-member notice requirements (ABN, NOMNC, IDN)
-
-Return the extracted text in plain text format with section headings preserved. Do not summarize — return the actual text.`;
-
-async function callClaudeWithPdfBuffer(apiKey: string, buffer: Buffer): Promise<string> {
-  const base64 = buffer.toString("base64");
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180000);
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    signal: controller.signal,
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
-            { type: "text", text: CLAUDE_PDF_PROMPT },
-          ],
-        },
-      ],
-    }),
-  });
-
-  clearTimeout(timeout);
-
-  if (!res.ok) {
-    const errBody = await res.text();
-    throw new Error(`Claude PDF vision API error ${res.status}: ${errBody.slice(0, 300)}`);
-  }
-
-  const data = (await res.json()) as any;
-  const text = data.content?.[0]?.text || "";
-  if (!text.trim()) throw new Error("Claude PDF vision returned empty text for chunk");
-  return text.replace(/\s{3,}/g, "\n\n").trim();
-}
-
 /**
- * Core PDF extraction pipeline. Returns one RawChunk per logical page-range
- * so callers can store each chunk's raw text before running structured AI analysis.
- *
- * Routing order:
- *  1. pdf-parse      → text-based PDFs (fast, no Claude, no page limit)
- *  2. Claude Vision  → image-based PDFs ≤ PDF_CHUNK_PAGES pages (single call)
- *  3. pdf-lib split + Claude Vision per slice → large image PDFs
- *  4. Claude direct  → pdf-lib can't split but page count is within limit
- *  5. Hard error     → pdf-lib can't split AND page count exceeds limit
+ * Delegate to the dedicated Phase 1 extraction service.
+ * pdfjs-dist handles text-layer PDFs; AWS Textract handles scanned/image PDFs.
+ * No Claude calls occur during text extraction.
  */
-async function extractChunksFromPdf(buffer: Buffer): Promise<RawChunk[]> {
-  // pdf-parse is CommonJS. Try every known export shape before giving up.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const _pdfParseModule = require("pdf-parse");
-  const pdfParse: ((buf: Buffer) => Promise<{ numpages: number; text: string }>) | null =
-    typeof _pdfParseModule === "function"
-      ? _pdfParseModule
-      : typeof _pdfParseModule?.default === "function"
-        ? _pdfParseModule.default
-        : typeof _pdfParseModule?.parse === "function"
-          ? _pdfParseModule.parse
-          : null;
-
-  let numpages = 0;
-  if (!pdfParse) {
-    console.warn("[manual-extractor] pdf-parse module loaded but no callable export found — skipping text-layer extraction");
-  } else {
-    try {
-      const data = await pdfParse(buffer);
-      numpages = data.numpages;
-      const text = data.text.replace(/\s{3,}/g, "\n\n").trim();
-      if (text.length > 200) {
-        console.log(`[manual-extractor] pdf-parse extracted text from ${numpages}-page PDF`);
-        return [{
-          chunkIndex: 0, pageStart: 1, pageEnd: numpages,
-          rawText: text, charCount: text.length, extractionMethod: 'pdf_parse',
-        }];
-      }
-    } catch (err: any) {
-      console.warn(`[manual-extractor] pdf-parse failed: ${err.message}`);
-    }
-  }
-
-  // Image-based PDF (or pdf-parse returned no text) — Claude Vision required
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error("PDF text extraction failed — file may be image-only (ANTHROPIC_API_KEY required for OCR)");
-  }
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  console.log(`[manual-extractor] Image-based PDF detected (${numpages} pages from pdf-parse) — routing to Claude Vision`);
-
-  // Fast path: pdf-parse confirmed within Claude's limit
-  if (numpages > 0 && numpages <= PDF_CHUNK_PAGES) {
-    const text = await callClaudeWithPdfBuffer(apiKey, buffer);
-    return [{
-      chunkIndex: 0, pageStart: 1, pageEnd: numpages,
-      rawText: text, charCount: text.length, extractionMethod: 'claude_vision',
-    }];
-  }
-
-  // Use pdf-lib for page-accurate splitting — handles 99% of PDFs
-  try {
-    const { PDFDocument } = await import("pdf-lib");
-    const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-    const totalPages = pdfDoc.getPageCount();
-
-    if (totalPages <= PDF_CHUNK_PAGES) {
-      console.log(`[manual-extractor] pdf-lib reports ${totalPages} pages — single Claude call`);
-      const text = await callClaudeWithPdfBuffer(apiKey, buffer);
-      return [{
-        chunkIndex: 0, pageStart: 1, pageEnd: totalPages,
-        rawText: text, charCount: text.length, extractionMethod: 'claude_vision',
-      }];
-    }
-
-    const numChunks = Math.ceil(totalPages / PDF_CHUNK_PAGES);
-    console.log(`[manual-extractor] Splitting ${totalPages}-page PDF into ${numChunks} chunks of ≤${PDF_CHUNK_PAGES} pages`);
-    const rawChunks: RawChunk[] = [];
-    let chunkingStarted = false; // distinguishes Claude errors from pdf-lib structural errors
-
-    // Per-chunk timeout: if Claude Vision doesn't respond within 120s, fail fast
-    // with a clear message rather than hanging indefinitely.
-    const CHUNK_TIMEOUT_MS = 120_000;
-    const withChunkTimeout = (promise: Promise<string>, pageLabel: string): Promise<string> =>
-      Promise.race([
-        promise,
-        new Promise<string>((_, reject) =>
-          setTimeout(() => reject(new Error(
-            `Claude Vision timed out after ${CHUNK_TIMEOUT_MS / 1000}s processing pages ${pageLabel}. ` +
-            `The PDF chunk may be too complex. Try splitting into smaller segments.`
-          )), CHUNK_TIMEOUT_MS)
-        ),
-      ]);
-
-    for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
-      chunkingStarted = true;
-      const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
-      const chunkDoc = await PDFDocument.create();
-      const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
-      const copiedPages = await chunkDoc.copyPages(pdfDoc, pageIndices);
-      copiedPages.forEach(p => chunkDoc.addPage(p));
-      const chunkBytes = await chunkDoc.save();
-      const chunkIndex = Math.floor(start / PDF_CHUNK_PAGES);
-      const pageLabel = `${start + 1}–${end}`;
-      console.log(`[manual-extractor] Processing pages ${pageLabel} (chunk ${chunkIndex + 1}/${numChunks})`);
-      const text = await withChunkTimeout(
-        callClaudeWithPdfBuffer(apiKey, Buffer.from(chunkBytes)),
-        pageLabel
-      );
-      rawChunks.push({
-        chunkIndex, pageStart: start + 1, pageEnd: end,
-        rawText: text, charCount: text.length, extractionMethod: 'claude_vision',
-      });
-    }
-
-    return rawChunks;
-
-  } catch (pdfLibErr: any) {
-    // If we already started sending chunks to Claude, this is a Claude/network
-    // error — not a pdf-lib structural failure. Re-throw so the caller marks
-    // the document failed with the real error message.
-    if (chunkingStarted) throw pdfLibErr;
-
-    console.warn(`[manual-extractor] pdf-lib failed: ${pdfLibErr.message}`);
-
-    if (numpages === 0 || numpages <= PDF_CHUNK_PAGES) {
-      console.log(`[manual-extractor] pdf-lib failed — attempting direct Claude call (${numpages || "unknown"} pages)`);
-      const text = await callClaudeWithPdfBuffer(apiKey, buffer);
-      return [{
-        chunkIndex: 0, pageStart: 1, pageEnd: numpages || null,
-        rawText: text, charCount: text.length, extractionMethod: 'claude_vision',
-      }];
-    }
-
-    throw new Error(
-      `PDF has ${numpages} pages and uses a non-standard structure that cannot be split automatically. ` +
-      `Please use a PDF tool (e.g., Adobe Acrobat, PDF24, Smallpdf) to split it into files of ` +
-      `≤${PDF_CHUNK_PAGES} pages and re-upload each part separately.`
-    );
-  }
+async function extractChunksFromPdf(buffer: Buffer, fileName?: string): Promise<RawChunk[]> {
+  const { extractPdfToChunks } = await import("./pdf-extractor.js");
+  return extractPdfToChunks(buffer, fileName);
 }
 
 // ── Main extraction entry point ───────────────────────────────────────────────
@@ -541,7 +347,7 @@ export async function extractRawChunks(
   if (input.buffer) {
     const name = (input.fileName || "").toLowerCase();
     if (name.endsWith(".pdf")) {
-      return extractChunksFromPdf(input.buffer);
+      return extractChunksFromPdf(input.buffer, input.fileName);
     }
     let text = input.buffer.toString("utf-8");
     if (text.trim().startsWith("<")) {

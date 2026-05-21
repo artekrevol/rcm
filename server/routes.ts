@@ -13304,9 +13304,9 @@ Warmly,
           const { extractSection } = await import("./services/claude-extractor");
 
           // ── Phase 1: raw text extraction ─────────────────────────────────────
-          // Extract text from the source (pdf-parse fast path, Claude Vision OCR,
-          // or URL/HTML scrape). Each chunk maps to a page range and is saved to
-          // payer_document_chunks BEFORE any structured AI analysis runs.
+          // Extract text from the source (pdfjs-dist for text-layer PDFs, AWS
+          // Textract for scanned PDFs, or URL/HTML scrape). Each chunk maps to a
+          // page range and is saved to payer_document_chunks BEFORE any AI runs.
           // Guard against node-postgres returning bytea as a hex-escaped string
           // (starts with \x) instead of a Buffer — decode explicitly in that case.
           let fileBuffer: Buffer | null = null;

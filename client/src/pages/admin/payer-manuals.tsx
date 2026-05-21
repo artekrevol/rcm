@@ -1631,7 +1631,15 @@ export default function PayerManualsPage() {
                                 </span>
                               )}
                               <span className="text-muted-foreground">{chunk.char_count.toLocaleString()} chars</span>
-                              <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono">{chunk.extraction_method}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-mono" data-testid={`text-extraction-method-${chunk.id}`}>
+                                {{
+                                  pdfjs: "PDF Text Layer",
+                                  textract: "AWS Textract OCR",
+                                  pdf_parse: "PDF Parse",
+                                  html: "HTML",
+                                  url: "URL",
+                                }[chunk.extraction_method] ?? chunk.extraction_method}
+                              </span>
                               <span className={`px-1.5 py-0.5 rounded font-medium ${
                                 chunk.status === "completed" ? "bg-green-50 text-green-700" :
                                 chunk.status === "failed" ? "bg-red-50 text-red-700" :
