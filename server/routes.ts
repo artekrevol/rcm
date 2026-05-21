@@ -1740,16 +1740,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`
       ALTER TABLE payer_source_documents DROP CONSTRAINT IF EXISTS payer_source_documents_status_check
     `).catch(() => {});
+    // Drop and recreate the status check so new values (e.g. text_extracted) are always included.
+    await pool.query(`ALTER TABLE payer_source_documents DROP CONSTRAINT IF EXISTS psd_status_check`).catch(() => {});
     await pool.query(`
-      DO $$ BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint WHERE conname = 'psd_status_check'
-        ) THEN
-          ALTER TABLE payer_source_documents
-            ADD CONSTRAINT psd_status_check
-            CHECK (status IN ('pending','processing','ready_for_review','completed','failed','superseded'));
-        END IF;
-      END $$
+      ALTER TABLE payer_source_documents
+        ADD CONSTRAINT psd_status_check
+        CHECK (status IN ('pending','processing','text_extracted','ready_for_review','completed','failed','superseded'))
     `).catch(() => {});
 
     await seederLog('table', 'manual_extraction_items');
