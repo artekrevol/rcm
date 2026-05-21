@@ -13328,6 +13328,21 @@ Warmly,
 
           const rawChunks = await extractRawChunks(extractInput);
 
+          // BUG-04 fix: resolve org_id — fall back to payer's org when document has NULL.
+          let chunkOrgId: string | null = manual.organization_id ?? null;
+          if (!chunkOrgId && manual.payer_id) {
+            const { rows: payerOrgRows } = await db.query(
+              "SELECT organization_id FROM payers WHERE id = $1", [manual.payer_id]
+            );
+            chunkOrgId = payerOrgRows[0]?.organization_id ?? null;
+          }
+          if (!chunkOrgId) {
+            throw new Error(
+              "Cannot ingest chunks: organization_id is NULL on document and could not be resolved from the linked payer. " +
+              "Link the document to a payer before extracting."
+            );
+          }
+
           for (const chunk of rawChunks) {
             await db.query(`
               INSERT INTO payer_document_chunks
@@ -13337,13 +13352,7 @@ Warmly,
             `, [
               manualId, chunk.chunkIndex, chunk.pageStart, chunk.pageEnd,
               chunk.rawText, chunk.charCount, chunk.extractionMethod,
-              // Prefer the document's own org_id; fall back to the linked payer's org
-              // so chunks are never silently stored without tenant isolation.
-              manual.organization_id
-                ?? (manual.payer_id
-                    ? await db.query(`SELECT organization_id FROM payers WHERE id = $1`, [manual.payer_id])
-                        .then((r: any) => r.rows[0]?.organization_id ?? null).catch(() => null)
-                    : null),
+              chunkOrgId,
             ]);
           }
 
@@ -13443,6 +13452,38 @@ Warmly,
         return res.status(400).json({ error: "reviewStatus must be approved, rejected, pending, not_found, or needs_reverification" });
       }
 
+      // FAIL-11 pre-flight: block timely_filing approval when document has no linked payer.
+      // Must run BEFORE the UPDATE so we can safely return 400 without dirtying the row.
+      // Works for both plain-approve and edit+approve paths: prospective days come from the
+      // request payload first (extractedJson.days) and fall back to stored extracted_json.days.
+      if (reviewStatus === "approved") {
+        const { rows: preItems } = await db.query(
+          "SELECT section_type, extracted_json, source_document_id FROM manual_extraction_items WHERE id = $1",
+          [req.params.id]
+        );
+        if (preItems.length > 0) {
+          const preItem = preItems[0];
+          if (preItem.section_type === "timely_filing") {
+            const prospectiveDays =
+              (extractedJson as any)?.days ?? (preItem.extracted_json as any)?.days ?? 0;
+            if (prospectiveDays > 0) {
+              const { rows: preDocs } = await db.query(
+                "SELECT payer_id FROM payer_source_documents WHERE id = $1",
+                [preItem.source_document_id]
+              );
+              if (!preDocs[0]?.payer_id) {
+                return res.status(400).json({
+                  error:
+                    "Cannot approve timely_filing: this document has no linked payer. " +
+                    "Link a payer to the document first, then re-approve so the " +
+                    `${prospectiveDays}-day filing window is written to the payer record.`,
+                });
+              }
+            }
+          }
+        }
+      }
+
       // Build param list dynamically — keep id as the last param so WHERE $N is always correct
       const baseParams: any[] = [reviewStatus, user?.email || 'admin', notes || null];
       let extraUpdates = "";
@@ -13532,10 +13573,13 @@ Warmly,
       // Auto-complete manual only when all items have a terminal acceptable status
       // (approved or not_found). Remaining 'rejected' items mean extraction still needs
       // correction — marking completed in that state would overstate coverage quality.
+      // FAIL-13 fix: count DISTINCT section types with pending/rejected rows so that
+      // duplicate items for the same section type cannot satisfy the completion check
+      // while a sibling row is still unreviewed.
       const { rows: pendingCheck } = await db.query(`
         SELECT
-          COUNT(*) FILTER (WHERE review_status = 'pending')::int  AS pending_cnt,
-          COUNT(*) FILTER (WHERE review_status = 'rejected')::int AS rejected_cnt
+          COUNT(DISTINCT section_type) FILTER (WHERE review_status = 'pending')::int  AS pending_cnt,
+          COUNT(DISTINCT section_type) FILTER (WHERE review_status = 'rejected')::int AS rejected_cnt
         FROM manual_extraction_items
         WHERE source_document_id = $1
       `, [item.source_document_id]);

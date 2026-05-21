@@ -14,9 +14,12 @@
 import {
   TextractClient,
   DetectDocumentTextCommand,
+  StartDocumentTextDetectionCommand,
+  GetDocumentTextDetectionCommand,
   type Block,
 } from "@aws-sdk/client-textract";
 import type { RawChunk } from "./manual-extractor.js";
+import { uploadBufferToS3, deletePdfFromS3 } from "./storage/s3-uploader.js";
 
 // Pages accumulated into a single RawChunk before storing to the DB.
 // 50 pages keeps each chunk at a comfortable size for Phase 2 analysis.
@@ -29,6 +32,11 @@ const SPARSE_CHARS_PER_PAGE = 10;
 // AWS Textract DetectDocumentText hard limit (bytes).
 // Stay 1 MB below to allow for encoding overhead.
 const TEXTRACT_MAX_BYTES = 9 * 1024 * 1024;
+
+// Polling backoff schedule (ms) for async Textract jobs.
+const ASYNC_POLL_BACKOFF_MS = [5000, 5000, 10000, 10000, 15000, 30000, 60000];
+// Allow up to 10 minutes for very large payer manuals.
+const ASYNC_MAX_POLL_MS = 10 * 60 * 1000;
 
 // ── Textract client ───────────────────────────────────────────────────────────
 
@@ -155,93 +163,118 @@ async function textractDetect(client: TextractClient, buf: Buffer): Promise<Bloc
   return res.Blocks ?? [];
 }
 
-async function extractWithTextract(buffer: Buffer): Promise<RawChunk[]> {
+/**
+ * Async Textract path for scanned PDFs > TEXTRACT_MAX_BYTES.
+ *
+ * Flow:
+ *   1. Upload the full PDF to S3 under a temp key (payer-manuals/temp/<ts>-<rand>.pdf).
+ *   2. Call StartDocumentTextDetection to kick off the async job.
+ *   3. Poll GetDocumentTextDetection with exponential backoff until SUCCEEDED.
+ *   4. Collect all blocks (handles NextToken pagination).
+ *   5. Delete the temp S3 object.
+ *   6. Return RawChunk[] via the shared helpers.
+ */
+async function extractWithTextractAsync(
+  buffer: Buffer,
+  label: string
+): Promise<RawChunk[]> {
   const client = getTextractClient();
-  const pageMap = new Map<number, string[]>();
+
+  const rand = Math.random().toString(36).slice(2, 10);
+  const s3Key = `payer-manuals/temp/${Date.now()}-${rand}.pdf`;
+
+  console.log(
+    `[pdf-extractor] Uploading ${label} (${(buffer.length / 1024 / 1024).toFixed(1)} MB) ` +
+    `to S3 for async Textract: ${s3Key}`
+  );
+  await uploadBufferToS3(buffer, s3Key, "application/pdf");
+
+  const bucket = process.env.S3_BUCKET_NAME?.trim();
+  if (!bucket) throw new Error("S3_BUCKET_NAME env var not set");
+
+  const startResp = await client.send(
+    new StartDocumentTextDetectionCommand({
+      DocumentLocation: { S3Object: { Bucket: bucket, Name: s3Key } },
+    })
+  );
+  const jobId = startResp.JobId;
+  if (!jobId) throw new Error("Textract StartDocumentTextDetection returned no JobId");
+
+  console.log(`[pdf-extractor] Async Textract job started: ${jobId}`);
+
+  const started = Date.now();
+  let backoffIdx = 0;
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  while (true) {
+    const elapsed = Date.now() - started;
+    if (elapsed > ASYNC_MAX_POLL_MS) {
+      throw new Error(
+        `[pdf-extractor] Async Textract job ${jobId} timed out after ${Math.round(elapsed / 1000)}s`
+      );
+    }
+
+    const waitMs = ASYNC_POLL_BACKOFF_MS[Math.min(backoffIdx, ASYNC_POLL_BACKOFF_MS.length - 1)];
+    backoffIdx++;
+    console.log(`[pdf-extractor] Waiting ${waitMs / 1000}s before polling job ${jobId}…`);
+    await sleep(waitMs);
+
+    const allBlocks: Block[] = [];
+    const firstResp = await client.send(
+      new GetDocumentTextDetectionCommand({ JobId: jobId })
+    );
+
+    const status = firstResp.JobStatus;
+    if (status === "IN_PROGRESS") {
+      console.log(`[pdf-extractor] Job ${jobId} still IN_PROGRESS (${Math.round(elapsed / 1000)}s elapsed)`);
+      continue;
+    }
+    if (status === "FAILED") {
+      throw new Error(
+        `[pdf-extractor] Async Textract job ${jobId} failed: ${firstResp.StatusMessage ?? "no message"}`
+      );
+    }
+
+    // SUCCEEDED — gather all blocks across paginated responses.
+    allBlocks.push(...(firstResp.Blocks ?? []));
+    let nextToken = firstResp.NextToken;
+    while (nextToken) {
+      const pageResp = await client.send(
+        new GetDocumentTextDetectionCommand({ JobId: jobId, NextToken: nextToken })
+      );
+      allBlocks.push(...(pageResp.Blocks ?? []));
+      nextToken = pageResp.NextToken;
+    }
+
+    console.log(
+      `[pdf-extractor] Async Textract job ${jobId} SUCCEEDED — ` +
+      `${allBlocks.length} blocks in ${Math.round((Date.now() - started) / 1000)}s`
+    );
+
+    // Clean up temp S3 object — best-effort, don't abort on failure.
+    deletePdfFromS3(s3Key).catch((err) =>
+      console.warn(`[pdf-extractor] Failed to delete temp S3 object ${s3Key}: ${err.message}`)
+    );
+
+    return pageMapToChunks(parseBlocks(allBlocks));
+  }
+}
+
+async function extractWithTextract(buffer: Buffer, label = "unnamed.pdf"): Promise<RawChunk[]> {
+  const client = getTextractClient();
 
   if (buffer.length <= TEXTRACT_MAX_BYTES) {
-    // Fast path — buffer fits within sync API limit
+    // Fast path — buffer fits within sync API limit.
     const blocks = await textractDetect(client, buffer);
-    for (const [page, lines] of parseBlocks(blocks)) {
-      pageMap.set(page, lines);
-    }
-  } else {
-    // Large PDF — split with pdf-lib, run Textract on each sub-buffer.
-    // IMPORTANT: we validate the ACTUAL byte size after pdf-lib serialises
-    // each sub-buffer and halve the page span until it fits within the 9 MB
-    // sync API limit. This handles uneven scanned PDFs where a per-page
-    // average would produce an oversized slice.
-    console.log(
-      `[pdf-extractor] Buffer ${(buffer.length / 1024 / 1024).toFixed(1)} MB ` +
-      `> ${TEXTRACT_MAX_BYTES / 1024 / 1024} MB limit — splitting for Textract`
-    );
-    const { PDFDocument } = await import("pdf-lib");
-    const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-    const totalPages = pdfDoc.getPageCount();
-
-    // Start with a generous estimate; the byte-cap loop below will shrink as needed.
-    const estBytesPerPage = buffer.length / Math.max(totalPages, 1);
-    let pagesPerSplit = Math.max(
-      1,
-      Math.floor((TEXTRACT_MAX_BYTES * 0.8) / Math.max(estBytesPerPage, 1))
-    );
-
-    let pageOffset = 0;
-    let start = 0;
-
-    while (start < totalPages) {
-      let span = Math.min(pagesPerSplit, totalPages - start);
-
-      // Shrink span until the serialised sub-buffer fits within the API limit.
-      let subBuf: Buffer;
-      while (true) {
-        const end = start + span;
-        const subDoc = await PDFDocument.create();
-        const indices = Array.from({ length: span }, (_, i) => start + i);
-        const copied = await subDoc.copyPages(pdfDoc, indices);
-        copied.forEach((p) => subDoc.addPage(p));
-        subBuf = Buffer.from(await subDoc.save());
-
-        if (subBuf.length <= TEXTRACT_MAX_BYTES || span === 1) {
-          // Either it fits, or we're already at the single-page minimum.
-          if (subBuf.length > TEXTRACT_MAX_BYTES) {
-            console.warn(
-              `[pdf-extractor] Page ${start + 1} alone is ${(subBuf.length / 1024 / 1024).toFixed(1)} MB — ` +
-              `exceeds Textract sync limit; proceeding anyway (will fail gracefully if rejected)`
-            );
-          } else {
-            console.log(
-              `[pdf-extractor] Textract sub-buffer pages ${start + 1}–${start + span} ` +
-              `(${(subBuf.length / 1024).toFixed(0)} KB, ${span} page(s))`
-            );
-          }
-          break;
-        }
-
-        // Too large — halve the span and retry.
-        const prevSpan = span;
-        span = Math.max(1, Math.floor(span / 2));
-        console.log(
-          `[pdf-extractor] Sub-buffer ${(subBuf.length / 1024 / 1024).toFixed(1)} MB too large — ` +
-          `reducing span from ${prevSpan} to ${span} pages`
-        );
-      }
-
-      const blocks = await textractDetect(client, subBuf);
-      for (const [relPage, lines] of parseBlocks(blocks)) {
-        pageMap.set(relPage + pageOffset, lines);
-      }
-
-      pageOffset += span;
-      start += span;
-
-      // Adjust the default span for the next iteration based on what worked,
-      // but keep it conservative to avoid re-triggering the shrink loop.
-      pagesPerSplit = Math.max(1, Math.min(span, pagesPerSplit));
-    }
+    return pageMapToChunks(parseBlocks(blocks));
   }
 
-  return pageMapToChunks(pageMap);
+  // Large PDF (> 9 MB) — use the async S3 + StartDocumentTextDetection path.
+  console.log(
+    `[pdf-extractor] Buffer ${(buffer.length / 1024 / 1024).toFixed(1)} MB ` +
+    `> ${TEXTRACT_MAX_BYTES / 1024 / 1024} MB sync limit — routing to async Textract via S3`
+  );
+  return extractWithTextractAsync(buffer, label);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -287,7 +320,7 @@ export async function extractPdfToChunks(
 
   // ── Fall back to AWS Textract ──
   console.log(`[pdf-extractor] Starting AWS Textract extraction for ${label}`);
-  const chunks = await extractWithTextract(buffer);
+  const chunks = await extractWithTextract(buffer, label);
   console.log(
     `[pdf-extractor] Textract complete — ${chunks.length} chunk(s), ${chunks.reduce((s, c) => s + c.charCount, 0).toLocaleString()} total chars`
   );

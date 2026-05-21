@@ -60,6 +60,31 @@ export async function getPdfFromS3(s3Key: string): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+/**
+ * Upload any buffer to S3 under a caller-supplied key.
+ * Returns the key that was written.
+ */
+export async function uploadBufferToS3(
+  buffer: Buffer,
+  key: string,
+  contentType = "application/octet-stream"
+): Promise<string> {
+  const s3 = getS3Client();
+  const bucket = getBucket();
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+      ServerSideEncryption: "AES256",
+    })
+  );
+
+  return key;
+}
+
 export async function deletePdfFromS3(s3Key: string): Promise<void> {
   const s3 = getS3Client();
   const bucket = getBucket();
