@@ -13218,12 +13218,12 @@ Warmly,
       }
       const { rows } = await db.query(`
         UPDATE payer_source_documents
-        SET payer_id = COALESCE($1, payer_id),
-            document_name = COALESCE($2, document_name),
+        SET payer_id = $1,
+            document_name = COALESCE(NULLIF($2, ''), document_name),
             updated_at = NOW()
         WHERE id = $3
         RETURNING *, document_name AS payer_name
-      `, [payerId ?? null, documentName ?? null, req.params.id]);
+      `, [payerId || null, documentName || null, req.params.id]);
       if (!rows.length) return res.status(404).json({ error: "Manual not found" });
       res.json(rows[0]);
     } catch (err: any) {
