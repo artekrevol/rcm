@@ -1734,7 +1734,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_payer ON payer_source_documents(payer_id, document_type)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_parent ON payer_source_documents(parent_document_id) WHERE parent_document_id IS NOT NULL`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_effective ON payer_source_documents(payer_id, effective_start, effective_end)`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_status ON payer_source_documents(status) WHERE status IN ('pending','processing','ready_for_review')`);
+    // Drop and recreate so all 7 status values are covered (text_extracted added in sprint-1e).
+    await pool.query(`DROP INDEX IF EXISTS idx_psd_status`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_psd_status ON payer_source_documents(status) WHERE status IN ('pending','processing','text_extracted','ready_for_review','completed','failed','superseded')`);
     // Prompt A: payer_manuals → payer_source_documents is also accepted for 'failed' + 'completed' status values.
     // Relax the CHECK constraint to include those values from the legacy schema if needed.
     await pool.query(`
@@ -13335,7 +13337,13 @@ Warmly,
             `, [
               manualId, chunk.chunkIndex, chunk.pageStart, chunk.pageEnd,
               chunk.rawText, chunk.charCount, chunk.extractionMethod,
-              manual.organization_id ?? null,
+              // Prefer the document's own org_id; fall back to the linked payer's org
+              // so chunks are never silently stored without tenant isolation.
+              manual.organization_id
+                ?? (manual.payer_id
+                    ? await db.query(`SELECT organization_id FROM payers WHERE id = $1`, [manual.payer_id])
+                        .then((r: any) => r.rows[0]?.organization_id ?? null).catch(() => null)
+                    : null),
             ]);
           }
 
@@ -13466,9 +13474,13 @@ Warmly,
         const { rows: manuals } = await db.query("SELECT *, document_name AS payer_name FROM payer_source_documents WHERE id = $1", [item.source_document_id]);
         const manual = manuals[0];
 
-        if (item.section_type === "timely_filing" && data.days > 0 && manual?.payer_id) {
-          await db.query("UPDATE payers SET timely_filing_days = $1 WHERE id = $2", [data.days, manual.payer_id])
-            .catch((e: any) => sideEffectErrors.push(`timely_filing update: ${e.message}`));
+        if (item.section_type === "timely_filing") {
+          if (!manual?.payer_id) {
+            sideEffectErrors.push(`timely_filing: no payer linked to this document — days value (${data.days}) was not written to any payer record. Link a payer to this document and re-approve to apply it.`);
+          } else if (data.days > 0) {
+            await db.query("UPDATE payers SET timely_filing_days = $1 WHERE id = $2", [data.days, manual.payer_id])
+              .catch((e: any) => sideEffectErrors.push(`timely_filing update: ${e.message}`));
+          }
         }
         if (item.section_type === "prior_auth" && manual?.payer_id) {
           const codes: string[] = data.cpt_codes && data.cpt_codes.length > 0 ? data.cpt_codes : ["*"];
