@@ -433,6 +433,20 @@ async function extractChunksFromPdf(buffer: Buffer): Promise<RawChunk[]> {
     console.log(`[manual-extractor] Splitting ${totalPages}-page PDF into ${numChunks} chunks of ≤${PDF_CHUNK_PAGES} pages`);
     const rawChunks: RawChunk[] = [];
 
+    // Per-chunk timeout: if Claude Vision doesn't respond within 120s, fail fast
+    // with a clear message rather than hanging indefinitely.
+    const CHUNK_TIMEOUT_MS = 120_000;
+    const withChunkTimeout = (promise: Promise<string>, pageLabel: string): Promise<string> =>
+      Promise.race([
+        promise,
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error(
+            `Claude Vision timed out after ${CHUNK_TIMEOUT_MS / 1000}s processing pages ${pageLabel}. ` +
+            `The PDF chunk may be too complex. Try splitting into smaller segments.`
+          )), CHUNK_TIMEOUT_MS)
+        ),
+      ]);
+
     for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
       const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
       const chunkDoc = await PDFDocument.create();
@@ -441,8 +455,12 @@ async function extractChunksFromPdf(buffer: Buffer): Promise<RawChunk[]> {
       copiedPages.forEach(p => chunkDoc.addPage(p));
       const chunkBytes = await chunkDoc.save();
       const chunkIndex = Math.floor(start / PDF_CHUNK_PAGES);
-      console.log(`[manual-extractor] Processing pages ${start + 1}–${end} (chunk ${chunkIndex + 1}/${numChunks})`);
-      const text = await callClaudeWithPdfBuffer(apiKey, Buffer.from(chunkBytes));
+      const pageLabel = `${start + 1}–${end}`;
+      console.log(`[manual-extractor] Processing pages ${pageLabel} (chunk ${chunkIndex + 1}/${numChunks})`);
+      const text = await withChunkTimeout(
+        callClaudeWithPdfBuffer(apiKey, Buffer.from(chunkBytes)),
+        pageLabel
+      );
       rawChunks.push({
         chunkIndex, pageStart: start + 1, pageEnd: end,
         rawText: text, charCount: text.length, extractionMethod: 'claude_vision',

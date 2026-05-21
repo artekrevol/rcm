@@ -1721,7 +1721,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         document_version VARCHAR,
         effective_start DATE,
         effective_end DATE,
-        status VARCHAR NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','ready_for_review','completed','failed','superseded')),
+        status VARCHAR NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','processing','text_extracted','ready_for_review','completed','failed','superseded')),
         last_verified_date DATE,
         error_message TEXT,
         uploaded_by VARCHAR,
@@ -13148,8 +13148,16 @@ Warmly,
   // Create a new payer manual (URL-based or file upload)
   {
     const multer = (await import("multer")).default;
-    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
-    app.post("/api/admin/payer-manuals", requireSuperAdmin, upload.single("file"), async (req, res) => {
+    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+    app.post("/api/admin/payer-manuals", requireSuperAdmin, (req, res, next) => {
+      upload.single("file")(req, res, (err) => {
+        if (err && err.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ error: "File too large — maximum size is 50 MB. Please split the PDF and re-upload each part." });
+        }
+        if (err) return res.status(400).json({ error: err.message });
+        next();
+      });
+    }, async (req, res) => {
       try {
         const { pool: db } = await import("./db");
         const { validateManualUrl } = await import("./services/manual-extractor");
@@ -13265,9 +13273,20 @@ Warmly,
         }
       }
 
-      // Idempotent reprocessing: clear non-approved items and all prior raw chunks.
+      // Idempotent reprocessing: clear non-approved items and orphaned chunks.
+      // Approved items keep their chunk_id FK intact — only delete chunks not
+      // referenced by any approved item so the audit trail is preserved.
       await db.query(`DELETE FROM manual_extraction_items WHERE source_document_id = $1 AND review_status IN ('pending','not_found','rejected')`, [manualId]);
-      await db.query(`DELETE FROM payer_document_chunks WHERE source_document_id = $1`, [manualId]);
+      await db.query(`
+        DELETE FROM payer_document_chunks
+        WHERE source_document_id = $1
+          AND id NOT IN (
+            SELECT chunk_id FROM manual_extraction_items
+            WHERE source_document_id = $1
+              AND review_status = 'approved'
+              AND chunk_id IS NOT NULL
+          )
+      `, [manualId]);
 
       await db.query("UPDATE payer_source_documents SET status = 'processing', error_message = NULL, updated_at = NOW() WHERE id = $1", [manualId]);
       res.json({ status: "processing", message: "Extraction started" });
@@ -13286,8 +13305,23 @@ Warmly,
           // Extract text from the source (pdf-parse fast path, Claude Vision OCR,
           // or URL/HTML scrape). Each chunk maps to a page range and is saved to
           // payer_document_chunks BEFORE any structured AI analysis runs.
-          const extractInput = manual.file_content
-            ? { buffer: Buffer.from(manual.file_content), fileName: manual.file_name || "upload.pdf" }
+          // Guard against node-postgres returning bytea as a hex-escaped string
+          // (starts with \x) instead of a Buffer — decode explicitly in that case.
+          let fileBuffer: Buffer | null = null;
+          if (manual.file_content) {
+            if (Buffer.isBuffer(manual.file_content)) {
+              fileBuffer = manual.file_content;
+            } else if (typeof manual.file_content === "string" && manual.file_content.startsWith("\\x")) {
+              fileBuffer = Buffer.from(manual.file_content.slice(2), "hex");
+            } else {
+              fileBuffer = Buffer.from(manual.file_content as any);
+            }
+            if (!fileBuffer || fileBuffer.length === 0) {
+              throw new Error("Stored file content is empty — please re-upload the document.");
+            }
+          }
+          const extractInput = fileBuffer
+            ? { buffer: fileBuffer, fileName: manual.file_name || "upload.pdf" }
             : { url: manual.source_url };
 
           const rawChunks = await extractRawChunks(extractInput);
