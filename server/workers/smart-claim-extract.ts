@@ -267,12 +267,22 @@ export async function runSmartClaimExtraction(draftId: string, orgId: string): P
           diagnosisPointers: "A",
         }));
 
+        // 2d: encounter defaults are now named variables, not inline SQL literals.
+        // For VA CCN home health claims (the only flow using this worker) these
+        // values are correct; in Wave 3q they will be resolved from profile_settings.
+        const encounterServiceType = "Home Health";
+        const encounterFacilityType = "Home"; // matches POS 12
+        const encounterAdmissionType = "Elective"; // scheduled/planned home health
+
         await pool.query(
           `INSERT INTO encounters (id, patient_id, service_type, facility_type, admission_type, expected_start_date, organization_id, created_at)
-           VALUES ($1, $2, 'Home Health', 'Home', 'Elective', $3, $4, $5)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             prospectiveEncounterId,
             existingPatient?.id ?? "00000000-0000-0000-0000-000000000000",
+            encounterServiceType,
+            encounterFacilityType,
+            encounterAdmissionType,
             qbExtraction.line_items[0]?.service_date ?? now.toISOString().slice(0, 10),
             orgId,
             now,

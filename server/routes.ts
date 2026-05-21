@@ -28,6 +28,9 @@ import { extractInsuranceFromTranscript } from "./services/transcript-extractor"
 import { getActivatedFieldsForContext, invalidateResolverCache } from "./services/field-resolver";
 import { getEnrolledPayers } from "./services/practice-profile-helpers";
 import { serializeDiagnosisPointer } from "./services/edi-generator";
+import { resolvePos, resolveHomebound } from "./services/practice-profile-resolvers";
+import { PREVENTION_RULES } from "./fixtures/prevention-rules";
+import { PREFLIGHT_RULES } from "./fixtures/preflight-rules";
 
 // Initialize Twilio client
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
@@ -335,11 +338,108 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_group_number VARCHAR`);
     await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_plan_name VARCHAR`);
     await pool.query(`ALTER TABLE patients ADD COLUMN IF NOT EXISTS secondary_relationship VARCHAR DEFAULT 'self'`);
+    // ── Wave 1a — Drop home-care-specific schema defaults ─────────────────────
+    // These defaults were removed from schema.ts so new rows without an
+    // explicit value produce NULL rather than a silent '12' or 'Y'.
+    // DROP DEFAULT is a no-op when the column has no default, so this is safe
+    // to run on every startup.
+    await pool.query(`ALTER TABLE claims ALTER COLUMN place_of_service DROP DEFAULT`);
+    await pool.query(`ALTER TABLE claims ALTER COLUMN homebound_indicator DROP DEFAULT`);
+    await pool.query(`ALTER TABLE encounters ALTER COLUMN place_of_service DROP DEFAULT`);
+    await pool.query(`ALTER TABLE claim_templates ALTER COLUMN place_of_service DROP DEFAULT`);
+    await pool.query(`ALTER TABLE practice_settings ALTER COLUMN default_pos DROP DEFAULT`);
+    await pool.query(`ALTER TABLE hcpcs_codes ALTER COLUMN default_pos DROP DEFAULT`);
+    // Add service_state — backfill from patients.state for existing rows.
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS service_state TEXT`);
+    await pool.query(`
+      UPDATE claims c
+      SET service_state = (SELECT state FROM patients p WHERE p.id = c.patient_id)
+      WHERE c.service_state IS NULL
+        AND EXISTS (SELECT 1 FROM patients p WHERE p.id = c.patient_id AND p.state IS NOT NULL)
+    `);
+    // Backfill existing claims/encounters that had the old default so they
+    // retain '12' / 'Y' rather than going NULL after the default drop.
+    // Scoped to organizations whose practice_settings flag homebound_default.
+    await pool.query(`
+      UPDATE claims SET place_of_service = '12'
+      WHERE place_of_service IS NULL
+        AND organization_id IN (
+          SELECT organization_id FROM practice_settings WHERE homebound_default = true
+        )
+    `);
+    await pool.query(`
+      UPDATE claims SET homebound_indicator = 'Y'
+      WHERE homebound_indicator IS NULL
+        AND organization_id IN (
+          SELECT organization_id FROM practice_settings WHERE homebound_default = true
+        )
+    `);
+    await pool.query(`
+      UPDATE encounters SET place_of_service = '12'
+      WHERE place_of_service IS NULL
+        AND organization_id IN (
+          SELECT organization_id FROM practice_settings WHERE homebound_default = true
+        )
+    `);
+    await pool.query(`
+      UPDATE practice_settings SET default_pos = '12' WHERE default_pos IS NULL
+    `);
+
+    // ── Wave 1c — payer_edi_overrides table ───────────────────────────────────
+    // Stores payer-specific EDI segment overrides previously hardcoded as
+    // constants in edi-generator.ts.  The edi-generator reads pgba_region
+    // from this table in Wave 3o; for now the table is created and seeded
+    // so row-level data is available and the schema dependency is satisfied.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS payer_edi_overrides (
+        id              VARCHAR PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        payer_id        VARCHAR NOT NULL,
+        pgba_region     INTEGER,
+        isa08_override  VARCHAR,
+        gs03_override   VARCHAR,
+        loop1000b_nm103 VARCHAR,
+        loop1000b_nm108 VARCHAR,
+        loop1000b_nm109 VARCHAR,
+        loop2010bb_nm109 VARCHAR,
+        routing_criteria JSONB,
+        notes           TEXT,
+        created_at      TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    // Seed PGBA Region 4 (Southeast/Gulf Coast) — receiver tax ID 841160004
+    // Per PGBA 837P Companion Guide v1.0 (March 2021), Table 6, page 15.
+    await pool.query(`
+      INSERT INTO payer_edi_overrides
+        (payer_id, pgba_region, isa08_override, gs03_override,
+         loop1000b_nm103, loop1000b_nm108, loop1000b_nm109,
+         loop2010bb_nm109, routing_criteria, notes)
+      VALUES
+        ('TWVACCN', 4, '841160004', '841160004',
+         'PGBA VA CCN', '46', '841160004',
+         'TWVACCN',
+         '{"regions": ["AL","AR","FL","GA","KY","LA","MS","NC","SC","TN"]}',
+         'PGBA Region 4 — Southeast/Gulf Coast. Default region for all current Chajinel VA CCN claims.')
+      ON CONFLICT DO NOTHING
+    `);
+    // Seed PGBA Region 5 (Pacific/Northwest) — receiver tax ID 841160005
+    await pool.query(`
+      INSERT INTO payer_edi_overrides
+        (payer_id, pgba_region, isa08_override, gs03_override,
+         loop1000b_nm103, loop1000b_nm108, loop1000b_nm109,
+         loop2010bb_nm109, routing_criteria, notes)
+      VALUES
+        ('TWVACCN', 5, '841160005', '841160005',
+         'PGBA VA CCN', '46', '841160005',
+         'TWVACCN',
+         '{"regions": ["AK","AZ","CA","CO","HI","ID","MT","NV","NM","OR","UT","WA","WY"]}',
+         'PGBA Region 5 — Pacific/Northwest. Activated when payer record sets pgba_region = 5.')
+      ON CONFLICT DO NOTHING
+    `);
+
     // Rules specialty tags
     await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS specialty_tags TEXT[] DEFAULT '{}'`);
     await pool.query(`UPDATE rules SET specialty_tags = ARRAY['VA Community Care'] WHERE (name ILIKE '%VA%' OR description ILIKE '%VA%' OR name ILIKE '%TriWest%' OR description ILIKE '%TriWest%') AND specialty_tags = '{}'`);
     await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Medicare'] WHERE (name ILIKE '%Medicare%' OR description ILIKE '%Medicare%' OR name ILIKE '%ABN%' OR description ILIKE '%NCCI%') AND specialty_tags = '{}'`);
-    await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Home Health'] WHERE (name ILIKE '%home health%' OR description ILIKE '%home health%' OR description ILIKE '%homebound%' OR description ILIKE '%POS 12%') AND specialty_tags = '{}'`);
     await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Behavioral Health'] WHERE (name ILIKE '%mental health%' OR description ILIKE '%behavioral%' OR description ILIKE '%substance abuse%') AND specialty_tags = '{}'`);
     await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Medicaid'] WHERE (name ILIKE '%Medicaid%' OR description ILIKE '%Medicaid%' OR description ILIKE '%CHIP%') AND specialty_tags = '{}'`);
     await pool.query(`UPDATE rules SET specialty_tags = ARRAY['Universal'] WHERE specialty_tags = '{}'`);
@@ -458,6 +558,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       )
     `);
 
+    // ── Wave 2c — Prevention rules seeder (fixture-driven) ────────────────────
     const { rows: vaRuleCheck } = await pool.query("SELECT COUNT(*)::int as cnt FROM rules WHERE name LIKE 'VA:%'");
     if (vaRuleCheck[0]?.cnt === 0) {
       await pool.query("DELETE FROM rules WHERE name LIKE 'Prevent%' OR name LIKE 'Check%'");
@@ -467,31 +568,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       for (const n of dupNames) {
         await pool.query(`DELETE FROM rules WHERE name = $1 AND id NOT IN (SELECT id FROM rules WHERE name = $1 ORDER BY created_at ASC LIMIT 1)`, [n]);
       }
-      await pool.query(`INSERT INTO rules (id, name, description, trigger_pattern, prevention_action, payer, enabled, created_at) VALUES
-        (gen_random_uuid()::text, 'VA: Missing or Invalid Member ICN/SSN', 'VA requires the 17-character Internal Control Number (10 digits + V + 6 digits) or 9-digit SSN with no special characters in the Member ID field. This is the #1 VA rejection reason.', 'member_id_format', 'block', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Invalid or Missing Rendering Provider NPI', 'The rendering provider NPI must be a valid 10-digit NPI that passes Luhn checksum validation and is enrolled with the VA Community Care Network.', 'rendering_npi', 'block', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Invalid Place of Service Code', 'VA home health claims must use Place of Service 12 (Home). Using an incorrect POS code is a top-10 VA rejection reason.', 'place_of_service', 'warn', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Unrecognized HCPCS/CPT Code', 'All procedure codes must be valid HCPCS Level II or CPT codes. VA will reject claims with invalid or discontinued codes.', 'procedure_code_validity', 'block', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Missing Provider Taxonomy Code', 'VA requires a valid taxonomy code on the service line provider. Home health RN taxonomy is 163W00000X.', 'provider_taxonomy', 'warn', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: ICD-9 Diagnosis Code Used Instead of ICD-10', 'VA requires ICD-10-CM codes for all dates of service after 09/30/2015. ICD-9 codes will be rejected immediately.', 'diagnosis_code_version', 'block', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Timely Filing Limit Approaching (180 Days)', 'VA Community Care Network requires claims within 180 days of service date. After 180 days, claims cannot be paid or appealed.', 'timely_filing', 'warn', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Timely Filing Limit Exceeded (180 Days)', 'Claim is past the 180-day VA timely filing deadline. VA will reject this claim and it is nearly impossible to appeal successfully.', 'timely_filing_exceeded', 'block', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Missing Authorization Number', 'All VA Community Care claims require a pre-authorization/referral number issued by the VA or Optum/TriWest. Claims without auth numbers will be denied.', 'authorization_required', 'block', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Authorization Number Format Invalid', 'VA authorization numbers follow a specific format. Invalid auth numbers result in denial even if care was authorized.', 'authorization_format', 'warn', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'CARC CO-29: Timely Filing — Medicare (365 Days)', 'Medicare requires claims within 365 days of service date. Missing this window results in CO-29 denial with no appeal path.', 'medicare_timely_filing', 'warn', 'Medicare', true, NOW()),
-        (gen_random_uuid()::text, 'CARC CO-97: Service Already Included in Another Code (NCCI Bundling)', 'Billing two codes where one is included in the other per CCI edits. Common home health example: billing G0299 and a separate E&M visit on same date without modifier.', 'ncci_bundling', 'warn', 'All', true, NOW()),
-        (gen_random_uuid()::text, 'CARC CO-16: Claim Missing Required Information', 'CO-16 is the most frequently issued CARC. Triggered by missing NPI, missing auth number, missing diagnosis pointer, or invalid dates.', 'missing_required_fields', 'block', 'All', true, NOW()),
-        (gen_random_uuid()::text, 'CARC CO-4: Modifier Required or Inconsistent with Procedure', 'Certain timed home health codes require modifiers (e.g., modifier GT for telehealth, modifier 59 for distinct service). Missing or wrong modifier causes CO-4 denial.', 'modifier_required', 'warn', 'All', true, NOW()),
-        (gen_random_uuid()::text, 'CARC CO-50: Service Not Medically Necessary', 'Payer determined the service does not meet medical necessity criteria for the diagnosis billed. Ensure ICD-10 diagnosis supports the home health service provided.', 'medical_necessity', 'warn', 'All', false, NOW()),
-        (gen_random_uuid()::text, 'Duplicate Claim: Same Patient, Service Date, and Code', 'A claim with the same patient, service date, and procedure code was already submitted. Duplicate claims result in CO-18 or VA rejection code 65 denial.', 'duplicate_claim', 'block', 'All', true, NOW()),
-        (gen_random_uuid()::text, 'VA: G0299 Units May Exceed Authorized Hours', 'G0299 billed in 15-minute units. Verify that total units billed do not exceed the hours authorized on the VA referral.', 'va_unit_authorization_check', 'warn', 'VA Community Care', true, NOW()),
-        (gen_random_uuid()::text, 'Missing ICD-10 Diagnosis Pointer on Service Line', 'Each service line must have a diagnosis pointer linking it to one of the listed ICD-10 codes (A, B, C, or D). Missing pointer causes CO-16 with RARC N286.', 'diagnosis_pointer', 'warn', 'All', true, NOW()),
-        (gen_random_uuid()::text, 'VA: Home Health Code Requires Place of Service 12', 'G0299, G0300, G0151, G0152, G0153, G0156, T1019 must be billed with Place of Service 12 (Home). Using any other POS for these codes will result in denial.', 'home_health_pos_mismatch', 'block', 'All', true, NOW()),
-        (gen_random_uuid()::text, 'Provider Not Credentialed with Payer', 'Rendering provider must be credentialed and contracted with the payer. Uncredentialed providers result in immediate denial.', 'provider_credentialing', 'warn', 'All', false, NOW()),
-        (gen_random_uuid()::text, 'CARC CO-29: Medicare Timely Filing Exceeded (365 Days)', 'Claim is past the 365-day Medicare timely filing limit. CO-29 denial cannot be appealed except in cases of administrative error by a Medicare agent.', 'medicare_timely_exceeded', 'block', 'Medicare', true, NOW()),
-        (gen_random_uuid()::text, 'COB: VA Secondary Payer Requires Primary EOB', 'When VA is secondary payer, the primary insurance EOB must be attached. VA will reject as code 78 without the primary payer EOB.', 'cob_primary_eob_required', 'warn', 'VA Community Care', true, NOW())
-      `);
-      console.log("Seeded 22 VA/CARC prevention rules");
+      for (const rule of PREVENTION_RULES) {
+        await pool.query(
+          `INSERT INTO rules (id, name, description, trigger_pattern, prevention_action, payer, enabled, specialty_tags, created_at)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, NOW())`,
+          [rule.name, rule.description, rule.trigger_pattern, rule.prevention_action, rule.payer, rule.enabled, rule.specialty_tags]
+        );
+      }
+      console.log(`Seeded ${PREVENTION_RULES.length} VA/CARC prevention rules`);
     }
 
     const DEMO_ORG_ID = "demo-org-001";
@@ -1517,20 +1601,28 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`
       INSERT INTO rules (id, name, description, trigger_pattern, prevention_action, enabled, condition_type, condition_value, action, is_active, specialty_tags, organization_id)
       VALUES
-        (gen_random_uuid()::text,'Missing NPI','Rendering provider NPI is missing or not 10 digits','provider_npi_invalid','block',true,'provider_npi_invalid','true','block',true,ARRAY['Universal'],NULL),
-        (gen_random_uuid()::text,'Missing Diagnosis','No primary ICD-10 diagnosis code on claim','diagnosis_missing','block',true,'diagnosis_missing','true','block',true,ARRAY['Universal'],NULL),
-        (gen_random_uuid()::text,'Zero Charges','All service line charges total $0.00','total_charges_zero','block',true,'total_charges_zero','true','block',true,ARRAY['Universal'],NULL),
-        (gen_random_uuid()::text,'Missing Payer','No payer assigned to claim','payer_missing','block',true,'payer_missing','true','block',true,ARRAY['Universal'],NULL),
-        (gen_random_uuid()::text,'Future Service Date','Date of service is more than 1 day in the future','service_date_future','warn',true,'service_date_future','1','warn',true,ARRAY['Universal'],NULL),
-        (gen_random_uuid()::text,'Missing Service Date','Date of service is not set','service_date_missing','block',true,'service_date_missing','true','block',true,ARRAY['Universal'],NULL),
-        (gen_random_uuid()::text,'VA Missing Auth Number','TriWest/VA CCN claims require an authorization number','va_auth_missing','block',true,'va_auth_missing','TWVACCN','block',true,ARRAY['VA Community Care'],NULL),
-        (gen_random_uuid()::text,'VA Timely Filing Warning','Claim approaching 150-day VA filing deadline','days_since_service_gt','warn',true,'days_since_service_gt','150','warn',true,ARRAY['VA Community Care'],NULL),
-        (gen_random_uuid()::text,'VA Timely Filing Block','Claim past 180-day VA filing deadline','days_since_service_gt','block',true,'days_since_service_gt','180','block',true,ARRAY['VA Community Care'],NULL),
-        (gen_random_uuid()::text,'VA Wrong Place of Service','VA CCN home health claims require POS 12','va_wrong_pos','warn',true,'va_wrong_pos','12','warn',true,ARRAY['VA Community Care'],NULL),
-        (gen_random_uuid()::text,'VA G-Code Requires POS 12','Home health G-codes must be billed with POS 12','gcode_wrong_pos','block',true,'gcode_wrong_pos','12','block',true,ARRAY['VA Community Care','Home Health'],NULL),
-        (gen_random_uuid()::text,'Duplicate Claim','A claim with same patient, service date, and code exists','duplicate_claim','warn',true,'duplicate_claim','true','warn',true,ARRAY['Universal'],NULL)
+        -- Wave 2c: preflight rules now driven by PREFLIGHT_RULES fixture (see seeder below)
+        -- This VALUES block has been replaced; rows are inserted via parameterized loop.
+        -- Placeholder kept to preserve the ON CONFLICT DO NOTHING wrapper.
+        (gen_random_uuid()::text,'__wave2c_placeholder__','placeholder','__none__','warn',false,'__none__','0','warn',false,ARRAY['Universal'],NULL)
       ON CONFLICT DO NOTHING
     `).catch(() => {});
+    // ── Wave 2c — Preflight rules seeder (fixture-driven) ─────────────────────
+    for (const rule of PREFLIGHT_RULES) {
+      await pool.query(
+        `INSERT INTO rules
+           (id, name, description, trigger_pattern, prevention_action, enabled,
+            rule_code, threshold_value, threshold_action, threshold_enabled,
+            specialty_tags, payer_match)
+         VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT DO NOTHING`,
+        [
+          rule.name, rule.description, rule.trigger_pattern, rule.prevention_action,
+          rule.enabled, rule.rule_code, rule.threshold_value, rule.threshold_action,
+          rule.threshold_enabled, rule.specialty_tags, rule.payer_match,
+        ]
+      ).catch(() => {});
+    }
 
     // Remove demo providers from non-demo orgs
     await pool.query(`
@@ -4236,7 +4328,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         const { rows } = await db.query(
           `INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, address, phone, default_pos, billing_location, default_va_locality, organization_id, default_tos, default_ordering_provider_id, homebound_default, exclude_facility)
            VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || '12', billingLocation || null, defaultVaLocality || null, orgId || null, defaultTos || null, defaultOrderingProviderId || null, homeboundDefault ?? true, excludeFacility ?? true]
+          [practiceName, primaryNpi, taxId, taxonomyCode, JSON.stringify(address || {}), phone, defaultPos || null, billingLocation || null, defaultVaLocality || null, orgId || null, defaultTos || null, defaultOrderingProviderId || null, homeboundDefault ?? true, excludeFacility ?? true]
         );
         res.json(rows[0]);
       }
@@ -4922,17 +5014,19 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const useTestMode = !!(c.last_test_status) || isFrcpbPayer || !!(req.body?.testMode);
       const isa15 = useTestMode ? "T" : resolveISA15(false);
 
+      const resolvedPos1 = await resolvePos(c.organization_id, pool);
+      const resolvedHomebound1 = await resolveHomebound(c.organization_id, pool);
       const { edi: ediString, rpTransmitted: rpTransmittedResubmit } = generate837P({
         isa15,
         claim: {
           id: c.id,
           patient_id: c.patient_id,
           service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
-          place_of_service: c.place_of_service || "12",
+          place_of_service: c.place_of_service || resolvedPos1,
           auth_number: c.authorization_number || null,
           payer: c.payer || payerInfo.name,
           amount: Number(c.amount) || 0,
-          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y" || (c.homebound_indicator == null && resolvedHomebound1),
           delay_reason_code: c.delay_reason_code || null,
           claim_frequency_code: "7",
           orig_claim_number: c.payer_claim_number,
@@ -6624,7 +6718,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           if (hasIcd9) warnings.push({ field: "claim.icd10", message: `[Rule] ${rule.name}: ${rule.description}`, severity });
         } else if (tp === "timely_filing" && c.service_date) {
           const daysSince = Math.floor((Date.now() - new Date(c.service_date).getTime()) / 86400000);
-          const limit = isVA ? 180 : isMedicare ? 365 : 365;
+          // 2b: read timely_filing_days from payer record; fall back to payer-class inference.
+          const limit = payerInfo?.timely_filing_days ?? (isVA ? 180 : 365);
           if (daysSince >= limit - 30 && daysSince < limit) {
             warnings.push({ field: "claim.service_date", message: `[Rule] ${rule.name}: ${daysSince} days since service (limit ${limit})`, severity: "warning" });
           }
@@ -6932,18 +7027,20 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (rpResult.rows.length) referringProvEdi = rpResult.rows[0];
       }
 
+      const resolvedPos2 = await resolvePos(c.organization_id, pool);
+      const resolvedHomebound2 = await resolveHomebound(c.organization_id, pool);
       const { edi, rpTransmitted: rpTransmittedEdi } = generate837P({
         claim: {
           id: c.id,
           patient_id: c.patient_id,
           service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
-          place_of_service: c.place_of_service || "12",
+          place_of_service: c.place_of_service || resolvedPos2,
           auth_number: c.authorization_number || null,
           payer: c.payer || payerInfo.name,
           amount: Number(c.amount) || 0,
           claim_frequency_code: c.claim_frequency_code || "1",
           orig_claim_number: c.orig_claim_number || null,
-          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y" || (c.homebound_indicator == null && resolvedHomebound2),
           delay_reason_code: c.delay_reason_code || null,
           statement_period_start: c.statement_period_start ? new Date(c.statement_period_start).toISOString().slice(0, 10) : null,
           statement_period_end: c.statement_period_end ? new Date(c.statement_period_end).toISOString().slice(0, 10) : null,
@@ -7105,17 +7202,19 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const addr = typeof ps.address === "object" && ps.address ? ps.address : {};
       const patAddr2 = typeof pat.address === "object" && pat.address ? pat.address : {};
 
+      const resolvedPos3 = await resolvePos(c.organization_id, pool);
+      const resolvedHomebound3 = await resolveHomebound(c.organization_id, pool);
       const { submitClaim837P } = await import("./services/office-ally");
       const result = await submitClaim837P({
         claim: {
           id: c.id,
           patient_id: c.patient_id,
           service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
-          place_of_service: c.place_of_service || "12",
+          place_of_service: c.place_of_service || resolvedPos3,
           auth_number: c.authorization_number || null,
           payer: c.payer || payerInfo.name,
           amount: Number(c.amount) || 0,
-          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y" || (c.homebound_indicator == null && resolvedHomebound3),
           delay_reason_code: c.delay_reason_code || null,
           claim_frequency_code: c.claim_frequency_code || "1",
           orig_claim_number: c.orig_claim_number || null,
@@ -7389,6 +7488,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         };
       }
 
+      const resolvedPos4 = await resolvePos(c.organization_id, pool);
+      const resolvedHomebound4 = await resolveHomebound(c.organization_id, pool);
       const { generate837P } = await import("./services/edi-generator");
       const { edi: ediString, rpTransmitted: rpTransmittedSubmit } = generate837P({
         isa15,
@@ -7396,11 +7497,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           id: c.id,
           patient_id: c.patient_id,
           service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
-          place_of_service: c.place_of_service || "12",
+          place_of_service: c.place_of_service || resolvedPos4,
           auth_number: c.authorization_number || null,
           payer: c.payer || payerInfo.name,
           amount: Number(c.amount) || 0,
-          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y" || (c.homebound_indicator == null && resolvedHomebound4),
           delay_reason_code: c.delay_reason_code || null,
           claim_frequency_code: c.claim_frequency_code || "1",
           orig_claim_number: c.orig_claim_number || null,
@@ -7759,6 +7860,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         if (rpResult.rows.length) referringProvTest = rpResult.rows[0];
       }
 
+      const resolvedPos5 = await resolvePos(c.organization_id, pool);
+      const resolvedHomebound5 = await resolveHomebound(c.organization_id, pool);
       const { generate837P } = await import("./services/edi-generator");
       const { edi: ediString, rpTransmitted: rpTransmittedTest } = generate837P({
         isa15: "T", // testClaim always forces ISA15=T; explicit for audit clarity
@@ -7766,11 +7869,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           id: c.id,
           patient_id: c.patient_id,
           service_date: c.service_date ? new Date(c.service_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
-          place_of_service: c.place_of_service || "12",
+          place_of_service: c.place_of_service || resolvedPos5,
           auth_number: c.authorization_number || null,
           payer: c.payer || payerInfo.name,
           amount: Number(c.amount) || 0,
-          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y",
+          homebound_indicator: c.homebound_indicator === true || c.homebound_indicator === "Y" || (c.homebound_indicator == null && resolvedHomebound5),
           delay_reason_code: c.delay_reason_code || null,
           claim_frequency_code: c.claim_frequency_code || "1",
           orig_claim_number: c.orig_claim_number || null,

@@ -109,7 +109,7 @@ export const encounters = pgTable("encounters", {
   admissionType: text("admission_type").notNull(),
   expectedStartDate: text("expected_start_date").notNull(),
   providerId: varchar("provider_id"),
-  placeOfService: varchar("place_of_service").default("12"),
+  placeOfService: varchar("place_of_service"),
   serviceDate: date("service_date"),
   authorizationNumber: varchar("authorization_number"),
   createdBy: varchar("created_by"),
@@ -136,7 +136,8 @@ export const claims = pgTable("claims", {
   providerId: varchar("provider_id"),
   payerId: varchar("payer_id"),
   serviceDate: date("service_date"),
-  placeOfService: varchar("place_of_service").default("12"),
+  placeOfService: varchar("place_of_service"),
+  serviceState: varchar("service_state"),
   icd10Primary: varchar("icd10_primary"),
   icd10Secondary: jsonb("icd10_secondary").$type<string[]>(),
   authorizationNumber: varchar("authorization_number"),
@@ -151,7 +152,7 @@ export const claims = pgTable("claims", {
   updatedAt: timestamp("updated_at"),
   claimFrequencyCode: varchar("claim_frequency_code").default("1"),
   origClaimNumber: varchar("orig_claim_number"),
-  homeboundIndicator: varchar("homebound_indicator").default("Y"),
+  homeboundIndicator: varchar("homebound_indicator"),
   orderingProviderId: varchar("ordering_provider_id"),
   delayReasonCode: varchar("delay_reason_code"),
   followUpDate: date("follow_up_date"),
@@ -538,7 +539,7 @@ export const practiceSettings = pgTable("practice_settings", {
   taxonomyCode: varchar("taxonomy_code"),
   address: jsonb("address").$type<Record<string, string>>().default({}),
   phone: varchar("phone"),
-  defaultPos: varchar("default_pos").default("12"),
+  defaultPos: varchar("default_pos"),
   organizationId: varchar("organization_id"),
   frcpbEnrolled: boolean("frcpb_enrolled").default(false),
   frcpbEnrolledAt: timestamp("frcpb_enrolled_at"),
@@ -599,6 +600,37 @@ export const insertPayerSchema = createInsertSchema(payers).omit({ id: true, cre
 export type InsertPayer = z.infer<typeof insertPayerSchema>;
 export type Payer = typeof payers.$inferSelect;
 
+/**
+ * payer_edi_overrides — Wave 1c
+ *
+ * Stores payer-specific EDI segment overrides that were previously hardcoded
+ * as constants in edi-generator.ts.  One row per EDI routing identity
+ * (e.g. PGBA Region 4, PGBA Region 5).
+ *
+ * pgba_region: 4 or 5 — used by edi-generator to pick the correct ISA08/GS03
+ *   receiver tax ID.  NULL on non-PGBA payers.
+ * routing_criteria: JSONB for future expression of state/facility-based
+ *   routing rules without additional schema migrations.
+ */
+export const payerEdiOverrides = pgTable("payer_edi_overrides", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  payerId: varchar("payer_id").notNull(),
+  pgbaRegion: integer("pgba_region"),
+  isa08Override: varchar("isa08_override"),
+  gs03Override: varchar("gs03_override"),
+  loop1000bNm103: varchar("loop1000b_nm103"),
+  loop1000bNm108: varchar("loop1000b_nm108"),
+  loop1000bNm109: varchar("loop1000b_nm109"),
+  loop2010bbNm109: varchar("loop2010bb_nm109"),
+  routingCriteria: jsonb("routing_criteria").$type<Record<string, any>>(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertPayerEdiOverrideSchema = createInsertSchema(payerEdiOverrides).omit({ id: true, createdAt: true });
+export type InsertPayerEdiOverride = z.infer<typeof insertPayerEdiOverrideSchema>;
+export type PayerEdiOverride = typeof payerEdiOverrides.$inferSelect;
+
 export const hcpcsCodes = pgTable("hcpcs_codes", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   code: varchar("code").notNull().unique(),
@@ -606,7 +638,7 @@ export const hcpcsCodes = pgTable("hcpcs_codes", {
   descriptionPlain: text("description_plain"),
   unitType: varchar("unit_type").notNull(),
   unitIntervalMinutes: integer("unit_interval_minutes"),
-  defaultPos: varchar("default_pos").default("12"),
+  defaultPos: varchar("default_pos"),
   requiresModifier: boolean("requires_modifier").default(false),
   notes: text("notes"),
   isActive: boolean("is_active").default(true),
@@ -640,7 +672,7 @@ export const claimTemplates = pgTable("claim_templates", {
   name: varchar("name").notNull(),
   providerId: varchar("provider_id"),
   payerId: varchar("payer_id"),
-  placeOfService: varchar("place_of_service").default("12"),
+  placeOfService: varchar("place_of_service"),
   serviceLines: jsonb("service_lines").$type<any[]>(),
   createdBy: varchar("created_by"),
   organizationId: varchar("organization_id"),
