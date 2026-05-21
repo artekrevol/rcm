@@ -3079,6 +3079,9 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!(await seederLog('column', 'payer_source_documents', 'scrape_status'))) {
       await pool.query(`ALTER TABLE payer_source_documents ADD COLUMN IF NOT EXISTS scrape_status VARCHAR`);
     }
+    if (!(await seederLog('column', 'payer_source_documents', 'plan_name'))) {
+      await pool.query(`ALTER TABLE payer_source_documents ADD COLUMN IF NOT EXISTS plan_name VARCHAR`);
+    }
     // CHECK constraints — idempotent via DO block
     await pool.query(`
       DO $$ BEGIN
@@ -13127,7 +13130,7 @@ Warmly,
     try {
       const { pool: db } = await import("./db");
       const { rows } = await db.query(`
-        SELECT pm.*, pm.document_name AS payer_name, p.name AS payer_record_name,
+        SELECT pm.*, pm.document_name AS payer_name, pm.plan_name, p.name AS payer_record_name,
           parent.document_name AS parent_document_name,
           dt.label AS document_type_label,
           (SELECT COUNT(*)::int FROM manual_extraction_items WHERE source_document_id = pm.id) AS item_count,
@@ -13163,8 +13166,9 @@ Warmly,
       try {
         const { pool: db } = await import("./db");
         const { validateManualUrl } = await import("./services/manual-extractor");
-        const { payerName, payerId, sourceUrl, documentType, parentDocumentId, effectiveStart, effectiveEnd } = req.body;
+        const { payerName, payerId, planName, sourceUrl, documentType, parentDocumentId, effectiveStart, effectiveEnd } = req.body;
         if (!payerName) return res.status(400).json({ error: "payerName is required" });
+        if (!payerId) return res.status(400).json({ error: "payerId (payer record link) is required" });
 
         const file = (req as any).file as Express.Multer.File | undefined;
         if (!file && !sourceUrl) return res.status(400).json({ error: "sourceUrl or file upload is required" });
@@ -13185,12 +13189,13 @@ Warmly,
 
         const user = req.user as any;
         const { rows } = await db.query(`
-          INSERT INTO payer_source_documents (document_name, payer_id, source_url, file_name, file_content, status, uploaded_by, document_type, parent_document_id, effective_start, effective_end)
-          VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10)
+          INSERT INTO payer_source_documents (document_name, payer_id, plan_name, source_url, file_name, file_content, status, uploaded_by, document_type, parent_document_id, effective_start, effective_end)
+          VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, $11)
           RETURNING *, document_name AS payer_name
         `, [
           payerName,
-          payerId || null,
+          payerId,
+          planName || null,
           sourceUrl || null,
           file?.originalname || null,
           file?.buffer || null,
@@ -13212,18 +13217,19 @@ Warmly,
   app.patch("/api/admin/payer-manuals/:id", requireSuperAdmin, async (req, res) => {
     try {
       const { pool: db } = await import("./db");
-      const { payerId, documentName } = req.body;
-      if (!documentName && payerId === undefined) {
-        return res.status(400).json({ error: "payerId or documentName is required" });
+      const { payerId, documentName, planName } = req.body;
+      if (!documentName && payerId === undefined && planName === undefined) {
+        return res.status(400).json({ error: "payerId, documentName, or planName is required" });
       }
       const { rows } = await db.query(`
         UPDATE payer_source_documents
         SET payer_id = $1,
             document_name = COALESCE(NULLIF($2, ''), document_name),
+            plan_name = $4,
             updated_at = NOW()
         WHERE id = $3
         RETURNING *, document_name AS payer_name
-      `, [payerId || null, documentName || null, req.params.id]);
+      `, [payerId || null, documentName || null, req.params.id, planName ?? null]);
       if (!rows.length) return res.status(404).json({ error: "Manual not found" });
       res.json(rows[0]);
     } catch (err: any) {
@@ -13392,13 +13398,16 @@ Warmly,
           // Mark all chunks as processing
           await db.query(`UPDATE payer_document_chunks SET status = 'processing' WHERE source_document_id = $1`, [manualId]);
 
-          for (const section of sections) {
+          // Process all sections in parallel — cuts extraction from ~14 min to ~2 min.
+          // Each section's Claude calls still run sequentially within the section (max 2 chunks),
+          // but all 14 sections run concurrently. A 5-minute wall-clock timeout kills runaway jobs.
+          const processSection = async (section: { sectionType: string; chunks: string[] }) => {
             if (section.chunks.length === 0) {
               await db.query(`
                 INSERT INTO manual_extraction_items (source_document_id, section_type, review_status, notes)
                 VALUES ($1, $2, 'pending', 'No relevant text found for this section — reviewer must confirm absent or re-extract')
               `, [manualId, section.sectionType]);
-              continue;
+              return;
             }
             for (const textChunk of section.chunks.slice(0, 2)) {
               const chunkId = findSourceChunkId(textChunk, dbChunks);
@@ -13420,7 +13429,15 @@ Warmly,
                 `, [manualId, section.sectionType, textChunk.slice(0, 2000), JSON.stringify(output.result), output.confidence, chunkId]);
               }
             }
-          }
+          };
+
+          const PHASE2_TIMEOUT_MS = 5 * 60 * 1000;
+          await Promise.race([
+            Promise.allSettled(sections.map(processSection)),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('Phase 2 timed out after 5 minutes — document marked failed')), PHASE2_TIMEOUT_MS)
+            ),
+          ]);
 
           // Ensure every active section type has at least one item (placeholder if absent)
           for (const st of sectionTypes) {

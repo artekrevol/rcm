@@ -383,6 +383,8 @@ interface PayerManual {
   id: string;
   payer_id: string | null;
   payer_name: string;
+  plan_name: string | null;
+  payer_record_name: string | null;
   source_url: string | null;
   file_name: string | null;
   status: string;
@@ -822,7 +824,7 @@ export default function PayerManualsPage() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [addMode, setAddMode] = useState<"url" | "file">("url");
   const [addForm, setAddForm] = useState({
-    payerName: "", payerId: "", sourceUrl: "",
+    payerName: "", payerId: "", planName: "", sourceUrl: "",
     documentType: "admin_guide" as DocumentType,
     parentDocumentId: "",
     effectiveStart: "",
@@ -835,7 +837,7 @@ export default function PayerManualsPage() {
   const [filterDocType, setFilterDocType] = useState<string>("all");
   const [showChunks, setShowChunks] = useState(false);
   const [showEditPayerDialog, setShowEditPayerDialog] = useState(false);
-  const [editPayerForm, setEditPayerForm] = useState({ payerId: "", documentName: "" });
+  const [editPayerForm, setEditPayerForm] = useState({ payerId: "", documentName: "", planName: "" });
 
   const { data: manuals = [], isLoading } = useQuery<PayerManual[]>({
     queryKey: ["/api/admin/payer-manuals"],
@@ -901,7 +903,8 @@ export default function PayerManualsPage() {
       if (addMode === "file" && uploadFile) {
         const fd = new FormData();
         fd.append("payerName", addForm.payerName);
-        if (addForm.payerId) fd.append("payerId", addForm.payerId);
+        fd.append("payerId", addForm.payerId);
+        if (addForm.planName) fd.append("planName", addForm.planName);
         fd.append("file", uploadFile);
         fd.append("documentType", commonFields.documentType);
         if (commonFields.parentDocumentId) fd.append("parentDocumentId", commonFields.parentDocumentId);
@@ -915,7 +918,7 @@ export default function PayerManualsPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ payerName: addForm.payerName, payerId: addForm.payerId, sourceUrl: addForm.sourceUrl, ...commonFields }),
+          body: JSON.stringify({ payerName: addForm.payerName, payerId: addForm.payerId, planName: addForm.planName || undefined, sourceUrl: addForm.sourceUrl, ...commonFields }),
         });
         if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
         return res.json();
@@ -948,7 +951,7 @@ export default function PayerManualsPage() {
         toast({ title: "Manual added", description: "Click 'Run Extraction' to start AI processing." });
       }
       setShowAddDialog(false);
-      setAddForm({ payerName: "", payerId: "", sourceUrl: "", documentType: "admin_guide", parentDocumentId: "", effectiveStart: "", effectiveEnd: "" });
+      setAddForm({ payerName: "", payerId: "", planName: "", sourceUrl: "", documentType: "admin_guide", parentDocumentId: "", effectiveStart: "", effectiveEnd: "" });
       setUploadFile(null);
       setSelectedManualId(manual.id);
     },
@@ -981,7 +984,7 @@ export default function PayerManualsPage() {
         return srcLower.split(/[\s\/\(\),]+/).filter((t: string) => t.length > 3).some((t: string) => pLower.includes(t));
       }) ?? null;
     }
-    setAddForm({ payerName: source.payer_name, payerId: matched?.id ?? "", sourceUrl: source.canonical_url || "", documentType: "admin_guide", parentDocumentId: "", effectiveStart: "", effectiveEnd: "" });
+    setAddForm({ payerName: source.payer_name, payerId: matched?.id ?? "", planName: "", sourceUrl: source.canonical_url || "", documentType: "admin_guide", parentDocumentId: "", effectiveStart: "", effectiveEnd: "" });
     setAddMode("url");
     setUploadFile(null);
     setPendingSourceId(source.source_id);
@@ -1048,12 +1051,12 @@ export default function PayerManualsPage() {
   });
 
   const updatePayerMutation = useMutation({
-    mutationFn: async ({ manualId, payerId, documentName }: { manualId: string; payerId: string; documentName: string }) => {
+    mutationFn: async ({ manualId, payerId, documentName, planName }: { manualId: string; payerId: string; documentName: string; planName: string }) => {
       const res = await fetch(`/api/admin/payer-manuals/${manualId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ payerId: payerId || null, documentName }),
+        body: JSON.stringify({ payerId: payerId || null, documentName, planName: planName || null }),
       });
       if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
       return res.json();
@@ -1076,7 +1079,7 @@ export default function PayerManualsPage() {
 
   const sectionTypes: SectionType[] = ["timely_filing", "prior_auth", "modifiers_and_liability", "appeals"];
 
-  const canAdd = addForm.payerName && (addMode === "url" ? !!addForm.sourceUrl : !!uploadFile)
+  const canAdd = addForm.payerName && !!addForm.payerId && (addMode === "url" ? !!addForm.sourceUrl : !!uploadFile)
     && (addForm.documentType === "supplement" ? !!addForm.parentDocumentId : true);
   const summary = coverageData?.summary;
   const coveragePayers = coverageData?.payers || [];
@@ -1452,7 +1455,13 @@ export default function PayerManualsPage() {
                 <div className="flex items-start justify-between gap-1">
                   <div className="flex flex-col gap-0.5 min-w-0">
                     {docTypeBadge(manual.document_type || "admin_guide")}
-                    <p className="text-sm font-medium leading-tight mt-0.5 truncate">{manual.payer_name}</p>
+                    <p className="text-sm font-medium leading-tight mt-0.5 truncate">{manual.payer_record_name || manual.payer_name}</p>
+                    {manual.plan_name && (
+                      <p className="text-[11px] text-muted-foreground truncate">{manual.plan_name}</p>
+                    )}
+                    {manual.payer_record_name && manual.payer_record_name !== manual.payer_name && (
+                      <p className="text-[10px] text-muted-foreground truncate italic">{manual.payer_name}</p>
+                    )}
                   </div>
                   {statusBadge(manual.status)}
                 </div>
@@ -1520,16 +1529,33 @@ export default function PayerManualsPage() {
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1.5">
-                        <CardTitle className="text-base">{selectedManual.payer_name}</CardTitle>
+                      <div className="flex items-start gap-1.5">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <CardTitle className="text-base">
+                              {selectedManual.payer_record_name || selectedManual.payer_name}
+                              {selectedManual.plan_name && (
+                                <span className="ml-2 text-sm font-normal text-muted-foreground">— {selectedManual.plan_name}</span>
+                              )}
+                            </CardTitle>
+                          </div>
+                          {selectedManual.payer_record_name && selectedManual.payer_record_name !== selectedManual.payer_name && (
+                            <p className="text-xs text-muted-foreground italic mt-0.5">Document: "{selectedManual.payer_name}"</p>
+                          )}
+                          {!selectedManual.payer_id && (
+                            <p className="text-xs text-amber-600 flex items-center gap-1 mt-0.5">
+                              <AlertCircle className="h-3 w-3 shrink-0" /> No payer linked — click the pencil to assign
+                            </p>
+                          )}
+                        </div>
                         <button
-                          title="Edit payer link"
+                          title="Edit document / payer link"
                           data-testid="button-edit-payer-link"
                           onClick={() => {
-                            setEditPayerForm({ payerId: selectedManual.payer_id ?? "", documentName: selectedManual.payer_name });
+                            setEditPayerForm({ payerId: selectedManual.payer_id ?? "", documentName: selectedManual.payer_name, planName: selectedManual.plan_name ?? "" });
                             setShowEditPayerDialog(true);
                           }}
-                          className="text-muted-foreground hover:text-foreground transition-colors"
+                          className="text-muted-foreground hover:text-foreground transition-colors mt-0.5 shrink-0"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
@@ -2060,19 +2086,30 @@ export default function PayerManualsPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="pm-payer-id">Link to Payer Record (optional)</Label>
-              <Select value={addForm.payerId || "__none__"} onValueChange={(v) => setAddForm({ ...addForm, payerId: v === "__none__" ? "" : v })}>
+              <Label htmlFor="pm-payer-id">Payer Record *</Label>
+              <Select value={addForm.payerId || ""} onValueChange={(v) => setAddForm({ ...addForm, payerId: v })}>
                 <SelectTrigger id="pm-payer-id" data-testid="select-payer-id">
-                  <SelectValue placeholder="Select existing payer record…" />
+                  <SelectValue placeholder="Select a payer…" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">None / unlisted payer</SelectItem>
                   {payers.map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">Linking allows approved timely filing rules to auto-update the payer record.</p>
+              <p className="text-xs text-muted-foreground">Required — links extracted rules to the correct payer in the billing engine.</p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="pm-plan-name">Plan / Product <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <Input
+                id="pm-plan-name"
+                value={addForm.planName}
+                onChange={(e) => setAddForm({ ...addForm, planName: e.target.value })}
+                placeholder="e.g. Commercial, Medicare Advantage, Medicaid, Individual &amp; Family"
+                data-testid="input-plan-name"
+              />
+              <p className="text-xs text-muted-foreground">A payer can have separate documents per plan type. Add this to distinguish them — e.g. "Aetna Commercial" vs "Aetna Medicare Advantage".</p>
             </div>
 
             {/* Effective dates */}
@@ -2187,17 +2224,17 @@ export default function PayerManualsPage() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="edit-doc-name">Document name</Label>
+              <Label htmlFor="edit-doc-name">Document name *</Label>
               <Input
                 id="edit-doc-name"
                 data-testid="input-edit-document-name"
                 value={editPayerForm.documentName}
                 onChange={(e) => setEditPayerForm((f) => ({ ...f, documentName: e.target.value }))}
-                placeholder="e.g. Allwell by WellCare"
+                placeholder="e.g. Allwell by WellCare 2024 Admin Guide"
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="edit-payer-select">Linked payer</Label>
+              <Label htmlFor="edit-payer-select">Payer record *</Label>
               <Select
                 value={editPayerForm.payerId || "__none__"}
                 onValueChange={(v) => setEditPayerForm((f) => ({ ...f, payerId: v === "__none__" ? "" : v }))}
@@ -2206,13 +2243,24 @@ export default function PayerManualsPage() {
                   <SelectValue placeholder="Select a payer…" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">— No payer —</SelectItem>
+                  <SelectItem value="__none__">— Clear / unlink payer —</SelectItem>
                   {payers.map((p: any) => (
                     <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">The payer's organization will be used to scope extracted rules.</p>
+              <p className="text-xs text-muted-foreground">Links extracted rules to the correct payer in the billing engine.</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-plan-name">Plan / Product <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <Input
+                id="edit-plan-name"
+                data-testid="input-edit-plan-name"
+                value={editPayerForm.planName}
+                onChange={(e) => setEditPayerForm((f) => ({ ...f, planName: e.target.value }))}
+                placeholder="e.g. Commercial, Medicare Advantage, Medicaid"
+              />
+              <p className="text-xs text-muted-foreground">Distinguishes multiple documents for the same payer — e.g. "Commercial" vs "Medicare Advantage".</p>
             </div>
           </div>
           <DialogFooter>
@@ -2226,6 +2274,7 @@ export default function PayerManualsPage() {
                   manualId: selectedManualId,
                   payerId: editPayerForm.payerId,
                   documentName: editPayerForm.documentName.trim(),
+                  planName: editPayerForm.planName.trim(),
                 });
               }}
             >
