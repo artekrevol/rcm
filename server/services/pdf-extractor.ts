@@ -45,14 +45,23 @@ interface PdfjsResult {
 
 async function extractWithPdfJs(buffer: Buffer): Promise<PdfjsResult> {
   // pdfjs-dist v5 is pure ESM — use dynamic import.
-  // Disable the web worker (not available in Node.js).
-  const pdfjsLib = await import("pdfjs-dist");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+  // Point to the bundled worker mjs so pdfjs can spawn it off the main thread.
+  // The legacy build is required for Node.js (it avoids browser-only APIs).
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+  // Resolve the worker absolute path at runtime so it works regardless of CWD.
+  // Using require.resolve ensures Node can find the file even in monorepos.
+  const { createRequire } = await import("module");
+  const req = createRequire(import.meta.url);
+  const workerPath = req.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `file://${workerPath}`;
 
   const loadingTask = pdfjsLib.getDocument({
     data: new Uint8Array(buffer),
-    // Suppress canvas/DOM warnings in Node.js
     useSystemFonts: true,
+    disableFontFace: true,
+    standardFontDataUrl: null as any,
+    cMapUrl: null as any,
     verbosity: 0,
   });
   const pdfDoc = await loadingTask.promise;
