@@ -157,39 +157,78 @@ async function extractWithTextract(buffer: Buffer): Promise<RawChunk[]> {
       pageMap.set(page, lines);
     }
   } else {
-    // Large PDF — split with pdf-lib, run Textract on each sub-buffer,
-    // then remap page numbers to the absolute position in the full document.
+    // Large PDF — split with pdf-lib, run Textract on each sub-buffer.
+    // IMPORTANT: we validate the ACTUAL byte size after pdf-lib serialises
+    // each sub-buffer and halve the page span until it fits within the 9 MB
+    // sync API limit. This handles uneven scanned PDFs where a per-page
+    // average would produce an oversized slice.
     console.log(
-      `[pdf-extractor] Buffer ${(buffer.length / 1024 / 1024).toFixed(1)} MB > ${TEXTRACT_MAX_BYTES / 1024 / 1024} MB limit — splitting for Textract`
+      `[pdf-extractor] Buffer ${(buffer.length / 1024 / 1024).toFixed(1)} MB ` +
+      `> ${TEXTRACT_MAX_BYTES / 1024 / 1024} MB limit — splitting for Textract`
     );
     const { PDFDocument } = await import("pdf-lib");
     const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
     const totalPages = pdfDoc.getPageCount();
 
-    // Conservative 200 KB/page estimate keeps us safely under the limit.
+    // Start with a generous estimate; the byte-cap loop below will shrink as needed.
     const estBytesPerPage = buffer.length / Math.max(totalPages, 1);
-    const pagesPerSplit = Math.max(
+    let pagesPerSplit = Math.max(
       1,
-      Math.floor(TEXTRACT_MAX_BYTES / Math.max(estBytesPerPage, 1))
+      Math.floor((TEXTRACT_MAX_BYTES * 0.8) / Math.max(estBytesPerPage, 1))
     );
 
     let pageOffset = 0;
-    for (let start = 0; start < totalPages; start += pagesPerSplit) {
-      const end = Math.min(start + pagesPerSplit, totalPages);
-      const subDoc = await PDFDocument.create();
-      const indices = Array.from({ length: end - start }, (_, i) => start + i);
-      const copied = await subDoc.copyPages(pdfDoc, indices);
-      copied.forEach((p) => subDoc.addPage(p));
-      const subBuf = Buffer.from(await subDoc.save());
+    let start = 0;
 
-      console.log(
-        `[pdf-extractor] Textract sub-buffer pages ${start + 1}–${end} (${(subBuf.length / 1024).toFixed(0)} KB)`
-      );
+    while (start < totalPages) {
+      let span = Math.min(pagesPerSplit, totalPages - start);
+
+      // Shrink span until the serialised sub-buffer fits within the API limit.
+      let subBuf: Buffer;
+      while (true) {
+        const end = start + span;
+        const subDoc = await PDFDocument.create();
+        const indices = Array.from({ length: span }, (_, i) => start + i);
+        const copied = await subDoc.copyPages(pdfDoc, indices);
+        copied.forEach((p) => subDoc.addPage(p));
+        subBuf = Buffer.from(await subDoc.save());
+
+        if (subBuf.length <= TEXTRACT_MAX_BYTES || span === 1) {
+          // Either it fits, or we're already at the single-page minimum.
+          if (subBuf.length > TEXTRACT_MAX_BYTES) {
+            console.warn(
+              `[pdf-extractor] Page ${start + 1} alone is ${(subBuf.length / 1024 / 1024).toFixed(1)} MB — ` +
+              `exceeds Textract sync limit; proceeding anyway (will fail gracefully if rejected)`
+            );
+          } else {
+            console.log(
+              `[pdf-extractor] Textract sub-buffer pages ${start + 1}–${start + span} ` +
+              `(${(subBuf.length / 1024).toFixed(0)} KB, ${span} page(s))`
+            );
+          }
+          break;
+        }
+
+        // Too large — halve the span and retry.
+        const prevSpan = span;
+        span = Math.max(1, Math.floor(span / 2));
+        console.log(
+          `[pdf-extractor] Sub-buffer ${(subBuf.length / 1024 / 1024).toFixed(1)} MB too large — ` +
+          `reducing span from ${prevSpan} to ${span} pages`
+        );
+      }
+
       const blocks = await textractDetect(client, subBuf);
       for (const [relPage, lines] of parseBlocks(blocks)) {
         pageMap.set(relPage + pageOffset, lines);
       }
-      pageOffset += end - start;
+
+      pageOffset += span;
+      start += span;
+
+      // Adjust the default span for the next iteration based on what worked,
+      // but keep it conservative to avoid re-triggering the shrink loop.
+      pagesPerSplit = Math.max(1, Math.min(span, pagesPerSplit));
     }
   }
 
