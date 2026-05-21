@@ -13351,31 +13351,18 @@ Warmly,
 
           const rawChunks = await extractRawChunks(extractInput);
 
-          // BUG-04 fix: resolve org_id — fall back to payer's org when document has NULL.
-          let chunkOrgId: string | null = manual.organization_id ?? null;
-          if (!chunkOrgId && manual.payer_id) {
-            const { rows: payerOrgRows } = await db.query(
-              "SELECT organization_id FROM payers WHERE id = $1", [manual.payer_id]
-            );
-            chunkOrgId = payerOrgRows[0]?.organization_id ?? null;
-          }
-          if (!chunkOrgId) {
-            throw new Error(
-              "Cannot ingest chunks: organization_id is NULL on document and could not be resolved from the linked payer. " +
-              "Link the document to a payer before extracting."
-            );
-          }
-
+          // Payer source documents are universal — not scoped to any organization.
+          // organization_id on payer_document_chunks is nullable and never queried;
+          // extraction does not require a payer link.
           for (const chunk of rawChunks) {
             await db.query(`
               INSERT INTO payer_document_chunks
                 (source_document_id, chunk_index, page_start, page_end,
-                 raw_text, char_count, extraction_method, status, organization_id)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
+                 raw_text, char_count, extraction_method, status)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
             `, [
               manualId, chunk.chunkIndex, chunk.pageStart, chunk.pageEnd,
               chunk.rawText, chunk.charCount, chunk.extractionMethod,
-              chunkOrgId,
             ]);
           }
 
