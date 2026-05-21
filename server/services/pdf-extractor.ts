@@ -57,11 +57,13 @@ async function extractWithPdfJs(buffer: Buffer): Promise<PdfjsResult> {
   // The legacy build is required for Node.js (it avoids browser-only APIs).
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
-  // Resolve the worker absolute path at runtime so it works regardless of CWD.
-  // Using require.resolve ensures Node can find the file even in monorepos.
-  const { createRequire } = await import("module");
-  const req = createRequire(import.meta.url);
-  const workerPath = req.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  // Resolve the worker path using process.cwd() so it works in both
+  // ESM (tsx dev) and CJS (esbuild production bundle) without import.meta.url.
+  const path = await import("path");
+  const workerPath = path.resolve(
+    process.cwd(),
+    "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+  );
   pdfjsLib.GlobalWorkerOptions.workerSrc = `file://${workerPath}`;
 
   const loadingTask = pdfjsLib.getDocument({
