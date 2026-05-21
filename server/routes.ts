@@ -13208,6 +13208,29 @@ Warmly,
     });
   }
 
+  // Update payer link / document name for a manual
+  app.patch("/api/admin/payer-manuals/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const { pool: db } = await import("./db");
+      const { payerId, documentName } = req.body;
+      if (!documentName && payerId === undefined) {
+        return res.status(400).json({ error: "payerId or documentName is required" });
+      }
+      const { rows } = await db.query(`
+        UPDATE payer_source_documents
+        SET payer_id = COALESCE($1, payer_id),
+            document_name = COALESCE($2, document_name),
+            updated_at = NOW()
+        WHERE id = $3
+        RETURNING *, document_name AS payer_name
+      `, [payerId ?? null, documentName ?? null, req.params.id]);
+      if (!rows.length) return res.status(404).json({ error: "Manual not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Get extraction items for a manual
   app.get("/api/admin/payer-manuals/:id/items", requireSuperAdmin, async (req, res) => {
     try {

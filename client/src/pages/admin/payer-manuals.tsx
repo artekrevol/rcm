@@ -834,6 +834,8 @@ export default function PayerManualsPage() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDocType, setFilterDocType] = useState<string>("all");
   const [showChunks, setShowChunks] = useState(false);
+  const [showEditPayerDialog, setShowEditPayerDialog] = useState(false);
+  const [editPayerForm, setEditPayerForm] = useState({ payerId: "", documentName: "" });
 
   const { data: manuals = [], isLoading } = useQuery<PayerManual[]>({
     queryKey: ["/api/admin/payer-manuals"],
@@ -1043,6 +1045,25 @@ export default function PayerManualsPage() {
       toast({ title: "Manual deleted" });
     },
     onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  const updatePayerMutation = useMutation({
+    mutationFn: async ({ manualId, payerId, documentName }: { manualId: string; payerId: string; documentName: string }) => {
+      const res = await fetch(`/api/admin/payer-manuals/${manualId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ payerId: payerId || null, documentName }),
+      });
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/payer-manuals"] });
+      setShowEditPayerDialog(false);
+      toast({ title: "Document updated", description: "Payer link saved. You can now run extraction." });
+    },
+    onError: (err: any) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
   });
 
   const selectedManual = manuals.find((m) => m.id === selectedManualId);
@@ -1499,7 +1520,20 @@ export default function PayerManualsPage() {
                           </span>
                         )}
                       </div>
-                      <CardTitle className="text-base">{selectedManual.payer_name}</CardTitle>
+                      <div className="flex items-center gap-1.5">
+                        <CardTitle className="text-base">{selectedManual.payer_name}</CardTitle>
+                        <button
+                          title="Edit payer link"
+                          data-testid="button-edit-payer-link"
+                          onClick={() => {
+                            setEditPayerForm({ payerId: selectedManual.payer_id ?? "", documentName: selectedManual.payer_name });
+                            setShowEditPayerDialog(true);
+                          }}
+                          className="text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                       {(selectedManual.effective_start || selectedManual.effective_end) && (
                         <p className="text-xs text-muted-foreground flex items-center gap-1">
                           <CalendarCheck className="h-3 w-3" />
@@ -2140,6 +2174,62 @@ export default function PayerManualsPage() {
               data-testid="button-submit-add-manual"
             >
               {addMutation.isPending ? "Adding…" : "Add Document"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit payer link dialog */}
+      <Dialog open={showEditPayerDialog} onOpenChange={setShowEditPayerDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit document / payer link</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-doc-name">Document name</Label>
+              <Input
+                id="edit-doc-name"
+                data-testid="input-edit-document-name"
+                value={editPayerForm.documentName}
+                onChange={(e) => setEditPayerForm((f) => ({ ...f, documentName: e.target.value }))}
+                placeholder="e.g. Allwell by WellCare"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-payer-select">Linked payer</Label>
+              <Select
+                value={editPayerForm.payerId || "__none__"}
+                onValueChange={(v) => setEditPayerForm((f) => ({ ...f, payerId: v === "__none__" ? "" : v }))}
+              >
+                <SelectTrigger id="edit-payer-select" data-testid="select-edit-payer" className="w-full">
+                  <SelectValue placeholder="Select a payer…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">— No payer —</SelectItem>
+                  {payers.map((p: any) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">The payer's organization will be used to scope extracted rules.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditPayerDialog(false)}>Cancel</Button>
+            <Button
+              data-testid="button-save-payer-link"
+              disabled={!editPayerForm.documentName.trim() || updatePayerMutation.isPending}
+              onClick={() => {
+                if (!selectedManualId) return;
+                updatePayerMutation.mutate({
+                  manualId: selectedManualId,
+                  payerId: editPayerForm.payerId,
+                  documentName: editPayerForm.documentName.trim(),
+                });
+              }}
+            >
+              {updatePayerMutation.isPending ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>
