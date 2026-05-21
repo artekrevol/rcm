@@ -300,7 +300,9 @@ function extractTextFromHtml(html: string): string {
   return bodyText.replace(/\t/g, " ").replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-const PDF_CHUNK_PAGES = 90; // Stay safely under Claude's 100-page hard limit
+// 40 pages per chunk stays safely under both Claude's 100-page hard limit
+// and its 200 000-token soft limit (dense policy PDFs can hit ~2 200 tokens/page).
+const PDF_CHUNK_PAGES = 40;
 
 const CLAUDE_PDF_PROMPT = `Extract all text content from this payer billing manual PDF, preserving section headings and structure.
 Pay special attention to sections about:
@@ -375,26 +377,36 @@ async function callClaudeWithPdfBuffer(apiKey: string, buffer: Buffer): Promise<
  *  5. Hard error     → pdf-lib can't split AND page count exceeds limit
  */
 async function extractChunksFromPdf(buffer: Buffer): Promise<RawChunk[]> {
-  // pdf-parse is CommonJS — require() is the correct interop, not import().default.
+  // pdf-parse is CommonJS. Try every known export shape before giving up.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const _pdfParseModule = require("pdf-parse");
-  const pdfParse: (buf: Buffer) => Promise<{ numpages: number; text: string }> =
-    typeof _pdfParseModule === "function" ? _pdfParseModule : _pdfParseModule.default;
+  const pdfParse: ((buf: Buffer) => Promise<{ numpages: number; text: string }>) | null =
+    typeof _pdfParseModule === "function"
+      ? _pdfParseModule
+      : typeof _pdfParseModule?.default === "function"
+        ? _pdfParseModule.default
+        : typeof _pdfParseModule?.parse === "function"
+          ? _pdfParseModule.parse
+          : null;
 
   let numpages = 0;
-  try {
-    const data = await pdfParse(buffer);
-    numpages = data.numpages;
-    const text = data.text.replace(/\s{3,}/g, "\n\n").trim();
-    if (text.length > 200) {
-      console.log(`[manual-extractor] pdf-parse extracted text from ${numpages}-page PDF`);
-      return [{
-        chunkIndex: 0, pageStart: 1, pageEnd: numpages,
-        rawText: text, charCount: text.length, extractionMethod: 'pdf_parse',
-      }];
+  if (!pdfParse) {
+    console.warn("[manual-extractor] pdf-parse module loaded but no callable export found — skipping text-layer extraction");
+  } else {
+    try {
+      const data = await pdfParse(buffer);
+      numpages = data.numpages;
+      const text = data.text.replace(/\s{3,}/g, "\n\n").trim();
+      if (text.length > 200) {
+        console.log(`[manual-extractor] pdf-parse extracted text from ${numpages}-page PDF`);
+        return [{
+          chunkIndex: 0, pageStart: 1, pageEnd: numpages,
+          rawText: text, charCount: text.length, extractionMethod: 'pdf_parse',
+        }];
+      }
+    } catch (err: any) {
+      console.warn(`[manual-extractor] pdf-parse failed: ${err.message}`);
     }
-  } catch (err: any) {
-    console.warn(`[manual-extractor] pdf-parse failed: ${err.message}`);
   }
 
   // Image-based PDF (or pdf-parse returned no text) — Claude Vision required
@@ -432,6 +444,7 @@ async function extractChunksFromPdf(buffer: Buffer): Promise<RawChunk[]> {
     const numChunks = Math.ceil(totalPages / PDF_CHUNK_PAGES);
     console.log(`[manual-extractor] Splitting ${totalPages}-page PDF into ${numChunks} chunks of ≤${PDF_CHUNK_PAGES} pages`);
     const rawChunks: RawChunk[] = [];
+    let chunkingStarted = false; // distinguishes Claude errors from pdf-lib structural errors
 
     // Per-chunk timeout: if Claude Vision doesn't respond within 120s, fail fast
     // with a clear message rather than hanging indefinitely.
@@ -448,6 +461,7 @@ async function extractChunksFromPdf(buffer: Buffer): Promise<RawChunk[]> {
       ]);
 
     for (let start = 0; start < totalPages; start += PDF_CHUNK_PAGES) {
+      chunkingStarted = true;
       const end = Math.min(start + PDF_CHUNK_PAGES, totalPages);
       const chunkDoc = await PDFDocument.create();
       const pageIndices = Array.from({ length: end - start }, (_, i) => start + i);
@@ -470,6 +484,11 @@ async function extractChunksFromPdf(buffer: Buffer): Promise<RawChunk[]> {
     return rawChunks;
 
   } catch (pdfLibErr: any) {
+    // If we already started sending chunks to Claude, this is a Claude/network
+    // error — not a pdf-lib structural failure. Re-throw so the caller marks
+    // the document failed with the real error message.
+    if (chunkingStarted) throw pdfLibErr;
+
     console.warn(`[manual-extractor] pdf-lib failed: ${pdfLibErr.message}`);
 
     if (numpages === 0 || numpages <= PDF_CHUNK_PAGES) {
