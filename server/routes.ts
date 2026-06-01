@@ -6542,6 +6542,46 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
   });
 
+  // PATCH /api/billing/claims/:id/status — manual status override with audit trail
+  app.patch("/api/billing/claims/:id/status", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { id } = req.params;
+      const { status, reason } = req.body as { status: string; reason?: string };
+
+      const ALLOWED_STATUSES = [
+        "draft", "created", "ready", "pending", "submitted", "acknowledged",
+        "paid", "denied", "rejected", "suspended", "returned",
+        "appeal_needed", "appealed", "patient_balance", "written_off",
+        "review_needed", "void", "exported",
+      ];
+      if (!status || !ALLOWED_STATUSES.includes(status)) {
+        return res.status(400).json({ error: `Invalid status. Allowed values: ${ALLOWED_STATUSES.join(", ")}` });
+      }
+
+      const { rows } = await db.query("SELECT id, status, organization_id FROM claims WHERE id = $1", [id]);
+      if (!rows.length || !verifyOrg(rows[0], req)) return res.status(404).json({ error: "Claim not found" });
+      const prev = rows[0].status;
+      if (prev === status) return res.status(400).json({ error: "Claim is already in that status" });
+
+      const user = req.user as any;
+      const actor = user?.email || user?.name || "staff";
+      await db.query(`UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2`, [status, id]);
+      await db.query(
+        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id)
+         VALUES ($1,$2,'StatusChange',$3,NOW(),$4)`,
+        [
+          crypto.randomUUID(), id,
+          `Status manually changed from '${prev}' to '${status}' by ${actor}${reason ? `. Reason: ${reason}` : ""}.`,
+          rows[0].organization_id,
+        ]
+      );
+      res.json({ success: true, previousStatus: prev, newStatus: status });
+    } catch (err: any) {
+      console.error("[API] Error:", err); res.status(500).json({ error: "An unexpected error occurred. Please try again." });
+    }
+  });
+
   app.get("/api/billing/claims/:id/edi-validate", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
@@ -14338,12 +14378,16 @@ Warmly,
         [eraId, orgId, parsed.payerName, parsed.checkNumber, parsed.checkDate, parsed.totalPayment, JSON.stringify({ filename, raw: content.slice(0, 500) })]
       );
       for (const line of parsed.claimLines) {
+        // UUID prefix search: CLM01 is first 20 hex chars of claim UUID with dashes stripped
         const matchedClaim = await db.query(
-          `SELECT id FROM claims WHERE id = $1 LIMIT 1`, [line.claimControlNumber]
+          `SELECT id FROM claims
+           WHERE LEFT(REPLACE(id::text, '-', ''), 20) = LOWER($1)
+           LIMIT 1`,
+          [line.claimControlNumber]
         );
         const claimId = matchedClaim.rows[0]?.id || null;
         await db.query(
-          `INSERT INTO era_lines (id, era_id, claim_id, org_id, patient_name, billed_amount, allowed_amount, paid_amount, service_lines) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+          `INSERT INTO era_lines (id, era_id, claim_id, org_id, patient_name, billed_amount, allowed_amount, paid_amount, service_lines, status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,'unposted')`,
           [crypto.randomUUID(), eraId, claimId, orgId, line.patientName, line.billedAmount, line.allowedAmount, line.paidAmount, JSON.stringify(line.adjustments || [])]
         );
       }
@@ -15387,9 +15431,14 @@ async function pollStedi835ERA() {
     for (const era of eras) {
       const existing = await db.query("SELECT id FROM era_batches WHERE check_number = $1 LIMIT 1", [era.checkNumber]);
       if (existing.rows.length) continue;
+      // Resolve org using UUID prefix search (CLM01 = first 20 hex chars of claim UUID without dashes)
       let orgId: string | null = null;
       for (const line of era.claimLines) {
-        const claimRow = await db.query("SELECT organization_id FROM claims WHERE id = $1 LIMIT 1", [line.claimControlNumber]);
+        const claimRow = await db.query(
+          `SELECT organization_id FROM claims
+           WHERE LEFT(REPLACE(id::text, '-', ''), 20) = LOWER($1) LIMIT 1`,
+          [line.claimControlNumber]
+        );
         if (claimRow.rows[0]?.organization_id) { orgId = claimRow.rows[0].organization_id; break; }
       }
       const eraId = crypto.randomUUID();
@@ -15399,7 +15448,10 @@ async function pollStedi835ERA() {
         [eraId, orgId, era.payerName, era.checkNumber, era.checkDate, era.totalPayment, era.eraId, JSON.stringify(era.rawData)]
       );
       for (const line of era.claimLines) {
-        const claimRow = await db.query("SELECT id FROM claims WHERE id = $1 LIMIT 1", [line.claimControlNumber]);
+        const claimRow = await db.query(
+          `SELECT id FROM claims WHERE LEFT(REPLACE(id::text, '-', ''), 20) = LOWER($1) LIMIT 1`,
+          [line.claimControlNumber]
+        );
         const matchedClaimId = claimRow.rows[0]?.id || null;
         const serviceLines = line.adjustments.map((adj: any) => ({
           carc: adj.code,
@@ -15409,10 +15461,18 @@ async function pollStedi835ERA() {
           paid: line.paidAmount,
         }));
         await db.query(
-          `INSERT INTO era_lines (id, era_id, claim_id, org_id, patient_name, billed_amount, allowed_amount, paid_amount, service_lines, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW())`,
+          `INSERT INTO era_lines (id, era_id, claim_id, org_id, patient_name, billed_amount, allowed_amount, paid_amount, service_lines, status, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, 'unposted', NOW())`,
           [crypto.randomUUID(), eraId, matchedClaimId, orgId, line.patientName, line.billedAmount, line.allowedAmount, line.paidAmount, JSON.stringify(serviceLines)]
         );
+        // Clean ERA: no adjustments + paid in full → mark claim paid immediately
+        if (matchedClaimId && line.paidAmount > 0 && line.adjustments.length === 0) {
+          await db.query(`UPDATE claims SET status='paid', updated_at=NOW() WHERE id=$1`, [matchedClaimId]);
+          await db.query(
+            `INSERT INTO claim_events (id, claim_id, type, notes, organization_id) VALUES ($1,$2,'Payment',$3,$4)`,
+            [crypto.randomUUID(), matchedClaimId, `ERA payment auto-posted: $${line.paidAmount.toFixed(2)} from check ${era.checkNumber} (${era.payerName}). Clean claim — no adjustments.`, orgId]
+          );
+        }
       }
       console.log(`[835 Poll] Imported ERA: ${era.checkNumber} — $${era.totalPayment}`);
     }
