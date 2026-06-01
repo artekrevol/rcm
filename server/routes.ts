@@ -6600,13 +6600,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const ps = settingsResult.rows[0];
 
       // Payer lookup — fetched early so payer_classification drives all downstream logic
-      let payerInfo: { name: string; payer_id: string; payer_classification: string | null; claim_filing_indicator: string | null; member_id_qualifier: string | null } =
+      let payerInfo: { name: string; payer_id: string; payer_classification: string | null; claim_filing_indicator: string | null; member_id_qualifier: string | null; referring_provider_policy?: string | null } =
         { name: c.payer || "Unknown", payer_id: "UNKNOWN", payer_classification: null, claim_filing_indicator: null, member_id_qualifier: "MI" };
       if (c.payer_id) {
-        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator, member_id_qualifier FROM payers WHERE id = $1", [c.payer_id]);
+        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator, member_id_qualifier, referring_provider_policy FROM payers WHERE id = $1", [c.payer_id]);
         if (pr.rows.length) payerInfo = pr.rows[0];
       } else if (c.payer) {
-        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator, member_id_qualifier FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
+        const pr = await db.query("SELECT name, payer_id, payer_classification, claim_filing_indicator, member_id_qualifier, referring_provider_policy FROM payers WHERE LOWER(name) = LOWER($1)", [c.payer]);
         if (pr.rows.length) payerInfo = pr.rows[0];
       }
 
@@ -6705,6 +6705,34 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       // Payer checks (payerInfo fetched above)
       if (!payerInfo.payer_id || payerInfo.payer_id === "UNKNOWN")
         warnings.push({ field: "payer.payer_id", message: `Payer "${payerInfo.name}" has no EDI Payer ID configured`, severity: "error" });
+
+      // Referring provider check — mirrors generate837P policy enforcement
+      {
+        const rpPolicy = (payerInfo as any).referring_provider_policy || 'required';
+        if (rpPolicy !== 'forbidden') {
+          let rpNpi: string | null = null;
+          let rpVerification: string | null = null;
+          if (c.referring_provider_id) {
+            const rpRow = await db.query(
+              "SELECT npi, verification_status FROM referring_providers WHERE id = $1",
+              [c.referring_provider_id]
+            );
+            if (rpRow.rows.length) {
+              rpNpi = rpRow.rows[0].npi || null;
+              rpVerification = rpRow.rows[0].verification_status || null;
+            }
+          }
+          const hasValidRpNpi = rpNpi && rpNpi.trim() !== '' && rpVerification !== 'pending';
+          const hasAuthNumber = !!(c.authorization_number && String(c.authorization_number).trim());
+          if (!hasValidRpNpi) {
+            if (rpPolicy === 'situational' && !hasAuthNumber) {
+              warnings.push({ field: "claim.referring_provider", message: "Referring provider NPI or VA authorization number is required for this payer. Add a referring provider or enter the authorization number.", severity: "error" });
+            } else if (rpPolicy === 'required') {
+              warnings.push({ field: "claim.referring_provider", message: `Referring provider with a valid NPI is required for ${payerInfo.name}. Select a referring provider before downloading the EDI.`, severity: "error" });
+            }
+          }
+        }
+      }
 
       // Rendering provider checks
       let provId = c.provider_id;
@@ -7150,7 +7178,11 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       res.send(edi);
     } catch (err: any) {
       console.error("EDI generation error:", err);
-      console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+      const msg: string = err?.message || '';
+      if (msg.startsWith('VALIDATION_ERROR:')) {
+        return res.status(422).json({ error: msg.replace('VALIDATION_ERROR:', '').trim() });
+      }
+      res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
   });
 
