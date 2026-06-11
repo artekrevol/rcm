@@ -11,8 +11,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronDown, ChevronRight, ExternalLink, CheckCircle2, AlertCircle, AlertTriangle,
-  XCircle, Search, Radio, FileText, Loader2, Clock, FlaskConical, Pencil, Trash2, Archive,
+  XCircle, Search, Radio, FileText, Loader2, Clock, FlaskConical, Pencil, Trash2, Archive, SlidersHorizontal,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { Link } from "wouter";
@@ -101,10 +102,28 @@ function EventRow({ event }: { event: any }) {
   );
 }
 
+const MANUAL_STATUSES = [
+  { value: "submitted", label: "Submitted" },
+  { value: "acknowledged", label: "Acknowledged" },
+  { value: "paid", label: "Paid" },
+  { value: "denied", label: "Denied" },
+  { value: "rejected", label: "Rejected" },
+  { value: "appeal_needed", label: "Appeal Needed" },
+  { value: "appealed", label: "Appealed" },
+  { value: "review_needed", label: "Review Needed" },
+  { value: "patient_balance", label: "Patient Balance" },
+  { value: "written_off", label: "Written Off" },
+  { value: "returned", label: "Returned" },
+  { value: "void", label: "Void" },
+];
+
 function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
   const [expanded, setExpanded] = useState(false);
   const [showFixDialog, setShowFixDialog] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+  const [showStatusDialog, setShowStatusDialog] = useState(false);
+  const [newStatus, setNewStatus] = useState("");
+  const [statusReason, setStatusReason] = useState("");
   const { toast } = useToast();
 
   const markFixedMutation = useMutation({
@@ -133,6 +152,21 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
       });
     },
     onError: () => toast({ title: "Error", description: "Failed to archive claim", variant: "destructive" }),
+  });
+
+  const changeStatusMutation = useMutation({
+    mutationFn: async ({ status, reason }: { status: string; reason: string }) => {
+      const res = await apiRequest("PATCH", `/api/billing/claims/${claim.id}/status`, { status, reason });
+      return res.json();
+    },
+    onSuccess: (_, { status }) => {
+      toast({ title: "Status updated", description: `Claim status changed to "${status}"` });
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/claim-tracker"] });
+      setShowStatusDialog(false);
+      setNewStatus("");
+      setStatusReason("");
+    },
+    onError: (err: any) => toast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
   const events: any[] = claim.events || [];
@@ -209,6 +243,16 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
                   <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Mark as Fixed
                 </Button>
               )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => { setNewStatus(claim.status); setShowStatusDialog(true); }}
+                data-testid={`button-change-status-${claim.id?.slice(0, 8)}`}
+                title="Manually change claim status"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+              </Button>
               {!claim.archived_at && (
                 <Button
                   variant="ghost"
@@ -262,6 +306,55 @@ function ClaimRow({ claim, payers }: { claim: any; payers: any[] }) {
             >
               {markFixedMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Resubmit Claim
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showStatusDialog} onOpenChange={(o) => { if (!o) { setShowStatusDialog(false); setNewStatus(""); setStatusReason(""); } }}>
+        <DialogContent data-testid="dialog-change-status">
+          <DialogHeader>
+            <DialogTitle>Change Claim Status</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="space-y-1.5">
+              <Label>Current status</Label>
+              <StatusBadge status={claim.status} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="status-select">New status</Label>
+              <Select value={newStatus} onValueChange={setNewStatus}>
+                <SelectTrigger id="status-select" data-testid="select-new-status">
+                  <SelectValue placeholder="Select a status…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {MANUAL_STATUSES.map(s => (
+                    <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="status-reason">Reason (optional)</Label>
+              <Textarea
+                id="status-reason"
+                placeholder="e.g. ERA received via fax — manually marking paid"
+                value={statusReason}
+                onChange={(e) => setStatusReason(e.target.value)}
+                rows={2}
+                data-testid="input-status-reason"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowStatusDialog(false)}>Cancel</Button>
+            <Button
+              onClick={() => changeStatusMutation.mutate({ status: newStatus, reason: statusReason })}
+              disabled={!newStatus || newStatus === claim.status || changeStatusMutation.isPending}
+              data-testid="button-confirm-status-change"
+            >
+              {changeStatusMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Update Status
             </Button>
           </DialogFooter>
         </DialogContent>

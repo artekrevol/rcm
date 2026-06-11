@@ -107,9 +107,12 @@ export async function process277CA(
     const isRejected = newStatus === 'rejected';
     const eventType = isRejected ? '277CA Rejected' : '277CA Accepted';
 
+    // CLM01 in 837P = claim.id with dashes stripped, sliced to 20 chars.
+    // Must match via UUID prefix search — direct id = $1 never works.
     const claimResult = await db.query(
-      `SELECT id, status, organization_id FROM claims 
-       WHERE id = $1 OR stedi_transaction_id = $2 
+      `SELECT id, status, organization_id FROM claims
+       WHERE LEFT(REPLACE(id::text, '-', ''), 20) = LOWER($1)
+          OR stedi_transaction_id = $2
        LIMIT 1`,
       [claimControlNumber, transactionId]
     );
@@ -120,7 +123,7 @@ export async function process277CA(
     }
 
     const claim = claimResult.rows[0];
-    if (claim.status !== 'submitted') continue;
+    if (!['submitted', 'exported'].includes(claim.status)) continue;
 
     // Store the payer's claim control number — needed for REF*F8 on corrected resubmissions
     if (payerClaimNumber) {
@@ -219,6 +222,8 @@ export async function process835ERA(
     return;
   }
 
+  // Resolve org from first claim that matches — uses UUID prefix search because
+  // CLM01 in 837P is claim.id with dashes stripped and sliced to 20 chars
   let orgId: string | null = null;
   for (const line of claimLines) {
     const controlNum =
@@ -227,7 +232,9 @@ export async function process835ERA(
       line?.claimControlNumber;
     if (!controlNum) continue;
     const match = await db.query(
-      'SELECT organization_id FROM claims WHERE id=$1 LIMIT 1',
+      `SELECT organization_id FROM claims
+       WHERE LEFT(REPLACE(id::text, '-', ''), 20) = LOWER($1)
+       LIMIT 1`,
       [controlNum]
     );
     if (match.rows[0]?.organization_id) {
@@ -272,25 +279,70 @@ export async function process835ERA(
       line?.adjustments ||
       [];
 
+    // Resolve matched claim_id using UUID prefix search
+    let matchedClaimId: string | null = null;
+    if (controlNum) {
+      const claimRow = await db.query(
+        `SELECT id, organization_id FROM claims
+         WHERE LEFT(REPLACE(id::text, '-', ''), 20) = LOWER($1)
+         LIMIT 1`,
+        [controlNum]
+      );
+      matchedClaimId = claimRow.rows[0]?.id || null;
+      if (claimRow.rows[0]?.organization_id && !orgId) {
+        orgId = claimRow.rows[0].organization_id;
+      }
+    }
+
+    const serviceLines = adjustments.map((adj: any) => ({
+      code: `${adj.claimAdjustmentGroupCode || adj.groupCode}-${adj.claimAdjustmentReasonCode || adj.reasonCode}`,
+      carc: `${adj.claimAdjustmentGroupCode || adj.groupCode}-${adj.claimAdjustmentReasonCode || adj.reasonCode}`,
+      carc_desc: adj.reasonDescription || adj.claimAdjustmentReasonCode || '',
+      amount: parseFloat(adj.claimAdjustmentAmount || adj.amount || '0'),
+      reason: adj.reasonDescription || adj.claimAdjustmentReasonCode || '',
+      billed: billedAmount,
+      allowed: paidAmount,
+      paid: paidAmount,
+    }));
+
+    // Write to era_lines (the table the UI and post action read from)
     await db.query(
-      `INSERT INTO era_claim_lines
-       (id, era_batch_id, claim_control_number,
+      `INSERT INTO era_lines
+       (id, era_id, claim_id, org_id,
         patient_name, billed_amount, allowed_amount,
-        paid_amount, adjustment_codes, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+        paid_amount, service_lines, status, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,'unposted',NOW())`,
       [
-        crypto.randomUUID(), eraId, controlNum, patientName,
-        billedAmount, paidAmount, paidAmount,
-        JSON.stringify(adjustments.map((adj: any) => ({
-          code: `${adj.claimAdjustmentGroupCode || adj.groupCode}-${adj.claimAdjustmentReasonCode || adj.reasonCode}`,
-          amount: parseFloat(adj.claimAdjustmentAmount || adj.amount || '0'),
-          reason: adj.reasonDescription || adj.claimAdjustmentReasonCode || ''
-        })))
+        crypto.randomUUID(), eraId, matchedClaimId, orgId,
+        patientName, billedAmount, paidAmount, paidAmount,
+        JSON.stringify(serviceLines)
       ]
     );
 
-    if (controlNum && adjustments.length > 0) {
-      await applyCARCRules(controlNum, adjustments, db);
+    if (adjustments.length > 0) {
+      await applyCARCRules(matchedClaimId, adjustments, db);
+    } else if (matchedClaimId && paidAmount > 0) {
+      // Clean ERA: fully paid, no CARC adjustments (Status Code 1 / Processed as Primary)
+      // Mark claim paid immediately on webhook ingestion
+      const claimOrg = await db.query(
+        'SELECT organization_id FROM claims WHERE id=$1 LIMIT 1',
+        [matchedClaimId]
+      );
+      await db.query(
+        `UPDATE claims SET status='paid', updated_at=NOW() WHERE id=$1`,
+        [matchedClaimId]
+      );
+      await db.query(
+        `INSERT INTO claim_events
+         (id, claim_id, type, notes, timestamp, organization_id)
+         VALUES ($1,$2,'Payment',$3,NOW(),$4)`,
+        [
+          crypto.randomUUID(),
+          matchedClaimId,
+          `ERA payment posted: $${paidAmount.toFixed(2)} from check ${checkNumber} (${payerName}). No adjustments — clean claim.`,
+          claimOrg.rows[0]?.organization_id || orgId
+        ]
+      );
     }
   }
 
@@ -298,13 +350,18 @@ export async function process835ERA(
 }
 
 async function applyCARCRules(
-  claimControlNumber: string,
+  claimIdOrControlNumber: string | null,
   adjustments: any[],
   db: any
 ): Promise<void> {
+  if (!claimIdOrControlNumber) return;
+  // Accept either a resolved UUID or a raw control number (20-char hex prefix)
   const claimResult = await db.query(
-    'SELECT id, organization_id FROM claims WHERE id=$1 LIMIT 1',
-    [claimControlNumber]
+    `SELECT id, organization_id FROM claims
+     WHERE id = $1
+        OR LEFT(REPLACE(id::text, '-', ''), 20) = LOWER($1)
+     LIMIT 1`,
+    [claimIdOrControlNumber]
   );
   if (!claimResult.rows.length) return;
   const claim = claimResult.rows[0];
