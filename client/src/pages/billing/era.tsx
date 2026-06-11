@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { CreditCard, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, Loader2, ArrowLeft, Zap, Upload } from "lucide-react";
+import { CreditCard, ChevronDown, ChevronRight, CheckCircle2, AlertTriangle, Loader2, ArrowLeft, Zap, Upload, RefreshCw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { Link } from "wouter";
@@ -331,6 +331,7 @@ function UploadERADialog({ open, onClose }: { open: boolean; onClose: () => void
 export default function ERAPage() {
   const [selectedEraId, setSelectedEraId] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
+  const { toast } = useToast();
 
   const { data: eras = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/billing/eras"],
@@ -344,6 +345,27 @@ export default function ERAPage() {
       return res.json();
     },
     enabled: !!selectedEraId,
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/billing/stedi/sync", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Sync failed");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/billing/eras"] });
+      toast({
+        title: "Stedi sync complete",
+        description: data.message,
+      });
+    },
+    onError: (err: any) => toast({ title: "Sync failed", description: err.message, variant: "destructive" }),
   });
 
   if (selectedEraId && selectedEra) {
@@ -361,10 +383,25 @@ export default function ERAPage() {
           <h1 className="text-2xl font-semibold" data-testid="text-page-title">ERA Posting</h1>
           <p className="text-muted-foreground">Review and post electronic remittance advice (835 files)</p>
         </div>
-        <Button variant="outline" className="gap-2" onClick={() => setShowUpload(true)} data-testid="button-upload-era">
-          <Upload className="h-4 w-4" />
-          Upload 835 File
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            className="gap-2"
+            onClick={() => syncMutation.mutate()}
+            disabled={syncMutation.isPending}
+            data-testid="button-sync-stedi"
+            title="Pull 277CA acknowledgments and 835 ERAs from Stedi now (last 90 days)"
+          >
+            {syncMutation.isPending
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <RefreshCw className="h-4 w-4" />}
+            {syncMutation.isPending ? "Syncing…" : "Sync from Stedi"}
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={() => setShowUpload(true)} data-testid="button-upload-era">
+            <Upload className="h-4 w-4" />
+            Upload 835 File
+          </Button>
+        </div>
       </div>
       <UploadERADialog open={showUpload} onClose={() => setShowUpload(false)} />
 
@@ -377,7 +414,7 @@ export default function ERAPage() {
           <CardContent className="py-16 text-center text-muted-foreground">
             <CreditCard className="h-10 w-10 mx-auto mb-3 opacity-30" />
             <p className="font-medium">No ERA batches received yet</p>
-            <p className="text-sm mt-1">835 remittance files from Stedi are polled every 6 hours and will appear here automatically.</p>
+            <p className="text-sm mt-1">835 ERAs from Stedi are synced every 4 hours automatically. Use "Sync from Stedi" to pull immediately.</p>
           </CardContent>
         </Card>
       ) : (

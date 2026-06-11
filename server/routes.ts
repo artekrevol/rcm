@@ -15380,44 +15380,64 @@ Warmly,
     }
   });
 
+  // POST /api/billing/stedi/sync — manually trigger 277CA + 835 ERA re-poll
+  // Optional body: { since: "ISO date string" } — defaults to 90 days back
+  app.post("/api/billing/stedi/sync", requireRole("admin", "rcm_manager"), async (req, res) => {
+    try {
+      const since: string | undefined = req.body?.since;
+      // Run both polls concurrently; each returns a count of processed items
+      const [acknowledged, eras] = await Promise.all([
+        pollStedi277Acknowledgments(since),
+        pollStedi835ERA(since),
+      ]);
+      res.json({
+        success: true,
+        acknowledged,
+        eras,
+        message: `Sync complete — ${acknowledged} 277CA acknowledgment(s), ${eras} 835 ERA(s) processed.`,
+      });
+    } catch (err: any) {
+      console.error("[Stedi Sync] Error:", err);
+      res.status(500).json({ error: err.message || "Sync failed" });
+    }
+  });
+
 }
 
 // ── Stedi 277CA polling job ─────────────────────────────────────────────────
-async function pollStedi277Acknowledgments() {
+async function pollStedi277Acknowledgments(sinceOverride?: string) {
   const { isStediConfigured, poll277Acknowledgments } = await import("./services/stedi-claims").catch(() => ({ isStediConfigured: () => false, poll277Acknowledgments: async () => ({ acknowledgments: [], lastCheckTimestamp: "" }) }));
-  if (!isStediConfigured()) return;
+  const { fetchStediTransaction, process277CA } = await import("./services/stedi-webhooks").catch(() => ({ fetchStediTransaction: async () => null, process277CA: async () => {} }));
+  if (!isStediConfigured()) return 0;
+  let processed = 0;
   try {
     const db = await import("./db").then(m => m.pool);
     const settingRow = await db.query("SELECT value FROM system_settings WHERE key = 'stedi_last_277_poll'").catch(() => ({ rows: [] as any[] }));
-    const since = settingRow.rows[0]?.value || new Date(Date.now() - 86400000).toISOString();
+    // Default lookback: 90 days on first run to catch any outstanding 277s
+    const since = sinceOverride || settingRow.rows[0]?.value || new Date(Date.now() - 90 * 86400000).toISOString();
     const { acknowledgments, lastCheckTimestamp } = await poll277Acknowledgments(since);
+
     for (const ack of acknowledgments) {
-      if (!ack.claimControlNumber && !ack.transactionId) continue;
-      const claimResult = await db.query(
-        `SELECT id, status, organization_id FROM claims WHERE id = $1 OR stedi_transaction_id = $2 LIMIT 1`,
-        [ack.claimControlNumber, ack.transactionId]
-      );
-      if (!claimResult.rows.length) continue;
-      const claim = claimResult.rows[0];
-      let newStatus: string;
-      if (ack.status === "4") newStatus = "rejected";
-      else if (ack.status === "1" || ack.status === "3") newStatus = "acknowledged";
-      else continue;
-      if (claim.status !== "submitted") continue;
-      const pollEventType = newStatus === "rejected" ? "277CA Rejected" : "277CA Accepted";
-      await db.query("UPDATE claims SET status = $1, updated_at = NOW() WHERE id = $2", [newStatus, claim.id]);
-      await db.query(
-        `INSERT INTO claim_events (id, claim_id, type, notes, timestamp, organization_id) VALUES ($1, $2, $3, $4, NOW(), $5)`,
-        [crypto.randomUUID(), claim.id, pollEventType, `Payer acknowledgment (polling): ${ack.statusDescription}. Payer: ${ack.payer}.`, claim.organization_id]
-      );
+      if (!ack.transactionId) continue;
+      // Fetch the full 277CA detail per transaction — this gives us claim-level
+      // statusCategoryCode (A1/A2/A4…) that process277CA needs.
+      // The list endpoint only has file-level metadata with numeric status.
+      const detail = await fetchStediTransaction(ack.transactionId, '277');
+      if (detail) {
+        await process277CA(detail, ack.transactionId, db);
+        processed++;
+      }
     }
+
     await db.query(
       `INSERT INTO system_settings (key, value, updated_at) VALUES ('stedi_last_277_poll', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
       [lastCheckTimestamp]
     );
+    if (acknowledgments.length) console.log(`[277 Poll] Processed ${processed}/${acknowledgments.length} 277CA transactions`);
   } catch (err) {
     console.warn("[277 Poll] Unexpected error:", err);
   }
+  return processed;
 }
 
 function parse835Manual(content: string) {
@@ -15452,13 +15472,15 @@ function parse835Manual(content: string) {
 }
 
 // ── Stedi 835 ERA polling job ───────────────────────────────────────────────
-async function pollStedi835ERA() {
+async function pollStedi835ERA(sinceOverride?: string) {
   const { isStediConfigured, poll835ERA } = await import("./services/stedi-claims").catch(() => ({ isStediConfigured: () => false, poll835ERA: async () => ({ eras: [], lastCheckTimestamp: "" }) }));
-  if (!isStediConfigured()) return;
+  if (!isStediConfigured()) return 0;
+  let imported = 0;
   try {
     const db = await import("./db").then(m => m.pool);
     const settingRow = await db.query("SELECT value FROM system_settings WHERE key = 'stedi_last_835_poll'").catch(() => ({ rows: [] as any[] }));
-    const since = settingRow.rows[0]?.value || new Date(Date.now() - 7 * 86400000).toISOString();
+    // Default lookback: 90 days on first run to catch any outstanding ERAs
+    const since = sinceOverride || settingRow.rows[0]?.value || new Date(Date.now() - 90 * 86400000).toISOString();
     const { eras, lastCheckTimestamp } = await poll835ERA(since);
     for (const era of eras) {
       const existing = await db.query("SELECT id FROM era_batches WHERE check_number = $1 LIMIT 1", [era.checkNumber]);
@@ -15507,6 +15529,7 @@ async function pollStedi835ERA() {
         }
       }
       console.log(`[835 Poll] Imported ERA: ${era.checkNumber} — $${era.totalPayment}`);
+      imported++;
     }
     await db.query(
       `INSERT INTO system_settings (key, value, updated_at) VALUES ('stedi_last_835_poll', $1, NOW()) ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()`,
@@ -15515,14 +15538,15 @@ async function pollStedi835ERA() {
   } catch (err) {
     console.warn("[835 Poll] Unexpected error:", err);
   }
+  return imported;
 }
 
 // Start polling jobs (run immediately, then on schedule)
 setTimeout(() => {
   pollStedi277Acknowledgments();
-  setInterval(pollStedi277Acknowledgments, 4 * 60 * 60 * 1000); // Every 4 hours (webhooks are primary)
+  setInterval(pollStedi277Acknowledgments, 2 * 60 * 60 * 1000); // Every 2 hours
   pollStedi835ERA();
-  setInterval(pollStedi835ERA, 24 * 60 * 60 * 1000); // Every 24 hours (webhooks are primary)
+  setInterval(pollStedi835ERA, 4 * 60 * 60 * 1000); // Every 4 hours (was 24h — too slow for ERA posting)
 }, 5000); // 5-second delay after startup to allow DB migrations to complete
 
 function generateIntakeTranscript(patientName: string): string {

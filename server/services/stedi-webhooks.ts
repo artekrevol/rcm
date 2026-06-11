@@ -107,9 +107,12 @@ export async function process277CA(
     const isRejected = newStatus === 'rejected';
     const eventType = isRejected ? '277CA Rejected' : '277CA Accepted';
 
+    // CLM01 in 837P = claim.id with dashes stripped, sliced to 20 chars.
+    // Must match via UUID prefix search — direct id = $1 never works.
     const claimResult = await db.query(
-      `SELECT id, status, organization_id FROM claims 
-       WHERE id = $1 OR stedi_transaction_id = $2 
+      `SELECT id, status, organization_id FROM claims
+       WHERE LEFT(REPLACE(id::text, '-', ''), 20) = LOWER($1)
+          OR stedi_transaction_id = $2
        LIMIT 1`,
       [claimControlNumber, transactionId]
     );
@@ -120,7 +123,7 @@ export async function process277CA(
     }
 
     const claim = claimResult.rows[0];
-    if (claim.status !== 'submitted') continue;
+    if (!['submitted', 'exported'].includes(claim.status)) continue;
 
     // Store the payer's claim control number — needed for REF*F8 on corrected resubmissions
     if (payerClaimNumber) {
