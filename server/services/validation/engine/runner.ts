@@ -7,6 +7,7 @@
  */
 
 import { Pool } from 'pg';
+import { UTN_AFFIRMED_STATES } from '@shared/hh-status';
 import type {
   ValidationResult,
   ClaimWithRelations,
@@ -236,10 +237,10 @@ async function loadClaimWithRelations(
         pool.query(
           `SELECT utn_number FROM pre_claim_reviews
            WHERE episode_id = $1 AND organization_id = $2
-             AND review_status IN ('affirmed','accepted','approved')
+             AND review_status = ANY($3::text[])
              AND utn_number IS NOT NULL
            ORDER BY created_at DESC LIMIT 1`,
-          [episodeId, orgId],
+          [episodeId, orgId, [...UTN_AFFIRMED_STATES]],
         ),
       ]);
 

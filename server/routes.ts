@@ -18,6 +18,12 @@ import {
   type Lead,
   type Patient,
 } from "@shared/schema";
+import {
+  UTN_AFFIRMED_STATES,
+  UTN_AFFIRMED_CANONICAL,
+  PCR_REVIEW_STATUSES,
+  NOA_STATUS,
+} from "@shared/hh-status";
 import { allPayers } from "./payers";
 import twilio from "twilio";
 import nodemailer from "nodemailer";
@@ -7797,14 +7803,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           if (pr.rows[0]) attending837i = pr.rows[0];
         }
 
-        // Load UTN from most recent affirmed PCR
-        // ('affirmed' is the canonical status; 'accepted'/'approved' are legacy aliases)
+        // Load UTN from most recent affirmed PCR.
+        // Affirmed-status set is centralized in @shared/hh-status (UTN_AFFIRMED_STATES).
         const pcrResult = await db.query(
           `SELECT utn_number FROM pre_claim_reviews
            WHERE episode_id=$1 AND organization_id=$2
-             AND review_status IN ('affirmed','accepted','approved')
+             AND review_status = ANY($3::text[])
            ORDER BY created_at DESC LIMIT 1`,
-          [bp837i.episode_id, c.organization_id],
+          [bp837i.episode_id, c.organization_id, [...UTN_AFFIRMED_STATES]],
         );
         const utnNumber = pcrResult.rows[0]?.utn_number || null;
 
@@ -16275,7 +16281,7 @@ Warmly,
       const filed = new Date(filed_date);
       const msPerDay = 86400000;
       const penaltyDays = Math.max(0, Math.floor((filed.getTime() - due.getTime()) / msPerDay));
-      const noaStatus = penaltyDays > 0 ? "late" : "filed";
+      const noaStatus = penaltyDays > 0 ? NOA_STATUS.LATE : NOA_STATUS.FILED;
       const updated = await withTenantTx(async (client) => {
         const { rows: [row] } = await client.query(
           `UPDATE noa_filings SET filed_date=$1, status=$2, penalty_days=$3, noa_control_number=COALESCE($4, noa_control_number), notes=COALESCE($5, notes), updated_at=NOW()
@@ -16308,16 +16314,15 @@ Warmly,
   // Returns: { claimId, edi, rpTransmitted, gateResult }
   // PATCH /api/hh/pre-claim-reviews/:id
   // Update UTN, bundle_ref, or review_status on a PCR record.
-  // UTN editable until review_status = 'affirmed' (locked after that).
+  // UTN editable until review_status reaches the affirmed canonical value (locked after that).
   app.patch("/api/hh/pre-claim-reviews/:id", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const { id: pcrId } = req.params;
       const { utn_number, bundle_ref, review_status } = req.body;
 
-      const VALID_STATUSES = ['pending', 'submitted', 'affirmed', 'rejected', 'approved'];
-      if (review_status && !VALID_STATUSES.includes(review_status)) {
-        return res.status(400).json({ error: `review_status must be one of: ${VALID_STATUSES.join(', ')}` });
+      if (review_status && !(PCR_REVIEW_STATUSES as readonly string[]).includes(review_status)) {
+        return res.status(400).json({ error: `review_status must be one of: ${PCR_REVIEW_STATUSES.join(', ')}` });
       }
 
       const db = await import("./db").then(m => m.pool);
@@ -16328,7 +16333,7 @@ Warmly,
         [pcrId, orgId],
       );
       if (!current) return res.status(404).json({ error: "PCR record not found." });
-      if (current.review_status === 'affirmed' && utn_number !== undefined) {
+      if (current.review_status === UTN_AFFIRMED_CANONICAL && utn_number !== undefined) {
         return res.status(409).json({
           error: "UTN is locked once affirmed. Create a new PCR record to replace it.",
         });
@@ -16482,14 +16487,14 @@ Warmly,
           [orgId],
         );
 
-        // Load UTN from most recent affirmed PCR for this episode
-        // ('affirmed' canonical; 'accepted'/'approved' accepted as legacy aliases)
+        // Load UTN from most recent affirmed PCR for this episode.
+        // Affirmed-status set is centralized in @shared/hh-status (UTN_AFFIRMED_STATES).
         const { rows: [pcr] } = await client.query(
           `SELECT utn_number FROM pre_claim_reviews
            WHERE episode_id=$1 AND organization_id=$2
-             AND review_status IN ('affirmed','accepted','approved')
+             AND review_status = ANY($3::text[])
            ORDER BY created_at DESC LIMIT 1`,
-          [bp.episode_id, orgId],
+          [bp.episode_id, orgId, [...UTN_AFFIRMED_STATES]],
         );
 
         // Load visit discipline counts for revenue lines
@@ -16797,22 +16802,23 @@ Warmly,
       }
 
       // ── Update NOA status ─────────────────────────────────────────────────
-      // Stedi returns status values with mixed casing ('Accepted', 'Rejected').
+      // Stedi returns status values with mixed casing (e.g. Accepted, Rejected).
+      // NOA status values are centralized in @shared/hh-status (NOA_STATUS).
       // Rules:
-      //   • Stedi not configured (sandbox/dev)  → advance to 'filed' so gate passes.
-      //   • Stedi returns 'Accepted' (any case)  → advance to 'accepted'.
-      //   • Stedi returns 'Rejected' or other    → preserve current NOA status so
+      //   • Stedi not configured (sandbox/dev)  → advance to FILED so gate passes.
+      //   • Stedi returns accepted (any case)   → advance to ACCEPTED.
+      //   • Stedi returns rejected or other     → preserve current NOA status so
       //     the precondition gate blocks further claims until re-submission succeeds.
       const stediStatus = stediResponse?.status?.toLowerCase() ?? null;
       let newStatus: string;
       if (!stediResponse) {
         // Stedi not configured — treat EDI generation itself as proof of filing.
-        newStatus = 'filed';
-      } else if (stediStatus === 'accepted') {
-        newStatus = 'accepted';
+        newStatus = NOA_STATUS.FILED;
+      } else if (stediStatus === NOA_STATUS.ACCEPTED) {
+        newStatus = NOA_STATUS.ACCEPTED;
       } else {
         // Stedi rejected or returned unexpected status — keep current NOA status.
-        newStatus = noa.status ?? 'pending';
+        newStatus = noa.status ?? NOA_STATUS.PENDING;
       }
       const controlNumber = stediResponse?.interchangeControlNumber || noaResult.rpTransmitted.patientControlNumber;
 

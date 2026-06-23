@@ -1,8 +1,4 @@
-- [ERA 835 ingestion bugs](era-835-ingestion.md) — webhook wrote to wrong table; claim matching used full UUID instead of 20-char hex prefix; clean ERAs never updated claim status.
-- [CLM01 format](clm01-format.md) — edi-generator CLM01 = claim.id dashes-stripped sliced to 20 chars; always match claims via LEFT(REPLACE(id::text,'-',''),20)=LOWER($1).
-- [Stedi 277CA polling](stedi-277-polling.md) — list endpoint has no claim-level status; must fetchStediTransaction per item → process277CA. 90-day default lookback.
-- [HH Phase A architecture](hh-phase-a.md) — segment isolation pattern: care_model gates all HH routes, UI, and validation packs.
-- [care_model enum migration](care-model-enum.md) — seeder must drop column default before ALTER TYPE; EXCEPTION WHEN others silently swallows failures.
-- [claimshield_app_role grants](rls-grants.md) — RLS policies never run until the role has table-level GRANTs; HH tables need explicit GRANT in seeder.
-- [Phase A test harness](phase-a-tests.md) — test runner: NODE_OPTIONS='--import tsx/esm' node --test; pure logic extracted to shared/ for node:test without React deps.
-- [Phase B 837I generator interface](phase-b-837i-interface.md) — EDI generator inputs, ISA15 default 'T', valid test NPIs, gate function signatures, VB-test fixes.
+# Memory Index
+
+- [tsc is not a passing gate here](tsc-not-a-gate.md) — `npm run check` has ~145 pre-existing errors; app ships via tsx (type-stripping). Don't treat red tsc as a regression you caused.
+- [HH status single source of truth](hh-status-centralization.md) — HH UTN/NOA status literals live in shared/hh-status.ts; the lead-handoff "accepted" literal is a permanent grep false-positive, not an HH status.

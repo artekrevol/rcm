@@ -11,6 +11,12 @@
  */
 
 import type { PoolClient } from 'pg';
+import {
+  UTN_AFFIRMED_CANONICAL,
+  NOA_GATE_STATUSES,
+  isNoaGateSatisfied,
+  formatStatusList,
+} from '@shared/hh-status';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared error type returned by all gates (so tests can inspect without parsing)
@@ -177,11 +183,12 @@ export async function assertRcdUtnGate(
      LIMIT 1`,
     [episodeId, organizationId],
   );
-  // Require BOTH a non-null UTN number AND an explicit 'affirmed' review_status
-  // or outcome === 'Affirmative'. Approved without a UTN does not pass.
+  // Require BOTH a non-null UTN number AND an explicit affirmed review_status
+  // (UTN_AFFIRMED_CANONICAL) or outcome === 'Affirmative'.
+  // Approved without a UTN does not pass.
   const utnAffirmed =
     !!pcr?.utn_number &&
-    (pcr?.review_status === 'affirmed' || pcr?.outcome === 'Affirmative');
+    (pcr?.review_status === UTN_AFFIRMED_CANONICAL || pcr?.outcome === 'Affirmative');
 
   return assertRcdUtnGateFromContext({ rcdReviewChoice, utnAffirmed });
 }
@@ -198,21 +205,17 @@ export interface NoaPreconditionGateInput {
  * Pure NOA precondition check.
  * A period claim cannot generate unless the episode has a NOA in 'filed' or 'accepted' status.
  */
-// Valid NOA statuses that satisfy the precondition gate.
-// 'filed'    — on-time submission via file route (PATCH /api/hh/noa/:id/file)
-// 'late'     — past-due submission (penalty days > 0) but still accepted
-// 'accepted' — confirmed by payer via Stedi submit or 277CA acknowledgment
-const NOA_GATE_STATUSES = new Set(['filed', 'late', 'accepted']);
-
+// NOA statuses that satisfy the precondition gate are defined centrally in
+// @shared/hh-status (NOA_GATE_STATUSES) so gates, packs, and routes never drift.
 export function assertNoaPreconditionFromContext(input: NoaPreconditionGateInput): void {
   const status = input.noaStatus;
-  if (!status || !NOA_GATE_STATUSES.has(status)) {
+  if (!isNoaGateSatisfied(status)) {
     throw new HhGateError(
       'noa_precondition',
       'HH-G5-NOA-REQUIRED',
       status
-        ? `The NOA for this episode is in "${status}" status. ` +
-            'A period-of-care claim cannot be generated until the NOA is in "filed", "late", or "accepted" status.'
+        ? `The NOA for this episode is in ${status} status. ` +
+            `A period-of-care claim cannot be generated until the NOA is in ${formatStatusList(NOA_GATE_STATUSES)} status.`
         : 'No NOA filing found for this episode. ' +
             'A Notice of Admission (NOA) must be filed before generating a period-of-care claim.',
     );
