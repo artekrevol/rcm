@@ -38,6 +38,8 @@ export default function ClinicDetail() {
   const [, setLocation] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [careModelEdit, setCareModelEdit] = useState<string>("");
+  const [rcdStateEdit, setRcdStateEdit] = useState<string>("");
 
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ["/api/super-admin/orgs", orgId],
@@ -88,9 +90,6 @@ export default function ClinicDetail() {
       </div>
     );
   }
-
-  const [careModelEdit, setCareModelEdit] = useState<string>("");
-  const [rcdStateEdit, setRcdStateEdit] = useState<string>("");
 
   const { org, practiceSettings: ps, users, providerCount, payerCount, featureUsage: fu, frictionItems, stediConfigured } = data;
 

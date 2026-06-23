@@ -159,6 +159,9 @@ export const claims = pgTable("claims", {
   followUpStatus: varchar("follow_up_status"),
   planProduct: text("plan_product"),
   referringProviderTransmitted: jsonb("referring_provider_transmitted").$type<Record<string, any>>(),
+  episodeId: uuid("episode_id"),
+  billingPeriodId: uuid("billing_period_id"),
+  claimTransactionSet: varchar("claim_transaction_set"),
 });
 
 export const insertClaimSchema = createInsertSchema(claims).omit({ id: true, createdAt: true });
@@ -274,6 +277,9 @@ export const priorAuthorizations = pgTable("prior_authorizations", {
   notes: text("notes"),
   denialReason: text("denial_reason"),
   organizationId: varchar("organization_id"),
+  episodeId: uuid("episode_id"),
+  visitsApproved: integer("visits_approved"),
+  visitsUsed: integer("visits_used").default(0),
 });
 
 export const insertPriorAuthSchema = createInsertSchema(priorAuthorizations).omit({ id: true, requestedDate: true });
@@ -604,6 +610,7 @@ export const payers = pgTable("payers", {
   requiresVob: boolean("requires_vob").default(true),
   memberIdQualifier: varchar("member_id_qualifier", { length: 2 }).default("MI"),
   organizationId: varchar("organization_id"),
+  hhSupported: boolean("hh_supported").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

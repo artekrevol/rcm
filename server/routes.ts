@@ -3575,7 +3575,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await seederLog('column', 'prior_authorizations', 'visits_approved');
     await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS visits_approved INTEGER`).catch(() => {});
     await seederLog('column', 'prior_authorizations', 'visits_used');
-    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS visits_used INTEGER NOT NULL DEFAULT 0`).catch(() => {});
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS visits_used INTEGER DEFAULT 0`).catch(() => {});
 
     // payers: HH support flag
     await seederLog('column', 'payers', 'hh_supported');
