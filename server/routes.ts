@@ -3549,6 +3549,203 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       WHERE payer_id = '87726' AND (stedi_payer_id IS NULL OR stedi_payer_id = '')
     `).catch(() => {});
 
+    // ── Home Health Skilled — Phase A migrations ─────────────────────────────
+    // G1 guardrail: these columns and tables are segment-isolated. No outpatient
+    // org ever writes to them (requireCareModel guard on every HH route).
+
+    // practice_settings: care_model segment switch + RCD fields
+    await seederLog('column', 'practice_settings', 'care_model');
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS care_model VARCHAR NOT NULL DEFAULT 'outpatient_professional'`).catch(() => {});
+    await seederLog('column', 'practice_settings', 'rcd_state');
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS rcd_state VARCHAR`).catch(() => {});
+    await seederLog('column', 'practice_settings', 'rcd_review_choice');
+    await pool.query(`ALTER TABLE practice_settings ADD COLUMN IF NOT EXISTS rcd_review_choice VARCHAR`).catch(() => {});
+
+    // claims: HH nullable extensions
+    await seederLog('column', 'claims', 'episode_id');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS episode_id UUID`).catch(() => {});
+    await seederLog('column', 'claims', 'billing_period_id');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS billing_period_id UUID`).catch(() => {});
+    await seederLog('column', 'claims', 'claim_transaction_set');
+    await pool.query(`ALTER TABLE claims ADD COLUMN IF NOT EXISTS claim_transaction_set VARCHAR`).catch(() => {});
+
+    // prior_authorizations: HH visit tracking
+    await seederLog('column', 'prior_authorizations', 'episode_id');
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS episode_id UUID`).catch(() => {});
+    await seederLog('column', 'prior_authorizations', 'visits_approved');
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS visits_approved INTEGER`).catch(() => {});
+    await seederLog('column', 'prior_authorizations', 'visits_used');
+    await pool.query(`ALTER TABLE prior_authorizations ADD COLUMN IF NOT EXISTS visits_used INTEGER NOT NULL DEFAULT 0`).catch(() => {});
+
+    // payers: HH support flag
+    await seederLog('column', 'payers', 'hh_supported');
+    await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS hh_supported BOOLEAN`).catch(() => {});
+
+    // episodes table
+    if (!(await seederLog('table', 'episodes'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS episodes (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id VARCHAR NOT NULL,
+          patient_id VARCHAR NOT NULL,
+          cert_period_start DATE NOT NULL,
+          cert_period_end DATE NOT NULL,
+          start_of_care_date DATE NOT NULL,
+          episode_status VARCHAR NOT NULL DEFAULT 'active',
+          primary_diagnosis VARCHAR,
+          authorization_id VARCHAR,
+          notes TEXT,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `).catch(() => {});
+      await pool.query(`ALTER TABLE episodes ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`ALTER TABLE episodes FORCE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`
+        DO $$ BEGIN
+          CREATE POLICY episodes_tenant_isolation ON episodes
+            USING (organization_id = current_setting('app.current_organization_id', true));
+          EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
+      `).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_episodes_org ON episodes(organization_id)`).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_episodes_patient ON episodes(patient_id)`).catch(() => {});
+    }
+
+    // billing_periods table
+    if (!(await seederLog('table', 'billing_periods'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS billing_periods (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id VARCHAR NOT NULL,
+          episode_id UUID NOT NULL,
+          period_number INTEGER NOT NULL,
+          period_start DATE NOT NULL,
+          period_end DATE NOT NULL,
+          period_status VARCHAR NOT NULL DEFAULT 'open',
+          hipps_code VARCHAR,
+          claim_id VARCHAR,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `).catch(() => {});
+      await pool.query(`ALTER TABLE billing_periods ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`ALTER TABLE billing_periods FORCE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`
+        DO $$ BEGIN
+          CREATE POLICY billing_periods_tenant_isolation ON billing_periods
+            USING (organization_id = current_setting('app.current_organization_id', true));
+          EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
+      `).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_billing_periods_org ON billing_periods(organization_id)`).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_billing_periods_episode ON billing_periods(episode_id)`).catch(() => {});
+    }
+
+    // episode_visits table
+    if (!(await seederLog('table', 'episode_visits'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS episode_visits (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id VARCHAR NOT NULL,
+          episode_id UUID NOT NULL,
+          billing_period_id UUID NOT NULL,
+          visit_date DATE NOT NULL,
+          discipline VARCHAR NOT NULL,
+          provider_id VARCHAR,
+          documented BOOLEAN NOT NULL DEFAULT false,
+          signed BOOLEAN NOT NULL DEFAULT false,
+          counts_against_auth BOOLEAN NOT NULL DEFAULT true,
+          notes TEXT,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `).catch(() => {});
+      await pool.query(`ALTER TABLE episode_visits ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`ALTER TABLE episode_visits FORCE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`
+        DO $$ BEGIN
+          CREATE POLICY episode_visits_tenant_isolation ON episode_visits
+            USING (organization_id = current_setting('app.current_organization_id', true));
+          EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
+      `).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_episode_visits_org ON episode_visits(organization_id)`).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_episode_visits_episode ON episode_visits(episode_id)`).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_episode_visits_period ON episode_visits(billing_period_id)`).catch(() => {});
+    }
+
+    // pre_claim_reviews table (schema only — Phase B flows)
+    if (!(await seederLog('table', 'pre_claim_reviews'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS pre_claim_reviews (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id VARCHAR NOT NULL,
+          episode_id UUID NOT NULL,
+          billing_period_id UUID,
+          utn_number VARCHAR,
+          review_status VARCHAR NOT NULL DEFAULT 'pending',
+          submitted_at TIMESTAMP,
+          reviewed_at TIMESTAMP,
+          outcome VARCHAR,
+          notes TEXT,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `).catch(() => {});
+      await pool.query(`ALTER TABLE pre_claim_reviews ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`ALTER TABLE pre_claim_reviews FORCE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`
+        DO $$ BEGIN
+          CREATE POLICY pre_claim_reviews_tenant_isolation ON pre_claim_reviews
+            USING (organization_id = current_setting('app.current_organization_id', true));
+          EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
+      `).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pre_claim_reviews_org ON pre_claim_reviews(organization_id)`).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_pre_claim_reviews_episode ON pre_claim_reviews(episode_id)`).catch(() => {});
+    }
+
+    // noa_filings table
+    if (!(await seederLog('table', 'noa_filings'))) {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS noa_filings (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id VARCHAR NOT NULL,
+          episode_id UUID NOT NULL,
+          soc_date DATE NOT NULL,
+          due_date DATE NOT NULL,
+          filed_date DATE,
+          status VARCHAR NOT NULL DEFAULT 'pending',
+          penalty_days INTEGER NOT NULL DEFAULT 0,
+          noa_control_number VARCHAR,
+          notes TEXT,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `).catch(() => {});
+      await pool.query(`ALTER TABLE noa_filings ENABLE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`ALTER TABLE noa_filings FORCE ROW LEVEL SECURITY`).catch(() => {});
+      await pool.query(`
+        DO $$ BEGIN
+          CREATE POLICY noa_filings_tenant_isolation ON noa_filings
+            USING (organization_id = current_setting('app.current_organization_id', true));
+          EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
+      `).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_noa_filings_org ON noa_filings(organization_id)`).catch(() => {});
+      await pool.query(`CREATE INDEX IF NOT EXISTS idx_noa_filings_episode ON noa_filings(episode_id)`).catch(() => {});
+    }
+
+    // Seed Caritas org as home_health_skilled, rcd_state='FL' (Phase A provisioning)
+    // rcd_review_choice is left null pending Victor's answer per spec.
+    await pool.query(`
+      UPDATE practice_settings SET care_model = 'home_health_skilled', rcd_state = 'FL'
+      WHERE organization_id IN (
+        SELECT id FROM organizations WHERE LOWER(name) LIKE '%caritas%'
+      ) AND care_model = 'outpatient_professional'
+    `).catch(() => {});
+
     console.log("[SEEDER] Startup schema seeder complete.");
   } catch (migrationErr: any) {
     console.error("Startup migration error:", migrationErr?.message || migrationErr);
@@ -7216,6 +7413,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       const c = claimResult.rows[0];
       if (!verifyOrg(c, req)) return res.status(404).json({ success: false, error: "Claim not found" });
 
+      // G6 gate — HH claims linked to a billing period must be in 'ready_to_bill' status before submission
+      if (c.billing_period_id) {
+        const bpResult = await db.query("SELECT period_status FROM billing_periods WHERE id = $1", [c.billing_period_id]);
+        if (bpResult.rows.length && bpResult.rows[0].period_status !== "ready_to_bill") {
+          return res.status(422).json({
+            success: false,
+            error: `G6 gate: billing period is '${bpResult.rows[0].period_status}'. Set period status to 'ready_to_bill' before submitting this claim.`,
+            code: "G6_BILLING_PERIOD_NOT_READY",
+          });
+        }
+      }
+
       const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
       const oaOrgId = getOrgId(req);
       const settingsResult = oaOrgId
@@ -7381,6 +7590,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       if (!claimResult.rows.length) return res.status(404).json({ success: false, error: "Claim not found" });
       const c = claimResult.rows[0];
       if (!verifyOrg(c, req)) return res.status(404).json({ success: false, error: "Claim not found" });
+
+      // G6 gate — HH claims linked to a billing period must be in 'ready_to_bill' status before submission
+      if (c.billing_period_id) {
+        const bpResult = await db.query("SELECT period_status FROM billing_periods WHERE id = $1", [c.billing_period_id]);
+        if (bpResult.rows.length && bpResult.rows[0].period_status !== "ready_to_bill") {
+          return res.status(422).json({
+            success: false,
+            error: `G6 gate: billing period is '${bpResult.rows[0].period_status}'. Set period status to 'ready_to_bill' before submitting this claim.`,
+            code: "G6_BILLING_PERIOD_NOT_READY",
+          });
+        }
+      }
 
       const patientResult = await db.query("SELECT * FROM patients WHERE id = $1", [c.patient_id]);
       const stOrgId = getOrgId(req);
@@ -13261,6 +13482,40 @@ Warmly,
   });
 
   // ── Impersonation Routes ─────────────────────────────────────────────────
+  app.patch("/api/super-admin/orgs/:orgId/care-model", requireSuperAdmin, async (req, res) => {
+    try {
+      const db = await import("./db").then(m => m.pool);
+      const { orgId } = req.params;
+      const { careModel, rcdState, rcdReviewChoice } = req.body;
+      const allowed = ["outpatient_professional", "home_health_skilled"];
+      if (careModel && !allowed.includes(careModel)) {
+        return res.status(400).json({ error: `careModel must be one of: ${allowed.join(", ")} (home_health_personal_care is not yet available)` });
+      }
+      const org = await db.query("SELECT id FROM organizations WHERE id = $1", [orgId]);
+      if (!org.rows[0]) return res.status(404).json({ error: "Organization not found" });
+      const existing = await db.query("SELECT id FROM practice_settings WHERE organization_id = $1 LIMIT 1", [orgId]);
+      if (!existing.rows.length) {
+        return res.status(404).json({ error: "Practice settings not found — org must complete onboarding first" });
+      }
+      const fields: string[] = [];
+      const params: any[] = [];
+      if (careModel !== undefined) { fields.push(`care_model=$${params.length + 1}`); params.push(careModel); }
+      if (rcdState !== undefined) { fields.push(`rcd_state=$${params.length + 1}`); params.push(rcdState || null); }
+      if (rcdReviewChoice !== undefined) { fields.push(`rcd_review_choice=$${params.length + 1}`); params.push(rcdReviewChoice || null); }
+      if (!fields.length) return res.status(400).json({ error: "No fields to update" });
+      fields.push(`updated_at=NOW()`);
+      params.push(orgId);
+      const { rows } = await db.query(
+        `UPDATE practice_settings SET ${fields.join(", ")} WHERE organization_id=$${params.length} RETURNING care_model, rcd_state, rcd_review_choice`,
+        params
+      );
+      res.json({ success: true, updated: rows[0] });
+    } catch (err: any) {
+      console.error("[Super-Admin] care-model patch error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
   app.post("/api/super-admin/impersonate/:orgId", requireSuperAdmin, async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
@@ -15401,6 +15656,268 @@ Warmly,
       res.status(500).json({ error: err.message || "Sync failed" });
     }
   });
+
+  // ── Home Health CRUD routes ────────────────────────────────────────────────
+  // All HH routes are guarded by requireCareModel("home_health_skilled").
+  // home_health_personal_care is a future segment — treat as not-yet-implemented.
+
+  const { requireCareModel: requireHH } = await import("./middleware/require-care-model.js");
+
+  // ── Episodes ──────────────────────────────────────────────────────────────
+
+  app.get("/api/hh/episodes", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const status = req.query.status as string | undefined;
+      let query = `SELECT e.*, p.first_name, p.last_name, p.date_of_birth
+        FROM episodes e
+        LEFT JOIN patients p ON p.id::text = e.patient_id
+        WHERE e.organization_id = $1`;
+      const params: any[] = [orgId];
+      if (status) { query += ` AND e.episode_status = $${params.length + 1}`; params.push(status); }
+      query += ` ORDER BY e.cert_period_start DESC`;
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[HH] Episodes list error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  app.post("/api/hh/episodes", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { patient_id, cert_period_start, cert_period_end, start_of_care_date, primary_diagnosis, authorization_id, notes } = req.body;
+      if (!patient_id || !cert_period_start || !cert_period_end || !start_of_care_date) {
+        return res.status(400).json({ error: "patient_id, cert_period_start, cert_period_end, and start_of_care_date are required" });
+      }
+      // Auto-create NOA filing with due_date = soc_date + 5 calendar days
+      const socDate = new Date(start_of_care_date);
+      const dueDate = new Date(socDate);
+      dueDate.setDate(dueDate.getDate() + 5);
+      const episodeId = crypto.randomUUID();
+      const { rows: [episode] } = await db.query(
+        `INSERT INTO episodes (id, organization_id, patient_id, cert_period_start, cert_period_end, start_of_care_date, episode_status, primary_diagnosis, authorization_id, notes, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9, NOW(), NOW()) RETURNING *`,
+        [episodeId, orgId, patient_id, cert_period_start, cert_period_end, start_of_care_date, primary_diagnosis || null, authorization_id || null, notes || null]
+      );
+      // Create NOA record
+      await db.query(
+        `INSERT INTO noa_filings (id, organization_id, episode_id, soc_date, due_date, status, penalty_days, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'pending', 0, NOW(), NOW())`,
+        [crypto.randomUUID(), orgId, episodeId, start_of_care_date, dueDate.toISOString().slice(0, 10)]
+      );
+      // Auto-create first 60-day billing period
+      const bp1End = new Date(socDate);
+      bp1End.setDate(bp1End.getDate() + 59);
+      await db.query(
+        `INSERT INTO billing_periods (id, organization_id, episode_id, period_number, period_start, period_end, period_status, created_at, updated_at)
+         VALUES ($1, $2, $3, 1, $4, $5, 'open', NOW(), NOW())`,
+        [crypto.randomUUID(), orgId, episodeId, cert_period_start, cert_period_end]
+      );
+      res.status(201).json(episode);
+    } catch (err: any) {
+      console.error("[HH] Episode create error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  app.get("/api/hh/episodes/:id", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `SELECT e.*, p.first_name, p.last_name, p.date_of_birth
+         FROM episodes e
+         LEFT JOIN patients p ON p.id::text = e.patient_id
+         WHERE e.id = $1 AND e.organization_id = $2`,
+        [req.params.id, orgId]
+      );
+      if (!rows.length) return res.status(404).json({ error: "Episode not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      console.error("[HH] Episode get error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  app.patch("/api/hh/episodes/:id", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { episode_status, primary_diagnosis, authorization_id, notes, cert_period_end } = req.body;
+      const fields: string[] = [];
+      const params: any[] = [];
+      if (episode_status !== undefined) { fields.push(`episode_status=$${params.length + 1}`); params.push(episode_status); }
+      if (primary_diagnosis !== undefined) { fields.push(`primary_diagnosis=$${params.length + 1}`); params.push(primary_diagnosis); }
+      if (authorization_id !== undefined) { fields.push(`authorization_id=$${params.length + 1}`); params.push(authorization_id); }
+      if (notes !== undefined) { fields.push(`notes=$${params.length + 1}`); params.push(notes); }
+      if (cert_period_end !== undefined) { fields.push(`cert_period_end=$${params.length + 1}`); params.push(cert_period_end); }
+      if (!fields.length) return res.status(400).json({ error: "No fields to update" });
+      fields.push(`updated_at=NOW()`);
+      params.push(req.params.id, orgId);
+      const { rows } = await db.query(
+        `UPDATE episodes SET ${fields.join(", ")} WHERE id=$${params.length - 1} AND organization_id=$${params.length} RETURNING *`,
+        params
+      );
+      if (!rows.length) return res.status(404).json({ error: "Episode not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      console.error("[HH] Episode patch error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // ── Billing Periods ────────────────────────────────────────────────────────
+
+  app.get("/api/hh/episodes/:episodeId/billing-periods", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `SELECT * FROM billing_periods WHERE episode_id = $1 AND organization_id = $2 ORDER BY period_number ASC`,
+        [req.params.episodeId, orgId]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[HH] Billing periods list error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  app.patch("/api/hh/billing-periods/:id/status", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { period_status, hipps_code } = req.body;
+      const allowed = ["open", "ready_to_bill", "billed", "paid", "voided"];
+      if (!allowed.includes(period_status)) {
+        return res.status(400).json({ error: `period_status must be one of: ${allowed.join(", ")}` });
+      }
+      const { rows } = await db.query(
+        `UPDATE billing_periods SET period_status=$1, hipps_code=COALESCE($2, hipps_code), updated_at=NOW()
+         WHERE id=$3 AND organization_id=$4 RETURNING *`,
+        [period_status, hipps_code || null, req.params.id, orgId]
+      );
+      if (!rows.length) return res.status(404).json({ error: "Billing period not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      console.error("[HH] Billing period status error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // ── Episode Visits ────────────────────────────────────────────────────────
+
+  app.get("/api/hh/episodes/:episodeId/visits", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { rows } = await db.query(
+        `SELECT * FROM episode_visits WHERE episode_id = $1 AND organization_id = $2 ORDER BY visit_date DESC`,
+        [req.params.episodeId, orgId]
+      );
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[HH] Visits list error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  app.post("/api/hh/episodes/:episodeId/visits", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { billing_period_id, visit_date, discipline, provider_id, documented, signed, counts_against_auth, notes } = req.body;
+      if (!billing_period_id || !visit_date || !discipline) {
+        return res.status(400).json({ error: "billing_period_id, visit_date, and discipline are required" });
+      }
+      // Verify billing period belongs to this episode + org
+      const bpCheck = await db.query(
+        `SELECT id FROM billing_periods WHERE id=$1 AND episode_id=$2 AND organization_id=$3`,
+        [billing_period_id, req.params.episodeId, orgId]
+      );
+      if (!bpCheck.rows.length) return res.status(404).json({ error: "Billing period not found" });
+      const { rows: [visit] } = await db.query(
+        `INSERT INTO episode_visits (id, organization_id, episode_id, billing_period_id, visit_date, discipline, provider_id, documented, signed, counts_against_auth, notes, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW()) RETURNING *`,
+        [crypto.randomUUID(), orgId, req.params.episodeId, billing_period_id, visit_date, discipline, provider_id || null, documented ?? false, signed ?? false, counts_against_auth ?? true, notes || null]
+      );
+      // Visit-cap tracking: if counts_against_auth, increment visits_used on the linked prior_authorization
+      if (visit.counts_against_auth) {
+        const epRow = await db.query(`SELECT authorization_id FROM episodes WHERE id=$1 AND organization_id=$2`, [req.params.episodeId, orgId]);
+        const authId = epRow.rows[0]?.authorization_id;
+        if (authId) {
+          await db.query(
+            `UPDATE prior_authorizations SET visits_used = COALESCE(visits_used, 0) + 1, updated_at=NOW() WHERE id=$1 AND organization_id=$2`,
+            [authId, orgId]
+          ).catch(() => {});
+        }
+      }
+      res.status(201).json(visit);
+    } catch (err: any) {
+      console.error("[HH] Visit create error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // ── NOA Filings ───────────────────────────────────────────────────────────
+
+  app.get("/api/hh/noa", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const status = req.query.status as string | undefined;
+      let query = `SELECT n.*, e.cert_period_start, e.cert_period_end, p.first_name, p.last_name
+        FROM noa_filings n
+        LEFT JOIN episodes e ON e.id = n.episode_id
+        LEFT JOIN patients p ON p.id::text = e.patient_id
+        WHERE n.organization_id = $1`;
+      const params: any[] = [orgId];
+      if (status) { query += ` AND n.status = $${params.length + 1}`; params.push(status); }
+      query += ` ORDER BY n.due_date ASC`;
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[HH] NOA list error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  app.patch("/api/hh/noa/:id/file", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { filed_date, noa_control_number, notes } = req.body;
+      if (!filed_date) return res.status(400).json({ error: "filed_date is required" });
+      // Get current NOA to compute penalty_days
+      const { rows: [noa] } = await db.query(
+        `SELECT * FROM noa_filings WHERE id=$1 AND organization_id=$2`,
+        [req.params.id, orgId]
+      );
+      if (!noa) return res.status(404).json({ error: "NOA filing not found" });
+      const due = new Date(noa.due_date);
+      const filed = new Date(filed_date);
+      const msPerDay = 86400000;
+      const penaltyDays = Math.max(0, Math.floor((filed.getTime() - due.getTime()) / msPerDay));
+      const status = penaltyDays > 0 ? "late" : "filed";
+      const { rows: [updated] } = await db.query(
+        `UPDATE noa_filings SET filed_date=$1, status=$2, penalty_days=$3, noa_control_number=COALESCE($4, noa_control_number), notes=COALESCE($5, notes), updated_at=NOW()
+         WHERE id=$6 AND organization_id=$7 RETURNING *`,
+        [filed_date, status, penaltyDays, noa_control_number || null, notes || null, req.params.id, orgId]
+      );
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[HH] NOA file error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // ── G6 Gate: claim submission guard for billing period readiness ───────────
+  // This is enforced in the claim submit handler itself (see /api/billing/claims/:id/submit)
+  // G6 check injected here for explicitness — actual gate is inline in the submit route.
 
 }
 

@@ -11,6 +11,8 @@
 import type { RulePack, ClaimWithRelations } from './engine/types.js';
 import { x12Base837pPack } from './packs/x12-base-837p.js';
 import { pgbaVaCcn837pPack } from './packs/pgba-va-ccn-837p.js';
+import { hhEpisodeCompletenessPack } from './packs/hh-episode-completeness.js';
+import { hhAuthVisitCapPack } from './packs/hh-auth-visit-cap.js';
 
 const registry = new Map<string, RulePack>();
 
@@ -21,6 +23,8 @@ function registerPack(pack: RulePack): void {
 // Auto-register all built-in packs
 registerPack(x12Base837pPack);
 registerPack(pgbaVaCcn837pPack);
+registerPack(hhEpisodeCompletenessPack);
+registerPack(hhAuthVisitCapPack);
 
 export function getRegisteredPacks(): RulePack[] {
   return Array.from(registry.values());
@@ -38,11 +42,15 @@ export function getPackById(id: string): RulePack | undefined {
  *
  * @param claim - normalized claim with payer info attached
  * @param overridePackIds - optional explicit list (admin debug override)
+ * @param careModel - org's care_model from practice_settings; used to filter segment-specific packs
  */
 export function resolvePacksForClaim(
   claim: ClaimWithRelations,
   overridePackIds?: string[],
+  careModel?: string,
 ): RulePack[] {
+  const effectiveCareModel = careModel ?? 'outpatient_professional';
+
   if (overridePackIds && overridePackIds.length > 0) {
     const packs = overridePackIds
       .map(id => registry.get(id))
@@ -54,24 +62,36 @@ export function resolvePacksForClaim(
   }
 
   // Determine claim type — default to 837P
-  const claimType = '837P';
+  const claimType = (claim as any).claimTransactionSet === '837I' ? '837I' : '837P';
 
-  // 1. Find the base pack matching claim type
+  // 1. Find the base pack matching claim type (no payer IDs, no careModels restriction)
   const basePacks = Array.from(registry.values()).filter(
-    p => !p.appliesTo.payerIds && p.appliesTo.claimType === claimType,
+    p =>
+      !p.appliesTo.payerIds &&
+      !p.appliesTo.careModels &&
+      (p.appliesTo.claimType === claimType || p.appliesTo.claimType === '*'),
   );
 
-  // 2. Find payer-specific overlays
+  // 2. Find payer-specific overlays (matching claim type and payer)
   const payerId = claim.payerRecord?.payerId ?? null;
   const overlayPacks = Array.from(registry.values()).filter(
     p =>
       p.appliesTo.payerIds != null &&
-      p.appliesTo.claimType === claimType &&
+      !p.appliesTo.careModels &&
+      (p.appliesTo.claimType === claimType || p.appliesTo.claimType === '*') &&
       payerId != null &&
       p.appliesTo.payerIds.includes(payerId),
   );
 
-  const selectedPacks = [...basePacks, ...overlayPacks];
+  // 3. Find segment-specific packs (filtered by careModel — HH packs only run for HH orgs)
+  const segmentPacks = Array.from(registry.values()).filter(
+    p =>
+      p.appliesTo.careModels != null &&
+      (p.appliesTo.claimType === claimType || p.appliesTo.claimType === '*') &&
+      p.appliesTo.careModels.includes(effectiveCareModel),
+  );
+
+  const selectedPacks = [...basePacks, ...overlayPacks, ...segmentPacks];
   return resolveExtendsChain(selectedPacks);
 }
 

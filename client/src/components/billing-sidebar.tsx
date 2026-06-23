@@ -22,7 +22,10 @@ import {
   Sparkles,
   ChevronRight,
   SlidersHorizontal,
+  Activity,
+  FileClock,
 } from "lucide-react";
+import { useIsHH } from "@/contexts/segment";
 import {
   Sidebar,
   SidebarContent,
@@ -70,6 +73,7 @@ const adminChildren = [
 export function BillingSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  const isHH = useIsHH();
 
   const isAdmin = user?.role === "admin" || user?.role === "super_admin";
 
@@ -212,6 +216,28 @@ export function BillingSidebar() {
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+
+              {/* Home Health — segment-gated */}
+              {isHH && (
+                <>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={isActive("/billing/hh/episodes")}>
+                      <Link href="/billing/hh/episodes" data-testid="nav-billing-hh-episodes">
+                        <Activity className="h-5 w-5" />
+                        <span>Episodes</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={isActive("/billing/hh/noa")}>
+                      <Link href="/billing/hh/noa" data-testid="nav-billing-hh-noa">
+                        <FileClock className="h-5 w-5" />
+                        <span>NOA Filings</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </>
+              )}
 
               {/* ERA Posting */}
               <SidebarMenuItem>

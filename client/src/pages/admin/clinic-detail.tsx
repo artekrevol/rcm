@@ -1,12 +1,22 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, Link, useLocation } from "wouter";
 import { format } from "date-fns";
+import { useState } from "react";
 import {
-  ArrowLeft, Building2, Users, FileText, AlertTriangle, CheckCircle2, XCircle, CreditCard, ClipboardList, Shield, UserCheck
+  ArrowLeft, Building2, Users, FileText, AlertTriangle, CheckCircle2, XCircle, CreditCard, ClipboardList, Shield, UserCheck, Activity
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -49,6 +59,20 @@ export default function ClinicDetail() {
     },
   });
 
+  const careModelMutation = useMutation({
+    mutationFn: async (payload: { careModel?: string; rcdState?: string }) =>
+      apiRequest("PATCH", `/api/super-admin/orgs/${orgId}/care-model`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/super-admin/orgs", orgId] });
+      toast({ title: "Segment updated", description: "Care model provisioning saved." });
+      setCareModelEdit("");
+      setRcdStateEdit("");
+    },
+    onError: (err: any) => {
+      toast({ title: "Update failed", description: err.message || "Unknown error", variant: "destructive" });
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="p-6">
@@ -64,6 +88,9 @@ export default function ClinicDetail() {
       </div>
     );
   }
+
+  const [careModelEdit, setCareModelEdit] = useState<string>("");
+  const [rcdStateEdit, setRcdStateEdit] = useState<string>("");
 
   const { org, practiceSettings: ps, users, providerCount, payerCount, featureUsage: fu, frictionItems, stediConfigured } = data;
 
@@ -199,6 +226,70 @@ export default function ClinicDetail() {
                 )}
               </tbody>
             </table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Segment / Care Model Provisioning */}
+      <Card data-testid="card-care-model">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Activity className="h-4 w-4" />
+            Segment Provisioning
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-md bg-muted/40 border p-3 text-sm space-y-1">
+            <Row label="Care Model" value={ps?.care_model || "outpatient_professional"} />
+            {ps?.care_model === "home_health_skilled" && (
+              <>
+                <Row label="RCD State" value={ps?.rcd_state || "—"} />
+                <Row label="RCD Review Choice" value={ps?.rcd_review_choice || "—"} />
+              </>
+            )}
+          </div>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Change Care Model</Label>
+              <Select
+                value={careModelEdit || ps?.care_model || "outpatient_professional"}
+                onValueChange={setCareModelEdit}
+              >
+                <SelectTrigger data-testid="select-care-model">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="outpatient_professional">Outpatient Professional</SelectItem>
+                  <SelectItem value="home_health_skilled">Home Health Skilled (837I)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {(careModelEdit || ps?.care_model) === "home_health_skilled" && (
+              <div className="space-y-1.5">
+                <Label className="text-xs">RCD State (2-letter, or blank)</Label>
+                <Input
+                  placeholder="e.g. FL"
+                  maxLength={2}
+                  data-testid="input-rcd-state"
+                  value={rcdStateEdit !== "" ? rcdStateEdit : (ps?.rcd_state || "")}
+                  onChange={(e) => setRcdStateEdit(e.target.value.toUpperCase())}
+                  className="uppercase w-28"
+                />
+              </div>
+            )}
+            <Button
+              size="sm"
+              data-testid="button-save-care-model"
+              disabled={careModelMutation.isPending}
+              onClick={() =>
+                careModelMutation.mutate({
+                  careModel: careModelEdit || undefined,
+                  rcdState: rcdStateEdit || undefined,
+                })
+              }
+            >
+              {careModelMutation.isPending ? "Saving…" : "Save Segment"}
+            </Button>
           </div>
         </CardContent>
       </Card>

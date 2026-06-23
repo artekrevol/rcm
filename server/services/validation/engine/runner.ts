@@ -197,7 +197,7 @@ async function loadClaimWithRelations(
   };
 }
 
-async function loadPractice(orgId: string, pool: Pool): Promise<PracticeRecord | null> {
+async function loadPractice(orgId: string, pool: Pool): Promise<(PracticeRecord & { careModel: string }) | null> {
   const res = await pool.query(
     'SELECT * FROM practice_settings WHERE organization_id = $1 LIMIT 1',
     [orgId],
@@ -212,6 +212,7 @@ async function loadPractice(orgId: string, pool: Pool): Promise<PracticeRecord |
     taxonomyCode: ps.taxonomy_code ?? null,
     address: normalizeAddress(ps.address),
     agencyNpi: ps.agency_npi ?? null,
+    careModel: ps.care_model ?? 'outpatient_professional',
   };
 }
 
@@ -260,7 +261,7 @@ export async function runValidation(
       };
     }
 
-    const packs = resolvePacksForClaim(claim, options?.packIds);
+    const packs = resolvePacksForClaim(claim, options?.packIds, practice.careModel);
 
     // Build deduped, ordered rule list — more-specific (later) pack wins on duplicate id
     const ruleMap = new Map<string, { rule: typeof packs[0]['rules'][0]; packId: string }>();

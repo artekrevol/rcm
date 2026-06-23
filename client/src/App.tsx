@@ -53,6 +53,8 @@ import ClaimTrackerPage from "@/pages/billing/claim-tracker";
 import ERAPage from "@/pages/billing/era";
 import FollowUpPage from "@/pages/billing/follow-up";
 import FilingAlertsPage from "@/pages/billing/filing-alerts";
+import EpisodesPage from "@/pages/hh/episodes-page";
+import NoaPage from "@/pages/hh/noa-page";
 import CascadeDemo from "@/pages/cascade-demo";
 function ReferringProvidersRedirect() {
   const [, navigate] = useLocation();
@@ -248,6 +250,21 @@ function Router() {
       <Route path="/billing/filing-alerts">
         <AuthGuard allowedRoles={["admin", "rcm_manager", "biller"]}>
           <BillingLayout><FilingAlertsPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/hh/episodes/:id">
+        <AuthGuard allowedRoles={["admin", "rcm_manager", "biller"]}>
+          <BillingLayout><EpisodesPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/hh/episodes">
+        <AuthGuard allowedRoles={["admin", "rcm_manager", "biller"]}>
+          <BillingLayout><EpisodesPage /></BillingLayout>
+        </AuthGuard>
+      </Route>
+      <Route path="/billing/hh/noa">
+        <AuthGuard allowedRoles={["admin", "rcm_manager", "biller"]}>
+          <BillingLayout><NoaPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/era">

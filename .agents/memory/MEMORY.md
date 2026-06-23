@@ -1,3 +1,4 @@
 - [ERA 835 ingestion bugs](era-835-ingestion.md) — webhook wrote to wrong table; claim matching used full UUID instead of 20-char hex prefix; clean ERAs never updated claim status.
 - [CLM01 format](clm01-format.md) — edi-generator CLM01 = claim.id dashes-stripped sliced to 20 chars; always match claims via LEFT(REPLACE(id::text,'-',''),20)=LOWER($1).
 - [Stedi 277CA polling](stedi-277-polling.md) — list endpoint has no claim-level status; must fetchStediTransaction per item → process277CA. 90-day default lookback.
+- [HH Phase A architecture](hh-phase-a.md) — segment isolation pattern: care_model gates all HH routes, UI, and validation packs.

@@ -530,6 +530,14 @@ export const organizations = pgTable("organizations", {
 
 export type Organization = typeof organizations.$inferSelect;
 
+/**
+ * care_model — master segment switch for the org.
+ *   'outpatient_professional'   : default; 837P flow, no HH UI.
+ *   'home_health_skilled'       : 837I flow, episodes, NOA, RCD.
+ *   'home_health_personal_care' : future segment — not yet implemented.
+ * G1 guardrail: every HH code path MUST check this. No outpatient org
+ * should ever see an episode, NOA, or RCD element.
+ */
 export const practiceSettings = pgTable("practice_settings", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   practiceName: varchar("practice_name").notNull().default(""),
@@ -546,6 +554,9 @@ export const practiceSettings = pgTable("practice_settings", {
   billingModel: varchar("billing_model").default("direct"),
   agencyNpi: varchar("agency_npi"),
   agencyTaxId: varchar("agency_tax_id"),
+  careModel: varchar("care_model").default("outpatient_professional"),
+  rcdState: varchar("rcd_state"),
+  rcdReviewChoice: varchar("rcd_review_choice"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -946,3 +957,136 @@ export const insertReferringProviderSchema = createInsertSchema(referringProvide
 });
 export type InsertReferringProvider = z.infer<typeof insertReferringProviderSchema>;
 export type ReferringProvider = typeof referringProviders.$inferSelect;
+
+// =========================================================================
+// HOME HEALTH SKILLED — Phase A tables
+// All tables use organization_id for tenant isolation (RLS enforced via
+// FORCE ROW LEVEL SECURITY on the DB side; server reads go through
+// withTenantTx which pins app.current_organization_id).
+//
+// G1 guardrail: these tables are only ever populated for orgs where
+// practice_settings.care_model = 'home_health_skilled'.
+// =========================================================================
+
+/**
+ * episodes — one row per 60-day certification period.
+ * A home health episode is anchored by a start_of_care_date and covers
+ * up to two 30-day billing periods (billing_periods rows).
+ */
+export const episodes = pgTable("episodes", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  patientId: varchar("patient_id").notNull(),
+  certPeriodStart: date("cert_period_start").notNull(),
+  certPeriodEnd: date("cert_period_end").notNull(),
+  startOfCareDate: date("start_of_care_date").notNull(),
+  episodeStatus: varchar("episode_status").notNull().default("active"),
+  primaryDiagnosis: varchar("primary_diagnosis"),
+  authorizationId: varchar("authorization_id"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertEpisodeSchema = createInsertSchema(episodes).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertEpisode = z.infer<typeof insertEpisodeSchema>;
+export type Episode = typeof episodes.$inferSelect;
+
+/**
+ * billing_periods — 30-day billing windows within an episode.
+ * period_number: 1 (days 1-30) or 2 (days 31-60).
+ * period_status: 'open' | 'ready_to_bill' | 'billed' | 'closed'
+ * G6: claims linked to a billing_period_id may only be submitted when
+ * period_status = 'ready_to_bill'.
+ */
+export const billingPeriods = pgTable("billing_periods", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  episodeId: uuid("episode_id").notNull(),
+  periodNumber: integer("period_number").notNull(),
+  periodStart: date("period_start").notNull(),
+  periodEnd: date("period_end").notNull(),
+  periodStatus: varchar("period_status").notNull().default("open"),
+  hippsCode: varchar("hipps_code"),
+  claimId: varchar("claim_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertBillingPeriodSchema = createInsertSchema(billingPeriods).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertBillingPeriod = z.infer<typeof insertBillingPeriodSchema>;
+export type BillingPeriod = typeof billingPeriods.$inferSelect;
+
+/**
+ * episode_visits — individual visit log within an episode.
+ * counts_against_auth: when true, incrementing this row bumps
+ * prior_authorizations.visits_used for the linked auth.
+ */
+export const episodeVisits = pgTable("episode_visits", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  episodeId: uuid("episode_id").notNull(),
+  billingPeriodId: uuid("billing_period_id").notNull(),
+  visitDate: date("visit_date").notNull(),
+  discipline: varchar("discipline").notNull(),
+  providerId: varchar("provider_id"),
+  documented: boolean("documented").notNull().default(false),
+  signed: boolean("signed").notNull().default(false),
+  countsAgainstAuth: boolean("counts_against_auth").notNull().default(true),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertEpisodeVisitSchema = createInsertSchema(episodeVisits).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertEpisodeVisit = z.infer<typeof insertEpisodeVisitSchema>;
+export type EpisodeVisit = typeof episodeVisits.$inferSelect;
+
+/**
+ * pre_claim_reviews — schema only for Phase A.
+ * Tracks RCD (Review Choice Demonstration) UTN numbers and outcomes.
+ * No UI or API flows built yet — Phase B.
+ */
+export const preClaimReviews = pgTable("pre_claim_reviews", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  episodeId: uuid("episode_id").notNull(),
+  billingPeriodId: uuid("billing_period_id"),
+  utnNumber: varchar("utn_number"),
+  reviewStatus: varchar("review_status").notNull().default("pending"),
+  submittedAt: timestamp("submitted_at"),
+  reviewedAt: timestamp("reviewed_at"),
+  outcome: varchar("outcome"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertPreClaimReviewSchema = createInsertSchema(preClaimReviews).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPreClaimReview = z.infer<typeof insertPreClaimReviewSchema>;
+export type PreClaimReview = typeof preClaimReviews.$inferSelect;
+
+/**
+ * noa_filings — Notice of Admission (NOA) tracking with 5-day clock.
+ * due_date = start_of_care_date + 5 calendar days.
+ * penalty_days = max(0, filed_date - due_date) in calendar days.
+ * status: 'pending' | 'filed' | 'late'
+ */
+export const noaFilings = pgTable("noa_filings", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull(),
+  episodeId: uuid("episode_id").notNull(),
+  socDate: date("soc_date").notNull(),
+  dueDate: date("due_date").notNull(),
+  filedDate: date("filed_date"),
+  status: varchar("status").notNull().default("pending"),
+  penaltyDays: integer("penalty_days").notNull().default(0),
+  noaControlNumber: varchar("noa_control_number"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertNoaFilingSchema = createInsertSchema(noaFilings).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertNoaFiling = z.infer<typeof insertNoaFilingSchema>;
+export type NoaFiling = typeof noaFilings.$inferSelect;

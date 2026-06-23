@@ -113,8 +113,14 @@ export interface RulePack {
   name: string;
   version: string;
   appliesTo: {
-    claimType: '837P' | '837I';
+    claimType: '837P' | '837I' | '*';
     payerIds?: string[];
+    /**
+     * Segment filter: if set, this pack only runs for orgs whose
+     * practice_settings.care_model is in this list.
+     * Used by HH packs so they never load for outpatient orgs.
+     */
+    careModels?: string[];
   };
   extends?: string[];
   rules: Rule[];
