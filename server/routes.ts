@@ -3739,19 +3739,38 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     }
 
     // care_model enum constraint — converts the varchar column to a proper Postgres enum.
-    // Idempotent: DO $$ ... EXCEPTION WHEN others THEN NULL ensures re-runs are safe.
+    // Step 1: create the enum type (idempotent).
     await pool.query(`
       DO $$ BEGIN
         CREATE TYPE care_model_enum AS ENUM ('outpatient_professional', 'home_health_skilled', 'home_health_personal_care');
       EXCEPTION WHEN duplicate_object THEN NULL;
       END $$
     `).catch(() => {});
+    // Step 2: convert column — must drop default first, alter type, then restore.
+    // If the column is already the enum type, all three steps no-op safely.
     await pool.query(`
       DO $$ BEGIN
-        ALTER TABLE practice_settings ALTER COLUMN care_model TYPE care_model_enum USING care_model::care_model_enum;
+        IF (SELECT data_type FROM information_schema.columns
+            WHERE table_name='practice_settings' AND column_name='care_model') = 'character varying' THEN
+          ALTER TABLE practice_settings ALTER COLUMN care_model DROP DEFAULT;
+          ALTER TABLE practice_settings ALTER COLUMN care_model TYPE care_model_enum
+            USING care_model::care_model_enum;
+          ALTER TABLE practice_settings ALTER COLUMN care_model
+            SET DEFAULT 'outpatient_professional'::care_model_enum;
+          ALTER TABLE practice_settings ALTER COLUMN care_model SET NOT NULL;
+        END IF;
       EXCEPTION WHEN others THEN NULL;
       END $$
     `).catch(() => {});
+
+    // Table-level grants for claimshield_app_role on all HH tables.
+    // RLS is table-permission-checked first — the role must have GRANT before
+    // RLS policies can run. These are idempotent (GRANT IF NOT GRANTED is implicit).
+    for (const tbl of ['episodes', 'billing_periods', 'episode_visits', 'noa_filings', 'pre_claim_reviews']) {
+      await pool.query(
+        `GRANT SELECT, INSERT, UPDATE, DELETE ON ${tbl} TO claimshield_app_role`
+      ).catch(() => {});
+    }
 
     // FK constraints for HH tables — idempotent via EXCEPTION WHEN duplicate_object
     await pool.query(`DO $$ BEGIN ALTER TABLE episodes ADD CONSTRAINT fk_episodes_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});

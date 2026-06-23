@@ -76,3 +76,6 @@ export function useSegment(): SegmentContextValue {
 export function useIsHH(): boolean {
   return useContext(SegmentContext).isHH;
 }
+
+export type { SegmentFeatures } from "@shared/segment-features";
+export { resolveSegmentFeatures } from "@shared/segment-features";

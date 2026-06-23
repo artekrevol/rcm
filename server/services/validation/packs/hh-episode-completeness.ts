@@ -92,6 +92,63 @@ const rules: Rule[] = [
   },
 ];
 
+// ── Standalone test adapter ───────────────────────────────────────────────────
+
+export interface HhVisitRecord {
+  id: string;
+  documented: boolean;
+  signed: boolean;
+}
+
+export interface HhPeriodInput {
+  episode: { soc_date?: string; primary_diagnosis?: string };
+  poc_present?: boolean;
+  orders_present?: boolean;
+  soc_present?: boolean;
+  visits: HhVisitRecord[];
+}
+
+export interface HhFinding {
+  ruleId: string;
+  severity: "error" | "warning" | "info";
+  message: string;
+}
+
+export interface HhCompletenessResult {
+  findings: HhFinding[];
+}
+
+/**
+ * Standalone completeness check — callable without the full validation engine.
+ * Used by the Phase A verification harness and unit tests.
+ *
+ * Returns ERROR findings for any unsigned or undocumented visits.
+ */
+export function runHhEpisodeCompleteness(input: HhPeriodInput): HhCompletenessResult {
+  const findings: HhFinding[] = [];
+
+  const undocumented = input.visits.filter((v) => !v.documented);
+  const unsigned = input.visits.filter((v) => !v.signed);
+
+  if (undocumented.length > 0) {
+    findings.push({
+      ruleId: "HH-EC-001",
+      severity: "error",
+      message: `${undocumented.length} visit(s) are not documented. All visits must be documented and signed before billing.`,
+    });
+  }
+
+  if (unsigned.length > 0) {
+    findings.push({
+      ruleId: "HH-EC-001",
+      severity: "error",
+      message: `${unsigned.length} visit(s) are not signed. All visits must be documented and signed before billing.`,
+    });
+  }
+
+  return { findings };
+}
+
 export const hhEpisodeCompletenessPack: RulePack = {
   id: PACK_ID,
   name: 'HH Episode Completeness',
