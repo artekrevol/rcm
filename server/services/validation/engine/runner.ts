@@ -189,6 +189,9 @@ async function loadClaimWithRelations(
     icd10Codes: buildIcd10Codes(c.icd10_primary, c.icd10_secondary),
     serviceLines: normalizeServiceLines(rawLines),
     claimFrequencyCode: c.claim_frequency_code ?? '1',
+    // claimTransactionSet: '837I' for institutional HH claims; '837P' (or null) otherwise.
+    // Required by resolvePacksForClaim() to select 837I/HH validation packs.
+    claimTransactionSet: c.claim_transaction_set ?? null,
     amount: Number(c.amount) || 0,
     patient: patRecord,
     payerRecord,

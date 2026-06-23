@@ -198,15 +198,21 @@ export interface NoaPreconditionGateInput {
  * Pure NOA precondition check.
  * A period claim cannot generate unless the episode has a NOA in 'filed' or 'accepted' status.
  */
+// Valid NOA statuses that satisfy the precondition gate.
+// 'filed'    — on-time submission via file route (PATCH /api/hh/noa/:id/file)
+// 'late'     — past-due submission (penalty days > 0) but still accepted
+// 'accepted' — confirmed by payer via Stedi submit or 277CA acknowledgment
+const NOA_GATE_STATUSES = new Set(['filed', 'late', 'accepted']);
+
 export function assertNoaPreconditionFromContext(input: NoaPreconditionGateInput): void {
   const status = input.noaStatus;
-  if (status !== 'filed' && status !== 'accepted') {
+  if (!status || !NOA_GATE_STATUSES.has(status)) {
     throw new HhGateError(
       'noa_precondition',
       'HH-G5-NOA-REQUIRED',
       status
         ? `The NOA for this episode is in "${status}" status. ` +
-            'A period-of-care claim cannot be generated until the NOA is in "filed" or "accepted" status.'
+            'A period-of-care claim cannot be generated until the NOA is in "filed", "late", or "accepted" status.'
         : 'No NOA filing found for this episode. ' +
             'A Notice of Admission (NOA) must be filed before generating a period-of-care claim.',
     );

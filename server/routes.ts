@@ -3608,10 +3608,13 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     if (!(await seederLog('row', 'payers', 'palmetto-gba-jm-001'))) {
       await pool.query(`
         INSERT INTO payers (id, name, payer_id, payer_category, claim_filing_indicator, hh_supported,
-          timely_filing_days, auth_required, billing_type, is_active, is_custom, created_at)
+          timely_filing_days, auth_required, billing_type, is_active, is_custom,
+          stedi_payer_id, requires_vob, created_at)
         VALUES ('palmetto-gba-jm-001', 'Palmetto GBA JM — Medicare FFS Home Health', 'PGBA-JM',
-          'Medicare', 'MB', true, 365, false, 'institutional', true, false, NOW())
-        ON CONFLICT (id) DO UPDATE SET hh_supported = true, stedi_payer_id = 'PGBA-JM', requires_vob = false
+          'Medicare', 'MB', true, 365, false, 'institutional', true, false,
+          'PGBA-JM', false, NOW())
+        ON CONFLICT (id) DO UPDATE
+          SET hh_supported = true, stedi_payer_id = 'PGBA-JM', requires_vob = false
       `).catch(() => {});
     }
 
@@ -7790,10 +7793,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           if (pr.rows[0]) attending837i = pr.rows[0];
         }
 
-        // Load UTN from most recent accepted PCR
+        // Load UTN from most recent affirmed PCR
+        // ('affirmed' is the canonical status; 'accepted'/'approved' are legacy aliases)
         const pcrResult = await db.query(
           `SELECT utn_number FROM pre_claim_reviews
-           WHERE episode_id=$1 AND organization_id=$2 AND review_status='accepted'
+           WHERE episode_id=$1 AND organization_id=$2
+             AND review_status IN ('affirmed','accepted','approved')
            ORDER BY created_at DESC LIMIT 1`,
           [bp837i.episode_id, c.organization_id],
         );
@@ -16471,10 +16476,12 @@ Warmly,
           [orgId],
         );
 
-        // Load UTN from most recent accepted PCR for this episode
+        // Load UTN from most recent affirmed PCR for this episode
+        // ('affirmed' canonical; 'accepted'/'approved' accepted as legacy aliases)
         const { rows: [pcr] } = await client.query(
           `SELECT utn_number FROM pre_claim_reviews
-           WHERE episode_id=$1 AND organization_id=$2 AND review_status='accepted'
+           WHERE episode_id=$1 AND organization_id=$2
+             AND review_status IN ('affirmed','accepted','approved')
            ORDER BY created_at DESC LIMIT 1`,
           [bp.episode_id, orgId],
         );
@@ -16768,7 +16775,10 @@ Warmly,
       }
 
       // ── Update NOA status ─────────────────────────────────────────────────
-      const newStatus = stediResponse?.status === 'accepted' ? 'accepted' : 'submitted';
+      // Use 'accepted' when Stedi confirms the NOA; 'filed' for successful submission
+      // without explicit acceptance (payer will confirm later via 277CA/835).
+      // 'filed' and 'accepted' are both recognized by the NOA precondition gate (G-B5).
+      const newStatus = stediResponse?.status === 'accepted' ? 'accepted' : 'filed';
       const controlNumber = stediResponse?.interchangeControlNumber || noaResult.rpTransmitted.patientControlNumber;
 
       await withTenantTx(async (client) => {
