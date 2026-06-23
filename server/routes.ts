@@ -27,6 +27,7 @@ import { releaseLock, acquireLock } from "./services/comm-locks";
 import { extractInsuranceFromTranscript } from "./services/transcript-extractor";
 import { getActivatedFieldsForContext, invalidateResolverCache } from "./services/field-resolver";
 import { getEnrolledPayers } from "./services/practice-profile-helpers";
+import { withTenantTx } from "./middleware/tenant-context";
 import { serializeDiagnosisPointer } from "./services/edi-generator";
 import { resolvePos, resolveHomebound } from "./services/practice-profile-resolvers";
 import { PREVENTION_RULES } from "./fixtures/prevention-rules";
@@ -15695,7 +15696,6 @@ Warmly,
   app.get("/api/hh/episodes", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
       const status = req.query.status as string | undefined;
       let query = `SELECT e.*, p.first_name, p.last_name, p.date_of_birth
         FROM episodes e
@@ -15704,7 +15704,10 @@ Warmly,
       const params: any[] = [orgId];
       if (status) { query += ` AND e.episode_status = $${params.length + 1}`; params.push(status); }
       query += ` ORDER BY e.cert_period_start DESC`;
-      const { rows } = await db.query(query, params);
+      const rows = await withTenantTx(async (client) => {
+        const { rows } = await client.query(query, params);
+        return rows;
+      }, orgId);
       res.json(rows);
     } catch (err: any) {
       console.error("[HH] Episodes list error:", err);
@@ -15715,49 +15718,41 @@ Warmly,
   app.post("/api/hh/episodes", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
       const { patient_id, cert_period_start, cert_period_end, start_of_care_date, primary_diagnosis, authorization_id, notes } = req.body;
       if (!patient_id || !cert_period_start || !cert_period_end || !start_of_care_date) {
         return res.status(400).json({ error: "patient_id, cert_period_start, cert_period_end, and start_of_care_date are required" });
       }
-      // Auto-create NOA filing with due_date = soc_date + 5 calendar days
       const socDate = new Date(start_of_care_date);
       const dueDate = new Date(socDate);
       dueDate.setDate(dueDate.getDate() + 5);
       const episodeId = crypto.randomUUID();
-      const { rows: [episode] } = await db.query(
-        `INSERT INTO episodes (id, organization_id, patient_id, cert_period_start, cert_period_end, start_of_care_date, episode_status, primary_diagnosis, authorization_id, notes, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9, NOW(), NOW()) RETURNING *`,
-        [episodeId, orgId, patient_id, cert_period_start, cert_period_end, start_of_care_date, primary_diagnosis || null, authorization_id || null, notes || null]
-      );
-      // Create NOA record
-      await db.query(
-        `INSERT INTO noa_filings (id, organization_id, episode_id, soc_date, due_date, status, penalty_days, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, 'pending', 0, NOW(), NOW())`,
-        [crypto.randomUUID(), orgId, episodeId, start_of_care_date, dueDate.toISOString().slice(0, 10)]
-      );
-      // Auto-create two 30-day billing periods for the 60-day cert period.
-      // Period 1: days 1–30 (SOC to SOC+29)
-      // Period 2: days 31–60 (SOC+30 to SOC+59)
       const bp1Start = new Date(socDate);
-      const bp1End = new Date(socDate);
-      bp1End.setDate(bp1End.getDate() + 29);
-      const bp2Start = new Date(socDate);
-      bp2Start.setDate(bp2Start.getDate() + 30);
-      const bp2End = new Date(socDate);
-      bp2End.setDate(bp2End.getDate() + 59);
-      await db.query(
-        `INSERT INTO billing_periods (id, organization_id, episode_id, period_number, period_start, period_end, period_status, created_at, updated_at)
-         VALUES ($1, $2, $3, 1, $4, $5, 'open', NOW(), NOW())`,
-        [crypto.randomUUID(), orgId, episodeId,
-          bp1Start.toISOString().slice(0, 10), bp1End.toISOString().slice(0, 10)]
-      );
-      await db.query(
-        `INSERT INTO billing_periods (id, organization_id, episode_id, period_number, period_start, period_end, period_status, created_at, updated_at)
-         VALUES ($1, $2, $3, 2, $4, $5, 'open', NOW(), NOW())`,
-        [crypto.randomUUID(), orgId, episodeId,
-          bp2Start.toISOString().slice(0, 10), bp2End.toISOString().slice(0, 10)]
-      );
+      const bp1End = new Date(socDate); bp1End.setDate(bp1End.getDate() + 29);
+      const bp2Start = new Date(socDate); bp2Start.setDate(bp2Start.getDate() + 30);
+      const bp2End = new Date(socDate); bp2End.setDate(bp2End.getDate() + 59);
+      const episode = await withTenantTx(async (client) => {
+        const { rows: [ep] } = await client.query(
+          `INSERT INTO episodes (id, organization_id, patient_id, cert_period_start, cert_period_end, start_of_care_date, episode_status, primary_diagnosis, authorization_id, notes, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9, NOW(), NOW()) RETURNING *`,
+          [episodeId, orgId, patient_id, cert_period_start, cert_period_end, start_of_care_date, primary_diagnosis || null, authorization_id || null, notes || null]
+        );
+        await client.query(
+          `INSERT INTO noa_filings (id, organization_id, episode_id, soc_date, due_date, status, penalty_days, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, 'pending', 0, NOW(), NOW())`,
+          [crypto.randomUUID(), orgId, episodeId, start_of_care_date, dueDate.toISOString().slice(0, 10)]
+        );
+        await client.query(
+          `INSERT INTO billing_periods (id, organization_id, episode_id, period_number, period_start, period_end, period_status, created_at, updated_at)
+           VALUES ($1, $2, $3, 1, $4, $5, 'open', NOW(), NOW())`,
+          [crypto.randomUUID(), orgId, episodeId, bp1Start.toISOString().slice(0, 10), bp1End.toISOString().slice(0, 10)]
+        );
+        await client.query(
+          `INSERT INTO billing_periods (id, organization_id, episode_id, period_number, period_start, period_end, period_status, created_at, updated_at)
+           VALUES ($1, $2, $3, 2, $4, $5, 'open', NOW(), NOW())`,
+          [crypto.randomUUID(), orgId, episodeId, bp2Start.toISOString().slice(0, 10), bp2End.toISOString().slice(0, 10)]
+        );
+        return ep;
+      }, orgId);
       res.status(201).json(episode);
     } catch (err: any) {
       console.error("[HH] Episode create error:", err);
@@ -15768,14 +15763,16 @@ Warmly,
   app.get("/api/hh/episodes/:id", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
-      const { rows } = await db.query(
-        `SELECT e.*, p.first_name, p.last_name, p.date_of_birth
-         FROM episodes e
-         LEFT JOIN patients p ON p.id::text = e.patient_id
-         WHERE e.id = $1 AND e.organization_id = $2`,
-        [req.params.id, orgId]
-      );
+      const rows = await withTenantTx(async (client) => {
+        const { rows } = await client.query(
+          `SELECT e.*, p.first_name, p.last_name, p.date_of_birth
+           FROM episodes e
+           LEFT JOIN patients p ON p.id::text = e.patient_id
+           WHERE e.id = $1 AND e.organization_id = $2`,
+          [req.params.id, orgId]
+        );
+        return rows;
+      }, orgId);
       if (!rows.length) return res.status(404).json({ error: "Episode not found" });
       res.json(rows[0]);
     } catch (err: any) {
@@ -15787,7 +15784,6 @@ Warmly,
   app.patch("/api/hh/episodes/:id", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
       const { episode_status, primary_diagnosis, authorization_id, notes, cert_period_end } = req.body;
       const fields: string[] = [];
       const params: any[] = [];
@@ -15799,10 +15795,13 @@ Warmly,
       if (!fields.length) return res.status(400).json({ error: "No fields to update" });
       fields.push(`updated_at=NOW()`);
       params.push(req.params.id, orgId);
-      const { rows } = await db.query(
-        `UPDATE episodes SET ${fields.join(", ")} WHERE id=$${params.length - 1} AND organization_id=$${params.length} RETURNING *`,
-        params
-      );
+      const rows = await withTenantTx(async (client) => {
+        const { rows } = await client.query(
+          `UPDATE episodes SET ${fields.join(", ")} WHERE id=$${params.length - 1} AND organization_id=$${params.length} RETURNING *`,
+          params
+        );
+        return rows;
+      }, orgId);
       if (!rows.length) return res.status(404).json({ error: "Episode not found" });
       res.json(rows[0]);
     } catch (err: any) {
@@ -15816,11 +15815,13 @@ Warmly,
   app.get("/api/hh/episodes/:episodeId/billing-periods", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
-      const { rows } = await db.query(
-        `SELECT * FROM billing_periods WHERE episode_id = $1 AND organization_id = $2 ORDER BY period_number ASC`,
-        [req.params.episodeId, orgId]
-      );
+      const rows = await withTenantTx(async (client) => {
+        const { rows } = await client.query(
+          `SELECT * FROM billing_periods WHERE episode_id = $1 AND organization_id = $2 ORDER BY period_number ASC`,
+          [req.params.episodeId, orgId]
+        );
+        return rows;
+      }, orgId);
       res.json(rows);
     } catch (err: any) {
       console.error("[HH] Billing periods list error:", err);
@@ -15831,36 +15832,38 @@ Warmly,
   app.patch("/api/hh/billing-periods/:id/status", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
       const { period_status, hipps_code } = req.body;
       const allowed = ["open", "ready_to_bill", "billed", "paid", "voided"];
       if (!allowed.includes(period_status)) {
         return res.status(400).json({ error: `period_status must be one of: ${allowed.join(", ")}` });
       }
-      // G6 completeness guard: before marking ready_to_bill, every visit in the
-      // billing period must be both documented AND signed.
-      if (period_status === "ready_to_bill") {
-        const incomplete = await db.query(
-          `SELECT COUNT(*) AS cnt FROM episode_visits
-           WHERE billing_period_id = $1 AND organization_id = $2
-             AND (documented IS DISTINCT FROM true OR signed IS DISTINCT FROM true)`,
-          [req.params.id, orgId]
-        );
-        const incompleteCnt = parseInt(incomplete.rows[0]?.cnt ?? "0", 10);
-        if (incompleteCnt > 0) {
-          return res.status(422).json({
-            error: "G6_VISITS_INCOMPLETE",
-            message: `${incompleteCnt} visit(s) in this billing period are not fully documented and signed. All visits must be documented and signed before marking ready-to-bill.`,
-          });
+      const result = await withTenantTx(async (client) => {
+        // G6 completeness guard
+        if (period_status === "ready_to_bill") {
+          const incomplete = await client.query(
+            `SELECT COUNT(*) AS cnt FROM episode_visits
+             WHERE billing_period_id = $1 AND organization_id = $2
+               AND (documented IS DISTINCT FROM true OR signed IS DISTINCT FROM true)`,
+            [req.params.id, orgId]
+          );
+          const cnt = parseInt(incomplete.rows[0]?.cnt ?? "0", 10);
+          if (cnt > 0) return { guard: cnt };
         }
+        const { rows } = await client.query(
+          `UPDATE billing_periods SET period_status=$1, hipps_code=COALESCE($2, hipps_code), updated_at=NOW()
+           WHERE id=$3 AND organization_id=$4 RETURNING *`,
+          [period_status, hipps_code || null, req.params.id, orgId]
+        );
+        return { rows };
+      }, orgId);
+      if ("guard" in result) {
+        return res.status(422).json({
+          error: "G6_VISITS_INCOMPLETE",
+          message: `${result.guard} visit(s) in this billing period are not fully documented and signed. All visits must be documented and signed before marking ready-to-bill.`,
+        });
       }
-      const { rows } = await db.query(
-        `UPDATE billing_periods SET period_status=$1, hipps_code=COALESCE($2, hipps_code), updated_at=NOW()
-         WHERE id=$3 AND organization_id=$4 RETURNING *`,
-        [period_status, hipps_code || null, req.params.id, orgId]
-      );
-      if (!rows.length) return res.status(404).json({ error: "Billing period not found" });
-      res.json(rows[0]);
+      if (!result.rows.length) return res.status(404).json({ error: "Billing period not found" });
+      res.json(result.rows[0]);
     } catch (err: any) {
       console.error("[HH] Billing period status error:", err);
       res.status(500).json({ error: "An unexpected error occurred." });
@@ -15872,11 +15875,13 @@ Warmly,
   app.get("/api/hh/episodes/:episodeId/visits", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
-      const { rows } = await db.query(
-        `SELECT * FROM episode_visits WHERE episode_id = $1 AND organization_id = $2 ORDER BY visit_date DESC`,
-        [req.params.episodeId, orgId]
-      );
+      const rows = await withTenantTx(async (client) => {
+        const { rows } = await client.query(
+          `SELECT * FROM episode_visits WHERE episode_id = $1 AND organization_id = $2 ORDER BY visit_date DESC`,
+          [req.params.episodeId, orgId]
+        );
+        return rows;
+      }, orgId);
       res.json(rows);
     } catch (err: any) {
       console.error("[HH] Visits list error:", err);
@@ -15887,34 +15892,37 @@ Warmly,
   app.post("/api/hh/episodes/:episodeId/visits", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
       const { billing_period_id, visit_date, discipline, provider_id, documented, signed, counts_against_auth, notes } = req.body;
       if (!billing_period_id || !visit_date || !discipline) {
         return res.status(400).json({ error: "billing_period_id, visit_date, and discipline are required" });
       }
-      // Verify billing period belongs to this episode + org
-      const bpCheck = await db.query(
-        `SELECT id FROM billing_periods WHERE id=$1 AND episode_id=$2 AND organization_id=$3`,
-        [billing_period_id, req.params.episodeId, orgId]
-      );
-      if (!bpCheck.rows.length) return res.status(404).json({ error: "Billing period not found" });
-      const { rows: [visit] } = await db.query(
-        `INSERT INTO episode_visits (id, organization_id, episode_id, billing_period_id, visit_date, discipline, provider_id, documented, signed, counts_against_auth, notes, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW()) RETURNING *`,
-        [crypto.randomUUID(), orgId, req.params.episodeId, billing_period_id, visit_date, discipline, provider_id || null, documented ?? false, signed ?? false, counts_against_auth ?? true, notes || null]
-      );
-      // Visit-cap tracking: if counts_against_auth, increment visits_used on the linked prior_authorization
-      if (visit.counts_against_auth) {
-        const epRow = await db.query(`SELECT authorization_id FROM episodes WHERE id=$1 AND organization_id=$2`, [req.params.episodeId, orgId]);
-        const authId = epRow.rows[0]?.authorization_id;
-        if (authId) {
-          await db.query(
-            `UPDATE prior_authorizations SET visits_used = COALESCE(visits_used, 0) + 1, updated_at=NOW() WHERE id=$1 AND organization_id=$2`,
-            [authId, orgId]
-          ).catch(() => {});
+      const visitResult = await withTenantTx(async (client) => {
+        // Verify billing period belongs to this episode + org
+        const bpCheck = await client.query(
+          `SELECT id FROM billing_periods WHERE id=$1 AND episode_id=$2 AND organization_id=$3`,
+          [billing_period_id, req.params.episodeId, orgId]
+        );
+        if (!bpCheck.rows.length) return null;
+        const { rows: [visit] } = await client.query(
+          `INSERT INTO episode_visits (id, organization_id, episode_id, billing_period_id, visit_date, discipline, provider_id, documented, signed, counts_against_auth, notes, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW()) RETURNING *`,
+          [crypto.randomUUID(), orgId, req.params.episodeId, billing_period_id, visit_date, discipline, provider_id || null, documented ?? false, signed ?? false, counts_against_auth ?? true, notes || null]
+        );
+        // Visit-cap tracking
+        if (visit.counts_against_auth) {
+          const epRow = await client.query(`SELECT authorization_id FROM episodes WHERE id=$1 AND organization_id=$2`, [req.params.episodeId, orgId]);
+          const authId = epRow.rows[0]?.authorization_id;
+          if (authId) {
+            await client.query(
+              `UPDATE prior_authorizations SET visits_used = COALESCE(visits_used, 0) + 1, updated_at=NOW() WHERE id=$1 AND organization_id=$2`,
+              [authId, orgId]
+            );
+          }
         }
-      }
-      res.status(201).json(visit);
+        return visit;
+      }, orgId);
+      if (!visitResult) return res.status(404).json({ error: "Billing period not found" });
+      res.status(201).json(visitResult);
     } catch (err: any) {
       console.error("[HH] Visit create error:", err);
       res.status(500).json({ error: "An unexpected error occurred." });
@@ -15925,7 +15933,6 @@ Warmly,
   app.patch("/api/hh/visits/:id", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
       const { documented, signed, notes } = req.body;
       const fields: string[] = [];
       const params: any[] = [];
@@ -15935,10 +15942,13 @@ Warmly,
       if (!fields.length) return res.status(400).json({ error: "No fields to update" });
       fields.push(`updated_at=NOW()`);
       params.push(req.params.id, orgId);
-      const { rows } = await db.query(
-        `UPDATE episode_visits SET ${fields.join(", ")} WHERE id=$${params.length - 1} AND organization_id=$${params.length} RETURNING *`,
-        params
-      );
+      const rows = await withTenantTx(async (client) => {
+        const { rows } = await client.query(
+          `UPDATE episode_visits SET ${fields.join(", ")} WHERE id=$${params.length - 1} AND organization_id=$${params.length} RETURNING *`,
+          params
+        );
+        return rows;
+      }, orgId);
       if (!rows.length) return res.status(404).json({ error: "Visit not found" });
       res.json(rows[0]);
     } catch (err: any) {
@@ -15951,11 +15961,13 @@ Warmly,
   app.delete("/api/hh/visits/:id", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
-      const { rowCount } = await db.query(
-        `DELETE FROM episode_visits WHERE id=$1 AND organization_id=$2`,
-        [req.params.id, orgId]
-      );
+      const rowCount = await withTenantTx(async (client) => {
+        const { rowCount } = await client.query(
+          `DELETE FROM episode_visits WHERE id=$1 AND organization_id=$2`,
+          [req.params.id, orgId]
+        );
+        return rowCount;
+      }, orgId);
       if (!rowCount) return res.status(404).json({ error: "Visit not found" });
       res.status(204).end();
     } catch (err: any) {
@@ -15968,11 +15980,13 @@ Warmly,
   app.delete("/api/hh/episodes/:id", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
-      const { rowCount } = await db.query(
-        `DELETE FROM episodes WHERE id=$1 AND organization_id=$2`,
-        [req.params.id, orgId]
-      );
+      const rowCount = await withTenantTx(async (client) => {
+        const { rowCount } = await client.query(
+          `DELETE FROM episodes WHERE id=$1 AND organization_id=$2`,
+          [req.params.id, orgId]
+        );
+        return rowCount;
+      }, orgId);
       if (!rowCount) return res.status(404).json({ error: "Episode not found" });
       res.status(204).end();
     } catch (err: any) {
@@ -15986,7 +16000,6 @@ Warmly,
   app.get("/api/hh/noa", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
       const status = req.query.status as string | undefined;
       let query = `SELECT n.*, e.cert_period_start, e.cert_period_end, p.first_name, p.last_name
         FROM noa_filings n
@@ -15996,7 +16009,10 @@ Warmly,
       const params: any[] = [orgId];
       if (status) { query += ` AND n.status = $${params.length + 1}`; params.push(status); }
       query += ` ORDER BY n.due_date ASC`;
-      const { rows } = await db.query(query, params);
+      const rows = await withTenantTx(async (client) => {
+        const { rows } = await client.query(query, params);
+        return rows;
+      }, orgId);
       res.json(rows);
     } catch (err: any) {
       console.error("[HH] NOA list error:", err);
@@ -16007,25 +16023,29 @@ Warmly,
   app.patch("/api/hh/noa/:id/file", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
-      const db = await import("./db").then(m => m.pool);
       const { filed_date, noa_control_number, notes } = req.body;
       if (!filed_date) return res.status(400).json({ error: "filed_date is required" });
-      // Get current NOA to compute penalty_days
-      const { rows: [noa] } = await db.query(
-        `SELECT * FROM noa_filings WHERE id=$1 AND organization_id=$2`,
-        [req.params.id, orgId]
-      );
+      const noa = await withTenantTx(async (client) => {
+        const { rows: [row] } = await client.query(
+          `SELECT * FROM noa_filings WHERE id=$1 AND organization_id=$2`,
+          [req.params.id, orgId]
+        );
+        return row ?? null;
+      }, orgId);
       if (!noa) return res.status(404).json({ error: "NOA filing not found" });
       const due = new Date(noa.due_date);
       const filed = new Date(filed_date);
       const msPerDay = 86400000;
       const penaltyDays = Math.max(0, Math.floor((filed.getTime() - due.getTime()) / msPerDay));
-      const status = penaltyDays > 0 ? "late" : "filed";
-      const { rows: [updated] } = await db.query(
-        `UPDATE noa_filings SET filed_date=$1, status=$2, penalty_days=$3, noa_control_number=COALESCE($4, noa_control_number), notes=COALESCE($5, notes), updated_at=NOW()
-         WHERE id=$6 AND organization_id=$7 RETURNING *`,
-        [filed_date, status, penaltyDays, noa_control_number || null, notes || null, req.params.id, orgId]
-      );
+      const noaStatus = penaltyDays > 0 ? "late" : "filed";
+      const updated = await withTenantTx(async (client) => {
+        const { rows: [row] } = await client.query(
+          `UPDATE noa_filings SET filed_date=$1, status=$2, penalty_days=$3, noa_control_number=COALESCE($4, noa_control_number), notes=COALESCE($5, notes), updated_at=NOW()
+           WHERE id=$6 AND organization_id=$7 RETURNING *`,
+          [filed_date, noaStatus, penaltyDays, noa_control_number || null, notes || null, req.params.id, orgId]
+        );
+        return row;
+      }, orgId);
       res.json(updated);
     } catch (err: any) {
       console.error("[HH] NOA file error:", err);
