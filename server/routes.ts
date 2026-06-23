@@ -3737,6 +3737,21 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_noa_filings_episode ON noa_filings(episode_id)`).catch(() => {});
     }
 
+    // care_model enum constraint — converts the varchar column to a proper Postgres enum.
+    // Idempotent: DO $$ ... EXCEPTION WHEN others THEN NULL ensures re-runs are safe.
+    await pool.query(`
+      DO $$ BEGIN
+        CREATE TYPE care_model_enum AS ENUM ('outpatient_professional', 'home_health_skilled', 'home_health_personal_care');
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$
+    `).catch(() => {});
+    await pool.query(`
+      DO $$ BEGIN
+        ALTER TABLE practice_settings ALTER COLUMN care_model TYPE care_model_enum USING care_model::care_model_enum;
+      EXCEPTION WHEN others THEN NULL;
+      END $$
+    `).catch(() => {});
+
     // FK constraints for HH tables — idempotent via EXCEPTION WHEN duplicate_object
     await pool.query(`DO $$ BEGIN ALTER TABLE episodes ADD CONSTRAINT fk_episodes_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
     await pool.query(`DO $$ BEGIN ALTER TABLE billing_periods ADD CONSTRAINT fk_billing_periods_episode FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
@@ -15902,6 +15917,66 @@ Warmly,
       res.status(201).json(visit);
     } catch (err: any) {
       console.error("[HH] Visit create error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // PATCH /api/hh/visits/:id — toggle documented/signed or update notes
+  app.patch("/api/hh/visits/:id", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { documented, signed, notes } = req.body;
+      const fields: string[] = [];
+      const params: any[] = [];
+      if (documented !== undefined) { fields.push(`documented=$${params.length + 1}`); params.push(documented); }
+      if (signed !== undefined) { fields.push(`signed=$${params.length + 1}`); params.push(signed); }
+      if (notes !== undefined) { fields.push(`notes=$${params.length + 1}`); params.push(notes); }
+      if (!fields.length) return res.status(400).json({ error: "No fields to update" });
+      fields.push(`updated_at=NOW()`);
+      params.push(req.params.id, orgId);
+      const { rows } = await db.query(
+        `UPDATE episode_visits SET ${fields.join(", ")} WHERE id=$${params.length - 1} AND organization_id=$${params.length} RETURNING *`,
+        params
+      );
+      if (!rows.length) return res.status(404).json({ error: "Visit not found" });
+      res.json(rows[0]);
+    } catch (err: any) {
+      console.error("[HH] Visit patch error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // DELETE /api/hh/visits/:id
+  app.delete("/api/hh/visits/:id", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { rowCount } = await db.query(
+        `DELETE FROM episode_visits WHERE id=$1 AND organization_id=$2`,
+        [req.params.id, orgId]
+      );
+      if (!rowCount) return res.status(404).json({ error: "Visit not found" });
+      res.status(204).end();
+    } catch (err: any) {
+      console.error("[HH] Visit delete error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // DELETE /api/hh/episodes/:id
+  app.delete("/api/hh/episodes/:id", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const db = await import("./db").then(m => m.pool);
+      const { rowCount } = await db.query(
+        `DELETE FROM episodes WHERE id=$1 AND organization_id=$2`,
+        [req.params.id, orgId]
+      );
+      if (!rowCount) return res.status(404).json({ error: "Episode not found" });
+      res.status(204).end();
+    } catch (err: any) {
+      console.error("[HH] Episode delete error:", err);
       res.status(500).json({ error: "An unexpected error occurred." });
     }
   });

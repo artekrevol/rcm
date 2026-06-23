@@ -54,6 +54,7 @@ import ERAPage from "@/pages/billing/era";
 import FollowUpPage from "@/pages/billing/follow-up";
 import FilingAlertsPage from "@/pages/billing/filing-alerts";
 import EpisodesPage from "@/pages/hh/episodes-page";
+import EpisodeDetailPage from "@/pages/hh/episode-detail-page";
 import NoaPage from "@/pages/hh/noa-page";
 import CascadeDemo from "@/pages/cascade-demo";
 function ReferringProvidersRedirect() {
@@ -254,7 +255,7 @@ function Router() {
       </Route>
       <Route path="/billing/hh/episodes/:id">
         <AuthGuard allowedRoles={["admin", "rcm_manager", "biller"]}>
-          <BillingLayout><EpisodesPage /></BillingLayout>
+          <BillingLayout><EpisodeDetailPage /></BillingLayout>
         </AuthGuard>
       </Route>
       <Route path="/billing/hh/episodes">
