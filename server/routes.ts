@@ -2242,26 +2242,30 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     `);
     console.log("[SEEDER] Seeded/verified 20 payer_manual_sources (Phase 4 top-20 commercial payer registry)");
 
+    // Phase B: ensure hh_supported column exists on payer_manual_sources
+    await pool.query(`ALTER TABLE payer_manual_sources ADD COLUMN IF NOT EXISTS hh_supported BOOLEAN NOT NULL DEFAULT false`).catch(() => {});
+
     // Phase B: HH MA payer_manual_sources — 5 MA payers with HH-specific billing guides
+    // hh_supported=true marks these as active HH scraper targets and billiing guide sources.
     await pool.query(`
-      INSERT INTO payer_manual_sources (id, payer_name, canonical_url, priority, notes)
+      INSERT INTO payer_manual_sources (id, payer_name, canonical_url, priority, notes, hh_supported)
       VALUES
         ('pms-hh-001', 'UnitedHealthcare MA Home Health',
           'https://www.uhcprovider.com/content/dam/provider/docs/public/policies/medicaid-comm-reimbursement/UHC-HH-Billing-and-Reimbursement-Guide.pdf',
-          1, 'UHC Medicare Advantage HH billing guide — Playwright scrape target'),
+          1, 'UHC Medicare Advantage HH billing guide — Playwright scrape target', true),
         ('pms-hh-002', 'Aetna Medicare Advantage Home Health',
           'https://www.aetna.com/health-care-professionals/provider-education-manuals/home-health-billing.html',
-          2, 'Aetna MA HH provider billing manual — public landing page, linked PDF requires login'),
+          2, 'Aetna MA HH provider billing manual — public landing page, linked PDF requires login', true),
         ('pms-hh-003', 'Simply Healthcare Plans (Centene HH FL)',
           'https://www.simplyhealthcareplans.com/providers/billing-resources/',
-          3, 'Simply Healthcare (Centene MA FL) HH provider billing resources portal'),
+          3, 'Simply Healthcare (Centene MA FL) HH provider billing resources portal', true),
         ('pms-hh-004', 'Solis Health Plans HH',
           'https://www.solishealthplans.com/providers/billing-and-claims/',
-          4, 'Solis Health Plans (TX MA) home health billing and claims portal'),
+          4, 'Solis Health Plans (TX MA) home health billing and claims portal', true),
         ('pms-hh-005', 'Oscar Health Home Health',
           'https://www.hioscar.com/provider-resources',
-          5, 'Oscar Health provider resources hub — HH billing guidelines accessible via portal login')
-      ON CONFLICT (id) DO NOTHING
+          5, 'Oscar Health provider resources hub — HH billing guidelines accessible via portal login', true)
+      ON CONFLICT (id) DO UPDATE SET hh_supported = true
     `).catch(() => {});
     // Deterministic source→document linkage (Phase 2 seed → Phase 4 source registry)
     // pms-005 = Aetna Commercial ↔ manual-aetna-001 (Phase 2 seed)

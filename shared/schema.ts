@@ -790,6 +790,8 @@ export const payerManualSources = pgTable("payer_manual_sources", {
   notes: text("notes"),
   priority: integer("priority").notNull().default(99),
   linkedManualId: varchar("linked_manual_id"),
+  /** True for MA payers that have a home-health-specific billing guide and support HH claims. */
+  hhSupported: boolean("hh_supported").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
