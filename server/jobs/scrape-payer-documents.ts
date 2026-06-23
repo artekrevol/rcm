@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { pool } from "../db";
 import { ScrapeReport, DocumentManifest } from "../scrapers/types";
 import { UhcScraper, NEWS_URL } from "../scrapers/uhc";
+import { UhcHhScraper, AetnaHhScraper, SimplyHhScraper, SolisHhScraper, OscarHhScraper } from "../scrapers/hh-ma";
 import { checkCircuit, recordSuccess, recordError } from "../scrapers/runtime";
 import { loadManifestCache } from "../scrapers/uhc-fallback-cache";
 
@@ -18,8 +19,14 @@ export interface ScrapeOptions {
 }
 
 // ── Registry of available scrapers ───────────────────────────────────────────
-const SCRAPERS: Record<string, () => InstanceType<typeof UhcScraper>> = {
-  uhc: () => new UhcScraper(),
+type AnyScraper = UhcScraper | UhcHhScraper | AetnaHhScraper | SimplyHhScraper | SolisHhScraper | OscarHhScraper;
+const SCRAPERS: Record<string, () => AnyScraper> = {
+  "uhc":      () => new UhcScraper(),
+  "uhc-hh":   () => new UhcHhScraper(),
+  "aetna-hh": () => new AetnaHhScraper(),
+  "simply-hh":() => new SimplyHhScraper(),
+  "solis-hh": () => new SolisHhScraper(),
+  "oscar-hh": () => new OscarHhScraper(),
 };
 
 // ── In-flight guard (one scrape per payer at a time) ─────────────────────────

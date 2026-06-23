@@ -36,7 +36,9 @@ function isoWeekKey(d: Date): string {
 
 // ── SCRAPERS list ─────────────────────────────────────────────────────────────
 // Must stay in sync with the SCRAPERS map in scrape-payer-documents.ts.
-const CRON_PAYERS = ["uhc"];
+// Phase B HH MA payers (uhc-hh, aetna-hh, simply-hh, solis-hh, oscar-hh) added
+// alongside the original UHC commercial scraper.
+const CRON_PAYERS = ["uhc", "uhc-hh", "aetna-hh", "simply-hh", "solis-hh", "oscar-hh"];
 
 // ── Daily scrape ──────────────────────────────────────────────────────────────
 

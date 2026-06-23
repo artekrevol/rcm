@@ -2241,6 +2241,28 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         ON CONFLICT (id) DO NOTHING
     `);
     console.log("[SEEDER] Seeded/verified 20 payer_manual_sources (Phase 4 top-20 commercial payer registry)");
+
+    // Phase B: HH MA payer_manual_sources — 5 MA payers with HH-specific billing guides
+    await pool.query(`
+      INSERT INTO payer_manual_sources (id, payer_name, canonical_url, priority, notes)
+      VALUES
+        ('pms-hh-001', 'UnitedHealthcare MA Home Health',
+          'https://www.uhcprovider.com/content/dam/provider/docs/public/policies/medicaid-comm-reimbursement/UHC-HH-Billing-and-Reimbursement-Guide.pdf',
+          1, 'UHC Medicare Advantage HH billing guide — Playwright scrape target'),
+        ('pms-hh-002', 'Aetna Medicare Advantage Home Health',
+          'https://www.aetna.com/health-care-professionals/provider-education-manuals/home-health-billing.html',
+          2, 'Aetna MA HH provider billing manual — public landing page, linked PDF requires login'),
+        ('pms-hh-003', 'Simply Healthcare Plans (Centene HH FL)',
+          'https://www.simplyhealthcareplans.com/providers/billing-resources/',
+          3, 'Simply Healthcare (Centene MA FL) HH provider billing resources portal'),
+        ('pms-hh-004', 'Solis Health Plans HH',
+          'https://www.solishealthplans.com/providers/billing-and-claims/',
+          4, 'Solis Health Plans (TX MA) home health billing and claims portal'),
+        ('pms-hh-005', 'Oscar Health Home Health',
+          'https://www.hioscar.com/provider-resources',
+          5, 'Oscar Health provider resources hub — HH billing guidelines accessible via portal login')
+      ON CONFLICT (id) DO NOTHING
+    `).catch(() => {});
     // Deterministic source→document linkage (Phase 2 seed → Phase 4 source registry)
     // pms-005 = Aetna Commercial ↔ manual-aetna-001 (Phase 2 seed)
     await pool.query(`UPDATE payer_manual_sources SET linked_source_document_id = 'manual-aetna-001' WHERE id = 'pms-005' AND linked_source_document_id IS NULL`).catch(() => {});
@@ -3589,7 +3611,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           timely_filing_days, auth_required, billing_type, is_active, is_custom, created_at)
         VALUES ('palmetto-gba-jm-001', 'Palmetto GBA JM — Medicare FFS Home Health', 'PGBA-JM',
           'Medicare', 'MB', true, 365, false, 'institutional', true, false, NOW())
-        ON CONFLICT (id) DO UPDATE SET hh_supported = true
+        ON CONFLICT (id) DO UPDATE SET hh_supported = true, stedi_payer_id = 'PGBA-JM', requires_vob = false
       `).catch(() => {});
     }
 
@@ -3703,6 +3725,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           episode_id UUID NOT NULL,
           billing_period_id UUID,
           utn_number VARCHAR,
+          bundle_ref VARCHAR,
           review_status VARCHAR NOT NULL DEFAULT 'pending',
           submitted_at TIMESTAMP,
           reviewed_at TIMESTAMP,
@@ -3799,6 +3822,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`DO $$ BEGIN ALTER TABLE episode_visits ADD CONSTRAINT fk_episode_visits_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
     await pool.query(`DO $$ BEGIN ALTER TABLE pre_claim_reviews ADD CONSTRAINT fk_pre_claim_reviews_episode FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
     await pool.query(`DO $$ BEGIN ALTER TABLE pre_claim_reviews ADD CONSTRAINT fk_pre_claim_reviews_period FOREIGN KEY (billing_period_id) REFERENCES billing_periods(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    // Migration: add bundle_ref for submission-bundle reference capture
+    await pool.query(`ALTER TABLE pre_claim_reviews ADD COLUMN IF NOT EXISTS bundle_ref VARCHAR`).catch(() => {});
     await pool.query(`DO $$ BEGIN ALTER TABLE noa_filings ADD CONSTRAINT fk_noa_filings_episode FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
     await pool.query(`DO $$ BEGIN ALTER TABLE noa_filings ADD CONSTRAINT fk_noa_filings_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
 
@@ -16272,6 +16297,75 @@ Warmly,
   //   G-B5 NOA precondition — episode must have filed/accepted NOA
   //
   // Returns: { claimId, edi, rpTransmitted, gateResult }
+  // PATCH /api/hh/pre-claim-reviews/:id
+  // Update UTN, bundle_ref, or review_status on a PCR record.
+  // UTN editable until review_status = 'affirmed' (locked after that).
+  app.patch("/api/hh/pre-claim-reviews/:id", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { id: pcrId } = req.params;
+      const { utn_number, bundle_ref, review_status } = req.body;
+
+      const VALID_STATUSES = ['pending', 'submitted', 'affirmed', 'rejected', 'approved'];
+      if (review_status && !VALID_STATUSES.includes(review_status)) {
+        return res.status(400).json({ error: `review_status must be one of: ${VALID_STATUSES.join(', ')}` });
+      }
+
+      const db = await import("./db").then(m => m.pool);
+
+      // Fetch current record to enforce lock after affirmation
+      const { rows: [current] } = await db.query(
+        `SELECT review_status FROM pre_claim_reviews WHERE id=$1 AND organization_id=$2`,
+        [pcrId, orgId],
+      );
+      if (!current) return res.status(404).json({ error: "PCR record not found." });
+      if (current.review_status === 'affirmed' && utn_number !== undefined) {
+        return res.status(409).json({
+          error: "UTN is locked once affirmed. Create a new PCR record to replace it.",
+        });
+      }
+
+      const setClauses: string[] = [];
+      const values: unknown[] = [];
+      let idx = 1;
+      if (utn_number !== undefined)  { setClauses.push(`utn_number=$${idx++}`);  values.push(utn_number); }
+      if (bundle_ref !== undefined)  { setClauses.push(`bundle_ref=$${idx++}`);  values.push(bundle_ref); }
+      if (review_status !== undefined) { setClauses.push(`review_status=$${idx++}`); values.push(review_status); }
+      setClauses.push(`updated_at=NOW()`);
+      values.push(pcrId, orgId);
+
+      const { rows: [updated] } = await db.query(
+        `UPDATE pre_claim_reviews SET ${setClauses.join(', ')}
+         WHERE id=$${idx} AND organization_id=$${idx + 1}
+         RETURNING *`,
+        values,
+      );
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[HH] PCR update error:", err);
+      res.status(500).json({ error: "Failed to update PCR record." });
+    }
+  });
+
+  // POST /api/hh/pre-claim-reviews — create a new PCR record for an episode
+  app.post("/api/hh/pre-claim-reviews", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { episode_id, billing_period_id, utn_number, bundle_ref, notes } = req.body;
+      if (!episode_id) return res.status(400).json({ error: "episode_id is required." });
+      const db = await import("./db").then(m => m.pool);
+      const { rows: [created] } = await db.query(
+        `INSERT INTO pre_claim_reviews (organization_id, episode_id, billing_period_id, utn_number, bundle_ref, notes)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [orgId, episode_id, billing_period_id ?? null, utn_number ?? null, bundle_ref ?? null, notes ?? null],
+      );
+      res.status(201).json(created);
+    } catch (err: any) {
+      console.error("[HH] PCR create error:", err);
+      res.status(500).json({ error: "Failed to create PCR record." });
+    }
+  });
+
   // GET /api/hh/episodes/:episodeId/rcd-status
   // Returns rcd_review_choice, PCR records, and NOA status for the episode.
   app.get("/api/hh/episodes/:episodeId/rcd-status", requireHH("home_health_skilled"), async (req, res) => {
@@ -16304,8 +16398,10 @@ Warmly,
   });
 
   // PATCH /api/hh/settings/rcd-choice
-  // Update rcd_review_choice on practice_settings for the current org.
-  app.patch("/api/hh/settings/rcd-choice", requireHH("home_health_skilled"), async (req, res) => {
+  // Admin-only: update rcd_review_choice on practice_settings for the current org.
+  // Guarded by requireRole("admin","rcm_manager") — only billing admins may change
+  // organization-level billing review policy.
+  app.patch("/api/hh/settings/rcd-choice", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
       const { rcd_review_choice } = req.body;

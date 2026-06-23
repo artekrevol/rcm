@@ -3,7 +3,7 @@ import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   CheckCircle, Circle, AlertTriangle, ChevronLeft,
-  Plus, Calendar, ClipboardList, Activity, User, FileText, Pencil,
+  Plus, Calendar, ClipboardList, Activity, User, FileText, Pencil, Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +21,16 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -325,15 +335,17 @@ function BillingPeriodCard({
 
 interface Payer { id: string; name: string; payer_id: string; }
 interface Provider { id: string; first_name: string; last_name: string; npi: string; }
+interface PcrRecord {
+  id: string;
+  review_status: string;
+  outcome: string | null;
+  utn_number: string | null;
+  bundle_ref: string | null;
+  created_at: string;
+}
 interface RcdStatus {
   rcd_review_choice: 'pre_claim_review' | 'postpayment_review' | null;
-  pcrs: Array<{
-    id: string;
-    review_status: string;
-    outcome: string | null;
-    utn_number: string | null;
-    created_at: string;
-  }>;
+  pcrs: PcrRecord[];
   noa: { id: string; status: string; filed_date: string | null; noa_control_number: string | null } | null;
 }
 
@@ -343,6 +355,10 @@ export default function EpisodeDetailPage() {
   const { toast } = useToast();
 
   const [editRcdChoice, setEditRcdChoice] = useState(false);
+  const [pendingRcdChoice, setPendingRcdChoice] = useState<string | null>(null);
+  const [editingUtnId, setEditingUtnId] = useState<string | null>(null);
+  const [utnDraft, setUtnDraft] = useState("");
+  const [bundleRefDraft, setBundleRefDraft] = useState("");
   const [addVisitPeriodId, setAddVisitPeriodId] = useState<string | null>(null);
   const [visitForm, setVisitForm] = useState({
     discipline: "",
@@ -461,8 +477,33 @@ export default function EpisodeDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/hh/episodes", episodeId, "rcd-status"] });
       toast({ title: "RCD review choice updated" });
       setEditRcdChoice(false);
+      setPendingRcdChoice(null);
     },
-    onError: () => toast({ title: "Error", description: "Could not update RCD choice.", variant: "destructive" }),
+    onError: () => {
+      toast({ title: "Error", description: "Could not update RCD choice. Admin or RCM manager role required.", variant: "destructive" });
+      setPendingRcdChoice(null);
+    },
+  });
+
+  const updatePcrMutation = useMutation({
+    mutationFn: async ({ id, ...fields }: { id: string; utn_number?: string; bundle_ref?: string; review_status?: string }) =>
+      apiRequest("PATCH", `/api/hh/pre-claim-reviews/${id}`, fields),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hh/episodes", episodeId, "rcd-status"] });
+      toast({ title: "PCR record updated" });
+      setEditingUtnId(null);
+    },
+    onError: (err: any) => toast({ title: "Error", description: err?.message ?? "Could not update PCR record.", variant: "destructive" }),
+  });
+
+  const createPcrMutation = useMutation({
+    mutationFn: async (fields: { episode_id: string; utn_number?: string; bundle_ref?: string }) =>
+      apiRequest("POST", "/api/hh/pre-claim-reviews", fields),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hh/episodes", episodeId, "rcd-status"] });
+      toast({ title: "PCR record created" });
+    },
+    onError: () => toast({ title: "Error", description: "Could not create PCR record.", variant: "destructive" }),
   });
 
   const ediFieldsMutation = useMutation({
@@ -595,6 +636,33 @@ export default function EpisodeDetailPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Confirmation dialog for RCD choice change (admin-only action) */}
+          <AlertDialog open={!!pendingRcdChoice} onOpenChange={(open) => { if (!open) setPendingRcdChoice(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Change Organization Billing Review Policy?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This changes the RCD review path for your entire organization.{" "}
+                  {pendingRcdChoice === 'pre_claim_review'
+                    ? 'Switching to Pre-Claim Review requires a valid, affirmed UTN before any final claim submission.'
+                    : 'Switching to Postpayment Review requires documentation readiness attestation before submission.'}
+                  {" "}This action requires admin or RCM manager role.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel onClick={() => { setPendingRcdChoice(null); setEditRcdChoice(false); }}>
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => pendingRcdChoice && rcdChoiceMutation.mutate(pendingRcdChoice)}
+                  data-testid="button-confirm-rcd-choice"
+                >
+                  Confirm Change
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
           {/* RCD choice row */}
           <div>
             <p className="text-xs text-muted-foreground mb-1.5">RCD Review Choice</p>
@@ -602,7 +670,7 @@ export default function EpisodeDetailPage() {
               <div className="flex items-center gap-2">
                 <Select
                   value={rcdStatus?.rcd_review_choice ?? ""}
-                  onValueChange={(v) => rcdChoiceMutation.mutate(v)}
+                  onValueChange={(v) => { setPendingRcdChoice(v); }}
                 >
                   <SelectTrigger className="h-8 text-xs w-52" data-testid="select-rcd-choice">
                     <SelectValue placeholder="Select review path…" />
@@ -639,6 +707,7 @@ export default function EpisodeDetailPage() {
                   className="h-6 px-2 text-xs"
                   onClick={() => setEditRcdChoice(true)}
                   data-testid="button-edit-rcd-choice"
+                  title="Admin or RCM manager role required"
                 >
                   <Pencil className="h-3 w-3" />
                 </Button>
@@ -649,36 +718,151 @@ export default function EpisodeDetailPage() {
           {/* PCR / UTN records (pre_claim_review path) */}
           {rcdStatus?.rcd_review_choice === 'pre_claim_review' && (
             <div>
-              <p className="text-xs text-muted-foreground mb-2">Pre-Claim Reviews &amp; UTN Records</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs text-muted-foreground">Pre-Claim Reviews &amp; UTN Records</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-xs gap-1"
+                  data-testid="button-add-pcr"
+                  onClick={() => createPcrMutation.mutate({ episode_id: episodeId })}
+                  disabled={createPcrMutation.isPending}
+                >
+                  <Plus className="h-3 w-3" />
+                  New PCR
+                </Button>
+              </div>
               {rcdStatus.pcrs.length === 0 ? (
                 <p className="text-xs text-muted-foreground italic py-1">No PCR records on file for this episode.</p>
               ) : (
-                <div className="space-y-1.5">
-                  {rcdStatus.pcrs.map((pcr) => (
-                    <div
-                      key={pcr.id}
-                      className="flex items-center gap-3 text-xs rounded border px-3 py-2 bg-muted/20"
-                      data-testid={`row-pcr-${pcr.id}`}
-                    >
-                      <Badge
-                        variant={pcr.review_status === 'accepted' ? 'default' : 'secondary'}
-                        className="text-[10px] shrink-0"
+                <div className="space-y-2">
+                  {rcdStatus.pcrs.map((pcr) => {
+                    const isAffirmed = pcr.review_status === 'affirmed';
+                    const isEditing = editingUtnId === pcr.id;
+                    return (
+                      <div
+                        key={pcr.id}
+                        className="rounded border px-3 py-2.5 bg-muted/20 space-y-2"
+                        data-testid={`row-pcr-${pcr.id}`}
                       >
-                        {pcr.review_status}
-                      </Badge>
-                      {pcr.utn_number && (
-                        <span className="font-mono font-medium text-green-700 dark:text-green-400" data-testid={`text-utn-${pcr.id}`}>
-                          UTN: {pcr.utn_number}
-                        </span>
-                      )}
-                      {pcr.outcome && (
-                        <span className="text-muted-foreground">{pcr.outcome}</span>
-                      )}
-                      <span className="ml-auto text-muted-foreground shrink-0">
-                        {new Date(pcr.created_at).toLocaleDateString()}
-                      </span>
-                    </div>
-                  ))}
+                        {/* Status + date row */}
+                        <div className="flex items-center gap-2 text-xs">
+                          <Badge
+                            variant={isAffirmed ? 'default' : pcr.review_status === 'rejected' ? 'destructive' : 'secondary'}
+                            className="text-[10px] shrink-0"
+                          >
+                            {pcr.review_status}
+                          </Badge>
+                          {pcr.outcome && <span className="text-muted-foreground">{pcr.outcome}</span>}
+                          <span className="ml-auto text-muted-foreground shrink-0">
+                            {new Date(pcr.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+
+                        {/* UTN + Bundle Ref edit row */}
+                        {isEditing ? (
+                          <div className="space-y-1.5">
+                            <div className="flex gap-2">
+                              <div className="flex-1">
+                                <Label className="text-[10px] text-muted-foreground">UTN Number</Label>
+                                <Input
+                                  className="h-7 text-xs font-mono"
+                                  value={utnDraft}
+                                  onChange={(e) => setUtnDraft(e.target.value)}
+                                  placeholder="Enter UTN…"
+                                  data-testid={`input-utn-${pcr.id}`}
+                                />
+                              </div>
+                              <div className="flex-1">
+                                <Label className="text-[10px] text-muted-foreground">Bundle Ref</Label>
+                                <Input
+                                  className="h-7 text-xs font-mono"
+                                  value={bundleRefDraft}
+                                  onChange={(e) => setBundleRefDraft(e.target.value)}
+                                  placeholder="Submission bundle ID…"
+                                  data-testid={`input-bundle-ref-${pcr.id}`}
+                                />
+                              </div>
+                            </div>
+                            <div className="flex gap-1.5">
+                              <Button
+                                size="sm"
+                                className="h-6 text-xs"
+                                disabled={!utnDraft.trim() || updatePcrMutation.isPending}
+                                onClick={() => updatePcrMutation.mutate({
+                                  id: pcr.id,
+                                  utn_number: utnDraft.trim(),
+                                  bundle_ref: bundleRefDraft.trim() || undefined,
+                                })}
+                                data-testid={`button-save-utn-${pcr.id}`}
+                              >
+                                Save UTN
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="default"
+                                className="h-6 text-xs bg-green-600 hover:bg-green-700"
+                                disabled={!utnDraft.trim() || updatePcrMutation.isPending}
+                                onClick={() => updatePcrMutation.mutate({
+                                  id: pcr.id,
+                                  utn_number: utnDraft.trim(),
+                                  bundle_ref: bundleRefDraft.trim() || undefined,
+                                  review_status: 'affirmed',
+                                })}
+                                data-testid={`button-affirm-utn-${pcr.id}`}
+                              >
+                                Save &amp; Affirm
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 text-xs"
+                                onClick={() => setEditingUtnId(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-3 text-xs">
+                            {pcr.utn_number ? (
+                              <span className="font-mono font-medium text-green-700 dark:text-green-400" data-testid={`text-utn-${pcr.id}`}>
+                                UTN: {pcr.utn_number}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground italic">No UTN on file</span>
+                            )}
+                            {pcr.bundle_ref && (
+                              <span className="text-muted-foreground font-mono text-[10px]" data-testid={`text-bundle-ref-${pcr.id}`}>
+                                Bundle: {pcr.bundle_ref}
+                              </span>
+                            )}
+                            {isAffirmed ? (
+                              <span className="ml-auto flex items-center gap-1 text-green-600 text-[10px]">
+                                <Lock className="h-3 w-3" />
+                                Locked
+                              </span>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="ml-auto h-5 px-1.5 text-[10px] gap-1"
+                                onClick={() => {
+                                  setEditingUtnId(pcr.id);
+                                  setUtnDraft(pcr.utn_number ?? "");
+                                  setBundleRefDraft(pcr.bundle_ref ?? "");
+                                }}
+                                data-testid={`button-edit-utn-${pcr.id}`}
+                              >
+                                <Pencil className="h-2.5 w-2.5" />
+                                Edit UTN
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

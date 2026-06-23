@@ -177,10 +177,11 @@ export async function assertRcdUtnGate(
      LIMIT 1`,
     [episodeId, organizationId],
   );
+  // Require BOTH a non-null UTN number AND an explicit 'affirmed' review_status
+  // or outcome === 'Affirmative'. Approved without a UTN does not pass.
   const utnAffirmed =
-    pcr?.outcome === 'Affirmative' ||
-    pcr?.review_status === 'affirmed' ||
-    pcr?.review_status === 'approved';
+    !!pcr?.utn_number &&
+    (pcr?.review_status === 'affirmed' || pcr?.outcome === 'Affirmative');
 
   return assertRcdUtnGateFromContext({ rcdReviewChoice, utnAffirmed });
 }
