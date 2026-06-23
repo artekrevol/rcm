@@ -9,6 +9,7 @@ export interface Violation {
   ediSegment?: string;
   suggestedFix?: string;
   packId: string;
+  data?: Record<string, unknown>;
 }
 
 export interface NormalizedServiceLine {

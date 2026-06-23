@@ -59,7 +59,7 @@ const rules: Rule[] = [
         : `the ${affected[0] === 1 ? '1st' : '2nd'} 30-day period`;
 
       return [{
-        ruleId: 'HH-NOA-TIMING-001', code: 'HH-NOA-TIMING-001', severity: 'warning', packId: PACK_ID,
+        ruleId: 'HH-NOA-TIMING-001', code: 'HH-NOA-TIMING-001', severity: 'error', packId: PACK_ID,
         fieldPath: 'noa_filing.penalty_days', ediSegment: 'CLM',
         message:
           `NOA was filed ${penaltyDays} day(s) late (after the 5-day deadline). ` +
@@ -68,6 +68,7 @@ const rules: Rule[] = [
         suggestedFix:
           'No correction is possible after the fact. Document the penalty for billing reconciliation. ' +
           'For future episodes, file the NOA within 5 calendar days of the start-of-care date.',
+        data: { penalty_days: penaltyDays },
       }];
     },
   },
