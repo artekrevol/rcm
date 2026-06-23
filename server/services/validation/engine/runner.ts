@@ -175,7 +175,7 @@ async function loadClaimWithRelations(
 
   const rawLines = Array.isArray(c.service_lines) ? c.service_lines : [];
 
-  return {
+  const base: ClaimWithRelations = {
     id: c.id,
     patientId: c.patient_id,
     organizationId: c.organization_id,
@@ -189,8 +189,6 @@ async function loadClaimWithRelations(
     icd10Codes: buildIcd10Codes(c.icd10_primary, c.icd10_secondary),
     serviceLines: normalizeServiceLines(rawLines),
     claimFrequencyCode: c.claim_frequency_code ?? '1',
-    // claimTransactionSet: '837I' for institutional HH claims; '837P' (or null) otherwise.
-    // Required by resolvePacksForClaim() to select 837I/HH validation packs.
     claimTransactionSet: c.claim_transaction_set ?? null,
     amount: Number(c.amount) || 0,
     patient: patRecord,
@@ -198,6 +196,98 @@ async function loadClaimWithRelations(
     auth,
     referringProvider,
   };
+
+  // ── HH context enrichment (837I claims only) ─────────────────────────────
+  // Loads episode / billing-period / NOA / PCR / practice data so HH packs
+  // can evaluate rules without casting to 'any' with missing data.
+  if (c.claim_transaction_set === '837I' && c.billing_period_id) {
+    const [bpRes, psRes] = await Promise.all([
+      pool.query(
+        `SELECT episode_id, hipps_code, oasis_date, fips_county, cbsa_code
+         FROM billing_periods WHERE id = $1 AND organization_id = $2`,
+        [c.billing_period_id, orgId],
+      ),
+      pool.query(
+        `SELECT rcd_review_choice FROM practice_settings WHERE organization_id = $1 LIMIT 1`,
+        [orgId],
+      ),
+    ]);
+    const bp = bpRes.rows[0] ?? null;
+    const ps = psRes.rows[0] ?? null;
+
+    if (bp) {
+      const episodeId: string = bp.episode_id;
+
+      const [visitRes, noaRes, epRes, pcrRes] = await Promise.all([
+        pool.query(
+          `SELECT discipline, COUNT(*) AS visit_count FROM episode_visits
+           WHERE billing_period_id = $1 AND organization_id = $2 GROUP BY discipline`,
+          [c.billing_period_id, orgId],
+        ),
+        pool.query(
+          `SELECT status, penalty_days, filed_date FROM noa_filings
+           WHERE episode_id = $1 AND organization_id = $2 ORDER BY created_at DESC LIMIT 1`,
+          [episodeId, orgId],
+        ),
+        pool.query(
+          `SELECT start_of_care_date FROM episodes WHERE id = $1 AND organization_id = $2`,
+          [episodeId, orgId],
+        ),
+        pool.query(
+          `SELECT utn_number FROM pre_claim_reviews
+           WHERE episode_id = $1 AND organization_id = $2
+             AND review_status IN ('affirmed','accepted','approved')
+             AND utn_number IS NOT NULL
+           ORDER BY created_at DESC LIMIT 1`,
+          [episodeId, orgId],
+        ),
+      ]);
+
+      const noa = noaRes.rows[0] ?? null;
+      const ep  = epRes.rows[0] ?? null;
+      const pcr = pcrRes.rows[0] ?? null;
+
+      const REV_CODE: Record<string, string> = {
+        'SN': '0551', 'skilled_nursing': '0551', 'skilled-nursing': '0551',
+        'PT': '0421', 'physical_therapy': '0421', 'physical-therapy': '0421',
+        'OT': '0431', 'occupational_therapy': '0431', 'occupational-therapy': '0431',
+        'ST': '0441', 'speech_therapy': '0441', 'speech-therapy': '0441',
+        'HHA': '0571', 'home_health_aide': '0571', 'home-health-aide': '0571',
+        'MSW': '0561', 'medical_social_work': '0561', 'medical-social-work': '0561',
+      };
+
+      base.hippsCode       = bp.hipps_code ?? null;
+      base.oasisDate       = bp.oasis_date ? new Date(bp.oasis_date).toISOString().slice(0, 10) : null;
+      base.fipsCounty      = bp.fips_county ?? null;
+      base.cbsaCode        = bp.cbsa_code ?? null;
+      base.visitLines      = visitRes.rows.map((r: any) => ({
+        revenueCode: REV_CODE[r.discipline as string] ?? '0559',
+        visitCount: Number(r.visit_count),
+      }));
+      base.noaStatus       = noa?.status ?? null;
+      base.noaPenaltyDays  = noa?.penalty_days ?? 0;
+      base.noaFiledDate    = noa?.filed_date ? new Date(noa.filed_date).toISOString().slice(0, 10) : null;
+      base.socDate         = ep?.start_of_care_date ? new Date(ep.start_of_care_date).toISOString().slice(0, 10) : null;
+      base.rcdReviewChoice = ps?.rcd_review_choice ?? null;
+      base.utnAffirmed     = !!pcr;
+      base.utnNumber       = pcr?.utn_number ?? null;
+
+      // visits_approved / visits_used from linked prior authorization
+      if (c.authorization_number) {
+        const authVRes = await pool.query(
+          `SELECT visits_approved, visits_used FROM prior_authorizations
+           WHERE auth_number = $1 AND organization_id = $2 LIMIT 1`,
+          [c.authorization_number, orgId],
+        );
+        if (authVRes.rows.length) {
+          base.visitsApproved = authVRes.rows[0].visits_approved ?? null;
+          base.visitsUsed     = authVRes.rows[0].visits_used ?? null;
+        }
+      }
+    }
+  }
+
+  return base;
 }
 
 async function loadPractice(orgId: string, pool: Pool): Promise<(PracticeRecord & { careModel: string }) | null> {

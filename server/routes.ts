@@ -16381,7 +16381,7 @@ Warmly,
       const [psResult, pcrResult, noaResult] = await Promise.all([
         db.query(`SELECT rcd_review_choice FROM practice_settings WHERE organization_id=$1 LIMIT 1`, [orgId]),
         db.query(
-          `SELECT id, review_status, outcome, utn_number, created_at FROM pre_claim_reviews
+          `SELECT id, review_status, outcome, utn_number, bundle_ref, created_at FROM pre_claim_reviews
            WHERE episode_id=$1 AND organization_id=$2 ORDER BY created_at DESC LIMIT 10`,
           [episodeId, orgId],
         ),
@@ -16519,10 +16519,8 @@ Warmly,
         catch (e: any) { if (e instanceof HhGateError) gateErrors.push({ gate: e.gate, code: e.code, message: e.message }); else throw e; }
       }, orgId);
 
-      const blockingErrors = gateErrors.filter(e =>
-        e.code !== 'HH-G4-UTN-REQUIRED' || e.gate !== 'rcd_utn' // only PCR UTN is blocking
-        || true // all gate errors are blocking
-      );
+      // All gate failures are hard blockers — claim generation cannot proceed.
+      const blockingErrors = gateErrors;
       if (blockingErrors.length > 0) {
         return res.status(422).json({
           error: "Gate check failed — claim cannot be generated",

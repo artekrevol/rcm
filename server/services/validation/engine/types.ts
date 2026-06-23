@@ -72,6 +72,12 @@ export interface PracticeRecord {
   agencyNpi: string | null;
 }
 
+/** Revenue line entry for 837I institutional claims. */
+export interface HhVisitLine {
+  revenueCode: string;
+  visitCount: number;
+}
+
 export interface ClaimWithRelations {
   id: string;
   patientId: string;
@@ -86,11 +92,43 @@ export interface ClaimWithRelations {
   icd10Codes: string[];
   serviceLines: NormalizedServiceLine[];
   claimFrequencyCode: string;
+  /** '837I' for institutional home-health claims; '837P' or null for professional. */
+  claimTransactionSet?: string | null;
   amount: number;
   patient: PatientRecord;
   payerRecord: PayerRecord | null;
   auth: AuthRecord | null;
   referringProvider: ReferringProviderRecord | null;
+
+  // ── HH context (populated only when claimTransactionSet === '837I') ──────
+  /** HIPPS code from the billing period. */
+  hippsCode?: string | null;
+  /** OASIS assessment reference date (YYYY-MM-DD). */
+  oasisDate?: string | null;
+  /** FIPS county code for value code 61 (home health). */
+  fipsCounty?: string | null;
+  /** CBSA code for geographic wage index. */
+  cbsaCode?: string | null;
+  /** Revenue lines built from episode visit discipline counts. */
+  visitLines?: HhVisitLine[];
+  /** Status of the most recent NOA filing for this episode. */
+  noaStatus?: string | null;
+  /** Number of days the NOA was filed late (0 = on time). */
+  noaPenaltyDays?: number;
+  /** Date the NOA was filed (YYYY-MM-DD). */
+  noaFiledDate?: string | null;
+  /** Episode start-of-care date (YYYY-MM-DD). */
+  socDate?: string | null;
+  /** Org-level RCD policy: 'pre_claim_review' | 'postpayment_review' | 'exempt'. */
+  rcdReviewChoice?: string | null;
+  /** True when the episode has an affirmed PCR with a UTN number. */
+  utnAffirmed?: boolean;
+  /** The UTN number from the most recent affirmed PCR, or null. */
+  utnNumber?: string | null;
+  /** Total visits authorized for linked prior authorization. */
+  visitsApproved?: number | null;
+  /** Visits consumed against the linked prior authorization. */
+  visitsUsed?: number | null;
 }
 
 export interface RuleContext {

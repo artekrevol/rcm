@@ -36,7 +36,7 @@ const rules: Rule[] = [
   {
     id: 'HH-NOA-TIMING-001',
     code: 'HH-NOA-TIMING-001',
-    severity: 'warning',
+    severity: 'error',
     description:
       'NOA 5-day clock: the NOA must be filed within 5 calendar days of the ' +
       'admission (SOC) date. Late filing incurs a payment reduction for each ' +

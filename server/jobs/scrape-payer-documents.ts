@@ -222,10 +222,24 @@ export async function scrapePayerDocuments(
     });
     await sleep(1500);
 
-    // Look up UHC payer ID
-    const { rows: payerRows } = await pool.query<{ id: string }>(
-      `SELECT id FROM payers WHERE LOWER(name) LIKE 'united%' LIMIT 1`
-    );
+    // Look up payer row for this scraper. Each payer_code maps to a name pattern
+    // so newly-added HH scrapers (aetna-hh, simply-hh, solis-hh, oscar-hh) resolve
+    // to their own payer row instead of always linking to United.
+    const PAYER_NAME_PATTERN: Record<string, string> = {
+      'uhc':        'united%',
+      'uhc-hh':     'united%',
+      'aetna-hh':   'aetna%',
+      'simply-hh':  'simply%',
+      'solis-hh':   'solis%',
+      'oscar-hh':   'oscar%',
+    };
+    const namePattern = PAYER_NAME_PATTERN[payer_code] ?? null;
+    const { rows: payerRows } = namePattern
+      ? await pool.query<{ id: string }>(
+          `SELECT id FROM payers WHERE LOWER(name) LIKE $1 LIMIT 1`,
+          [namePattern],
+        )
+      : { rows: [] };
     const payerId = payerRows[0]?.id ?? null;
 
     // Step 3 — Process each document
