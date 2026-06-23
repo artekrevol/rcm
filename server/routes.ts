@@ -3737,6 +3737,18 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       await pool.query(`CREATE INDEX IF NOT EXISTS idx_noa_filings_episode ON noa_filings(episode_id)`).catch(() => {});
     }
 
+    // FK constraints for HH tables — idempotent via EXCEPTION WHEN duplicate_object
+    await pool.query(`DO $$ BEGIN ALTER TABLE episodes ADD CONSTRAINT fk_episodes_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE billing_periods ADD CONSTRAINT fk_billing_periods_episode FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE billing_periods ADD CONSTRAINT fk_billing_periods_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE episode_visits ADD CONSTRAINT fk_episode_visits_episode FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE episode_visits ADD CONSTRAINT fk_episode_visits_period FOREIGN KEY (billing_period_id) REFERENCES billing_periods(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE episode_visits ADD CONSTRAINT fk_episode_visits_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE pre_claim_reviews ADD CONSTRAINT fk_pre_claim_reviews_episode FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE pre_claim_reviews ADD CONSTRAINT fk_pre_claim_reviews_period FOREIGN KEY (billing_period_id) REFERENCES billing_periods(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE noa_filings ADD CONSTRAINT fk_noa_filings_episode FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+    await pool.query(`DO $$ BEGIN ALTER TABLE noa_filings ADD CONSTRAINT fk_noa_filings_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
+
     // Seed Caritas org as home_health_skilled, rcd_state='FL' (Phase A provisioning)
     // rcd_review_choice is left null pending Victor's answer per spec.
     await pool.query(`
@@ -15709,13 +15721,27 @@ Warmly,
          VALUES ($1, $2, $3, $4, $5, 'pending', 0, NOW(), NOW())`,
         [crypto.randomUUID(), orgId, episodeId, start_of_care_date, dueDate.toISOString().slice(0, 10)]
       );
-      // Auto-create first 60-day billing period
+      // Auto-create two 30-day billing periods for the 60-day cert period.
+      // Period 1: days 1–30 (SOC to SOC+29)
+      // Period 2: days 31–60 (SOC+30 to SOC+59)
+      const bp1Start = new Date(socDate);
       const bp1End = new Date(socDate);
-      bp1End.setDate(bp1End.getDate() + 59);
+      bp1End.setDate(bp1End.getDate() + 29);
+      const bp2Start = new Date(socDate);
+      bp2Start.setDate(bp2Start.getDate() + 30);
+      const bp2End = new Date(socDate);
+      bp2End.setDate(bp2End.getDate() + 59);
       await db.query(
         `INSERT INTO billing_periods (id, organization_id, episode_id, period_number, period_start, period_end, period_status, created_at, updated_at)
          VALUES ($1, $2, $3, 1, $4, $5, 'open', NOW(), NOW())`,
-        [crypto.randomUUID(), orgId, episodeId, cert_period_start, cert_period_end]
+        [crypto.randomUUID(), orgId, episodeId,
+          bp1Start.toISOString().slice(0, 10), bp1End.toISOString().slice(0, 10)]
+      );
+      await db.query(
+        `INSERT INTO billing_periods (id, organization_id, episode_id, period_number, period_start, period_end, period_status, created_at, updated_at)
+         VALUES ($1, $2, $3, 2, $4, $5, 'open', NOW(), NOW())`,
+        [crypto.randomUUID(), orgId, episodeId,
+          bp2Start.toISOString().slice(0, 10), bp2End.toISOString().slice(0, 10)]
       );
       res.status(201).json(episode);
     } catch (err: any) {
@@ -15795,6 +15821,23 @@ Warmly,
       const allowed = ["open", "ready_to_bill", "billed", "paid", "voided"];
       if (!allowed.includes(period_status)) {
         return res.status(400).json({ error: `period_status must be one of: ${allowed.join(", ")}` });
+      }
+      // G6 completeness guard: before marking ready_to_bill, every visit in the
+      // billing period must be both documented AND signed.
+      if (period_status === "ready_to_bill") {
+        const incomplete = await db.query(
+          `SELECT COUNT(*) AS cnt FROM episode_visits
+           WHERE billing_period_id = $1 AND organization_id = $2
+             AND (documented IS DISTINCT FROM true OR signed IS DISTINCT FROM true)`,
+          [req.params.id, orgId]
+        );
+        const incompleteCnt = parseInt(incomplete.rows[0]?.cnt ?? "0", 10);
+        if (incompleteCnt > 0) {
+          return res.status(422).json({
+            error: "G6_VISITS_INCOMPLETE",
+            message: `${incompleteCnt} visit(s) in this billing period are not fully documented and signed. All visits must be documented and signed before marking ready-to-bill.`,
+          });
+        }
       }
       const { rows } = await db.query(
         `UPDATE billing_periods SET period_status=$1, hipps_code=COALESCE($2, hipps_code), updated_at=NOW()

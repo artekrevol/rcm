@@ -27,6 +27,8 @@ function getOrgId(req: Request): string | null {
 /**
  * Returns an Express middleware that reads practice_settings.care_model for
  * the current org and rejects with 403 if it does not match `required`.
+ * If the org has care_model = 'home_health_personal_care', returns 501
+ * (not yet implemented) so callers get a clear signal.
  *
  * @param required - the care_model value that must be present
  */
@@ -45,6 +47,18 @@ export function requireCareModel(required: CareModel) {
       );
 
       const careModel: string = result.rows[0]?.care_model ?? "outpatient_professional";
+
+      // home_health_personal_care is defined in the type system but not yet implemented.
+      // Return 501 so callers receive a clear "not implemented" signal rather than a
+      // misleading 403 access-denied.
+      if (careModel === "home_health_personal_care") {
+        res.status(501).json({
+          error: "not_implemented",
+          message: "Home Health Personal Care segment is not yet available.",
+          actualCareModel: careModel,
+        });
+        return;
+      }
 
       if (careModel !== required) {
         res.status(403).json({
