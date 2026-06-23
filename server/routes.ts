@@ -16458,8 +16458,10 @@ Warmly,
         );
 
         const { rows: [payer] } = await client.query(
+          // Allow global (organization_id IS NULL) payers such as Palmetto GBA JM
+          // as well as tenant-specific payers.
           `SELECT id, name, payer_id, stedi_payer_id, claim_filing_indicator, member_id_qualifier
-           FROM payers WHERE id=$1 AND organization_id=$2`,
+           FROM payers WHERE id=$1 AND (organization_id=$2 OR organization_id IS NULL)`,
           [payer_fk_id, orgId],
         );
 
@@ -16686,8 +16688,10 @@ Warmly,
           [noa.patient_id],
         );
         const { rows: [payer] } = await client.query(
+          // Allow global (organization_id IS NULL) payers such as Palmetto GBA JM
+          // as well as tenant-specific payers.
           `SELECT id, name, payer_id, stedi_payer_id, claim_filing_indicator, member_id_qualifier
-           FROM payers WHERE id=$1 AND organization_id=$2`,
+           FROM payers WHERE id=$1 AND (organization_id=$2 OR organization_id IS NULL)`,
           [payer_fk_id, orgId],
         );
         const { rows: [provider] } = await client.query(
@@ -16773,10 +16777,23 @@ Warmly,
       }
 
       // ── Update NOA status ─────────────────────────────────────────────────
-      // Use 'accepted' when Stedi confirms the NOA; 'filed' for successful submission
-      // without explicit acceptance (payer will confirm later via 277CA/835).
-      // 'filed' and 'accepted' are both recognized by the NOA precondition gate (G-B5).
-      const newStatus = stediResponse?.status === 'accepted' ? 'accepted' : 'filed';
+      // Stedi returns status values with mixed casing ('Accepted', 'Rejected').
+      // Rules:
+      //   • Stedi not configured (sandbox/dev)  → advance to 'filed' so gate passes.
+      //   • Stedi returns 'Accepted' (any case)  → advance to 'accepted'.
+      //   • Stedi returns 'Rejected' or other    → preserve current NOA status so
+      //     the precondition gate blocks further claims until re-submission succeeds.
+      const stediStatus = stediResponse?.status?.toLowerCase() ?? null;
+      let newStatus: string;
+      if (!stediResponse) {
+        // Stedi not configured — treat EDI generation itself as proof of filing.
+        newStatus = 'filed';
+      } else if (stediStatus === 'accepted') {
+        newStatus = 'accepted';
+      } else {
+        // Stedi rejected or returned unexpected status — keep current NOA status.
+        newStatus = noa.status ?? 'pending';
+      }
       const controlNumber = stediResponse?.interchangeControlNumber || noaResult.rpTransmitted.patientControlNumber;
 
       await withTenantTx(async (client) => {
