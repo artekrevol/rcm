@@ -3784,6 +3784,14 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await pool.query(`DO $$ BEGIN ALTER TABLE noa_filings ADD CONSTRAINT fk_noa_filings_episode FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
     await pool.query(`DO $$ BEGIN ALTER TABLE noa_filings ADD CONSTRAINT fk_noa_filings_org FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT; EXCEPTION WHEN duplicate_object THEN NULL; WHEN undefined_table THEN NULL; END $$`).catch(() => {});
 
+    // Phase B: billing_periods — 837I OASIS / CBSA / FIPS columns
+    await seederLog('column', 'billing_periods', 'oasis_date');
+    await pool.query(`ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS oasis_date DATE`).catch(() => {});
+    await seederLog('column', 'billing_periods', 'cbsa_code');
+    await pool.query(`ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS cbsa_code VARCHAR`).catch(() => {});
+    await seederLog('column', 'billing_periods', 'fips_county');
+    await pool.query(`ALTER TABLE billing_periods ADD COLUMN IF NOT EXISTS fips_county VARCHAR`).catch(() => {});
+
     // Seed Caritas org as home_health_skilled, rcd_state='FL' (Phase A provisioning)
     // rcd_review_choice is left null pending Victor's answer per spec.
     await pool.query(`
@@ -16075,6 +16083,376 @@ Warmly,
   // ── G6 Gate: claim submission guard for billing period readiness ───────────
   // This is enforced in the claim submit handler itself (see /api/billing/claims/:id/submit)
   // G6 check injected here for explicitness — actual gate is inline in the submit route.
+
+  // ── Phase B: Generate 837I period-of-care claim ───────────────────────────
+  // POST /api/hh/billing-periods/:id/generate-claim
+  //
+  // Body: { payer_fk_id, attending_provider_id, claim_frequency_code?, patient_status_code? }
+  //
+  // Gates run inside a single tenant transaction:
+  //   G-B3 Episode completeness — period must be ready_to_bill, all visits signed+documented
+  //   G-B4 RCD/UTN — PCR orgs blocked without affirmed UTN
+  //   G-B5 NOA precondition — episode must have filed/accepted NOA
+  //
+  // Returns: { claimId, edi, rpTransmitted, gateResult }
+  app.post("/api/hh/billing-periods/:id/generate-claim", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { id: periodId } = req.params;
+      const {
+        payer_fk_id,
+        attending_provider_id,
+        claim_frequency_code,
+        patient_status_code,
+      } = req.body;
+
+      if (!payer_fk_id) return res.status(400).json({ error: "payer_fk_id is required" });
+      if (!attending_provider_id) return res.status(400).json({ error: "attending_provider_id is required" });
+
+      // ── Load all required data in one tenant-scoped transaction ──────────
+      const context = await withTenantTx(async (client) => {
+        const { rows: [bp] } = await client.query(
+          `SELECT bp.*, e.patient_id, e.start_of_care_date, e.primary_diagnosis,
+                  e.cert_period_start, e.cert_period_end, e.episode_status
+           FROM billing_periods bp
+           JOIN episodes e ON e.id = bp.episode_id
+           WHERE bp.id=$1 AND bp.organization_id=$2`,
+          [periodId, orgId],
+        );
+        if (!bp) return null;
+
+        const { rows: [patient] } = await client.query(
+          `SELECT id, first_name, last_name, dob, member_id, sex, address, city, state, zip
+           FROM patients WHERE id=$1`,
+          [bp.patient_id],
+        );
+
+        const { rows: [payer] } = await client.query(
+          `SELECT id, name, payer_id, stedi_payer_id, claim_filing_indicator, member_id_qualifier
+           FROM payers WHERE id=$1 AND organization_id=$2`,
+          [payer_fk_id, orgId],
+        );
+
+        const { rows: [provider] } = await client.query(
+          `SELECT id, first_name, last_name, npi
+           FROM providers WHERE id=$1 AND organization_id=$2`,
+          [attending_provider_id, orgId],
+        );
+
+        const { rows: [ps] } = await client.query(
+          `SELECT primary_npi, tax_id, taxonomy_code, practice_name, legal_name,
+                  address, phone, agency_npi, agency_tax_id, rcd_review_choice
+           FROM practice_settings WHERE organization_id=$1`,
+          [orgId],
+        );
+
+        return { bp, patient, payer, provider, ps };
+      }, orgId);
+
+      if (!context) return res.status(404).json({ error: "Billing period not found" });
+      const { bp, patient, payer, provider, ps } = context;
+      if (!patient) return res.status(422).json({ error: "Patient record not found for this episode" });
+      if (!payer) return res.status(422).json({ error: "Payer not found" });
+      if (!provider) return res.status(422).json({ error: "Attending provider not found" });
+      if (!ps) return res.status(422).json({ error: "Practice settings not configured" });
+
+      // ── Run gates ─────────────────────────────────────────────────────────
+      const { assertEpisodeGate, assertRcdUtnGate, assertNoaPreconditionGate, HhGateError }
+        = await import("./services/hh/gates.js");
+
+      let gateErrors: { gate: string; code: string; message: string }[] = [];
+      await withTenantTx(async (client) => {
+        try { await assertEpisodeGate(periodId, orgId, client); }
+        catch (e: any) { if (e instanceof HhGateError) gateErrors.push({ gate: e.gate, code: e.code, message: e.message }); else throw e; }
+        try { await assertRcdUtnGate(bp.episode_id, orgId, client); }
+        catch (e: any) { if (e instanceof HhGateError) gateErrors.push({ gate: e.gate, code: e.code, message: e.message }); else throw e; }
+        try { await assertNoaPreconditionGate(bp.episode_id, orgId, client); }
+        catch (e: any) { if (e instanceof HhGateError) gateErrors.push({ gate: e.gate, code: e.code, message: e.message }); else throw e; }
+      }, orgId);
+
+      const blockingErrors = gateErrors.filter(e =>
+        e.code !== 'HH-G4-UTN-REQUIRED' || e.gate !== 'rcd_utn' // only PCR UTN is blocking
+        || true // all gate errors are blocking
+      );
+      if (blockingErrors.length > 0) {
+        return res.status(422).json({
+          error: "Gate check failed — claim cannot be generated",
+          gates: blockingErrors,
+        });
+      }
+
+      // ── Build 837I input ──────────────────────────────────────────────────
+      const { generate837I } = await import("./services/edi-generator-institutional.js");
+      const { resolveISA15 } = await import("./lib/environment.js");
+      const isa15 = resolveISA15(false);
+
+      const addressObj = typeof ps.address === "string" ? JSON.parse(ps.address || "{}") : (ps.address || {});
+      const practiceNpi = ps.agency_npi || ps.primary_npi || "";
+      const practiceTaxId = ps.agency_tax_id || ps.tax_id || "";
+
+      // Derive freq code from period_number if not supplied
+      const freqCode = (claim_frequency_code as '2'|'3'|'4'|'9') ||
+        (bp.period_number === 1 ? '2' : '3');
+
+      const ediResult = generate837I({
+        isa15: isa15 as 'P' | 'T',
+        claimFrequencyCode: freqCode,
+        patientControlNumber: bp.id,
+        totalCharge: parseFloat(bp.charge_amount || "0"),
+        hippsCode: bp.hipps_code || "",
+        visitLines: [], // visit lines can be supplied later via UI
+        oasisDate: bp.oasis_date || "",
+        fipsCounty: bp.fips_county || "",
+        cbsaCode: bp.cbsa_code || null,
+        patientStatusCode: patient_status_code || "30",
+        admission: {
+          socDate: bp.start_of_care_date,
+          firstVisitDate: bp.period_start,
+          principalDiagnosis: bp.primary_diagnosis || "",
+        },
+        patient: {
+          first_name: patient.first_name || "",
+          last_name: patient.last_name || "",
+          dob: patient.dob || "",
+          member_id: patient.member_id || "",
+          sex: patient.sex,
+          address: patient.address,
+          city: patient.city,
+          state: patient.state,
+          zip: patient.zip,
+        },
+        practice: {
+          name: ps.practice_name || "",
+          legal_name: ps.legal_name,
+          npi: practiceNpi,
+          tax_id: practiceTaxId,
+          taxonomy_code: ps.taxonomy_code || "251E00000X",
+          address: addressObj.line1 || addressObj.address || "",
+          city: addressObj.city || "",
+          state: addressObj.state || "",
+          zip: addressObj.zip || "",
+          phone: ps.phone,
+        },
+        attendingProvider: {
+          first_name: provider.first_name,
+          last_name: provider.last_name,
+          npi: provider.npi || "",
+        },
+        payer: {
+          name: payer.name,
+          payer_id: payer.payer_id,
+          stedi_payer_id: payer.stedi_payer_id,
+          claim_filing_indicator: payer.claim_filing_indicator,
+          member_id_qualifier: payer.member_id_qualifier,
+        },
+      });
+
+      // ── Create claim record ───────────────────────────────────────────────
+      const claimId = await withTenantTx(async (client) => {
+        const { rows: [claim] } = await client.query(
+          `INSERT INTO claims (
+             id, organization_id, patient_id, status, payer_fk_id, payer_name,
+             service_date, place_of_service, icd10_codes, service_lines, amount,
+             claim_transaction_set, claim_frequency_code, created_at, updated_at
+           ) VALUES (
+             gen_random_uuid(), $1, $2, 'draft', $3, $4, $5, '12', $6, '[]'::jsonb, $7, '837I', $8, NOW(), NOW()
+           ) RETURNING id`,
+          [
+            orgId, bp.patient_id, payer_fk_id, payer.name,
+            bp.period_start,
+            JSON.stringify([bp.primary_diagnosis || '']),
+            parseFloat(bp.charge_amount || "0"),
+            freqCode,
+          ],
+        );
+        await client.query(
+          `UPDATE billing_periods SET claim_id=$1, updated_at=NOW() WHERE id=$2 AND organization_id=$3`,
+          [claim.id, periodId, orgId],
+        );
+        return claim.id;
+      }, orgId);
+
+      res.json({
+        claimId,
+        edi: ediResult.edi,
+        rpTransmitted: ediResult.rpTransmitted,
+        gateWarnings: gateErrors,
+      });
+    } catch (err: any) {
+      if (err?.name === 'HhGateError') {
+        return res.status(422).json({ error: err.message, gate: err.gate, code: err.code });
+      }
+      console.error("[HH] generate-claim error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // ── Phase B: Submit NOA via Stedi ─────────────────────────────────────────
+  // POST /api/hh/noa/:id/submit
+  //
+  // Generates the 837I NOA EDI and submits to Stedi.
+  // ISA15 guard applies — 'P' only in production (isAutomatedContext=false by default).
+  // Returns: { noaId, status, edi, rpTransmitted, stediResponse? }
+  app.post("/api/hh/noa/:id/submit", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { id: noaId } = req.params;
+      const { attending_provider_id, payer_fk_id } = req.body;
+
+      if (!attending_provider_id) return res.status(400).json({ error: "attending_provider_id is required" });
+      if (!payer_fk_id) return res.status(400).json({ error: "payer_fk_id is required" });
+
+      // ── Load NOA + episode + patient + practice ────────────────────────────
+      const context = await withTenantTx(async (client) => {
+        const { rows: [noa] } = await client.query(
+          `SELECT n.*, e.patient_id, e.start_of_care_date, e.primary_diagnosis, e.cert_period_start
+           FROM noa_filings n
+           JOIN episodes e ON e.id = n.episode_id
+           WHERE n.id=$1 AND n.organization_id=$2`,
+          [noaId, orgId],
+        );
+        if (!noa) return null;
+
+        const { rows: [patient] } = await client.query(
+          `SELECT id, first_name, last_name, dob, member_id, sex, address, city, state, zip
+           FROM patients WHERE id=$1`,
+          [noa.patient_id],
+        );
+        const { rows: [payer] } = await client.query(
+          `SELECT id, name, payer_id, stedi_payer_id, claim_filing_indicator, member_id_qualifier
+           FROM payers WHERE id=$1 AND organization_id=$2`,
+          [payer_fk_id, orgId],
+        );
+        const { rows: [provider] } = await client.query(
+          `SELECT id, first_name, last_name, npi FROM providers WHERE id=$1 AND organization_id=$2`,
+          [attending_provider_id, orgId],
+        );
+        const { rows: [ps] } = await client.query(
+          `SELECT primary_npi, tax_id, taxonomy_code, practice_name, legal_name,
+                  address, phone, agency_npi, agency_tax_id
+           FROM practice_settings WHERE organization_id=$1`,
+          [orgId],
+        );
+        return { noa, patient, payer, provider, ps };
+      }, orgId);
+
+      if (!context) return res.status(404).json({ error: "NOA filing not found" });
+      const { noa, patient, payer, provider, ps } = context;
+      if (!patient) return res.status(422).json({ error: "Patient record not found" });
+      if (!payer) return res.status(422).json({ error: "Payer not found" });
+      if (!provider) return res.status(422).json({ error: "Attending provider not found" });
+
+      const { generateNOA } = await import("./services/edi-generator-institutional.js");
+      const { resolveISA15 } = await import("./lib/environment.js");
+      const isa15 = resolveISA15(false);
+
+      const addressObj = typeof ps.address === "string" ? JSON.parse(ps.address || "{}") : (ps.address || {});
+      const practiceNpi = ps.agency_npi || ps.primary_npi || "";
+      const practiceTaxId = ps.agency_tax_id || ps.tax_id || "";
+
+      const noaResult = generateNOA({
+        isa15: isa15 as 'P' | 'T',
+        noaType: 'original',
+        patientControlNumber: noa.id,
+        admission: {
+          socDate: noa.start_of_care_date || noa.soc_date,
+          firstVisitDate: noa.cert_period_start || noa.soc_date,
+          principalDiagnosis: noa.primary_diagnosis || "",
+        },
+        patient: {
+          first_name: patient.first_name || "",
+          last_name: patient.last_name || "",
+          dob: patient.dob || "",
+          member_id: patient.member_id || "",
+          sex: patient.sex,
+          address: patient.address,
+          city: patient.city,
+          state: patient.state,
+          zip: patient.zip,
+        },
+        practice: {
+          name: ps.practice_name || "",
+          legal_name: ps.legal_name,
+          npi: practiceNpi,
+          tax_id: practiceTaxId,
+          taxonomy_code: ps.taxonomy_code || "251E00000X",
+          address: addressObj.line1 || addressObj.address || "",
+          city: addressObj.city || "",
+          state: addressObj.state || "",
+          zip: addressObj.zip || "",
+          phone: ps.phone,
+        },
+        attendingProvider: { first_name: provider.first_name, last_name: provider.last_name, npi: provider.npi || "" },
+        payer: {
+          name: payer.name, payer_id: payer.payer_id,
+          stedi_payer_id: payer.stedi_payer_id,
+          claim_filing_indicator: payer.claim_filing_indicator,
+          member_id_qualifier: payer.member_id_qualifier,
+        },
+      });
+
+      // ── Submit via Stedi (same raw-x12 endpoint — [C-4] to confirm) ────────
+      let stediResponse: any = null;
+      const { isStediConfigured, submitClaim: stediSubmit }
+        = await import("./services/stedi-claims.js").catch(() => ({ isStediConfigured: () => false, submitClaim: null }));
+
+      if (isStediConfigured() && stediSubmit) {
+        stediResponse = await (stediSubmit as any)({ rawEdi: noaResult.edi, isa15 });
+      }
+
+      // ── Update NOA status ─────────────────────────────────────────────────
+      const newStatus = stediResponse?.status === 'accepted' ? 'accepted' : 'submitted';
+      const controlNumber = stediResponse?.interchangeControlNumber || noaResult.rpTransmitted.patientControlNumber;
+
+      await withTenantTx(async (client) => {
+        await client.query(
+          `UPDATE noa_filings SET status=$1, noa_control_number=COALESCE($2, noa_control_number), updated_at=NOW()
+           WHERE id=$3 AND organization_id=$4`,
+          [newStatus, controlNumber, noaId, orgId],
+        );
+      }, orgId);
+
+      res.json({
+        noaId,
+        status: newStatus,
+        edi: noaResult.edi,
+        rpTransmitted: noaResult.rpTransmitted,
+        stediResponse,
+      });
+    } catch (err: any) {
+      console.error("[HH] NOA submit error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
+
+  // ── Phase B: Update billing period 837I fields (HIPPS, OASIS, CBSA, FIPS) ─
+  // PATCH /api/hh/billing-periods/:id/edi-fields
+  app.patch("/api/hh/billing-periods/:id/edi-fields", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { hipps_code, oasis_date, cbsa_code, fips_county } = req.body;
+
+      const updated = await withTenantTx(async (client) => {
+        const { rows: [row] } = await client.query(
+          `UPDATE billing_periods
+           SET hipps_code = COALESCE($1, hipps_code),
+               oasis_date = COALESCE($2, oasis_date),
+               cbsa_code  = COALESCE($3, cbsa_code),
+               fips_county = COALESCE($4, fips_county),
+               updated_at = NOW()
+           WHERE id=$5 AND organization_id=$6 RETURNING *`,
+          [hipps_code || null, oasis_date || null, cbsa_code || null, fips_county || null, req.params.id, orgId],
+        );
+        return row;
+      }, orgId);
+
+      if (!updated) return res.status(404).json({ error: "Billing period not found" });
+      res.json(updated);
+    } catch (err: any) {
+      console.error("[HH] EDI fields update error:", err);
+      res.status(500).json({ error: "An unexpected error occurred." });
+    }
+  });
 
 }
 

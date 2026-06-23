@@ -1016,6 +1016,22 @@ export const billingPeriods = pgTable("billing_periods", {
   periodStatus: varchar("period_status").notNull().default("open"),
   hippsCode: varchar("hipps_code"),
   claimId: varchar("claim_id"),
+  /**
+   * OASIS M0090 completion date — emitted as occurrence code 50 on the
+   * final 837I period claim. Required by CMS for home health final claims.
+   */
+  oasisDate: date("oasis_date"),
+  /**
+   * CBSA (Core Based Statistical Area) code — emitted as value code 61
+   * on the 837I period claim per CMS HH billing guidance.
+   */
+  cbsaCode: varchar("cbsa_code"),
+  /**
+   * FIPS state+county code — emitted as value code 85 on the 837I period
+   * claim. Required on all TOB 32x home health claims.
+   * Format: 2-char state + 3-char county (e.g., "FL067" = Miami-Dade, FL).
+   */
+  fipsCounty: varchar("fips_county"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

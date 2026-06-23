@@ -3,7 +3,7 @@ import { useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   CheckCircle, Circle, AlertTriangle, ChevronLeft,
-  Plus, Calendar, ClipboardList, Activity, User,
+  Plus, Calendar, ClipboardList, Activity, User, FileText, Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +57,10 @@ interface BillingPeriod {
   period_end: string;
   period_status: string;
   hipps_code?: string;
+  oasis_date?: string;
+  cbsa_code?: string;
+  fips_county?: string;
+  claim_id?: string;
 }
 
 interface EpisodeVisit {
@@ -175,14 +179,19 @@ function BillingPeriodCard({
   visits,
   onStatusChange,
   onAddVisit,
+  onEditEdiFields,
+  onGenerateClaim,
 }: {
   period: BillingPeriod;
   visits: EpisodeVisit[];
   onStatusChange: (periodId: string, status: string) => void;
   onAddVisit: (periodId: string) => void;
+  onEditEdiFields: (period: BillingPeriod) => void;
+  onGenerateClaim: (period: BillingPeriod) => void;
 }) {
   const allComplete = visits.length > 0 && visits.every(v => v.documented && v.signed);
   const canMarkReady = period.period_status === "open" && allComplete;
+  const canGenerateClaim = period.period_status === "ready_to_bill" && !!period.hipps_code;
 
   return (
     <Card data-testid={`card-period-${period.id}`}>
@@ -216,11 +225,69 @@ function BillingPeriodCard({
             )}
           </div>
         </div>
-        {period.hipps_code && (
-          <CardDescription>HIPPS: {period.hipps_code}</CardDescription>
-        )}
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* 837I EDI Fields */}
+        <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">837I Fields</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 text-xs gap-1 text-muted-foreground hover:text-foreground"
+              data-testid={`button-edit-edi-fields-${period.id}`}
+              onClick={() => onEditEdiFields(period)}
+            >
+              <Pencil className="h-3 w-3" />
+              Edit
+            </Button>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <span className="text-muted-foreground">HIPPS Code</span>
+            <span className="font-mono font-medium" data-testid={`text-hipps-${period.id}`}>
+              {period.hipps_code || <span className="text-muted-foreground italic">not set</span>}
+            </span>
+            <span className="text-muted-foreground">OASIS Date</span>
+            <span data-testid={`text-oasis-date-${period.id}`}>
+              {period.oasis_date || <span className="text-muted-foreground italic">not set</span>}
+            </span>
+            <span className="text-muted-foreground">CBSA Code</span>
+            <span data-testid={`text-cbsa-${period.id}`}>
+              {period.cbsa_code || <span className="text-muted-foreground italic">not set</span>}
+            </span>
+            <span className="text-muted-foreground">FIPS County</span>
+            <span data-testid={`text-fips-${period.id}`}>
+              {period.fips_county || <span className="text-muted-foreground italic">not set</span>}
+            </span>
+          </div>
+          {period.claim_id ? (
+            <div className="flex items-center gap-2 pt-1 border-t mt-2">
+              <FileText className="h-3.5 w-3.5 text-green-600" />
+              <span className="text-xs text-green-700 dark:text-green-400 font-medium">
+                Claim generated — ID: <span className="font-mono">{period.claim_id.slice(0, 8)}…</span>
+              </span>
+            </div>
+          ) : (
+            <div className="pt-1 border-t mt-2">
+              <Button
+                size="sm"
+                className="w-full h-7 text-xs gap-1.5"
+                variant={canGenerateClaim ? "default" : "outline"}
+                disabled={!canGenerateClaim}
+                data-testid={`button-generate-claim-${period.id}`}
+                title={
+                  !period.hipps_code ? "HIPPS code required before generating claim" :
+                  period.period_status !== "ready_to_bill" ? "Period must be Ready to Bill" : ""
+                }
+                onClick={() => onGenerateClaim(period)}
+              >
+                <FileText className="h-3 w-3" />
+                Generate 837I Claim
+              </Button>
+            </div>
+          )}
+        </div>
+
         <CompletenessChecklist visits={visits} />
         <Separator />
         <div className="space-y-1">
@@ -240,7 +307,15 @@ function BillingPeriodCard({
           {visits.length === 0 ? (
             <p className="text-xs text-muted-foreground py-2 text-center">No visits recorded yet.</p>
           ) : (
-            visits.map(v => <div key={v.id}>{v.discipline} — {v.visit_date}</div>)
+            visits.map(v => (
+              <div key={v.id} className="flex items-center gap-2 text-xs px-2 py-1 rounded hover:bg-muted/40">
+                <span className="font-medium">{v.discipline}</span>
+                <span className="text-muted-foreground">{v.visit_date}</span>
+                {v.documented && v.signed
+                  ? <CheckCircle className="h-3 w-3 text-green-500 ml-auto shrink-0" />
+                  : <Circle className="h-3 w-3 text-muted-foreground ml-auto shrink-0" />}
+              </div>
+            ))
           )}
         </div>
       </CardContent>
@@ -248,10 +323,14 @@ function BillingPeriodCard({
   );
 }
 
+interface Payer { id: string; name: string; payer_id: string; }
+interface Provider { id: string; first_name: string; last_name: string; npi: string; }
+
 export default function EpisodeDetailPage() {
   const [, params] = useRoute("/billing/hh/episodes/:id");
   const episodeId = params?.id ?? "";
   const { toast } = useToast();
+
   const [addVisitPeriodId, setAddVisitPeriodId] = useState<string | null>(null);
   const [visitForm, setVisitForm] = useState({
     discipline: "",
@@ -261,6 +340,12 @@ export default function EpisodeDetailPage() {
     signed: false,
     counts_against_auth: true,
   });
+
+  const [editEdiPeriod, setEditEdiPeriod] = useState<BillingPeriod | null>(null);
+  const [ediForm, setEdiForm] = useState({ hipps_code: "", oasis_date: "", cbsa_code: "", fips_county: "" });
+
+  const [generateClaimPeriod, setGenerateClaimPeriod] = useState<BillingPeriod | null>(null);
+  const [claimForm, setClaimForm] = useState({ payer_fk_id: "", attending_provider_id: "" });
 
   const { data: episode, isLoading: epLoading } = useQuery<Episode>({
     queryKey: ["/api/hh/episodes", episodeId],
@@ -326,6 +411,65 @@ export default function EpisodeDetailPage() {
       apiRequest("PATCH", `/api/hh/visits/${visitId}`, { [field]: value }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/hh/episodes", episodeId, "visits"] });
+    },
+  });
+
+  const { data: payers = [] } = useQuery<Payer[]>({
+    queryKey: ["/api/billing/payers"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/payers", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const { data: providers = [] } = useQuery<Provider[]>({
+    queryKey: ["/api/billing/providers"],
+    queryFn: async () => {
+      const res = await fetch("/api/billing/providers", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  const ediFieldsMutation = useMutation({
+    mutationFn: async ({ periodId, fields }: { periodId: string; fields: typeof ediForm }) =>
+      apiRequest("PATCH", `/api/hh/billing-periods/${periodId}/edi-fields`, fields),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hh/episodes", episodeId, "billing-periods"] });
+      toast({ title: "837I fields saved" });
+      setEditEdiPeriod(null);
+    },
+    onError: async (err: any) => {
+      let msg = "Could not save EDI fields.";
+      try { const b = await err?.response?.json?.(); msg = b?.error ?? msg; } catch {}
+      toast({ title: "Error", description: msg, variant: "destructive" });
+    },
+  });
+
+  const generateClaimMutation = useMutation({
+    mutationFn: async ({ periodId, body }: { periodId: string; body: typeof claimForm }) =>
+      apiRequest("POST", `/api/hh/billing-periods/${periodId}/generate-claim`, body),
+    onSuccess: async (res: any) => {
+      const data = await res.json?.() ?? res;
+      queryClient.invalidateQueries({ queryKey: ["/api/hh/episodes", episodeId, "billing-periods"] });
+      toast({
+        title: "837I claim generated",
+        description: `Claim ID: ${(data.claimId ?? "").slice(0, 8)}…`,
+      });
+      setGenerateClaimPeriod(null);
+    },
+    onError: async (err: any) => {
+      let msg = "Could not generate claim.";
+      try {
+        const b = await err?.response?.json?.();
+        if (b?.gates?.length) {
+          msg = b.gates.map((g: any) => g.message).join(" | ");
+        } else {
+          msg = b?.error ?? msg;
+        }
+      } catch {}
+      toast({ title: "Gate check failed", description: msg, variant: "destructive" });
     },
   });
 
@@ -437,6 +581,19 @@ export default function EpisodeDetailPage() {
                 onAddVisit={(periodId) => {
                   setAddVisitPeriodId(periodId);
                 }}
+                onEditEdiFields={(p) => {
+                  setEditEdiPeriod(p);
+                  setEdiForm({
+                    hipps_code: p.hipps_code ?? "",
+                    oasis_date: p.oasis_date ?? "",
+                    cbsa_code: p.cbsa_code ?? "",
+                    fips_county: p.fips_county ?? "",
+                  });
+                }}
+                onGenerateClaim={(p) => {
+                  setGenerateClaimPeriod(p);
+                  setClaimForm({ payer_fk_id: "", attending_provider_id: "" });
+                }}
               />
             );
           })
@@ -514,6 +671,133 @@ export default function EpisodeDetailPage() {
               }}
             >
               {addVisitMutation.isPending ? "Adding…" : "Add Visit"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit 837I EDI Fields Dialog */}
+      <Dialog open={!!editEdiPeriod} onOpenChange={(o) => !o && setEditEdiPeriod(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit 837I Fields — Period {editEdiPeriod?.period_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="input-hipps">HIPPS Code <span className="text-red-500">*</span></Label>
+              <Input
+                id="input-hipps"
+                placeholder="e.g. 1A111"
+                data-testid="input-hipps-code"
+                value={ediForm.hipps_code}
+                onChange={e => setEdiForm({ ...ediForm, hipps_code: e.target.value.toUpperCase() })}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="input-oasis-date">OASIS Assessment Date (Occurrence Code 50)</Label>
+              <Input
+                id="input-oasis-date"
+                type="date"
+                data-testid="input-oasis-date"
+                value={ediForm.oasis_date}
+                onChange={e => setEdiForm({ ...ediForm, oasis_date: e.target.value })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="input-cbsa">CBSA Code (Value 61)</Label>
+                <Input
+                  id="input-cbsa"
+                  placeholder="e.g. 33100"
+                  data-testid="input-cbsa-code"
+                  value={ediForm.cbsa_code}
+                  onChange={e => setEdiForm({ ...ediForm, cbsa_code: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="input-fips">FIPS County (Value 85)</Label>
+                <Input
+                  id="input-fips"
+                  placeholder="e.g. FL086"
+                  data-testid="input-fips-county"
+                  value={ediForm.fips_county}
+                  onChange={e => setEdiForm({ ...ediForm, fips_county: e.target.value })}
+                />
+              </div>
+            </div>
+            <Button
+              className="w-full"
+              data-testid="button-save-edi-fields"
+              disabled={ediFieldsMutation.isPending || !ediForm.hipps_code}
+              onClick={() => {
+                if (!editEdiPeriod) return;
+                ediFieldsMutation.mutate({ periodId: editEdiPeriod.id, fields: ediForm });
+              }}
+            >
+              {ediFieldsMutation.isPending ? "Saving…" : "Save EDI Fields"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Generate 837I Claim Dialog */}
+      <Dialog open={!!generateClaimPeriod} onOpenChange={(o) => !o && setGenerateClaimPeriod(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate 837I Claim — Period {generateClaimPeriod?.period_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            {generateClaimPeriod && (
+              <div className="rounded-md bg-muted/40 p-3 text-xs space-y-1">
+                <p><span className="text-muted-foreground">HIPPS:</span> <span className="font-mono font-medium">{generateClaimPeriod.hipps_code}</span></p>
+                <p><span className="text-muted-foreground">Period:</span> {generateClaimPeriod.period_start} → {generateClaimPeriod.period_end}</p>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label htmlFor="select-payer">Payer <span className="text-red-500">*</span></Label>
+              <Select
+                value={claimForm.payer_fk_id}
+                onValueChange={(v) => setClaimForm({ ...claimForm, payer_fk_id: v })}
+              >
+                <SelectTrigger id="select-payer" data-testid="select-payer-claim">
+                  <SelectValue placeholder={payers.length === 0 ? "No payers configured" : "Select payer"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {payers.map(p => (
+                    <SelectItem key={p.id} value={p.id}>{p.name} ({p.payer_id})</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="select-provider">Attending Physician <span className="text-red-500">*</span></Label>
+              <Select
+                value={claimForm.attending_provider_id}
+                onValueChange={(v) => setClaimForm({ ...claimForm, attending_provider_id: v })}
+              >
+                <SelectTrigger id="select-provider" data-testid="select-provider-claim">
+                  <SelectValue placeholder={providers.length === 0 ? "No providers configured" : "Select provider"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {providers.map(p => (
+                    <SelectItem key={p.id} value={p.id}>{p.first_name} {p.last_name} · {p.npi}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {generateClaimMutation.isPending && (
+              <p className="text-xs text-muted-foreground text-center animate-pulse">Running gate checks + generating EDI…</p>
+            )}
+            <Button
+              className="w-full"
+              data-testid="button-submit-generate-claim"
+              disabled={generateClaimMutation.isPending || !claimForm.payer_fk_id || !claimForm.attending_provider_id}
+              onClick={() => {
+                if (!generateClaimPeriod) return;
+                generateClaimMutation.mutate({ periodId: generateClaimPeriod.id, body: claimForm });
+              }}
+            >
+              {generateClaimMutation.isPending ? "Generating…" : "Generate Claim"}
             </Button>
           </div>
         </DialogContent>

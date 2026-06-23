@@ -5,3 +5,4 @@
 - [care_model enum migration](care-model-enum.md) — seeder must drop column default before ALTER TYPE; EXCEPTION WHEN others silently swallows failures.
 - [claimshield_app_role grants](rls-grants.md) — RLS policies never run until the role has table-level GRANTs; HH tables need explicit GRANT in seeder.
 - [Phase A test harness](phase-a-tests.md) — test runner: NODE_OPTIONS='--import tsx/esm' node --test; pure logic extracted to shared/ for node:test without React deps.
+- [Phase B 837I generator interface](phase-b-837i-interface.md) — EDI generator inputs, ISA15 default 'T', valid test NPIs, gate function signatures, VB-test fixes.

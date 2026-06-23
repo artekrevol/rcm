@@ -340,3 +340,51 @@ export const IEA = (e: {
   1: String(e.functionalGroupCount),
   2: e.controlNumber,
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 837I-specific segment helpers
+// All helpers below are used ONLY in edi-generator-institutional.ts.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── CL1 — Institutional Claim Code ───────────────────────────────────────────
+// Required on all 837I institutional claims.
+// CL101: Admission type code
+//   1=Emergency, 2=Urgent, 3=Elective, 5=Other, 9=Information not available
+// CL102: Admission source code
+//   1=Non-health care, 4=Transfer from hospital, 5=Transfer from SNF,
+//   B=Transfer from another HHA, C=Readmission to same HHA, 9=Info not available
+// CL103: Patient status code
+//   01=Routine discharge, 06=Home, 20=Expired, 30=Still patient,
+//   50=Hospice-home, 51=Hospice-medical
+export const CL1 = (e: {
+  admissionTypeCode: string;    // 01
+  admissionSourceCode: string;  // 02
+  patientStatusCode: string;    // 03
+}) => buildSegment('CL1', {
+  1: e.admissionTypeCode,
+  2: e.admissionSourceCode,
+  3: e.patientStatusCode,
+});
+
+// ── SV2 — Institutional Service Line ──────────────────────────────────────────
+// Used in 837I Loop 2400.
+// SV201: Revenue code (4-digit, e.g., "0023" for HH PPS HIPPS line).
+// SV202: Composite procedure identifier — caller pre-builds the composite.
+//   For the 0023 HIPPS line: "HH:HIPPS_CODE" where HH = home health qualifier.
+//   For discipline visit lines: omit or use the bare procedure code.
+// SV203: Line charge ("NNN.NN").
+// SV204: Unit or basis for measurement code (default "UN").
+// SV205: Service unit count.
+export const SV2 = (e: {
+  revenueCode: string;          // 01
+  procedureComposite?: string;  // 02 — optional; pre-built composite
+  charge: string;               // 03
+  unitOfMeasure?: string;       // 04 — default 'UN'
+  serviceUnits: number | string;// 05
+}) => buildSegment('SV2', {
+  1: e.revenueCode,
+  2: e.procedureComposite,
+  3: e.charge,
+  4: e.unitOfMeasure ?? 'UN',
+  5: String(e.serviceUnits),
+});

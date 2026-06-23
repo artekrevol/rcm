@@ -13,6 +13,11 @@ import { x12Base837pPack } from './packs/x12-base-837p.js';
 import { pgbaVaCcn837pPack } from './packs/pgba-va-ccn-837p.js';
 import { hhEpisodeCompletenessPack } from './packs/hh-episode-completeness.js';
 import { hhAuthVisitCapPack } from './packs/hh-auth-visit-cap.js';
+// Phase B — 837I / HH institutional packs
+import { palmettoHh837iPack } from './packs/palmetto-hh-837i.js';
+import { hhRcdGatePack } from './packs/hh-rcd-gate.js';
+import { hhNoaPreconditionPack } from './packs/hh-noa-precondition.js';
+import { hhNoaTimingPack } from './packs/hh-noa-timing.js';
 
 const registry = new Map<string, RulePack>();
 
@@ -25,6 +30,11 @@ registerPack(x12Base837pPack);
 registerPack(pgbaVaCcn837pPack);
 registerPack(hhEpisodeCompletenessPack);
 registerPack(hhAuthVisitCapPack);
+// Phase B — 837I institutional packs (HH-only, guarded by careModels filter)
+registerPack(palmettoHh837iPack);
+registerPack(hhRcdGatePack);
+registerPack(hhNoaPreconditionPack);
+registerPack(hhNoaTimingPack);
 
 export function getRegisteredPacks(): RulePack[] {
   return Array.from(registry.values());
