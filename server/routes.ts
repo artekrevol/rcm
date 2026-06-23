@@ -3582,6 +3582,24 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     await seederLog('column', 'payers', 'hh_supported');
     await pool.query(`ALTER TABLE payers ADD COLUMN IF NOT EXISTS hh_supported BOOLEAN`).catch(() => {});
 
+    // Seed Palmetto GBA JM as global Medicare FFS HH payer (hh_supported=true)
+    if (!(await seederLog('row', 'payers', 'palmetto-gba-jm-001'))) {
+      await pool.query(`
+        INSERT INTO payers (id, name, payer_id, payer_category, claim_filing_indicator, hh_supported,
+          timely_filing_days, auth_required, billing_type, is_active, is_custom, created_at)
+        VALUES ('palmetto-gba-jm-001', 'Palmetto GBA JM — Medicare FFS Home Health', 'PGBA-JM',
+          'Medicare', 'MB', true, 365, false, 'institutional', true, false, NOW())
+        ON CONFLICT (id) DO UPDATE SET hh_supported = true
+      `).catch(() => {});
+    }
+
+    // Mark known MA home health payers as hh_supported=true
+    await pool.query(`
+      UPDATE payers SET hh_supported = true
+      WHERE LOWER(name) LIKE ANY(ARRAY['%united%health%', '%aetna%', '%simply%health%', '%solis%', '%oscar%'])
+        AND is_active = true
+    `).catch(() => {});
+
     // episodes table
     if (!(await seederLog('table', 'episodes'))) {
       await pool.query(`
@@ -7776,12 +7794,12 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           charge: 0,
         }));
 
-        const { generate837I } = await import("./services/edi-generator-institutional.js");
+        const { selectAndGenerate837I } = await import("./services/edi/select-generator.js");
         const freqCode837i = (c.claim_frequency_code || '2') as '2'|'3'|'4'|'9';
         const practiceAddr837i = typeof ps.address === "string"
           ? JSON.parse(ps.address || "{}") : (ps.address || {});
 
-        const { edi: edi837i, rpTransmitted: rp837i } = generate837I({
+        const { edi: edi837i, rpTransmitted: rp837i } = selectAndGenerate837I({
           isa15: isa15 as 'P'|'T',
           claimFrequencyCode: freqCode837i,
           patientControlNumber: c.id,
@@ -16254,6 +16272,58 @@ Warmly,
   //   G-B5 NOA precondition — episode must have filed/accepted NOA
   //
   // Returns: { claimId, edi, rpTransmitted, gateResult }
+  // GET /api/hh/episodes/:episodeId/rcd-status
+  // Returns rcd_review_choice, PCR records, and NOA status for the episode.
+  app.get("/api/hh/episodes/:episodeId/rcd-status", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { episodeId } = req.params;
+      const db = await import("./db").then(m => m.pool);
+      const [psResult, pcrResult, noaResult] = await Promise.all([
+        db.query(`SELECT rcd_review_choice FROM practice_settings WHERE organization_id=$1 LIMIT 1`, [orgId]),
+        db.query(
+          `SELECT id, review_status, outcome, utn_number, created_at FROM pre_claim_reviews
+           WHERE episode_id=$1 AND organization_id=$2 ORDER BY created_at DESC LIMIT 10`,
+          [episodeId, orgId],
+        ),
+        db.query(
+          `SELECT id, status, filed_date, noa_control_number FROM noa_filings
+           WHERE episode_id=$1 AND organization_id=$2 ORDER BY created_at DESC LIMIT 1`,
+          [episodeId, orgId],
+        ),
+      ]);
+      res.json({
+        rcd_review_choice: psResult.rows[0]?.rcd_review_choice ?? null,
+        pcrs: pcrResult.rows,
+        noa: noaResult.rows[0] ?? null,
+      });
+    } catch (err: any) {
+      console.error("[HH] RCD status error:", err);
+      res.status(500).json({ error: "Failed to load RCD status." });
+    }
+  });
+
+  // PATCH /api/hh/settings/rcd-choice
+  // Update rcd_review_choice on practice_settings for the current org.
+  app.patch("/api/hh/settings/rcd-choice", requireHH("home_health_skilled"), async (req, res) => {
+    try {
+      const orgId = getOrgId(req);
+      const { rcd_review_choice } = req.body;
+      if (!['pre_claim_review', 'postpayment_review'].includes(rcd_review_choice)) {
+        return res.status(400).json({ error: "rcd_review_choice must be 'pre_claim_review' or 'postpayment_review'" });
+      }
+      const db = await import("./db").then(m => m.pool);
+      await db.query(
+        `UPDATE practice_settings SET rcd_review_choice=$1, updated_at=NOW() WHERE organization_id=$2`,
+        [rcd_review_choice, orgId],
+      );
+      res.json({ rcd_review_choice });
+    } catch (err: any) {
+      console.error("[HH] RCD choice update error:", err);
+      res.status(500).json({ error: "Failed to update RCD choice." });
+    }
+  });
+
   app.post("/api/hh/billing-periods/:id/generate-claim", requireHH("home_health_skilled"), async (req, res) => {
     try {
       const orgId = getOrgId(req);
@@ -16632,6 +16702,15 @@ Warmly,
     try {
       const orgId = getOrgId(req);
       const { hipps_code, oasis_date, cbsa_code, fips_county, period_charge } = req.body;
+
+      // Server-side HIPPS pattern validation
+      if (hipps_code != null && hipps_code !== '') {
+        if (!/^[A-Z0-9]{5}$/.test(String(hipps_code).trim())) {
+          return res.status(400).json({
+            error: `Invalid HIPPS code "${hipps_code}". Must be exactly 5 uppercase alphanumeric characters (A-Z, 0-9).`,
+          });
+        }
+      }
 
       const updated = await withTenantTx(async (client) => {
         const { rows: [row] } = await client.query(

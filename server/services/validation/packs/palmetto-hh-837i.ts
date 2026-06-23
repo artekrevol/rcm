@@ -13,26 +13,90 @@ import type { RulePack, Rule, RuleContext, Violation } from '../engine/types.js'
 
 const PACK_ID = 'palmetto-hh-837i';
 
+/** Valid HH revenue codes per CMS billing guide */
+const VALID_HH_REVENUE_CODES = new Set([
+  '0023',                          // HIPPS/OASIS grouper line
+  '0551', '0559',                  // Skilled Nursing
+  '0421', '0429',                  // Physical Therapy
+  '0431', '0439',                  // Occupational Therapy
+  '0441', '0449',                  // Speech-Language Pathology
+  '0571', '0579',                  // Home Health Aide
+  '0561', '0569',                  // Medical Social Services
+]);
+
 const rules: Rule[] = [
   {
     id: 'PHH-001',
     code: 'PHH-001',
     severity: 'error',
-    description: 'HIPPS code must be present and exactly 5 characters on the 0023 revenue line of a final 32x claim.',
+    description: 'HIPPS code must be present, exactly 5 uppercase alphanumeric characters, on the 0023 revenue line of a final 32x claim.',
     ediSegment: 'SV2',
     check(ctx: RuleContext): Violation[] | null {
       const hipps: string | null | undefined = (ctx.claim as any).hippsCode;
-      if (!hipps || hipps.trim().length !== 5) {
+      const HIPPS_PATTERN = /^[A-Z0-9]{5}$/;
+      if (!hipps) {
         return [{
           ruleId: 'PHH-001', code: 'PHH-001', severity: 'error', packId: PACK_ID,
           fieldPath: 'billing_period.hipps_code', ediSegment: 'SV2',
-          message: hipps
-            ? `HIPPS code "${hipps}" is not exactly 5 characters. HIPPS codes must be 5 alphanumeric characters.`
-            : 'HIPPS code is missing. A valid HIPPS code is required on the 0023 revenue line of all 32x HH final claims.',
+          message: 'HIPPS code is missing. A valid HIPPS code is required on the 0023 revenue line of all 32x HH final claims.',
           suggestedFix: 'Enter the 5-character HIPPS code from the OASIS grouper on the billing period.',
         }];
       }
+      if (!HIPPS_PATTERN.test(hipps.trim())) {
+        return [{
+          ruleId: 'PHH-001', code: 'PHH-001', severity: 'error', packId: PACK_ID,
+          fieldPath: 'billing_period.hipps_code', ediSegment: 'SV2',
+          message: `HIPPS code "${hipps}" is invalid. Must be exactly 5 uppercase alphanumeric characters (A-Z, 0-9). No spaces, lowercase, or special characters.`,
+          suggestedFix: 'Enter the 5-character uppercase alphanumeric HIPPS code from the OASIS grouper (e.g., "1AA11").',
+        }];
+      }
       return null;
+    },
+  },
+
+  {
+    id: 'PHH-007',
+    code: 'PHH-007',
+    severity: 'error',
+    description: 'Claim frequency code must be valid for HH 32x claims (2=first period, 3=subsequent, 4=final, 9=void).',
+    ediSegment: 'CLM',
+    check(ctx: RuleContext): Violation[] | null {
+      const freqCode: string | null | undefined = (ctx.claim as any).claimFrequencyCode;
+      const VALID_HH_FREQ = ['2', '3', '4', '9'];
+      if (!freqCode || !VALID_HH_FREQ.includes(freqCode)) {
+        return [{
+          ruleId: 'PHH-007', code: 'PHH-007', severity: 'error', packId: PACK_ID,
+          fieldPath: 'billing_period.claim_frequency_code', ediSegment: 'CLM',
+          message: `Claim frequency code "${freqCode ?? '(missing)'}" is not valid for a home health 32x claim. ` +
+            'Valid codes: 2 (first 30-day period), 3 (subsequent), 4 (final), 9 (void/cancel).',
+          suggestedFix: 'Select the correct claim frequency code for this billing period.',
+        }];
+      }
+      return null;
+    },
+  },
+
+  {
+    id: 'PHH-008',
+    code: 'PHH-008',
+    severity: 'error',
+    description: 'All visit revenue lines must use CMS-approved HH revenue codes (055x, 042x, 043x, 044x, 057x, 056x).',
+    ediSegment: 'SV2',
+    check(ctx: RuleContext): Violation[] | null {
+      const visitLines: Array<{ revenueCode: string }> | undefined = (ctx.claim as any).visitLines;
+      if (!visitLines || visitLines.length === 0) return null;
+      const invalid = visitLines
+        .filter(l => l.revenueCode !== '0023' && !VALID_HH_REVENUE_CODES.has(l.revenueCode))
+        .map(l => l.revenueCode);
+      if (invalid.length === 0) return null;
+      return [{
+        ruleId: 'PHH-008', code: 'PHH-008', severity: 'error', packId: PACK_ID,
+        fieldPath: 'billing_period.visit_lines', ediSegment: 'SV2',
+        message: `Invalid HH revenue code(s): ${invalid.join(', ')}. ` +
+          'Revenue codes must be from the approved set: 055x (SN), 042x (PT), 043x (OT), 044x (ST), 057x (HHA), 056x (MSW).',
+        suggestedFix: 'Correct discipline-to-revenue-code mapping for the flagged visit lines.',
+        data: { invalid_codes: invalid },
+      }];
     },
   },
 

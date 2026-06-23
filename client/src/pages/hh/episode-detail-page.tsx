@@ -325,12 +325,24 @@ function BillingPeriodCard({
 
 interface Payer { id: string; name: string; payer_id: string; }
 interface Provider { id: string; first_name: string; last_name: string; npi: string; }
+interface RcdStatus {
+  rcd_review_choice: 'pre_claim_review' | 'postpayment_review' | null;
+  pcrs: Array<{
+    id: string;
+    review_status: string;
+    outcome: string | null;
+    utn_number: string | null;
+    created_at: string;
+  }>;
+  noa: { id: string; status: string; filed_date: string | null; noa_control_number: string | null } | null;
+}
 
 export default function EpisodeDetailPage() {
   const [, params] = useRoute("/billing/hh/episodes/:id");
   const episodeId = params?.id ?? "";
   const { toast } = useToast();
 
+  const [editRcdChoice, setEditRcdChoice] = useState(false);
   const [addVisitPeriodId, setAddVisitPeriodId] = useState<string | null>(null);
   const [visitForm, setVisitForm] = useState({
     discipline: "",
@@ -430,6 +442,27 @@ export default function EpisodeDetailPage() {
       if (!res.ok) return [];
       return res.json();
     },
+  });
+
+  const { data: rcdStatus } = useQuery<RcdStatus>({
+    queryKey: ["/api/hh/episodes", episodeId, "rcd-status"],
+    queryFn: async () => {
+      const res = await fetch(`/api/hh/episodes/${episodeId}/rcd-status`, { credentials: "include" });
+      if (!res.ok) return { rcd_review_choice: null, pcrs: [], noa: null };
+      return res.json();
+    },
+    enabled: !!episodeId,
+  });
+
+  const rcdChoiceMutation = useMutation({
+    mutationFn: async (choice: string) =>
+      apiRequest("PATCH", "/api/hh/settings/rcd-choice", { rcd_review_choice: choice }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/hh/episodes", episodeId, "rcd-status"] });
+      toast({ title: "RCD review choice updated" });
+      setEditRcdChoice(false);
+    },
+    onError: () => toast({ title: "Error", description: "Could not update RCD choice.", variant: "destructive" }),
   });
 
   const ediFieldsMutation = useMutation({
@@ -542,6 +575,147 @@ export default function EpisodeDetailPage() {
           <div>
             <p className="text-xs text-muted-foreground">Notes</p>
             <p className="font-medium">{episode.notes ?? "—"}</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* RCD / PCR Panel */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-primary" />
+                Review Choice &amp; PCR Status
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                RCD review path and Pre-Claim Review / UTN tracking
+              </p>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* RCD choice row */}
+          <div>
+            <p className="text-xs text-muted-foreground mb-1.5">RCD Review Choice</p>
+            {editRcdChoice ? (
+              <div className="flex items-center gap-2">
+                <Select
+                  value={rcdStatus?.rcd_review_choice ?? ""}
+                  onValueChange={(v) => rcdChoiceMutation.mutate(v)}
+                >
+                  <SelectTrigger className="h-8 text-xs w-52" data-testid="select-rcd-choice">
+                    <SelectValue placeholder="Select review path…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pre_claim_review">Pre-Claim Review (PCR)</SelectItem>
+                    <SelectItem value="postpayment_review">Postpayment Review</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="ghost" size="sm" onClick={() => setEditRcdChoice(false)}>Cancel</Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Badge
+                  variant="outline"
+                  className={
+                    rcdStatus?.rcd_review_choice === 'pre_claim_review'
+                      ? 'text-blue-700 border-blue-300 dark:text-blue-300'
+                      : rcdStatus?.rcd_review_choice === 'postpayment_review'
+                      ? 'text-amber-700 border-amber-300 dark:text-amber-300'
+                      : 'text-muted-foreground'
+                  }
+                  data-testid="badge-rcd-choice"
+                >
+                  {rcdStatus?.rcd_review_choice === 'pre_claim_review'
+                    ? 'Pre-Claim Review'
+                    : rcdStatus?.rcd_review_choice === 'postpayment_review'
+                    ? 'Postpayment Review'
+                    : 'Not configured'}
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => setEditRcdChoice(true)}
+                  data-testid="button-edit-rcd-choice"
+                >
+                  <Pencil className="h-3 w-3" />
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* PCR / UTN records (pre_claim_review path) */}
+          {rcdStatus?.rcd_review_choice === 'pre_claim_review' && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">Pre-Claim Reviews &amp; UTN Records</p>
+              {rcdStatus.pcrs.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic py-1">No PCR records on file for this episode.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {rcdStatus.pcrs.map((pcr) => (
+                    <div
+                      key={pcr.id}
+                      className="flex items-center gap-3 text-xs rounded border px-3 py-2 bg-muted/20"
+                      data-testid={`row-pcr-${pcr.id}`}
+                    >
+                      <Badge
+                        variant={pcr.review_status === 'accepted' ? 'default' : 'secondary'}
+                        className="text-[10px] shrink-0"
+                      >
+                        {pcr.review_status}
+                      </Badge>
+                      {pcr.utn_number && (
+                        <span className="font-mono font-medium text-green-700 dark:text-green-400" data-testid={`text-utn-${pcr.id}`}>
+                          UTN: {pcr.utn_number}
+                        </span>
+                      )}
+                      {pcr.outcome && (
+                        <span className="text-muted-foreground">{pcr.outcome}</span>
+                      )}
+                      <span className="ml-auto text-muted-foreground shrink-0">
+                        {new Date(pcr.created_at).toLocaleDateString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Postpayment readiness notice */}
+          {rcdStatus?.rcd_review_choice === 'postpayment_review' && (
+            <div className="rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 text-xs">
+              <p className="font-medium text-amber-800 dark:text-amber-300 mb-1">Postpayment Readiness Required</p>
+              <p className="text-amber-700 dark:text-amber-400">
+                All visit notes, OASIS assessments, and physician orders must be signed and accessible
+                before final claim submission. Ensure documentation readiness is confirmed.
+              </p>
+            </div>
+          )}
+
+          {/* NOA status */}
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-muted-foreground">NOA Status:</p>
+            <Badge
+              variant="outline"
+              className={
+                rcdStatus?.noa?.status === 'accepted'
+                  ? 'text-green-700 border-green-300 dark:text-green-400 text-xs'
+                  : rcdStatus?.noa?.status === 'submitted'
+                  ? 'text-blue-700 border-blue-300 dark:text-blue-300 text-xs'
+                  : 'text-muted-foreground text-xs'
+              }
+              data-testid="badge-noa-status"
+            >
+              {rcdStatus?.noa ? rcdStatus.noa.status : 'Not filed'}
+            </Badge>
+            {rcdStatus?.noa?.noa_control_number && (
+              <span className="text-xs text-muted-foreground font-mono">
+                #{rcdStatus.noa.noa_control_number}
+              </span>
+            )}
           </div>
         </CardContent>
       </Card>
