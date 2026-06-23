@@ -16718,7 +16718,23 @@ Warmly,
       if (!provider) return res.status(422).json({ error: "Attending provider not found" });
 
       const { generateNOA } = await import("./services/edi-generator-institutional.js");
-      const { resolveISA15 } = await import("./lib/environment.js");
+      const { resolveISA15, isAutomatedContext: isAutoCtx } = await import("./lib/environment.js");
+
+      // ── Automated-agent guard (parity with 837P submit-stedi) ─────────────
+      // NOA submission carries the same production-safety requirement as claim
+      // submission: only a human session may trigger a real Stedi EDI send.
+      const isNOAAutomated = isAutoCtx({
+        hasUserSession: !!(req.user),
+        userAgent: req.headers["user-agent"],
+        xAutomatedAgent: req.headers["x-automated-agent"] as string | undefined,
+      });
+      if (isNOAAutomated && process.env.STEDI_AUTOMATED_TEST_MODE !== "true") {
+        return res.status(403).json({
+          success: false,
+          error: "Automated NOA submission blocked. Human session required for production NOA submission.",
+        });
+      }
+
       const isa15 = resolveISA15(false);
 
       const addressObj = typeof ps.address === "string" ? JSON.parse(ps.address || "{}") : (ps.address || {});

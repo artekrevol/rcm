@@ -48,20 +48,38 @@ const rules: Rule[] = [
     severity: 'warning',
     description:
       'Postpayment review (RCD): claim is allowed to proceed but postpayment ' +
-      'documentation must be ready. Palmetto GBA may audit this claim after payment.',
+      'documentation must be ready. Only flags when documentation-readiness fields ' +
+      '(HIPPS code, OASIS date, at least one visit line) are incomplete. ' +
+      'Palmetto GBA may audit this claim after payment.',
     ediSegment: 'CLM',
     check(ctx: RuleContext): Violation[] | null {
       const rcdChoice: string | null = (ctx.claim as any).rcdReviewChoice ?? null;
       if (rcdChoice !== 'postpayment_review') return null;
 
+      // Evaluate documentation-readiness fields.
+      // Only warn when one or more required fields are missing — not unconditionally.
+      const hippsCode: string | null | undefined = (ctx.claim as any).hippsCode;
+      const oasisDate: string | null | undefined = (ctx.claim as any).oasisDate;
+      const visitLines: unknown[] | undefined = (ctx.claim as any).visitLines;
+
+      const missingFields: string[] = [];
+      if (!hippsCode) missingFields.push('HIPPS code');
+      if (!oasisDate) missingFields.push('OASIS reference date');
+      if (!visitLines || visitLines.length === 0) missingFields.push('visit documentation (revenue lines)');
+
+      if (missingFields.length === 0) return null; // documentation is complete — no warning needed
+
       return [{
         ruleId: 'HH-RCD-002', code: 'HH-RCD-002', severity: 'warning', packId: PACK_ID,
         fieldPath: 'practice_settings.rcd_review_choice', ediSegment: 'CLM',
         message:
-          'Postpayment review election: this claim will be paid but is subject to ' +
-          'postpayment audit by Palmetto GBA. Ensure all clinical documentation ' +
-          '(visit notes, OASIS, POC, physician orders) is complete and retained.',
-        suggestedFix: 'Verify all clinical documentation is complete and stored for potential ADR response.',
+          'Postpayment review election: this claim is subject to postpayment audit by Palmetto GBA. ' +
+          `The following documentation-readiness fields are incomplete: ${missingFields.join(', ')}. ` +
+          'Complete these fields before submission to ensure audit readiness.',
+        suggestedFix:
+          'Complete the missing fields on the Billing Period screen before generating this claim. ' +
+          'All clinical documentation (visit notes, OASIS, POC, physician orders) must be retained for ADR response.',
+        data: { missingFields },
       }];
     },
   },

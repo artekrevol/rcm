@@ -202,6 +202,19 @@ const rules: Rule[] = [
   },
 ];
 
+// Palmetto GBA payer identifiers:
+//   'PGBA-JM'  — Jurisdiction M (South: AL, AR, FL, GA, LA, MS, NC, SC, TN, VA, WV + DC/PR/VI)
+//   'PGBA-JJ'  — Jurisdiction J (South East) — less common
+// Rules appliesWhen checks on these IDs to avoid applying Palmetto-specific
+// edits (occurrence code 50, value code 61/45, HIPPS format) to non-Palmetto payers.
+const PALMETTO_PAYER_IDS = new Set(['PGBA-JM', 'PGBA-JJ', 'palmetto-gba-jm-001']);
+
+/** True when the claim is being billed to a Palmetto GBA MAC. */
+function isPalmettoPayerCtx(ctx: RuleContext): boolean {
+  const payerId = ctx.claim.payerRecord?.payerId ?? (ctx.claim as any).payerFkId ?? null;
+  return payerId != null && PALMETTO_PAYER_IDS.has(payerId);
+}
+
 export const palmettoHh837iPack: RulePack = {
   id: PACK_ID,
   name: 'Palmetto GBA JM — Home Health 837I',
@@ -210,5 +223,11 @@ export const palmettoHh837iPack: RulePack = {
     claimType: '837I',
     careModels: ['home_health_skilled'],
   },
-  rules,
+  // Payer-scope each rule individually via appliesWhen so that generic HH
+  // 837I validation packs do not absorb Palmetto-specific constraints.
+  rules: rules.map(r => ({
+    ...r,
+    appliesWhen: (ctx: RuleContext) =>
+      isPalmettoPayerCtx(ctx) && (r.appliesWhen ? r.appliesWhen(ctx) : true),
+  })),
 };
