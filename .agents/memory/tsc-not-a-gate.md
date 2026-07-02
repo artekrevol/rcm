@@ -8,7 +8,7 @@ description: Why a red `npm run check` (tsc) is expected in this repo and how to
 The repo's `check` script runs `tsc --noEmit`, but the project **runs and ships via `tsx`** (`dev`: `tsx server/index.ts`; `build`: `tsx script/build.ts`). `tsx` strips types without type-checking, so the codebase has accumulated a large number of standing tsc errors (~145 at last count) and still runs fine.
 
 The dominant pre-existing error families (all systemic, all over `server/routes.ts` from line ~66 onward):
-- `Cannot find name 'pool'` / `Cannot find name 'db'` (scoping)
+- `Cannot find name 'pool'` / `Cannot find name 'db'` (scoping) — **CAUTION: this family hid a real prod bug.** `Cannot find name 'X'` is a genuine runtime `ReferenceError` under tsx too (tsx strips types, not scoping). In July 2026, bare `pool` refs in submit/EDI routes crashed production with 500s until a top-level `import { pool } from "./db"` was added to routes.ts. If a "pre-existing" tsc error is a bare-identifier error on a code path that actually executes, treat it as a live bug, not noise.
 - `Argument of type 'string | null' is not assignable to 'string | undefined'` (`getOrgId()` returns `string | null`, fed into query helpers)
 - `Property 'X' does not exist on type '{}'` (raw `client.query`/`withTenantTx` results typed as `{}`)
 - `Set/MapIterator can only be iterated ... target es2015+` (tsconfig target)

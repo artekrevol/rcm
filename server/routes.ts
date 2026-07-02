@@ -36,6 +36,7 @@ import { getEnrolledPayers } from "./services/practice-profile-helpers";
 import { withTenantTx } from "./middleware/tenant-context";
 import { serializeDiagnosisPointer } from "./services/edi-generator";
 import { resolvePos, resolveHomebound } from "./services/practice-profile-resolvers";
+import { pool } from "./db";
 import { PREVENTION_RULES } from "./fixtures/prevention-rules";
 import { PREFLIGHT_RULES } from "./fixtures/preflight-rules";
 
