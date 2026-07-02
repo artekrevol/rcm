@@ -481,6 +481,12 @@ export default function ClaimDetailPage() {
   const isBlocked = claim.readinessStatus === "RED";
   const canSubmit = stediConfigured && claim.readinessStatus === "GREEN" && ["created", "ready", "exported"].includes(claim.status);
 
+  const lastRiskFactors: Array<{ severity?: string; message?: string; fixSuggestion?: string }> =
+    Array.isArray((claim as any).lastRiskFactors) ? (claim as any).lastRiskFactors : [];
+  const blockReasons = lastRiskFactors
+    .filter((f) => f.severity === "block" && f.message)
+    .map((f) => f.message as string);
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-4">
@@ -769,13 +775,24 @@ export default function ClaimDetailPage() {
               <ShieldAlert className="h-5 w-5 text-red-600 dark:text-red-400" />
             </div>
             <div className="flex-1">
-              <h3 className="font-semibold text-red-800 dark:text-red-300">
-                Blocked before submission — Authorization likely required
+              <h3 className="font-semibold text-red-800 dark:text-red-300" data-testid="text-blocked-title">
+                Blocked before submission
               </h3>
-              <p className="text-sm text-red-700/80 dark:text-red-400/80 mt-1">
-                This claim has been flagged as high-risk and requires additional verification
-                before it can be submitted.
-              </p>
+              {blockReasons.length > 0 ? (
+                <ul className="text-sm text-red-700/80 dark:text-red-400/80 mt-1 space-y-1 list-disc pl-4" data-testid="list-block-reasons">
+                  {blockReasons.slice(0, 4).map((reason, i) => (
+                    <li key={i} data-testid={`text-block-reason-${i}`}>{reason}</li>
+                  ))}
+                  {blockReasons.length > 4 && (
+                    <li className="list-none text-xs">…and {blockReasons.length - 4} more — see "Why this decision?"</li>
+                  )}
+                </ul>
+              ) : (
+                <p className="text-sm text-red-700/80 dark:text-red-400/80 mt-1">
+                  This claim has been flagged as high-risk and requires additional verification
+                  before it can be submitted.
+                </p>
+              )}
               <div className="mt-3 flex items-center gap-2">
                 <Badge className="bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300 border-0">
                   Potential revenue protected: ${claim.amount.toLocaleString()}

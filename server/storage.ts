@@ -26,7 +26,7 @@ import {
   emailTemplates, nurtureSections, emailLogs, availabilitySlots, appointments,
   chatSessions, chatMessages, chatAnalytics, activityLogs, vobVerifications,
 } from "@shared/schema";
-import { db } from "./db";
+import { db, pool } from "./db";
 import { eq, desc, sql, and, count } from "drizzle-orm";
 
 export interface IStorage {
@@ -540,7 +540,26 @@ export class DatabaseStorage implements IStorage {
     else if (matchedRules.length === 2) ruleContribution = 10;
     else if (matchedRules.length === 1) ruleContribution = 5;
 
-    const totalRisk = authContribution + denialHistoryContribution + docScore + ruleContribution;
+    // ── Rules-engine findings (source of truth for Blocked/RED status) ──────
+    // The claim's stored risk_score/readiness_status come from the rules
+    // engine, not from the heuristic factors above. Pull the persisted
+    // findings so this explanation never contradicts the blocked banner.
+    let engineBlocks: Array<{ message?: string; fixSuggestion?: string }> = [];
+    try {
+      const engineRes = await pool.query(
+        `SELECT last_risk_factors FROM claims WHERE id = $1`,
+        [claimId]
+      );
+      const engineFactors = engineRes.rows[0]?.last_risk_factors;
+      if (Array.isArray(engineFactors)) {
+        engineBlocks = engineFactors.filter((f: any) => f?.severity === "block");
+      }
+    } catch {
+      // Column may not exist yet — fall back to heuristic-only explanation
+    }
+    const engineBlockScore = engineBlocks.length > 0 ? (claim.riskScore || 0) : 0;
+
+    const totalRisk = authContribution + denialHistoryContribution + docScore + ruleContribution + engineBlockScore;
     const confidenceRaw = Math.max(0.40, Math.min(0.99, 1 - (totalRisk / 150)));
     const confidenceDisplay = Math.round(confidenceRaw * 100);
 
@@ -599,6 +618,16 @@ export class DatabaseStorage implements IStorage {
       });
     }
 
+    if (engineBlocks.length > 0) {
+      const seen = new Set<string>();
+      for (const b of engineBlocks.slice(0, 3)) {
+        const action = b.fixSuggestion || b.message || "Resolve submission blocker";
+        if (seen.has(action)) continue;
+        seen.add(action);
+        recommendations.push({ action, priority: "high", completed: false });
+      }
+    }
+
     if (recommendations.length === 0) {
       recommendations.push({
         action: "Claim looks clean — verify patient eligibility before submission",
@@ -640,6 +669,11 @@ export class DatabaseStorage implements IStorage {
           name: "Prevention Rules Triggered",
           contribution: ruleContribution,
           description: `${matchedRules.length} rule(s) matched for this payer/CPT combination`,
+        }] : []),
+        ...(engineBlocks.length > 0 ? [{
+          name: "Submission Blockers (Rules Engine)",
+          contribution: engineBlockScore,
+          description: engineBlocks.map((b) => b.message).filter(Boolean).slice(0, 4).join("; "),
         }] : []),
       ],
       appliedRules,

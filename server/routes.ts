@@ -5129,7 +5129,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
           : ref.status === "expired" ? "present_expired" : "present_used_up";
 
         await db.query(
-          `UPDATE claims SET pcp_referral_id = $1, pcp_referral_required = true, pcp_referral_check_status = $2 WHERE id = $3`,
+          `UPDATE claims SET pcp_referral_id = $1, pcp_referral_required = true, pcp_referral_check_status = $2, updated_at = NOW() WHERE id = $3`,
           [referral_id, checkStatus, req.params.id]
         );
         // Increment visits_used on the referral
@@ -5140,7 +5140,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
       } else {
         // User is proceeding without a referral (HMO/POS plan, no referral chosen)
         await db.query(
-          `UPDATE claims SET pcp_referral_required = true, pcp_referral_check_status = 'missing' WHERE id = $1`,
+          `UPDATE claims SET pcp_referral_required = true, pcp_referral_check_status = 'missing', updated_at = NOW() WHERE id = $1`,
           [req.params.id]
         );
         res.json({ ok: true, pcp_referral_check_status: "missing" });
@@ -6455,13 +6455,19 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
       const factors = await evaluateClaim(ctx);
 
-      // Persist if claimId is provided
+      // Persist factors if claimId is provided (org-scoped). Deliberately does
+      // NOT touch last_risk_evaluation_at: preflight stores factors only, not
+      // risk_score/readiness_status, so marking the claim "freshly evaluated"
+      // here would let a stale stored score dodge the GET self-heal.
       if (b.claimId) {
         const db = await import("./db").then(m => m.pool);
-        await db.query(
-          `UPDATE claims SET last_risk_evaluation_at = NOW(), last_risk_factors = $1 WHERE id = $2`,
-          [JSON.stringify(factors), b.claimId]
-        ).catch(() => {});
+        const preflightOrgId = (req.user as any)?.organization_id;
+        if (preflightOrgId) {
+          await db.query(
+            `UPDATE claims SET last_risk_factors = $1 WHERE id = $2 AND organization_id = $3`,
+            [JSON.stringify(factors), b.claimId, preflightOrgId]
+          ).catch(() => {});
+        }
       }
 
       res.json({ factors });
@@ -6619,7 +6625,37 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         }
       }
 
-      res.json(rows[0]);
+      // ── Auto re-evaluate risk after claim-data changes ─────────────────────
+      // The score stored at draft creation is computed against an empty claim
+      // shell (always 100/RED). Re-scoring here whenever billing data changes
+      // guarantees the stored risk always reflects the claim's current state.
+      // Skipped when the caller explicitly sets riskScore/readinessStatus, or
+      // when only the status/follow-up fields changed.
+      const riskDataFields = [
+        "payer", "payerId", "cptCodes", "serviceLines", "amount", "providerId",
+        "serviceDate", "placeOfService", "icd10Primary", "icd10Secondary",
+        "authorizationNumber", "chargeOverridden", "planProduct",
+      ];
+      const explicitRiskSet = req.body.riskScore !== undefined || req.body.readinessStatus !== undefined;
+      const dataChanged = riskDataFields.some((k) => req.body[k] !== undefined);
+      let responseClaim = rows[0];
+      if (dataChanged && !explicitRiskSet) {
+        try {
+          const { evaluateAndPersistClaimRisk } = await import("./services/claim-risk");
+          const riskResult = await evaluateAndPersistClaimRisk(req.params.id);
+          if (riskResult) {
+            responseClaim = {
+              ...responseClaim,
+              risk_score: riskResult.riskScore,
+              readiness_status: riskResult.readinessStatus,
+            };
+          }
+        } catch (riskErr: any) {
+          console.warn('[PATCH claim] Risk re-evaluation failed (non-fatal):', riskErr?.message);
+        }
+      }
+
+      res.json(responseClaim);
     } catch (err: any) {
       console.error('[API] Error:', err); res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
     }
@@ -6628,105 +6664,17 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   app.post("/api/billing/claims/:id/risk", requireRole("admin", "rcm_manager"), async (req, res) => {
     try {
       const db = await import("./db").then(m => m.pool);
-      const { evaluateClaim, scoreViolations } = await import("./services/rules-engine");
 
-      const claimResult = await db.query("SELECT * FROM claims WHERE id = $1", [req.params.id]);
+      const claimResult = await db.query("SELECT id, organization_id FROM claims WHERE id = $1", [req.params.id]);
       if (claimResult.rows.length === 0) return res.status(404).json({ error: "Claim not found" });
       const claim = claimResult.rows[0];
       if (!verifyOrg(claim, req)) return res.status(404).json({ error: "Claim not found" });
 
-      const patientResult = await db.query(
-        `SELECT p.*, l.name as lead_name FROM patients p LEFT JOIN leads l ON p.lead_id = l.id WHERE p.id = $1`,
-        [claim.patient_id]
-      );
-      const patient = patientResult.rows[0];
+      const { evaluateAndPersistClaimRisk } = await import("./services/claim-risk");
+      const result = await evaluateAndPersistClaimRisk(req.params.id);
+      if (!result) return res.status(404).json({ error: "Claim not found" });
 
-      const payerResult = claim.payer_id
-        ? await db.query(`SELECT requires_vob FROM payers WHERE id = $1`, [claim.payer_id])
-        : { rows: [] };
-      const payerRequiresVob = payerResult.rows[0]?.requires_vob !== false;
-
-      const rawServiceLines: any[] = claim.service_lines || [];
-      const serviceLines = rawServiceLines.map((sl: any) => ({
-        code: (sl.hcpcs_code || sl.code || "").trim(),
-        modifier: sl.modifier || "",
-        units: parseFloat(sl.units) || 0,
-        totalCharge: parseFloat(sl.totalCharge || sl.total_charge) || 0,
-      }));
-
-      const ctx = {
-        claimId: claim.id,
-        organizationId: claim.organization_id,
-        patientId: claim.patient_id,
-        payerId: claim.payer_id || null,
-        payerName: claim.payer || "",
-        planProduct: (claim.plan_product || patient?.plan_product || null) as any,
-        serviceDate: claim.service_date ? new Date(claim.service_date) : null,
-        serviceLines,
-        icd10Primary: claim.icd10_primary || "",
-        icd10Secondary: Array.isArray(claim.icd10_secondary) ? claim.icd10_secondary : [],
-        authorizationNumber: claim.authorization_number || null,
-        placeOfService: claim.place_of_service || "11",
-        memberId: patient?.member_id || null,
-        patientDob: patient?.dob ? new Date(patient.dob) : null,
-        patientFirstName: patient?.first_name || null,
-        patientLastName: patient?.last_name || null,
-        testMode: false,
-        pcpReferralCheckStatus: (claim.pcp_referral_check_status || null) as any,
-      };
-
-      const violations = await evaluateClaim(ctx);
-      const { riskScore, readinessStatus } = scoreViolations(violations);
-
-      // Legacy compat: also add VOB + charge_overridden as info factors
-      const legacyFactors: any[] = [];
-      if (!patient?.vob_verified && payerRequiresVob) {
-        legacyFactors.push({
-          ruleType: "data_quality", severity: "info",
-          message: "Benefits (VOB) not yet verified for this patient.",
-          fixSuggestion: "Run insurance verification before submitting.",
-          ruleId: null, sourcePage: null, sourceQuote: null, payerSpecific: false,
-        });
-      }
-      if (claim.charge_overridden) {
-        legacyFactors.push({
-          ruleType: "data_quality", severity: "info",
-          message: "Charge amount was manually overridden — ensure it matches your fee schedule.",
-          fixSuggestion: "Confirm the charge is correct before submitting.",
-          ruleId: null, sourcePage: null, sourceQuote: null, payerSpecific: false,
-        });
-      }
-
-      const allFactors = [...violations, ...legacyFactors];
-      const finalScore = Math.min(riskScore + legacyFactors.length * 5, 100);
-      const finalStatus: "GREEN" | "YELLOW" | "RED" =
-        finalScore >= 71 ? "RED" : finalScore >= 31 ? "YELLOW" : "GREEN";
-
-      // Derive backward-compat cciFactors for existing wizard UI
-      const cciFactors = allFactors
-        .filter((v) => v.ruleType === "cci_edit")
-        .map((v) => ({
-          type: "cci_edit",
-          severity: v.severity === "block" ? "high" : "medium",
-          message: v.message,
-          fix_suggestion: v.fixSuggestion,
-          modifier_indicator: v.message.includes("hard block") ? "0" : "1",
-          primary_code: v.message.match(/([A-Z0-9]{4,7}) and/i)?.[1] || "",
-          secondary_code: v.message.match(/and ([A-Z0-9]{4,7})/i)?.[1] || "",
-        }));
-
-      await db.query(
-        `UPDATE claims SET
-           risk_score = $1,
-           readiness_status = $2,
-           last_risk_evaluation_at = NOW(),
-           last_risk_factors = $3,
-           updated_at = NOW()
-         WHERE id = $4`,
-        [finalScore, finalStatus, JSON.stringify(allFactors), req.params.id]
-      );
-
-      res.json({ riskScore: finalScore, readinessStatus: finalStatus, factors: allFactors, cciFactors });
+      res.json(result);
     } catch (err: any) {
       console.error('[API] Risk engine error:', err);
       res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
@@ -10666,7 +10614,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
   });
 
   app.get("/api/claims/:id", requireRole("admin", "rcm_manager"), async (req, res) => {
-    const claim = await storage.getClaim(req.params.id);
+    let claim = await storage.getClaim(req.params.id);
     if (!claim || !verifyOrg(claim, req)) {
       return res.status(404).json({ error: "Claim not found" });
     }
@@ -10674,12 +10622,37 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     // are not present in the Drizzle schema definition.
     try {
       const db = await import("./db").then(m => m.pool);
+
+      // ── Self-heal stale risk scores on pre-submission claims ─────────────
+      // Drafts are scored at creation against an empty claim shell (always
+      // 100/RED). If the claim data has been edited since the last risk
+      // evaluation, re-score now so the page never shows a stale "Blocked".
+      // Covers all pre-submission statuses so claims created via other paths
+      // (e.g. lead conversion) also heal.
+      if (["draft", "created", "ready"].includes(claim.status)) {
+        try {
+          const staleCheck = await db.query(
+            `SELECT (last_risk_evaluation_at IS NULL OR updated_at > last_risk_evaluation_at) AS stale
+             FROM claims WHERE id = $1`,
+            [claim.id]
+          );
+          if (staleCheck.rows[0]?.stale) {
+            const { evaluateAndPersistClaimRisk } = await import("./services/claim-risk");
+            await evaluateAndPersistClaimRisk(claim.id);
+            claim = (await storage.getClaim(req.params.id)) || claim;
+          }
+        } catch (healErr: any) {
+          console.warn('[GET claim] Stale risk self-heal failed (non-fatal):', healErr?.message);
+        }
+      }
+
       const extra = await db.query(
         `SELECT
            statement_period_start, statement_period_end,
            external_ordering_provider_name, external_ordering_provider_npi,
            ordering_provider_first_name, ordering_provider_last_name,
-           ordering_provider_npi, ordering_provider_org
+           ordering_provider_npi, ordering_provider_org,
+           last_risk_factors, last_risk_evaluation_at
          FROM claims WHERE id = $1`,
         [claim.id]
       );
@@ -10695,6 +10668,8 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
         orderingProviderLastName: row.ordering_provider_last_name || null,
         orderingProviderNpi: row.ordering_provider_npi || null,
         orderingProviderOrg: row.ordering_provider_org || null,
+        lastRiskFactors: Array.isArray(row.last_risk_factors) ? row.last_risk_factors : [],
+        lastRiskEvaluationAt: row.last_risk_evaluation_at || null,
       });
     } catch {
       // If the extra columns don't exist yet, return what we have
