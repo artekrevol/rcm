@@ -90,7 +90,7 @@ async function run() {
   console.log('[Script] EDI ISA line:', edi.split('~')[0]);
 
   const result = await submitClaim({
-    ediContent: edi, claimId: c.id, hasUserSession: true, userAgent: 'ClaimShield/AdminScript',
+    ediContent: edi, claimId: c.id, hasUserSession: true, userAgent: 'Resolta/AdminScript',
   });
 
   console.log('[Script] Result:', JSON.stringify(result, null, 2));

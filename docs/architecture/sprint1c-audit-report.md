@@ -1,4 +1,4 @@
-# ClaimShield — Phase 3 Sprint 1c Audit Report
+# Resolta — Phase 3 Sprint 1c Audit Report
 
 **Sprint:** EDI Route → `evaluateClaim` Wire-In
 **Scope:** server-side only; gates `POST /api/billing/claims/:id/submit-stedi` and `POST /api/billing/claims/:id/test-stedi` on Tier 1 structural integrity before `generate837P`

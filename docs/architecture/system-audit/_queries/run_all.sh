@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only schema inventory queries for ClaimShield system audit.
+# Read-only schema inventory queries for Resolta system audit.
 # Run with: bash docs/architecture/system-audit/_queries/run_all.sh
 # Requires: DATABASE_URL env var. ALL queries are SELECT-only.
 set -e

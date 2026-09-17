@@ -1,6 +1,6 @@
 # Phase 3 Production Deploy — Audit Report
 
-**Project:** Claim Shield Health
+**Project:** Resolta Health
 **Scope:** Sprint 0 + Sprint 1a + Sprint 1b → Railway production
 **Operator:** main agent + user (Abeer)
 **Window:** 2026-05-03 04:51 UTC — 2026-05-03 (Gate 6 sign-off)

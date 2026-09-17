@@ -5,31 +5,31 @@ generated = []
 id = "PbSNDqP136dNUa6YK-JAC"
 uri = "file://ClaimShield_Platform_Scope.md"
 type = "text"
-title = "Claim Shield Health — Platform Scope & User Flows"
+title = "Resolta Health — Platform Scope & User Flows"
 
 [[outputs]]
 id = "T7g_iKBmvYFEHU0MD6tfr"
 uri = "file://AUDIT_REPORT.md"
 type = "text"
-title = "Claim Shield Health — Full Codebase Audit Report"
+title = "Resolta Health — Full Codebase Audit Report"
 
 [[outputs]]
 id = "aVt7bu-fNUd_SJd38ImT_"
 uri = "file://SCOPE.md"
 type = "text"
-title = "Claim Shield Health — Full Platform Scope"
+title = "Resolta Health — Full Platform Scope"
 
 [[outputs]]
 id = "fklmH2TwKeDCk47QaT4fz"
 uri = "file://docs/QA_DEMO_RUNBOOK.md"
 type = "text"
-title = "ClaimShield Health — Pre-Demo QA Runbook"
+title = "Resolta Health — Pre-Demo QA Runbook"
 
 [[outputs]]
 id = "_VASmmBppQgaifeoFMFQ0"
 uri = "file://docs/PRODUCT_SCOPE.md"
 type = "text"
-title = "ClaimShield Health — Full Product Scope"
+title = "Resolta Health — Full Product Scope"
 
 [[outputs]]
 id = "9fdYGzG0Rcz5HQuZCR0VK"

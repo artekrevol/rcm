@@ -1,5 +1,5 @@
 /**
- * ClaimShield — 837I Institutional EDI Generator (Home Health)
+ * Resolta — 837I Institutional EDI Generator (Home Health)
  *
  * HIPAA X12 005010X223A2 (837 Institutional) for:
  *   - Period-of-care final claims (TOB 032x)

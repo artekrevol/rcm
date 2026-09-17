@@ -1,4 +1,4 @@
-# ClaimShield — Sprint 1d Production Deploy Audit Report
+# Resolta — Sprint 1d Production Deploy Audit Report
 
 **Sprint:** 1d — Payer Enrollment Surface Migration (Production Deploy)
 **Date:** 2026-05-04

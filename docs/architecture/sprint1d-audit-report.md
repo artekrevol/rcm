@@ -1,4 +1,4 @@
-# ClaimShield — Phase 3 Sprint 1d Audit Report
+# Resolta — Phase 3 Sprint 1d Audit Report
 
 **Sprint:** 1d — Payer Enrollment Surface Migration
 **Environment:** Dev only. No production deploy in this sprint.

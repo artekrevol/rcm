@@ -1,12 +1,12 @@
-# ClaimShield Health — Full Product Scope
+# Resolta Health — Full Product Scope
 
-> **Document purpose.** This is the canonical, end-to-end scope of ClaimShield Health: every module, use case, persona, scenario, integration, automation, data structure, and the strategic implementation roadmap behind it. It is written to be readable by an executive, a product manager, and a new engineer in equal measure. The numbers reference the live codebase as of May 2026: ~14,000 lines of routing logic, 31 first-class database tables (plus ~25 supporting `org_*` and reference tables), 261 API endpoints, 39 frontend pages, 4 cron jobs, and 3 product modules running on a single multi-tenant deployment.
+> **Document purpose.** This is the canonical, end-to-end scope of Resolta Health: every module, use case, persona, scenario, integration, automation, data structure, and the strategic implementation roadmap behind it. It is written to be readable by an executive, a product manager, and a new engineer in equal measure. The numbers reference the live codebase as of May 2026: ~14,000 lines of routing logic, 31 first-class database tables (plus ~25 supporting `org_*` and reference tables), 261 API endpoints, 39 frontend pages, 4 cron jobs, and 3 product modules running on a single multi-tenant deployment.
 
 ---
 
 ## 1. Executive Summary
 
-ClaimShield Health is a **multi-tenant Revenue Cycle Management (RCM) platform** that combines three traditionally separate categories of healthcare software into one product:
+Resolta Health is a **multi-tenant Revenue Cycle Management (RCM) platform** that combines three traditionally separate categories of healthcare software into one product:
 
 1. **Patient Intake & Lead Conversion** — capturing prospective patients, verifying their insurance, qualifying them, and converting them to active patients via AI-driven outbound calls, SMS, and email automation.
 2. **Billing & Claims Lifecycle Management** — generating, validating, submitting, tracking, and recovering payment for medical claims, with first-party EDI generation/parsing rather than third-party clearinghouse middleware.
@@ -14,7 +14,7 @@ ClaimShield Health is a **multi-tenant Revenue Cycle Management (RCM) platform**
 
 The product is built for the long tail of US healthcare providers that are currently glued together with spreadsheets, faxes, and manual phone calls — initially **home health agencies, behavioral health practices, and VA Community Care providers**, with architecture explicitly designed to extend into adjacent specialties.
 
-**Core differentiator.** Unlike clearinghouse-thin platforms (Office Ally, Availity, Waystar) which submit whatever EDI the user produces, ClaimShield owns the EDI generation, the policy intelligence, and the patient capture. A claim that goes through ClaimShield is pre-flighted against payer-specific rules extracted from the payer's own published manuals, scored for risk, and only released when the readiness gate is green. Denials are then mapped back to the rule that was missed, which closes the loop on payer intelligence.
+**Core differentiator.** Unlike clearinghouse-thin platforms (Office Ally, Availity, Waystar) which submit whatever EDI the user produces, Resolta owns the EDI generation, the policy intelligence, and the patient capture. A claim that goes through Resolta is pre-flighted against payer-specific rules extracted from the payer's own published manuals, scored for risk, and only released when the readiness gate is green. Denials are then mapped back to the rule that was missed, which closes the loop on payer intelligence.
 
 ---
 

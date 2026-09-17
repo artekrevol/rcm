@@ -2711,7 +2711,7 @@ function ClearinghouseTab() {
             id="oa_submitter_id"
             value={oaForm.submitterId}
             onChange={(e) => setOaForm((f) => ({ ...f, submitterId: e.target.value }))}
-            placeholder="e.g. CLAIMSHIELD01"
+            placeholder="e.g. RESOLTA01"
             className="mt-1"
             data-testid="input-oa-submitter-id"
           />

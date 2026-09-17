@@ -115,11 +115,11 @@ export function BillingSidebar() {
         <Link href="/billing/dashboard" className="flex items-center gap-3">
           <img
             src="/brand/logo_icon.png"
-            alt="Claim Shield Health"
+            alt="Resolta Health"
             className="h-10 w-10 rounded-lg object-contain"
           />
           <div>
-            <h1 className="text-sm font-semibold leading-tight">Claim Shield Health</h1>
+            <h1 className="text-sm font-semibold leading-tight">Resolta Health</h1>
             <p className="text-xs text-muted-foreground">Billing Module</p>
           </div>
         </Link>

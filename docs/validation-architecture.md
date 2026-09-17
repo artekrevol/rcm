@@ -1,4 +1,4 @@
-# ClaimShield Validation Engine — Architecture
+# Resolta Validation Engine — Architecture
 
 ## Overview
 

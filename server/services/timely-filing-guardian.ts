@@ -228,7 +228,7 @@ export async function sendEmailDigests(stats: EvaluationStats): Promise<void> {
 
   const send = async (to: string, subject: string, html: string) => {
     try {
-      await transporter!.sendMail({ from: `"Claim Shield Health" <${user}>`, to, subject, html });
+      await transporter!.sendMail({ from: `"Resolta Health" <${user}>`, to, subject, html });
     } catch (e: any) {
       console.error(`[TF-Guardian] Email send failed to ${to}:`, e.message);
     }

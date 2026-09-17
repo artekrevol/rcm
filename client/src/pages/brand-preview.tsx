@@ -17,7 +17,7 @@ export default function BrandPreviewPage() {
     <div className="p-8 max-w-5xl mx-auto space-y-8">
       <div className="text-center space-y-2">
         <h1 className="text-3xl font-semibold">Brand Preview</h1>
-        <p className="text-muted-foreground">Claim Shield Health - Visual QA Page</p>
+        <p className="text-muted-foreground">Resolta Health - Visual QA Page</p>
       </div>
 
       <Card>
@@ -31,7 +31,7 @@ export default function BrandPreviewPage() {
               <div className="p-4 bg-muted/50 rounded-lg">
                 <img 
                   src="/brand/logo_full.png" 
-                  alt="Claim Shield Health Full Logo" 
+                  alt="Resolta Health Full Logo" 
                   className="h-16 object-contain"
                 />
               </div>
@@ -41,7 +41,7 @@ export default function BrandPreviewPage() {
               <div className="p-4 bg-muted/50 rounded-lg flex items-center justify-center">
                 <img 
                   src="/brand/logo_icon.png" 
-                  alt="Claim Shield Health Icon" 
+                  alt="Resolta Health Icon" 
                   className="h-16 w-16 object-contain"
                 />
               </div>

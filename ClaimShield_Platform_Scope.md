@@ -1,4 +1,4 @@
-# Claim Shield Health — Platform Scope & User Flows
+# Resolta Health — Platform Scope & User Flows
 
 **Version:** 2.0  
 **Date:** April 2026  
@@ -20,7 +20,7 @@
 
 ## 1. Platform Overview
 
-Claim Shield Health is a healthcare revenue cycle management (RCM) platform designed for home health, skilled nursing, and community-based care providers. The platform is split into two purpose-built modules:
+Resolta Health is a healthcare revenue cycle management (RCM) platform designed for home health, skilled nursing, and community-based care providers. The platform is split into two purpose-built modules:
 
 - **Intake Module** — Captures, qualifies, and nurtures prospective patients from first contact through insurance verification, using AI-powered voice, SMS, email, and guided chat.
 - **Billing Module** — Manages the full claim lifecycle from patient demographics and service documentation through claim submission, denial tracking, and compliance reporting.

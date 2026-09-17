@@ -68,7 +68,7 @@ const conversationFlow: ConversationStep[] = [
   {
     id: "welcome",
     type: "message",
-    message: "Hi, I'm your virtual admissions assistant at Claim Shield Health. I'm here to help answer any questions you may have about our services.",
+    message: "Hi, I'm your virtual admissions assistant at Resolta Health. I'm here to help answer any questions you may have about our services.",
     tooltip: "Select an option to get started.",
     nextStep: "main_menu"
   },
@@ -882,7 +882,7 @@ function GuidedChatContent() {
         try {
           const firstName = (data.name || "").split(' ')[0] || "there";
           await apiRequest("POST", `/api/leads/${lead.id}/send-sms`, {
-            message: `Hello, ${firstName}, this is Claim Shield Health. Thank you for contacting us. Do you have any immediate questions we can answer?`
+            message: `Hello, ${firstName}, this is Resolta Health. Thank you for contacting us. Do you have any immediate questions we can answer?`
           });
         } catch (smsError) {
           console.error("Failed to send follow-up SMS:", smsError);
@@ -1266,7 +1266,7 @@ function GuidedChatContent() {
             <Bot className="h-4 w-4 text-white" />
           </div>
           <div className="flex flex-col">
-            <span className="text-sm font-semibold">Claim Shield Health</span>
+            <span className="text-sm font-semibold">Resolta Health</span>
             <span className="text-xs text-muted-foreground">Click to continue chat</span>
           </div>
           {messages.length > 0 && (
@@ -1312,7 +1312,7 @@ function GuidedChatContent() {
             </div>
             <div>
               <h3 className="font-semibold text-sm">Admissions Assistant</h3>
-              <p className="text-xs text-muted-foreground">Claim Shield Health</p>
+              <p className="text-xs text-muted-foreground">Resolta Health</p>
             </div>
           </div>
           <Button
@@ -1353,7 +1353,7 @@ function GuidedChatContent() {
                 </div>
                 <div className="space-y-2 px-4">
                   <p className="text-sm text-foreground leading-relaxed">
-                    Hi, I'm your virtual admissions assistant at Claim Shield Health. I'm here to help answer any questions you may have about our services.
+                    Hi, I'm your virtual admissions assistant at Resolta Health. I'm here to help answer any questions you may have about our services.
                   </p>
                   <p className="text-sm font-medium text-foreground">How can I help you today?</p>
                 </div>
@@ -1489,7 +1489,7 @@ function GuidedChatContent() {
         <div className="px-4 py-2 bg-gradient-to-r from-muted/30 to-muted/10 border-t border-border/30">
           <p className="text-[10px] text-muted-foreground text-center flex items-center justify-center gap-1.5">
             <Shield className="h-3 w-3" />
-            Powered by Claim Shield Health
+            Powered by Resolta Health
           </p>
         </div>
       </Card>

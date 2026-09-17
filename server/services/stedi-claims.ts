@@ -114,7 +114,7 @@ export async function submitClaim(
     return {
       success: false,
       blockedBy: "claimshield",
-      error: "ClaimShield could not read the ISA15 field from the generated EDI — the claim was not sent to the payer. Please try again. If the problem persists, contact support.",
+      error: "Resolta could not read the ISA15 field from the generated EDI — the claim was not sent to the payer. Please try again. If the problem persists, contact support.",
     };
   }
 

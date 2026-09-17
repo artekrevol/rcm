@@ -1,5 +1,5 @@
-# Claim Shield Health — Full Platform Scope
-**Version:** ClaimShield 2.0 (Sprint 2 Complete)
+# Resolta Health — Full Platform Scope
+**Version:** Resolta 2.0 (Sprint 2 Complete)
 **Stack:** React 18 + TypeScript / Express.js / PostgreSQL / Drizzle ORM / Vite
 
 ---
@@ -203,7 +203,7 @@ Templates support variable interpolation (e.g., `{{patient_name}}`, `{{insurance
 **Route:** `/billing/dashboard`
 
 **Onboarding Checklist** *(Sprint 2)*
-A "Get Started with ClaimShield" card appears above the KPI pipeline until dismissed. It tracks 6 setup steps:
+A "Get Started with Resolta" card appears above the KPI pipeline until dismissed. It tracks 6 setup steps:
 1. Practice information configured
 2. At least one provider added
 3. At least one payer in the system

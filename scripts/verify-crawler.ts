@@ -27,7 +27,7 @@ function check(id: number, label: string, ok: boolean, note = "") {
 }
 
 async function run() {
-  console.log("\n🕷️  ClaimShield Crawler Kit — Acceptance Tests\n");
+  console.log("\n🕷️  Resolta Crawler Kit — Acceptance Tests\n");
 
   // ── #1 Robots.txt fetch and cache ─────────────────────────────────────────
   console.log("Check #1: Robots.txt fetch and cache [LIVE]");

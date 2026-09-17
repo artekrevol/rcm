@@ -1,4 +1,4 @@
-# Claim Shield Health — System Audit
+# Resolta Health — System Audit
 
 **Audit date:** 2026-05-03 (refreshed post-Sprint-1b)
 **Audit mode:** Read-only. No mutations were performed against the codebase or database.

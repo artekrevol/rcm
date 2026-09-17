@@ -1,4 +1,4 @@
-# Claim Shield Health — Pre-Demo QA Runbook
+# Resolta Health — Pre-Demo QA Runbook
 
 **Purpose:** Step-by-step test scenarios for every module in the platform. Run every section top to bottom before demo day. Mark each row ✅ Pass / ❌ Fail / ⚠️ Note.
 
@@ -43,7 +43,7 @@
 | 1-01 | Billing module entry | Click "Billing" on module selector. | Redirects to `/billing/clinic` or `/billing/claims`. Billing sidebar is visible. |
 | 1-02 | Intake module entry | Click "Intake" on module selector. | Redirects to `/intake/dashboard`. Intake sidebar is visible. |
 | 1-03 | Sidebar links all resolve | Click every sidebar link in Billing module. | Each link loads its page without 404 or white screen. |
-| 1-04 | Back to module selector | Click the ClaimShield logo or module-switch button in sidebar. | Returns to module selector. |
+| 1-04 | Back to module selector | Click the Resolta logo or module-switch button in sidebar. | Returns to module selector. |
 
 ---
 

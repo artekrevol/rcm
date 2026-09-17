@@ -39,7 +39,7 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
             </div>
             <h1 className="text-2xl font-semibold mb-2">Platform Administration</h1>
             <p className="text-muted-foreground mb-6">
-              This area is restricted to ClaimShield platform administrators. If you need access, contact your administrator.
+              This area is restricted to Resolta platform administrators. If you need access, contact your administrator.
             </p>
             <Button variant="outline" onClick={() => navigate("/billing/dashboard")}>
               ← Back to Billing

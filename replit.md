@@ -1,7 +1,7 @@
-# Claim Shield Health
+# Resolta Health
 
 ## Overview
-Claim Shield Health is a multi-tenant Revenue Cycle Management (RCM) platform designed for healthcare providers such as home care agencies, behavioral health organizations, and specialty practices. Its primary purpose is to streamline billing and patient intake processes. Key capabilities include claims lifecycle management, denial recovery, EDI submission, lead management, AI-driven patient outreach, and insurance verification. The platform aims to improve operational efficiency and financial performance for healthcare organizations.
+Resolta Health is a multi-tenant Revenue Cycle Management (RCM) platform designed for healthcare providers such as home care agencies, behavioral health organizations, and specialty practices. Its primary purpose is to streamline billing and patient intake processes. Key capabilities include claims lifecycle management, denial recovery, EDI submission, lead management, AI-driven patient outreach, and insurance verification. The platform aims to improve operational efficiency and financial performance for healthcare organizations.
 
 ## User Preferences
 Preferred communication style: Simple, everyday language.
@@ -27,7 +27,7 @@ The Railway production database (`hopper.proxy.rlwy.net:45126`, database `railwa
 - No agent may add a Railway database credential to this workspace's secrets.
 
 ## System Architecture
-Claim Shield Health is built with a modern web stack. The frontend uses React 18 with TypeScript, Vite, Wouter for routing, and TanStack Query for server state management. UI components are developed with `shadcn/ui` and Radix UI, styled using Tailwind CSS, and incorporate Recharts for data visualization and Lucide for icons.
+Resolta Health is built with a modern web stack. The frontend uses React 18 with TypeScript, Vite, Wouter for routing, and TanStack Query for server state management. UI components are developed with `shadcn/ui` and Radix UI, styled using Tailwind CSS, and incorporate Recharts for data visualization and Lucide for icons.
 
 The backend is developed using Express.js and Node.js, also in TypeScript. PostgreSQL is the primary database, accessed via Drizzle ORM. Authentication relies on Passport.js with a local strategy, `bcryptjs` for password hashing, and `express-session` with `pg-session-store` for session management.
 

@@ -1,4 +1,4 @@
-# Claim Shield Health - Design Guidelines
+# Resolta Health - Design Guidelines
 
 ## Design Approach: Enterprise SaaS System
 
