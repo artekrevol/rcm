@@ -1,0 +1,74 @@
+[
+  {
+    "path": "/",
+    "title": "Catch home care claim errors before you submit",
+    "type": "commercial",
+    "description": "Payer-aware claims and reimbursement software for home care billing teams. Start with a scoped claims-workflow review."
+  },
+  {
+    "path": "/home-care/",
+    "title": "Claims software for home care billing teams",
+    "type": "commercial",
+    "description": "Evaluate a focused home care claims workflow without replacing agency operations."
+  },
+  {
+    "path": "/platform/",
+    "title": "Prepare review and follow claims",
+    "type": "commercial",
+    "description": "Understand Resolta\u2019s focused claims workflow and evaluate incremental value against your current stack."
+  },
+  {
+    "path": "/pricing/",
+    "title": "Agree scope and pricing before a pilot",
+    "type": "commercial",
+    "description": "Discuss the claim workflow, implementation needs and pilot terms before committing."
+  },
+  {
+    "path": "/billing-risk-review/",
+    "title": "Review my claims workflow",
+    "type": "commercial",
+    "description": "Evaluate one payer and a bounded recent claim sample against your existing process."
+  },
+  {
+    "path": "/resources/",
+    "title": "Practical claims workflow resources",
+    "type": "resource",
+    "description": "Ungated tools for preparation, payer checks, response interpretation and cost evaluation."
+  },
+  {
+    "path": "/resources/claim-checklist/",
+    "title": "Home care claim checklist",
+    "type": "resource",
+    "description": "A general evidence worksheet; payer-specific rules require applicable current sources."
+  },
+  {
+    "path": "/resources/claim-state-map/",
+    "title": "Claim to payment state map",
+    "type": "resource",
+    "description": "Identify what the sender and response prove at each step."
+  },
+  {
+    "path": "/resources/claim-exception-taxonomy/",
+    "title": "Home care claim exception taxonomy",
+    "type": "resource",
+    "description": "A practical classification, not measured customer error rates."
+  },
+  {
+    "path": "/tools/billing-risk-calculator/",
+    "title": "Claim preparation and correction cost calculator",
+    "type": "tool",
+    "description": "Transparent labor estimates using your own inputs. No assumed savings."
+  },
+  {
+    "path": "/methodology/payer-rules/",
+    "title": "Our payer rule evaluation method",
+    "type": "methodology",
+    "description": "Every applicable payer requirement needs a source, scope, version and review."
+  },
+  {
+    "path": "/about/",
+    "title": "ClaimShield is now Resolta",
+    "type": "brand",
+    "description": "Resolta is the rebranded ClaimShield with a focused claims and reimbursement scope."
+  }
+]
