@@ -529,7 +529,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
 
     await pool.query(`
       INSERT INTO practice_settings (id, practice_name, primary_npi, tax_id, taxonomy_code, phone, default_pos, billing_location, created_at, updated_at)
-      SELECT gen_random_uuid()::text, 'ClaimShield Demo Practice', '1234567893', '123456789', '251B00000X', '512-555-0100', '12', 'AUSTIN', NOW(), NOW()
+      SELECT gen_random_uuid()::text, 'Resolta Demo Practice', '1234567893', '123456789', '251B00000X', '512-555-0100', '12', 'AUSTIN', NOW(), NOW()
       WHERE NOT EXISTS (SELECT 1 FROM practice_settings LIMIT 1)
     `);
 
@@ -590,7 +590,7 @@ export async function registerRoutes(server: Server, app: Express): Promise<void
     const { rows: orgCheck } = await pool.query("SELECT id FROM organizations WHERE id = $1", [DEMO_ORG_ID]);
     if (orgCheck.length === 0) {
       await pool.query(
-        "INSERT INTO organizations (id, name, created_at) VALUES ($1, 'ClaimShield Demo Practice', NOW())",
+        "INSERT INTO organizations (id, name, created_at) VALUES ($1, 'Resolta Demo Practice', NOW())",
         [DEMO_ORG_ID]
       );
       console.log("Created Demo Organization");
@@ -12013,7 +12013,7 @@ Warmly,
 
     // Fetch org practice name for template substitution
     const emailOrgId = getOrgId(req);
-    let facilityName = "Claim Shield Health";
+    let facilityName = "Resolta";
     if (emailOrgId) {
       try {
         const { pool: emailPool } = await import("./db");
@@ -12468,8 +12468,8 @@ Warmly,
       const { appointmentDate } = req.body;
 
       const subject = appointmentDate 
-        ? "Your Appointment Confirmation - Claim Shield Health"
-        : "Thank You for Contacting Claim Shield Health";
+        ? "Your Appointment Confirmation - Resolta"
+        : "Thank You for Contacting Resolta";
 
       const appointmentSection = appointmentDate 
         ? `<div style="background-color: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0;">
@@ -12494,7 +12494,7 @@ Warmly,
         </head>
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
           <div style="text-align: center; margin-bottom: 30px;">
-            <h1 style="color: #1F7AE0; margin: 0;">Claim Shield Health</h1>
+            <h1 style="color: #1F7AE0; margin: 0;">Resolta</h1>
             <p style="color: #666; margin: 5px 0 0 0;">Secure Claims Workflow</p>
           </div>
           
@@ -12533,7 +12533,7 @@ Warmly,
           <p>If you have any questions, please don't hesitate to reach out.</p>
           
           <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb; text-align: center; color: #6b7280; font-size: 14px;">
-            <p style="margin: 0;">Claim Shield Health</p>
+            <p style="margin: 0;">Resolta</p>
             <p style="margin: 5px 0 0 0;">This is an automated confirmation email.</p>
           </div>
         </body>
@@ -12836,7 +12836,7 @@ Warmly,
     } else if (lowerMessage.includes("location") || lowerMessage.includes("address") || lowerMessage.includes("where")) {
       reply = "We have multiple locations to serve you. Our main facility is conveniently located with easy parking. Would you like specific directions?";
     } else if (lowerMessage.includes("hello") || lowerMessage.includes("hi") || lowerMessage.includes("hey")) {
-      reply = "Hello! Welcome to Claim Shield Health. How can I assist you today? I can help with scheduling appointments, verifying insurance, or answering questions about our services.";
+      reply = "Hello! Welcome to Resolta. How can I assist you today? I can help with scheduling appointments, verifying insurance, or answering questions about our services.";
     } else if (lowerMessage.includes("thanks") || lowerMessage.includes("thank you")) {
       reply = "You're welcome! Is there anything else I can help you with?";
     } else if (lowerMessage.includes("call") || lowerMessage.includes("phone") || lowerMessage.includes("speak")) {
@@ -12936,7 +12936,7 @@ Warmly,
                     <a href="${process.env.PUBLIC_URL || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000')}/leads/${lead.id}" class="btn">View Conversation</a>
                   </div>
                   <div class="footer">
-                    <span class="footer-brand">Claim Shield Health</span><br>
+                    <span class="footer-brand">Resolta</span><br>
                     The content of this email is confidential and intended for specific recipients only.
                   </div>
                 </body>
@@ -17008,7 +17008,7 @@ setTimeout(() => {
 }, 5000); // 5-second delay after startup to allow DB migrations to complete
 
 function generateIntakeTranscript(patientName: string): string {
-  return `Agent: Good morning! This is Sarah from Claim Shield Health calling to verify insurance benefits. May I speak with ${patientName}?
+  return `Agent: Good morning! This is Sarah from Resolta calling to verify insurance benefits. May I speak with ${patientName}?
 
 Patient: Yes, this is ${patientName}.
 

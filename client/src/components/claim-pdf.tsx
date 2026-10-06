@@ -92,7 +92,7 @@ export function ClaimSummaryDocument({ data }: { data: ClaimPdfData }) {
     <Document>
       <Page size="LETTER" style={styles.page}>
         <View style={styles.header}>
-          <Text style={styles.headerLeft}>[ClaimShield]</Text>
+          <Text style={styles.headerLeft}>[Resolta]</Text>
           <View style={styles.headerRight}>
             <Text style={styles.headerRightTitle}>CLAIM SUMMARY</Text>
             <Text>Generated: {d.generatedAt}</Text>

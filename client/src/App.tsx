@@ -352,7 +352,7 @@ function Router() {
 
 function App() {
   return (
-    <ThemeProvider defaultTheme="light" storageKey="claim-shield-health-theme">
+    <ThemeProvider defaultTheme="light" storageKey="resolta-theme">
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <Toaster />

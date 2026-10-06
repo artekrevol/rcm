@@ -23,7 +23,7 @@ function downloadFile(url: string, destPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(destPath);
     const protocol = url.startsWith("https") ? https : http;
-    const req = protocol.get(url, { headers: { "User-Agent": "ClaimShieldHealth/1.0" } }, (res) => {
+    const req = protocol.get(url, { headers: { "User-Agent": "Resolta/1.0" } }, (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
         file.close();
         return downloadFile(res.headers.location!, destPath).then(resolve).catch(reject);

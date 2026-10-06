@@ -17,33 +17,26 @@ export default function BrandPreviewPage() {
     <div className="p-8 max-w-5xl mx-auto space-y-8">
       <div className="text-center space-y-2">
         <h1 className="text-3xl font-semibold">Brand Preview</h1>
-        <p className="text-muted-foreground">Claim Shield Health - Visual QA Page</p>
+        <p className="text-muted-foreground">Resolta - Visual QA Page</p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Logo Assets</CardTitle>
+          <CardTitle>Resolta Identity</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="grid grid-cols-2 gap-8">
             <div className="space-y-2">
-              <Label>Full Logo (logo_full.png)</Label>
-              <div className="p-4 bg-muted/50 rounded-lg">
-                <img 
-                  src="/brand/logo_full.png" 
-                  alt="Claim Shield Health Full Logo" 
-                  className="h-16 object-contain"
-                />
+              <Label>Wordmark</Label>
+              <div className="p-4 bg-muted/50 rounded-lg flex items-center gap-3">
+                <div aria-hidden="true" className="h-12 w-12 rounded-lg bg-primary flex items-center justify-center text-xl font-bold text-primary-foreground">R</div>
+                <span className="text-xl font-semibold">Resolta</span>
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Icon Logo (logo_icon.png)</Label>
+              <Label>Icon Mark</Label>
               <div className="p-4 bg-muted/50 rounded-lg flex items-center justify-center">
-                <img 
-                  src="/brand/logo_icon.png" 
-                  alt="Claim Shield Health Icon" 
-                  className="h-16 w-16 object-contain"
-                />
+                <div aria-label="Resolta" className="h-16 w-16 rounded-lg bg-primary flex items-center justify-center text-2xl font-bold text-primary-foreground">R</div>
               </div>
             </div>
           </div>

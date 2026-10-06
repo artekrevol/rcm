@@ -308,7 +308,7 @@ async function executeAppointmentSchedule(
       ? `${providerResult.rows[0].first_name} ${providerResult.rows[0].last_name}`
       : "your provider";
 
-    const leadUrl = `https://claimshield.health/intake/leads/${lead.id}`;
+    const leadUrl = `${(process.env.PUBLIC_URL || "https://www.resolta.ai").replace(/\/$/, "")}/intake/leads/${lead.id}`;
     const notifyMsg = `New lead ${lead.first_name || ""} ${lead.last_name || ""} matched to ${providerName}. Please schedule appointment: ${leadUrl}`;
 
     for (const admin of admins.rows) {

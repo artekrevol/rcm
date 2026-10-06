@@ -37,7 +37,7 @@ export default function LoginPage() {
           <div className="inline-flex h-16 w-16 items-center justify-center rounded-xl bg-primary mb-4">
             <ShieldCheck className="h-10 w-10 text-primary-foreground" />
           </div>
-          <h1 className="text-3xl font-semibold">Claim Shield Health</h1>
+          <h1 className="text-3xl font-semibold">Resolta</h1>
           <p className="text-muted-foreground mt-2">
             Secure, streamlined claims workflow
           </p>

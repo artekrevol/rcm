@@ -2,9 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* LIGHT MODE - Claim Shield Health Brand */
+/* LIGHT MODE - Resolta Brand */
 :root {
-  /* Claim Shield Health Brand Tokens (HSL format) */
+  /* Resolta Brand Tokens (HSL format) */
   --csh-blue: 210 76% 50%;
   --csh-teal: 173 70% 45%;
   --csh-slate: 209 20% 23%;

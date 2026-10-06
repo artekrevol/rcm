@@ -276,7 +276,7 @@ async function extractTextFromUrl(url: string): Promise<string> {
   try {
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { "User-Agent": "ClaimShieldHealth/1.0 ManualIngestionAgent" },
+      headers: { "User-Agent": "Resolta/1.0 ManualIngestionAgent" },
     });
     clearTimeout(timeout);
     const contentType = res.headers.get("content-type") || "";

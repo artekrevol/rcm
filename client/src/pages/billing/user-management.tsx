@@ -254,7 +254,7 @@ export default function UserManagement() {
                 type="email"
                 value={createForm.email}
                 onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
-                placeholder="jane@claimshield.ai"
+                placeholder="jane@resolta.ai"
                 data-testid="input-new-user-email"
               />
             </div>

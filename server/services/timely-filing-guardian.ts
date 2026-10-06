@@ -228,7 +228,7 @@ export async function sendEmailDigests(stats: EvaluationStats): Promise<void> {
 
   const send = async (to: string, subject: string, html: string) => {
     try {
-      await transporter!.sendMail({ from: `"Claim Shield Health" <${user}>`, to, subject, html });
+      await transporter!.sendMail({ from: `"Resolta" <${user}>`, to, subject, html });
     } catch (e: any) {
       console.error(`[TF-Guardian] Email send failed to ${to}:`, e.message);
     }
@@ -297,7 +297,7 @@ export async function sendEmailDigests(stats: EvaluationStats): Promise<void> {
           <tbody>${urgentRowsHtml}</tbody>
         </table>` : ""}
         <p style="margin-top:24px">
-          <a href="${process.env.APP_URL || "https://app.claimshield.ai"}/billing/filing-alerts"
+          <a href="${process.env.APP_URL || "https://www.resolta.ai"}/billing/filing-alerts"
              style="background:#1e3a5f;color:white;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:600">
             View Filing Alerts
           </a>

@@ -129,7 +129,7 @@ export class UhcScraper implements PayerScraper {
       // UHC's CDN serves PDFs with standard HTTP semantics; no JS execution needed.
       const resp = await fetch(url, {
         headers: {
-          "User-Agent": "ClaimShieldHealth/1.0 (payer-document-crawler; contact@claimshield.ai)",
+          "User-Agent": "Resolta/1.0 (payer-document-crawler; https://www.resolta.ai)",
           "Accept": "application/pdf,*/*",
         },
         redirect: "follow",

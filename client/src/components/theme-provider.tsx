@@ -12,14 +12,26 @@ const ThemeProviderContext = createContext<ThemeProviderContextType | undefined>
 export function ThemeProvider({
   children,
   defaultTheme = "system",
-  storageKey = "claimshield-theme",
+  storageKey = "resolta-theme",
 }: {
   children: React.ReactNode;
   defaultTheme?: Theme;
   storageKey?: string;
 }) {
   const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
+    () => {
+      const storedTheme = localStorage.getItem(storageKey) as Theme | null;
+      if (storedTheme) return storedTheme;
+      const legacyTheme = (
+        localStorage.getItem("claim-shield-health-theme")
+        || localStorage.getItem("claimshield-theme")
+      ) as Theme | null;
+      if (legacyTheme) {
+        localStorage.setItem(storageKey, legacyTheme);
+        return legacyTheme;
+      }
+      return defaultTheme;
+    }
   );
 
   useEffect(() => {

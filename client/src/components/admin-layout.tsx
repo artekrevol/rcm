@@ -49,7 +49,7 @@ function AdminSidebar() {
             <Shield className="h-5 w-5 text-primary-foreground" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold leading-tight">Claim Shield Health</h1>
+            <h1 className="text-sm font-semibold leading-tight">Resolta</h1>
             <p className="text-xs text-muted-foreground">Platform Admin</p>
           </div>
         </Link>

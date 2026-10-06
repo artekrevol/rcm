@@ -3031,7 +3031,7 @@ export default function ClaimWizard() {
                   <div>
                     <p className="font-semibold">
                       {stediResult.blockedBy === "claimshield"
-                        ? "Submission blocked by ClaimShield"
+                        ? "Submission blocked by Resolta"
                         : "Stedi rejected the submission"}
                     </p>
                     <p className="text-xs mt-0.5">{stediResult.error}</p>

@@ -36,7 +36,7 @@ export function logRobotsDisallowed(robotsTxt: string, url: string, payerCode: s
 }
 
 // ── Browser wrapper ───────────────────────────────────────────────────────────
-const UA = "ClaimShieldHealth/1.0 (compliance-research; contact@claimshield.health)";
+const UA = "Resolta/1.0 (compliance-research; https://www.resolta.ai)";
 
 export async function withBrowser<T>(
   fn: (page: Page) => Promise<T>,

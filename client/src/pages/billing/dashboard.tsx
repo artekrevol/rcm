@@ -87,7 +87,7 @@ function OnboardingChecklist() {
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-5 w-5 text-blue-600" />
             <CardTitle className="text-base font-semibold text-blue-900 dark:text-blue-100">
-              Get Started with ClaimShield
+              Get Started with Resolta
             </CardTitle>
             <Badge variant="secondary" className="text-xs" data-testid="badge-progress">
               {completedCount}/{total}

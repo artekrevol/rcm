@@ -44,13 +44,9 @@ export function IntakeSidebar() {
     <Sidebar>
       <SidebarHeader className="p-4">
         <Link href="/intake/dashboard" className="flex items-center gap-3">
-          <img
-            src="/brand/logo_icon.png"
-            alt="Claim Shield Health"
-            className="h-10 w-10 rounded-lg object-contain"
-          />
+          <div aria-label="Resolta" className="h-10 w-10 rounded-lg bg-primary flex items-center justify-center text-lg font-bold text-primary-foreground">R</div>
           <div>
-            <h1 className="text-sm font-semibold leading-tight">Claim Shield Health</h1>
+            <h1 className="text-sm font-semibold leading-tight">Resolta</h1>
             <p className="text-xs text-muted-foreground">Intake Module</p>
           </div>
         </Link>

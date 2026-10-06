@@ -40,13 +40,9 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="p-4">
         <Link href="/dashboard" className="flex items-center gap-3">
-          <img 
-            src="/brand/logo_icon.png" 
-            alt="Claim Shield Health" 
-            className="h-10 w-10 rounded-lg object-contain"
-          />
+          <div aria-label="Resolta" className="h-10 w-10 rounded-lg bg-primary flex items-center justify-center text-lg font-bold text-primary-foreground">R</div>
           <div>
-            <h1 className="text-sm font-semibold leading-tight">Claim Shield Health</h1>
+            <h1 className="text-sm font-semibold leading-tight">Resolta</h1>
             <p className="text-xs text-muted-foreground">RCM Platform</p>
           </div>
         </Link>
@@ -87,7 +83,7 @@ export function AppSidebar() {
           </Avatar>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">RCM Admin</p>
-            <p className="text-xs text-muted-foreground truncate">admin@claimshield.health</p>
+            <p className="text-xs text-muted-foreground truncate">Resolta workspace</p>
           </div>
           <Link href="/login">
             <LogOut className="h-4 w-4 text-muted-foreground hover:text-foreground cursor-pointer" data-testid="button-logout" />
