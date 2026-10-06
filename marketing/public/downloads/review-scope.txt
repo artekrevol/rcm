@@ -1,0 +1,12 @@
+RESOLTA WORKFLOW REVIEW PREPARATION
+Business-only worksheet. Do not include patient or claim-level details.
+Organization: ___
+Payer/program and jurisdiction: ___
+Current software/clearinghouse/biller: ___
+Recurring preparation/correction/response problem: ___
+Claim volume band: ___
+Billing owner: ___
+Agreed recent period and approximate 25–50 claim sample or equivalent: ___
+Secure data route and permissions: confirm before sharing.
+Success criteria, baseline, pilot scope, fees and exit terms: agree before starting.
+Possible result: no meaningful additional value.

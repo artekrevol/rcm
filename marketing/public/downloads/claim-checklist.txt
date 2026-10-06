@@ -1,0 +1,66 @@
+RESOLTA — GENERAL HOME CARE CLAIM CHECKLIST
+Version 1.0. Generic worksheet; payer module requires review. Do not enter patient information in the GTM folder.
+
+Scope: payer/program ___ jurisdiction ___ service period ___ format ___ route ___ reviewer ___
+
+[ ] Scope
+Identify payer, program, jurisdiction, service dates, claim format and submission route.
+Evidence: Current payer/enrollment records
+Exception: Unverified applicability
+
+[ ] Source documents
+Identify referral or authorization, invoice and relevant service evidence. Use approved secure storage.
+Evidence: Record reference, owner and availability
+Exception: Missing evidence
+
+[ ] Identity
+Check patient/member and submitting provider identifiers against the applicable source.
+Evidence: Approved source and matching fields
+Exception: Identifier mismatch
+
+[ ] Authorization evidence
+Compare applicable services, dates and units to the received authorization; do not infer authorization from a filled field.
+Evidence: Authorization record and applicable payer rule
+Exception: Scope mismatch or unavailable
+
+[ ] Claim fields
+Check required fields, dates, units, modifiers and format only against applicable rules.
+Evidence: Rule ID and source version
+Exception: Field/rule issue
+
+[ ] Payer specifics
+Confirm exactly which payer requirement applies; distinguish structural checks from payer rules.
+Evidence: Program, effective range, source section, reviewer
+Exception: Rule applicability uncertain
+
+[ ] Human review
+Confirm corrections and record unresolved exceptions before submission.
+Evidence: Reviewer, action and timestamp
+Exception: Unresolved exception
+
+[ ] Submission
+Retain the actual transmission evidence and correlation ID. Generating a file is not transmission.
+Evidence: Transport response and sender
+Exception: No transmission evidence
+
+[ ] Response
+Identify the sender and meaning of each acknowledgment; retain rejection/correction branch.
+Evidence: Original acknowledgment and claim match
+Exception: Status unclear
+
+[ ] Follow-up
+Record action owner and payer-specific due-date source; do not insert a universal deadline.
+Evidence: Applicable filing/follow-up rule
+Exception: Deadline not verified
+
+[ ] Remittance
+Match claim/line response, adjustments and remittance separately from bank receipt.
+Evidence: ERA/EOB and reconciliation record
+Exception: Unmatched or unresolved balance
+
+[ ] Closeout
+Document final state and evidence; do not equate absence of response with denial or loss.
+Evidence: Outcome evidence and reviewer
+Exception: Insufficient outcome evidence
+
+Outcome and next action: __________________
