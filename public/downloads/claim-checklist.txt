@@ -1,66 +1,42 @@
-RESOLTA — GENERAL HOME CARE CLAIM CHECKLIST
-Version 1.0. Generic worksheet; payer module requires review. Do not enter patient information in the GTM folder.
+RESOLTA — CLAIM REVIEW CHECKLIST
 
-Scope: payer/program ___ jurisdiction ___ service period ___ format ___ route ___ reviewer ___
+Use current payer-specific requirements. Keep patient and claim identifiers in your approved secure system.
 
-[ ] Scope
-Identify payer, program, jurisdiction, service dates, claim format and submission route.
-Evidence: Current payer/enrollment records
-Exception: Unverified applicability
+[ ] Confirm scope
+Identify the payer, program, jurisdiction, service period, claim format and submission route.
 
-[ ] Source documents
-Identify referral or authorization, invoice and relevant service evidence. Use approved secure storage.
-Evidence: Record reference, owner and availability
-Exception: Missing evidence
+[ ] Locate source records
+Confirm the required referral, authorization, invoice and service evidence are available in the approved secure system.
 
-[ ] Identity
-Check patient/member and submitting provider identifiers against the applicable source.
-Evidence: Approved source and matching fields
-Exception: Identifier mismatch
+[ ] Compare identifiers
+Check member and submitting provider identifiers against the appropriate authoritative record.
 
-[ ] Authorization evidence
-Compare applicable services, dates and units to the received authorization; do not infer authorization from a filled field.
-Evidence: Authorization record and applicable payer rule
-Exception: Scope mismatch or unavailable
+[ ] Review authorization evidence
+Where applicable, compare services, dates and units with the received authorization and current payer instructions.
 
-[ ] Claim fields
-Check required fields, dates, units, modifiers and format only against applicable rules.
-Evidence: Rule ID and source version
-Exception: Field/rule issue
+[ ] Check claim fields
+Review required fields, dates, units and modifiers against the applicable claim format and payer rules.
 
-[ ] Payer specifics
-Confirm exactly which payer requirement applies; distinguish structural checks from payer rules.
-Evidence: Program, effective range, source section, reviewer
-Exception: Rule applicability uncertain
+[ ] Verify the rule source
+Confirm the program, source section, effective period and any relevant updates.
 
-[ ] Human review
-Confirm corrections and record unresolved exceptions before submission.
-Evidence: Reviewer, action and timestamp
-Exception: Unresolved exception
+[ ] Resolve review questions
+Have a billing reviewer decide corrections and document any unresolved exceptions.
 
-[ ] Submission
-Retain the actual transmission evidence and correlation ID. Generating a file is not transmission.
-Evidence: Transport response and sender
-Exception: No transmission evidence
+[ ] Retain transmission evidence
+Keep the actual sending confirmation and correlation reference. A generated file is not a submission.
 
-[ ] Response
-Identify the sender and meaning of each acknowledgment; retain rejection/correction branch.
-Evidence: Original acknowledgment and claim match
-Exception: Status unclear
+[ ] Read acknowledgments
+Identify the sender, status and submission attempt for each response.
 
-[ ] Follow-up
-Record action owner and payer-specific due-date source; do not insert a universal deadline.
-Evidence: Applicable filing/follow-up rule
-Exception: Deadline not verified
+[ ] Assign follow-up
+Record the next action, owner and payer-specific deadline source in your secure workflow.
 
-[ ] Remittance
-Match claim/line response, adjustments and remittance separately from bank receipt.
-Evidence: ERA/EOB and reconciliation record
-Exception: Unmatched or unresolved balance
+[ ] Reconcile remittance and cash
+Match claim and line details to the ERA/EOB, then reconcile the bank receipt separately.
 
-[ ] Closeout
-Document final state and evidence; do not equate absence of response with denial or loss.
-Evidence: Outcome evidence and reviewer
-Exception: Insufficient outcome evidence
+[ ] Close with evidence
+Confirm the documented outcome before closing an item. Silence alone does not establish denial or payment.
 
-Outcome and next action: __________________
+A completed checklist is not payer approval or a guarantee of payment.
+https://www.resolta.ai/resources/claim-checklist/
