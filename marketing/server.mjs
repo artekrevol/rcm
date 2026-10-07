@@ -3,6 +3,7 @@ import { readFile, mkdir, open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
+import { appOrigin, legacyAppPage, forwardAppRequest } from './legacy-app.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const routes = JSON.parse(await readFile(path.join(root, 'routes.json'), 'utf8'));
@@ -23,7 +24,7 @@ export function validateReview(body) {
   return {...clean, program:body.program, contactConsent:true, marketingConsent:body.marketingConsent};
 }
 
-export function createMarketingServer(env = process.env) {
+export function createMarketingServer(env = process.env, adapters = {}) {
   const publicDir = path.join(root, 'public');
   const release = env.PUBLIC_RELEASE_APPROVED === 'true';
   let origin = null;
@@ -43,10 +44,17 @@ export function createMarketingServer(env = process.env) {
     try {
       const url = new URL(req.url,'http://localhost');
       const pathname = decodeURIComponent(url.pathname);
+      if (env.LEGACY_APP_PROXY_ENABLED === 'true') {
+        if (pathname.startsWith('/api/') || pathname.startsWith('/assets/')) return forwardAppRequest(req,res,adapters.appRequest);
+        if ((req.method==='GET'||req.method==='HEAD') && legacyAppPage(pathname)) {
+          res.writeHead(302,{'Location':appOrigin+url.pathname+url.search,'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow'});
+          return res.end();
+        }
+      }
       if (pathname === '/healthz' && req.method === 'GET') return send(200,{status:'ok',service:'resolta-marketing'});
-      if (pathname === '/api/config' && req.method === 'GET') return send(200,{intakeEnabled,privacyURL:intakeEnabled ? privacyURL : null,consentVersion:'review-request-v1'});
-      if (pathname === '/api/workflow-review' && req.method === 'POST') {
-        if (!intakeEnabled) return send(503,{error:'Review requests are not enabled in this staging environment.'});
+      if (pathname === '/marketing-api/config' && req.method === 'GET') return send(200,{intakeEnabled,privacyURL:intakeEnabled ? privacyURL : null,consentVersion:'review-request-v1'});
+      if (pathname === '/marketing-api/workflow-review' && req.method === 'POST') {
+        if (!intakeEnabled) return send(503,{error:'Online review requests are currently unavailable.'});
         const requestOrigin = req.headers.origin;
         const expectedOrigin = origin || `http://${req.headers.host}`;
         if (requestOrigin !== expectedOrigin) return send(403,{error:'Please submit the form from this website.'});

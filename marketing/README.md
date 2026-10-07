@@ -37,3 +37,13 @@ The companion GTM package is in the existing Resolta Drive folder:
 https://drive.google.com/drive/folders/1DxS80pvY0qicMB1CKOdQ7yacU_WgZLoc
 
 Read the canonical memory and governing prompt before expanding claims or content. Payer coverage, customer outcomes, pricing rates, integrations and security attestations are evidence-gated. No production claims submission was performed for this change.
+
+## Public deployment — October 6, 2026
+
+The user authorized public release and directed the application to `https://app.resolta.ai`. Marketing login links use that host. The separate `resolta-website` Railway service contains no application database credentials. Intake remains disabled pending its independent handling setup.
+
+Railway rejects the legacy `railwayConfigFile` setting. Publish a clean deployment branch containing only this directory with `git subtree split --prefix=marketing -b codex/resolta-website-production`; push that branch and connect the website service to it. Use repository root `/`, the checked-in Dockerfile, start `node server.mjs`, health `/healthz`, and public environment settings. The source branch remains the reviewable full-repository change. Do not point the website service at the application's root build or startup commands.
+
+Enable `LEGACY_APP_PROXY_ENABLED=true` during migration: existing `/api/*` and `/assets/*` requests stream to the fixed HTTPS application origin without changing request method/body; known application page links redirect to app.resolta.ai. Marketing APIs use `/marketing-api/*`. The old ClaimShield callback hostname remains on the original service. No secrets or request bodies are logged by the website. Existing users may need to sign in again because session cookies are host-only.
+
+Main-domain publishing uses `https://www.resolta.ai` with existing GoDaddy root forwarding from `resolta.ai`. GoDaddy root HTTPS must be separately checked. DNS does not affect application data. Rollback the website service to its previous deployment for code issues; restore the saved www domain mapping only if app separation itself fails.
