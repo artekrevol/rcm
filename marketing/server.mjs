@@ -7,7 +7,7 @@ import { appOrigin, legacyAppPage, forwardAppRequest } from './legacy-app.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const routes = JSON.parse(await readFile(path.join(root, 'routes.json'), 'utf8'));
-const types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.svg':'image/svg+xml', '.txt':'text/plain; charset=utf-8' };
+const types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8', '.woff2':'font/woff2', '.png':'image/png', '.csv':'text/csv; charset=utf-8', '.svg':'image/svg+xml', '.txt':'text/plain; charset=utf-8' };
 const allowedPrograms = new Set(['VA_CCN','Medicaid','Other_public_payer','Unsure']);
 
 export function validateReview(body) {
@@ -98,13 +98,15 @@ export function createMarketingServer(env = process.env, adapters = {}) {
       if (pathname.startsWith('/api/')) return send(404,{error:'Not found.'});
       if (pathname === '/robots.txt') {res.setHeader('Content-Type','text/plain');return res.end(indexable?`User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`:'User-agent: *\nDisallow: /\n');}
       if (pathname === '/sitemap.xml') {res.setHeader('Content-Type','application/xml');return res.end('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+(indexable?routes.map(r=>`<url><loc>${origin}${r.path}</loc></url>`).join(''):'')+'</urlset>');}
+      const notFound=async()=>{res.writeHead(404,{'Content-Type':'text/html; charset=utf-8','X-Robots-Tag':'noindex, nofollow','Cache-Control':'no-cache'});res.end(req.method==='HEAD'?undefined:await readFile(path.join(publicDir,'404.html')));};
+      if(pathname.endsWith('/index.html')){const canonical=pathname.slice(0,-10);if(routes.some(r=>r.path===canonical)){res.writeHead(308,{Location:canonical+url.search});return res.end();}}
       const normalized=pathname==='/'?'/':pathname.replace(/\/$/,'')+'/';
       const route=routes.find(r=>r.path===normalized);
       if(route && pathname!==normalized){res.writeHead(308,{Location:normalized});return res.end();}
       const relative=route ? path.join(normalized,'index.html') : pathname;
       const target=path.resolve(publicDir,'.'+relative);
-      if (!target.startsWith(publicDir+path.sep) || !types[path.extname(target)]) return send(404,{error:'Not found.'});
-      let data;try{data=await readFile(target);}catch(error){if(error.code==='ENOENT')return send(404,{error:'Not found.'});throw error;}
+      if (!target.startsWith(publicDir+path.sep) || !types[path.extname(target)] || (!route && path.extname(target)==='.html')) return notFound();
+      let data;try{data=await readFile(target);}catch(error){if(error.code==='ENOENT'||error.code==='EISDIR')return notFound();throw error;}
       if (route && indexable) {
         data=Buffer.from(data.toString().replace('<meta name="robots" content="noindex,nofollow">',`<meta name="robots" content="index,follow"><meta name="resolta-environment" content="public"><link rel="canonical" href="${origin}${route.path}">`).replace('<div class="notice">Staging review · launch copy and tools · customer outcomes and payer coverage are not asserted</div>',''));
       }
