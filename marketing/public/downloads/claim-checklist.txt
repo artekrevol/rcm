@@ -1,0 +1,42 @@
+RESOLTA — CLAIM REVIEW CHECKLIST
+
+Use current payer-specific requirements. Keep patient and claim identifiers in your approved secure system.
+
+[ ] Confirm scope
+Identify the payer, program, jurisdiction, service period, claim format and submission route.
+
+[ ] Locate source records
+Confirm the required referral, authorization, invoice and service evidence are available in the approved secure system.
+
+[ ] Compare identifiers
+Check member and submitting provider identifiers against the appropriate authoritative record.
+
+[ ] Review authorization evidence
+Where applicable, compare services, dates and units with the received authorization and current payer instructions.
+
+[ ] Check claim fields
+Review required fields, dates, units and modifiers against the applicable claim format and payer rules.
+
+[ ] Verify the rule source
+Confirm the program, source section, effective period and any relevant updates.
+
+[ ] Resolve review questions
+Have a billing reviewer decide corrections and document any unresolved exceptions.
+
+[ ] Retain transmission evidence
+Keep the actual sending confirmation and correlation reference. A generated file is not a submission.
+
+[ ] Read acknowledgments
+Identify the sender, status and submission attempt for each response.
+
+[ ] Assign follow-up
+Record the next action, owner and payer-specific deadline source in your secure workflow.
+
+[ ] Reconcile remittance and cash
+Match claim and line details to the ERA/EOB, then reconcile the bank receipt separately.
+
+[ ] Close with evidence
+Confirm the documented outcome before closing an item. Silence alone does not establish denial or payment.
+
+A completed checklist is not payer approval or a guarantee of payment.
+https://www.resolta.ai/resources/claim-checklist/

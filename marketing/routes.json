@@ -1,0 +1,80 @@
+[
+  {
+    "path": "/",
+    "title": "Catch home care claim errors before you submit",
+    "description": "Payer-aware claims and reimbursement software for home care billing teams. Explore the workflow, use free billing tools or speak with Resolta.",
+    "type": "commercial"
+  },
+  {
+    "path": "/home-care/",
+    "title": "Claims software for home care billing teams",
+    "description": "A focused approach to home care claim preparation, payer requirements, corrections and reimbursement follow-up.",
+    "type": "commercial"
+  },
+  {
+    "path": "/platform/",
+    "title": "A clearer path from claim preparation to reimbursement",
+    "description": "Explore the Resolta claims workflow: source evidence, applicable payer checks, reviewer decisions and claim responses.",
+    "type": "commercial"
+  },
+  {
+    "path": "/pricing/",
+    "title": "Pricing built around your claims workflow",
+    "description": "Discuss payer scope, claim volume, implementation and pilot terms with Resolta sales.",
+    "type": "commercial"
+  },
+  {
+    "path": "/billing-risk-review/",
+    "title": "Review your claims workflow",
+    "description": "Create a focused claims-workflow action plan, download it and choose whether to discuss it with Resolta sales.",
+    "type": "tool"
+  },
+  {
+    "path": "/resources/",
+    "title": "Free tools for home care billing teams",
+    "description": "Use Resolta\u2019s claim checklist, exception finder, state explorer, workflow planner and labor-cost calculator.",
+    "type": "resource"
+  },
+  {
+    "path": "/resources/claim-checklist/",
+    "title": "Interactive home care claim checklist",
+    "description": "Work through 12 general evidence checkpoints, keep track of open items and download a checklist for your billing team.",
+    "type": "resource"
+  },
+  {
+    "path": "/resources/claim-state-map/",
+    "title": "Claim status explorer: from draft to cash",
+    "description": "Understand the evidence behind claim transmission, acknowledgments, payer acceptance, adjudication, remittance and cash reconciliation.",
+    "type": "resource"
+  },
+  {
+    "path": "/resources/claim-exception-taxonomy/",
+    "title": "Claim exception finder: examples and next actions",
+    "description": "Search common claim-review questions, see practical examples and identify the evidence and next action for your billing team.",
+    "type": "resource"
+  },
+  {
+    "path": "/tools/billing-risk-calculator/",
+    "title": "Claim preparation and correction cost calculator",
+    "description": "Estimate monthly claim preparation and correction labor. Compare a second scenario including fees and implementation costs.",
+    "type": "tool"
+  },
+  {
+    "path": "/methodology/payer-rules/",
+    "title": "How to evaluate a payer requirement",
+    "description": "Use the current source, applicable program, effective dates and a documented reviewer decision to evaluate payer-rule questions.",
+    "type": "methodology"
+  },
+  {
+    "path": "/about/",
+    "title": "About Resolta",
+    "description": "Resolta focuses on claims, payer requirements, billing workflow and reimbursement, starting with home care.",
+    "type": "brand"
+  },
+  {
+    "path": "/privacy/",
+    "title": "How Resolta public tools handle your information",
+    "description": "Learn what happens to information used in Resolta\u2019s public workflow planner, checklist and calculator.",
+    "type": "information"
+  }
+]
