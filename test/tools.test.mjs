@@ -9,3 +9,5 @@ const links=new Set();for(const[path,html]of pages)for(const match of html.match
 for(const asset of ['/tools.js','/toolkit.mjs','/data.mjs'])assert.match((await fetch(origin+asset)).headers.get('content-type'),/javascript/);assert.match((await fetch(origin+'/fonts/inter-latin.woff2')).headers.get('content-type'),/font/);
 const missing=await fetch(origin+'/nonexistent-test');assert.equal(missing.status,404);assert.match(missing.headers.get('x-robots-tag'),/noindex/);assert.match(await missing.text(),/Page not found/);assert.equal((await fetch(origin+'/home-care/index.html',{redirect:'manual'})).status,308);
 }finally{await new Promise(r=>server.close(r));}});
+
+test('workflow plan preserves the selected claim-volume range',()=>{assert.equal(choices.volume.low,'Fewer than 50 claims per month');assert.equal(choices.volume.medium,'50–250 claims per month');assert.equal(choices.volume.high,'251–1,000 claims per month');assert.equal(choices.volume.large,'More than 1,000 claims per month');});
